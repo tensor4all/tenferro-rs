@@ -14,7 +14,7 @@ pub struct LuAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LuAdBuilder<'a, T>
 where
-    T: crate::runtime::dispatch::RealLuLinalgDispatchValue,
+    T: crate::runtime::dispatch::RealLuLinalgDispatchValue + DynAdTensorTyped,
 {
     /// Sets LU pivot policy.
     /// # Examples
@@ -34,7 +34,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedLuResult<T>> {
+    pub fn run(self) -> Result<DynLuResult> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("lu", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -163,10 +163,13 @@ where
             }
         }
 
-        Ok(TypedLuResult {
-            p: crate::AdTensor::new_primal(primal.p),
-            l: out_l,
-            u: out_u,
+        Ok(DynLuResult {
+            p: AdTensor::try_from(tenferro_internal_ad_core::AdTensorSnapshot::Primal(
+                primal.p.into(),
+            ))?
+            .into(),
+            l: out_l.into(),
+            u: out_u.into(),
         })
     }
 }
@@ -197,7 +200,7 @@ pub struct LstsqAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LstsqAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: RealLinalgRuntimeValue + DynAdTensorTyped,
 {
     /// Executes AD least squares.
     /// # Examples
@@ -205,7 +208,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedLstsqResult<T>> {
+    pub fn run(self) -> Result<DynLstsqResult> {
         let operands = [self.a, self.b];
         ensure_dense_linalg_inputs("lstsq", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -343,9 +346,9 @@ where
             }
         }
 
-        Ok(TypedLstsqResult {
-            x: out_x,
-            residual: out_residual,
+        Ok(DynLstsqResult {
+            x: out_x.into(),
+            residual: out_residual.into(),
         })
     }
 }

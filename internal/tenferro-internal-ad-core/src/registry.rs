@@ -1,7 +1,7 @@
 use chainrules_core::{AdResult, AutodiffError, NodeId};
 use tenferro_internal_error::Result;
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTensor};
-use tidu::{ReverseRule, Tape};
+use tidu::expert::{ReverseRule, Tape};
 
 struct ClosureRuleAdapter<T: DynTensorTyped> {
     pullback_fn: Box<

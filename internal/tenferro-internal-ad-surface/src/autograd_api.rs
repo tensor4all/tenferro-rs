@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chainrules_core::Differentiable;
 
 use crate::core::{DynTensor, NodeId};
-use crate::{AdTensor, Error, Result, Tensor};
+use crate::{Error, Result, Tensor};
 
 /// Options for reverse-mode gradient accumulation.
 ///
@@ -39,30 +39,22 @@ pub struct GradOptions {
     pub create_graph: bool,
 }
 
-fn reverse_tape(output: &Tensor) -> Option<tidu::Tape<crate::DynTensor>> {
-    match output {
-        Tensor::F32(value) => value.reverse_tape(),
-        Tensor::F64(value) => value.reverse_tape(),
-        Tensor::C32(value) => value.reverse_tape(),
-        Tensor::C64(value) => value.reverse_tape(),
+fn reverse_tape(output: &Tensor) -> Option<tidu::expert::Tape<crate::DynTensor>> {
+    output.reverse_tape()
+}
+
+fn mixed_reverse_graph_error(
+    expected: Option<tidu::expert::Tape<crate::DynTensor>>,
+    found: Option<tidu::expert::Tape<crate::DynTensor>>,
+) -> Error {
+    Error::MixedReverseTape {
+        expected: expected.map_or(0, |tape| tape.id() as u64),
+        found: found.map_or(0, |tape| tape.id() as u64),
     }
 }
 
 fn default_seed(output: &Tensor) -> Result<Tensor> {
-    match output {
-        Tensor::F32(value) => Ok(Tensor::F32(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::F64(value) => Ok(Tensor::F64(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::C32(value) => Ok(Tensor::C32(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::C64(value) => Ok(Tensor::C64(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-    }
+    Ok(Tensor::from(output.primal_snapshot().seed_cotangent()))
 }
 
 fn accumulate_optional_grad(slot: &mut Option<Tensor>, grad: Option<Tensor>) -> Result<()> {
@@ -131,7 +123,8 @@ pub fn grad(
     }
 
     let mut accum = vec![None; inputs.len()];
-    let mut shared_tape: Option<tidu::Tape<crate::DynTensor>> = None;
+    let mut shared_tape: Option<tidu::expert::Tape<crate::DynTensor>> = None;
+    let mut reference_output: Option<&Tensor> = None;
 
     for (index, output) in outputs.iter().enumerate() {
         let seed = match grad_outputs {
@@ -139,13 +132,24 @@ pub fn grad(
             None => &default_seed(output)?,
         };
 
+        if let Some(reference) = reference_output {
+            if !reference.shares_reverse_graph(output) {
+                return Err(mixed_reverse_graph_error(
+                    reverse_tape(reference),
+                    reverse_tape(output),
+                ));
+            }
+        } else {
+            reference_output = Some(output);
+        }
+
         if let Some(tape) = reverse_tape(output) {
             if let Some(expected) = &shared_tape {
                 if !expected.same_tape(&tape) {
-                    return Err(Error::MixedReverseTape {
-                        expected: expected.id() as u64,
-                        found: tape.id() as u64,
-                    });
+                    return Err(mixed_reverse_graph_error(
+                        Some(expected.clone()),
+                        Some(tape),
+                    ));
                 }
             } else {
                 shared_tape = Some(tape);
@@ -183,7 +187,7 @@ pub fn grad(
 /// x.set_requires_grad(true).unwrap();
 /// let out = x.exp().unwrap().sum().unwrap();
 /// backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
-/// assert!(x.grad().is_some());
+/// assert!(x.grad().unwrap().is_some());
 /// ```
 pub fn backward(
     outputs: &[&Tensor],
@@ -247,39 +251,19 @@ pub struct HvpResult {
 }
 
 fn dyn_primal_from_snapshot(snapshot: DynTensor) -> Tensor {
-    match snapshot {
-        DynTensor::F32(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::F64(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::C32(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::C64(value) => Tensor::from(AdTensor::new_primal(value)),
-    }
+    Tensor::from(snapshot)
 }
 
-fn reverse_handle(value: &Tensor) -> Option<(NodeId, tidu::Tape<DynTensor>)> {
-    match value {
-        Tensor::F32(value) => value.reverse_handle(),
-        Tensor::F64(value) => value.reverse_handle(),
-        Tensor::C32(value) => value.reverse_handle(),
-        Tensor::C64(value) => value.reverse_handle(),
-    }
+fn reverse_handle(value: &Tensor) -> Option<(NodeId, tidu::expert::Tape<DynTensor>)> {
+    value.reverse_handle()
 }
 
-fn as_tracked_dyn(output: &Tensor) -> Option<tidu::TrackedValue<DynTensor>> {
-    match output {
-        Tensor::F32(value) => value.as_tracked(),
-        Tensor::F64(value) => value.as_tracked(),
-        Tensor::C32(value) => value.as_tracked(),
-        Tensor::C64(value) => value.as_tracked(),
-    }
+fn as_tracked_dyn(output: &Tensor) -> Option<tidu::expert::TrackedValue<DynTensor>> {
+    output.as_tracked()
 }
 
 fn input_to_dyn_tensor(input: &Tensor) -> DynTensor {
-    match input {
-        Tensor::F32(value) => DynTensor::F32(value.structured_primal().clone()),
-        Tensor::F64(value) => DynTensor::F64(value.structured_primal().clone()),
-        Tensor::C32(value) => DynTensor::C32(value.structured_primal().clone()),
-        Tensor::C64(value) => DynTensor::C64(value.structured_primal().clone()),
-    }
+    input.primal_snapshot()
 }
 
 /// Computes gradient and Hessian-vector product for a scalar output.
@@ -333,7 +317,14 @@ pub fn hvp(
         }
     }
 
-    let tape = reverse_tape(output).ok_or(Error::UnsupportedAdOp { op: "hvp" })?;
+    let tape = match reverse_tape(output) {
+        Some(tape) => tape,
+        None => {
+            return Err(Error::Autodiff(
+                chainrules_core::AutodiffError::HvpNotSupported,
+            ))
+        }
+    };
 
     // Build leaf_tangents HashMap: NodeId -> DynTensor
     let mut leaf_tangents: HashMap<NodeId, DynTensor> = HashMap::new();

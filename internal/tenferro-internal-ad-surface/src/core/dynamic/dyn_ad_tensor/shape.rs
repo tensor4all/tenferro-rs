@@ -1,3 +1,4 @@
+use tenferro_internal_ad_core::DynAdTensorRef;
 use tenferro_tensor::MemoryOrder;
 
 use super::layout::{
@@ -7,45 +8,36 @@ use super::layout::{
 use super::Tensor;
 use crate::Result;
 
+macro_rules! match_dyn_ad_tensor_ref {
+    ($tensor:expr, |$value:ident| $body:block) => {{
+        match $tensor.as_dyn_ad_ref() {
+            DynAdTensorRef::F32($value) => $body,
+            DynAdTensorRef::F64($value) => $body,
+            DynAdTensorRef::C32($value) => $body,
+            DynAdTensorRef::C64($value) => $body,
+        }
+    }};
+}
+
 impl Tensor {
     /// Returns primal tensor dimensions.
     pub fn dims(&self) -> &[usize] {
-        match self {
-            Self::F32(v) => v.dims(),
-            Self::F64(v) => v.dims(),
-            Self::C32(v) => v.dims(),
-            Self::C64(v) => v.dims(),
-        }
+        self.as_dyn_ad_ref().dims()
     }
 
     /// Returns axis classes of the structured primal.
     pub fn axis_classes(&self) -> &[usize] {
-        match self {
-            Self::F32(v) => v.axis_classes(),
-            Self::F64(v) => v.axis_classes(),
-            Self::C32(v) => v.axis_classes(),
-            Self::C64(v) => v.axis_classes(),
-        }
+        self.as_dyn_ad_ref().axis_classes()
     }
 
     /// Returns `true` when the structured primal is dense.
     pub fn is_dense(&self) -> bool {
-        match self {
-            Self::F32(v) => v.is_dense(),
-            Self::F64(v) => v.is_dense(),
-            Self::C32(v) => v.is_dense(),
-            Self::C64(v) => v.is_dense(),
-        }
+        self.as_dyn_ad_ref().is_dense()
     }
 
     /// Returns `true` when the structured primal is diagonal.
     pub fn is_diag(&self) -> bool {
-        match self {
-            Self::F32(v) => v.is_diag(),
-            Self::F64(v) => v.is_diag(),
-            Self::C32(v) => v.is_diag(),
-            Self::C64(v) => v.is_diag(),
-        }
+        self.as_dyn_ad_ref().is_diag()
     }
 
     /// Return a zero-copy view of a dense tensor while preserving AD mode.
@@ -60,12 +52,9 @@ impl Tensor {
     /// assert_eq!(y.dims(), &[4]);
     /// ```
     pub fn view(&self, new_dims: &[usize]) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(view_ad_tensor_typed(v, new_dims)?)),
-            Self::F64(v) => Ok(Self::F64(view_ad_tensor_typed(v, new_dims)?)),
-            Self::C32(v) => Ok(Self::C32(view_ad_tensor_typed(v, new_dims)?)),
-            Self::C64(v) => Ok(Self::C64(view_ad_tensor_typed(v, new_dims)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(view_ad_tensor_typed(value, new_dims)?))
+        })
     }
 
     /// Reshape a dense tensor while preserving AD mode.
@@ -83,12 +72,9 @@ impl Tensor {
     /// assert_eq!(y.dims(), &[4]);
     /// ```
     pub fn reshape(&self, new_dims: &[usize]) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(reshape_ad_tensor_typed(v, new_dims)?)),
-            Self::F64(v) => Ok(Self::F64(reshape_ad_tensor_typed(v, new_dims)?)),
-            Self::C32(v) => Ok(Self::C32(reshape_ad_tensor_typed(v, new_dims)?)),
-            Self::C64(v) => Ok(Self::C64(reshape_ad_tensor_typed(v, new_dims)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(reshape_ad_tensor_typed(value, new_dims)?))
+        })
     }
 
     /// Permutes logical tensor axes while preserving AD mode.
@@ -103,32 +89,23 @@ impl Tensor {
     /// assert_eq!(y.dims(), &[2, 2]);
     /// ```
     pub fn permute(&self, perm: &[usize]) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(permute_ad_tensor_typed(v, perm)?)),
-            Self::F64(v) => Ok(Self::F64(permute_ad_tensor_typed(v, perm)?)),
-            Self::C32(v) => Ok(Self::C32(permute_ad_tensor_typed(v, perm)?)),
-            Self::C64(v) => Ok(Self::C64(permute_ad_tensor_typed(v, perm)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(permute_ad_tensor_typed(value, perm)?))
+        })
     }
 
     /// Take the first `len` entries along `axis` for a dense tensor.
     pub fn take_prefix(&self, axis: usize, len: usize) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(take_prefix_ad_tensor_typed(v, axis, len)?)),
-            Self::F64(v) => Ok(Self::F64(take_prefix_ad_tensor_typed(v, axis, len)?)),
-            Self::C32(v) => Ok(Self::C32(take_prefix_ad_tensor_typed(v, axis, len)?)),
-            Self::C64(v) => Ok(Self::C64(take_prefix_ad_tensor_typed(v, axis, len)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(take_prefix_ad_tensor_typed(value, axis, len)?))
+        })
     }
 
     /// Embed a rank-1 dense tensor as a structured diagonal tensor.
     pub fn diag_embed(&self, logical_rank: usize) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(diag_embed_ad_tensor_typed(v, logical_rank)?)),
-            Self::F64(v) => Ok(Self::F64(diag_embed_ad_tensor_typed(v, logical_rank)?)),
-            Self::C32(v) => Ok(Self::C32(diag_embed_ad_tensor_typed(v, logical_rank)?)),
-            Self::C64(v) => Ok(Self::C64(diag_embed_ad_tensor_typed(v, logical_rank)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(diag_embed_ad_tensor_typed(value, logical_rank)?))
+        })
     }
 
     /// Builds a rank-2 diagonal tensor from a dense rank-1 vector payload.
@@ -149,12 +126,9 @@ impl Tensor {
 
     /// Returns a logically identical tensor with payloads made contiguous in `order`.
     pub fn contiguous(&self, order: MemoryOrder) -> Result<Self> {
-        match self {
-            Self::F32(v) => Ok(Self::F32(contiguous_ad_tensor_typed(v, order)?)),
-            Self::F64(v) => Ok(Self::F64(contiguous_ad_tensor_typed(v, order)?)),
-            Self::C32(v) => Ok(Self::C32(contiguous_ad_tensor_typed(v, order)?)),
-            Self::C64(v) => Ok(Self::C64(contiguous_ad_tensor_typed(v, order)?)),
-        }
+        match_dyn_ad_tensor_ref!(self, |value| {
+            Ok(Self::from(contiguous_ad_tensor_typed(value, order)?))
+        })
     }
 
     /// Returns primal tensor rank.

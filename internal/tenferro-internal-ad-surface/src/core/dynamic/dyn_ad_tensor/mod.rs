@@ -15,13 +15,13 @@ mod scalar_ops;
 mod shape;
 mod snapshot;
 
-use num_complex::{Complex32, Complex64};
-
+pub use accessors::TypedTensorRef;
 pub use downcast::TensorScalarDowncast;
 pub use eager_linalg::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult,
 };
+use tenferro_internal_ad_core::DynAdTensor;
 
 /// Runtime AD tensor wrapper.
 ///
@@ -62,9 +62,21 @@ pub use eager_linalg::{
 /// assert!(debug.contains("preview: [1.0]"));
 /// ```
 #[derive(Clone)]
-pub enum Tensor {
-    F32(crate::AdTensor<f32>),
-    F64(crate::AdTensor<f64>),
-    C32(crate::AdTensor<Complex32>),
-    C64(crate::AdTensor<Complex64>),
+pub struct Tensor(pub(crate) DynAdTensor);
+
+#[cfg(test)]
+mod carrier_tests {
+    use super::Tensor;
+    use crate::ScalarType;
+    use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+
+    #[test]
+    fn tensor_wraps_erased_dyn_ad_carrier() {
+        let dense =
+            DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let tensor = Tensor::from_tensor(dense);
+        assert_eq!(tensor.scalar_type(), ScalarType::F64);
+        let typed = tensor.as_f64().unwrap();
+        assert_eq!(typed.primal().buffer().as_slice().unwrap(), &[1.0, 2.0]);
+    }
 }

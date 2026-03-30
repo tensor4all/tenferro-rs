@@ -1,35 +1,28 @@
+use tenferro_internal_ad_core::{DynAdTensor, DynAdTensorRef};
 use tenferro_tensor::MemoryOrder;
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use super::super::ScalarType;
 use super::layout::with_axis_classes_ad_tensor_typed;
 use super::Tensor;
 use crate::structured::StructuredTensor;
-use crate::{backward, AdTensor, BackwardOptions, DynTensor, Error, Result};
+use crate::{backward, BackwardOptions, DynTensor, Error, Result};
 
 #[cfg(test)]
 fn reverse_tape_from_anchor(anchor: &Tensor, op_name: &'static str) -> Result<Tape<DynTensor>> {
-    let tape = match anchor {
-        Tensor::F32(value) => value.reverse_tape(),
-        Tensor::F64(value) => value.reverse_tape(),
-        Tensor::C32(value) => value.reverse_tape(),
-        Tensor::C64(value) => value.reverse_tape(),
-    };
+    let tape = anchor.as_dyn_ad_ref().reverse_tape();
     tape.ok_or_else(|| Error::InvalidAdTensor {
         message: format!("{op_name} requires a reverse-mode Tensor anchor"),
     })
 }
 
-pub(crate) fn ensure_common_reverse_tape(operands: &[&Tensor]) -> Result<Option<Tape<DynTensor>>> {
+pub(crate) fn ensure_common_reverse_tape_impl(
+    operands: &[&Tensor],
+) -> Result<Option<Tape<DynTensor>>> {
     let mut tape: Option<Tape<DynTensor>> = None;
 
     for operand in operands {
-        let current = match operand {
-            Tensor::F32(value) => value.reverse_tape(),
-            Tensor::F64(value) => value.reverse_tape(),
-            Tensor::C32(value) => value.reverse_tape(),
-            Tensor::C64(value) => value.reverse_tape(),
-        };
+        let current = operand.as_dyn_ad_ref().reverse_tape();
         if let Some(current) = current {
             if let Some(expected) = &tape {
                 if !expected.same_tape(&current) {
@@ -47,17 +40,40 @@ pub(crate) fn ensure_common_reverse_tape(operands: &[&Tensor]) -> Result<Option<
     if operands.iter().any(|operand| operand.requires_grad()) {
         let tape = tape.unwrap_or_else(Tape::new);
         for operand in operands {
-            match operand {
-                Tensor::F32(value) => value.ensure_reverse_leaf_on(&tape)?,
-                Tensor::F64(value) => value.ensure_reverse_leaf_on(&tape)?,
-                Tensor::C32(value) => value.ensure_reverse_leaf_on(&tape)?,
-                Tensor::C64(value) => value.ensure_reverse_leaf_on(&tape)?,
-            }
+            operand.as_dyn_ad_ref().ensure_reverse_leaf_on(&tape)?;
         }
         return Ok(Some(tape));
     }
 
     Ok(tape)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tensor_from_adtensor_roundtrips_through_dyn_carrier() {
+        let dense =
+            tenferro_tensor::Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let tensor = Tensor::new_primal(StructuredTensor(
+            tenferro_tensor::StructuredTensor::from_dense(dense),
+        ));
+
+        assert_eq!(tensor.scalar_type(), ScalarType::F64);
+        assert_eq!(tensor.dims(), &[2]);
+        assert_eq!(
+            tensor
+                .as_f64()
+                .unwrap()
+                .primal()
+                .buffer()
+                .as_slice()
+                .unwrap(),
+            &[1.0, 2.0]
+        );
+    }
 }
 
 impl Tensor {
@@ -76,8 +92,10 @@ impl Tensor {
     /// ```
     pub fn from_tensor<T>(tensor: tenferro_tensor::Tensor<T>) -> Self
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         Self::new_primal(StructuredTensor(
             tenferro_tensor::StructuredTensor::from_dense(tensor),
@@ -86,8 +104,10 @@ impl Tensor {
 
     pub(crate) fn from_structured<T>(tensor: StructuredTensor<T>) -> Self
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         Self::new_primal(tensor)
     }
@@ -104,8 +124,11 @@ impl Tensor {
     /// ```
     pub fn from_slice<T>(data: &[T], dims: &[usize]) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + Clone + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + Clone
+            + 'static,
     {
         let tensor = tenferro_tensor::Tensor::<T>::from_slice(data, dims, MemoryOrder::ColumnMajor)
             .map_err(Error::from)?;
@@ -129,21 +152,21 @@ impl Tensor {
     /// assert!(!x.is_dense());
     /// ```
     pub fn with_axis_classes(payload: Self, axis_classes: &[usize]) -> Result<Self> {
-        match payload {
-            Self::F32(value) => Ok(Self::F32(with_axis_classes_ad_tensor_typed(
-                &value,
+        match payload.as_dyn_ad_ref() {
+            DynAdTensorRef::F32(value) => Ok(Self::from(with_axis_classes_ad_tensor_typed(
+                value,
                 axis_classes,
             )?)),
-            Self::F64(value) => Ok(Self::F64(with_axis_classes_ad_tensor_typed(
-                &value,
+            DynAdTensorRef::F64(value) => Ok(Self::from(with_axis_classes_ad_tensor_typed(
+                value,
                 axis_classes,
             )?)),
-            Self::C32(value) => Ok(Self::C32(with_axis_classes_ad_tensor_typed(
-                &value,
+            DynAdTensorRef::C32(value) => Ok(Self::from(with_axis_classes_ad_tensor_typed(
+                value,
                 axis_classes,
             )?)),
-            Self::C64(value) => Ok(Self::C64(with_axis_classes_ad_tensor_typed(
-                &value,
+            DynAdTensorRef::C64(value) => Ok(Self::from(with_axis_classes_ad_tensor_typed(
+                value,
                 axis_classes,
             )?)),
         }
@@ -151,32 +174,51 @@ impl Tensor {
 
     pub(crate) fn new_primal<T>(tensor: impl Into<StructuredTensor<T>>) -> Self
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
-        AdTensor::new_primal(tensor).into()
+        Self::from(DynAdTensor::new_primal(tensor))
     }
 
-    #[cfg(test)]
     pub(crate) fn new_forward<T>(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
     ) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
-        Ok(AdTensor::new_forward(primal, tangent)?.into())
+        Ok(Self::from(DynAdTensor::new_forward(primal, tangent)?))
     }
 
     #[cfg(test)]
     pub(crate) fn new_reverse_leaf<T>(primal: impl Into<StructuredTensor<T>>) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         let tape = Tape::new();
-        Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
+        Ok(Self::from(DynAdTensor::new_reverse_leaf(primal, &tape)?))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_reverse_leaf_on<T>(
+        primal: impl Into<StructuredTensor<T>>,
+        tape: &Tape<DynTensor>,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
+    {
+        Ok(Self::from(DynAdTensor::new_reverse_leaf(primal, tape)?))
     }
 
     #[cfg(test)]
@@ -185,11 +227,32 @@ impl Tensor {
         tangent: impl Into<StructuredTensor<T>>,
     ) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         let tape = Tape::new();
-        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, &tape)?.into())
+        Ok(Self::from(DynAdTensor::new_reverse_leaf_with_tangent(
+            primal, tangent, &tape,
+        )?))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_reverse_leaf_with_tangent_on<T>(
+        primal: impl Into<StructuredTensor<T>>,
+        tangent: impl Into<StructuredTensor<T>>,
+        tape: &Tape<DynTensor>,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
+    {
+        Ok(Self::from(DynAdTensor::new_reverse_leaf_with_tangent(
+            primal, tangent, tape,
+        )?))
     }
 
     #[cfg(test)]
@@ -198,11 +261,13 @@ impl Tensor {
         primal: impl Into<StructuredTensor<T>>,
     ) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         let tape = reverse_tape_from_anchor(self, "Tensor::new_reverse_sibling")?;
-        Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
+        Ok(Self::from(DynAdTensor::new_reverse_leaf(primal, &tape)?))
     }
 
     #[cfg(test)]
@@ -212,21 +277,20 @@ impl Tensor {
         tangent: impl Into<StructuredTensor<T>>,
     ) -> Result<Self>
     where
-        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
-        AdTensor<T>: Into<Self>,
+        T: tenferro_algebra::Scalar
+            + super::super::DynTensorTyped
+            + tenferro_internal_ad_core::DynAdTensorTyped
+            + 'static,
     {
         let tape = reverse_tape_from_anchor(self, "Tensor::new_reverse_sibling_with_tangent")?;
-        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, &tape)?.into())
+        Ok(Self::from(DynAdTensor::new_reverse_leaf_with_tangent(
+            primal, tangent, &tape,
+        )?))
     }
 
     /// Returns runtime scalar type.
     pub fn scalar_type(&self) -> ScalarType {
-        match self {
-            Self::F32(_) => ScalarType::F32,
-            Self::F64(_) => ScalarType::F64,
-            Self::C32(_) => ScalarType::C32,
-            Self::C64(_) => ScalarType::C64,
-        }
+        self.0.scalar_type()
     }
 
     /// Returns whether this tensor participates in reverse-mode AD.
@@ -242,12 +306,35 @@ impl Tensor {
     /// assert!(x.requires_grad());
     /// ```
     pub fn requires_grad(&self) -> bool {
-        match self {
-            Self::F32(v) => v.requires_grad(),
-            Self::F64(v) => v.requires_grad(),
-            Self::C32(v) => v.requires_grad(),
-            Self::C64(v) => v.requires_grad(),
-        }
+        self.0.requires_grad()
+    }
+
+    /// Returns whether this tensor is a leaf in the reverse-mode graph.
+    ///
+    /// Primal and forward-mode tensors are treated as leaf values.
+    pub fn is_leaf(&self) -> bool {
+        self.0.is_leaf()
+    }
+
+    /// Returns a tensor that requires reverse-mode gradients.
+    ///
+    /// If the tensor is already a grad-requiring leaf, this is idempotent.
+    /// Otherwise the returned tensor is detached from any existing AD state and
+    /// becomes a new reverse leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::Tensor;
+    ///
+    /// let x = Tensor::from_slice(&[1.0_f64], &[1]).unwrap()
+    ///     .with_requires_grad(true)
+    ///     .unwrap();
+    /// assert!(x.requires_grad());
+    /// assert!(x.is_leaf());
+    /// ```
+    pub fn with_requires_grad(&self, enabled: bool) -> Result<Self> {
+        self.0.with_requires_grad(enabled).map(Self::from)
     }
 
     /// Enables or disables reverse-mode gradient tracking for a leaf tensor.
@@ -262,11 +349,11 @@ impl Tensor {
     /// assert!(x.requires_grad());
     /// ```
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
-        match self {
-            Self::F32(v) => v.set_requires_grad(enabled),
-            Self::F64(v) => v.set_requires_grad(enabled),
-            Self::C32(v) => v.set_requires_grad(enabled),
-            Self::C64(v) => v.set_requires_grad(enabled),
+        match self.as_dyn_ad_mut_ref() {
+            tenferro_internal_ad_core::DynAdTensorMutRef::F32(v) => v.set_requires_grad(enabled),
+            tenferro_internal_ad_core::DynAdTensorMutRef::F64(v) => v.set_requires_grad(enabled),
+            tenferro_internal_ad_core::DynAdTensorMutRef::C32(v) => v.set_requires_grad(enabled),
+            tenferro_internal_ad_core::DynAdTensorMutRef::C64(v) => v.set_requires_grad(enabled),
         }
     }
 
@@ -283,15 +370,10 @@ impl Tensor {
     /// x.set_requires_grad(true).unwrap();
     /// let out = x.exp().unwrap().sum().unwrap();
     /// backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
-    /// assert!(x.grad().is_some());
+    /// assert!(x.grad().unwrap().is_some());
     /// ```
-    pub fn grad(&self) -> Option<Self> {
-        match self {
-            Self::F32(v) => v.grad().map(|grad| Self::F32(AdTensor::new_primal(grad))),
-            Self::F64(v) => v.grad().map(|grad| Self::F64(AdTensor::new_primal(grad))),
-            Self::C32(v) => v.grad().map(|grad| Self::C32(AdTensor::new_primal(grad))),
-            Self::C64(v) => v.grad().map(|grad| Self::C64(AdTensor::new_primal(grad))),
-        }
+    pub fn grad(&self) -> Result<Option<Self>> {
+        Ok(self.0.grad().map(Self::from))
     }
 
     /// Clears accumulated reverse-mode gradients on a leaf tensor.
@@ -308,15 +390,10 @@ impl Tensor {
     /// let out = x.exp().unwrap().sum().unwrap();
     /// backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
     /// x.zero_grad().unwrap();
-    /// assert!(x.grad().is_none());
+    /// assert!(x.grad().unwrap().is_none());
     /// ```
     pub fn zero_grad(&self) -> Result<()> {
-        match self {
-            Self::F32(v) => v.zero_grad(),
-            Self::F64(v) => v.zero_grad(),
-            Self::C32(v) => v.zero_grad(),
-            Self::C64(v) => v.zero_grad(),
-        }
+        self.0.zero_grad()
     }
 
     /// Runs reverse-mode accumulation from this output tensor into `inputs`.
@@ -332,7 +409,7 @@ impl Tensor {
     /// x.set_requires_grad(true).unwrap();
     /// let out = x.exp().unwrap().sum().unwrap();
     /// out.backward(None, &[&x], BackwardOptions::default()).unwrap();
-    /// assert!(x.grad().is_some());
+    /// assert!(x.grad().unwrap().is_some());
     /// ```
     pub fn backward(
         &self,
@@ -345,47 +422,11 @@ impl Tensor {
     }
 
     pub(crate) fn accumulate_grad(&self, grad: &Self) -> Result<()> {
-        match (self, grad) {
-            (Self::F32(value), Self::F32(grad)) => {
-                value.accumulate_leaf_grad(grad.structured_primal().clone())
-            }
-            (Self::F64(value), Self::F64(grad)) => {
-                value.accumulate_leaf_grad(grad.structured_primal().clone())
-            }
-            (Self::C32(value), Self::C32(grad)) => {
-                value.accumulate_leaf_grad(grad.structured_primal().clone())
-            }
-            (Self::C64(value), Self::C64(grad)) => {
-                value.accumulate_leaf_grad(grad.structured_primal().clone())
-            }
-            _ => Err(Error::InvalidAdTensor {
-                message: format!(
-                    "gradient dtype {:?} does not match input dtype {:?}",
-                    grad.scalar_type(),
-                    self.scalar_type()
-                ),
-            }),
-        }
+        self.0.accumulate_input_grad_from(&grad.0)
     }
 
     #[cfg(test)]
     pub(crate) fn node_id(&self) -> Option<crate::core::NodeId> {
-        match self {
-            Self::F32(v) => v.node_id(),
-            Self::F64(v) => v.node_id(),
-            Self::C32(v) => v.node_id(),
-            Self::C64(v) => v.node_id(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn shares_reverse_graph(&self, other: &Self) -> bool {
-        match (
-            reverse_tape_from_anchor(self, "Tensor::shares_reverse_graph"),
-            reverse_tape_from_anchor(other, "Tensor::shares_reverse_graph"),
-        ) {
-            (Ok(lhs), Ok(rhs)) => lhs.same_tape(&rhs),
-            _ => false,
-        }
+        self.0.node_id()
     }
 }

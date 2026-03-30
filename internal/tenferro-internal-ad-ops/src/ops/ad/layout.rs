@@ -1,8 +1,9 @@
 use tenferro_algebra::Scalar;
+use tenferro_internal_ad_core::AdTensor;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::structured::StructuredTensor;
-use crate::{AdTensor, Error, Result};
+use crate::{Error, Result};
 
 pub(crate) fn increment_col_major_index(index: &mut [usize], dims: &[usize]) {
     for axis in 0..dims.len() {

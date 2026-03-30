@@ -1,13 +1,14 @@
 use chainrules_core::{AutodiffError, NodeId};
 use tenferro_internal_frontend_core::{DynTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::{register_closure_rule, register_mixed_rule, register_rule, AdTensor};
 
 mod core_value;
 mod core_value_organization;
 mod core_value_reverse_api;
+mod dyn_ad_tensor;
 mod tape_frontend;
 mod tape_organization;
 

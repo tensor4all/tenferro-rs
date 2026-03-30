@@ -1,8 +1,14 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use super::super::*;
+use super::backward::{
+    structured_einsum_input_grads_in_backend, structured_einsum_pullback_in_backend,
+};
 use super::dense_rule::DenseEinsumRule;
+use crate::ops::ad::wrap_reverse_edge_output;
 use tenferro_prims::TensorTempPoolContext;
+use tidu::{AdResult, AutodiffError, Op, Schema, SlotSchema, Value};
 
 /// Builder for AD einsum.
 /// # Examples
@@ -19,100 +25,173 @@ where
     size_dict: Option<&'a HashMap<u32, usize>>,
 }
 
-fn structured_einsum_pullback_in_backend<B, C, T>(
-    ctx: &mut C,
-    subscripts: &Subscripts,
-    reverse_nodes: &[Option<NodeId>],
-    primals: &[StructuredTensor<T>],
-    cotangent: &StructuredTensor<T>,
-) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
+fn ad_invalid_argument(err: impl std::fmt::Display) -> AutodiffError {
+    AutodiffError::InvalidArgument(err.to_string())
+}
+
+#[derive(Clone)]
+struct EdgeEinsumSaved<T: EinsumRuntimeValue> {
+    subscripts: Subscripts,
+    primals: Vec<StructuredTensor<T>>,
+}
+
+#[derive(Clone)]
+struct EdgeEinsumOp<T: EinsumRuntimeValue> {
+    subscripts: Subscripts,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Op<StructuredTensor<T>> for EdgeEinsumOp<T>
 where
     T: EinsumRuntimeValue,
-    B: DenseEinsumBackend<T, C>,
-    C: TensorTempPoolContext,
 {
-    // Build size dictionary for delta injection.
-    let size_dict: std::collections::HashMap<u32, usize> = {
-        let mut sd = std::collections::HashMap::new();
-        for (i, input_labels) in subscripts.inputs.iter().enumerate() {
-            let dims = primals[i].logical_dims();
-            for (j, &label) in input_labels.iter().enumerate() {
-                sd.entry(label).or_insert(dims[j]);
-            }
-        }
-        sd
-    };
+    type SavedBackward = EdgeEinsumSaved<T>;
+    type SavedJvp = EdgeEinsumSaved<T>;
 
-    let mut input_grads = Vec::new();
-
-    for (k, maybe_node) in reverse_nodes.iter().enumerate() {
-        let Some(node) = maybe_node else {
-            continue;
-        };
-        let mut rev_subs = reverse_subscripts(subscripts, k);
-        // Wirtinger VJP: conjugate non-cotangent operands.
-        let mut conj_store: Vec<StructuredTensor<T>> = Vec::new();
-        for (idx, operand) in primals.iter().enumerate() {
-            if idx != k {
-                conj_store.push(operand.conj());
-            }
-        }
-
-        // Inject delta tensors for output-only labels (e.g., trace "ii->").
-        let all_input_labels: std::collections::HashSet<u32> = rev_subs
-            .inputs
-            .iter()
-            .flat_map(|labels| labels.iter().copied())
-            .collect();
-        let mut unique_missing = Vec::new();
-        {
-            let mut seen = std::collections::HashSet::new();
-            for &label in &rev_subs.output {
-                if !all_input_labels.contains(&label) && seen.insert(label) {
-                    unique_missing.push(label);
-                }
-            }
-        }
-        let mut delta_tensors: Vec<StructuredTensor<T>> = Vec::new();
-        for &label in &unique_missing {
-            let dim = size_dict
-                .get(&label)
-                .copied()
-                .ok_or_else(|| Error::InvalidAdTensor {
-                    message: format!(
-                        "einsum structured pullback: missing dimension for label {}",
-                        label
-                    ),
-                })?;
-            let mut data = vec![T::zero(); dim * dim];
-            for i in 0..dim {
-                data[i * dim + i] = T::one();
-            }
-            let eye = tenferro_tensor::Tensor::from_slice(
-                &data,
-                &[dim, dim],
-                tenferro_tensor::MemoryOrder::ColumnMajor,
-            )
-            .map_err(Error::from)?;
-            delta_tensors.push(StructuredTensor(
-                tenferro_tensor::StructuredTensor::from_dense(eye),
-            ));
-            rev_subs.inputs.push(vec![label, label]);
-        }
-
-        let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
-        rev_operands.push(cotangent);
-        for c in &conj_store {
-            rev_operands.push(c);
-        }
-        for dt in &delta_tensors {
-            rev_operands.push(dt);
-        }
-        let grad = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, &rev_subs, &rev_operands)?;
-        input_grads.push((*node, grad));
+    fn primal(&self, inputs: &[&StructuredTensor<T>]) -> AdResult<Vec<StructuredTensor<T>>> {
+        let output = dispatch_einsum_runtime!(T, "edge_einsum_primal", |ctx, Backend| {
+            einsum_with_subscripts_in_ctx::<Backend, _, T>(ctx, &self.subscripts, inputs)
+        })
+        .map_err(ad_invalid_argument)?;
+        Ok(vec![output])
     }
 
-    Ok(input_grads)
+    fn input_schema(&self, inputs: &[&StructuredTensor<T>]) -> AdResult<Schema> {
+        Ok(Schema {
+            slots: vec![
+                SlotSchema {
+                    differentiable: true,
+                    auxiliary: false,
+                };
+                inputs.len()
+            ],
+        })
+    }
+
+    fn output_schema(
+        &self,
+        _inputs: &[&StructuredTensor<T>],
+        _outputs: &[StructuredTensor<T>],
+    ) -> AdResult<Schema> {
+        Ok(Schema {
+            slots: vec![SlotSchema {
+                differentiable: true,
+                auxiliary: false,
+            }],
+        })
+    }
+
+    fn save_for_backward(
+        &self,
+        inputs: &[&StructuredTensor<T>],
+        _outputs: &[StructuredTensor<T>],
+    ) -> AdResult<Self::SavedBackward> {
+        Ok(EdgeEinsumSaved {
+            subscripts: self.subscripts.clone(),
+            primals: inputs.iter().map(|input| (*input).clone()).collect(),
+        })
+    }
+
+    fn save_for_jvp(
+        &self,
+        inputs: &[&StructuredTensor<T>],
+        _outputs: &[StructuredTensor<T>],
+    ) -> AdResult<Self::SavedJvp> {
+        Ok(EdgeEinsumSaved {
+            subscripts: self.subscripts.clone(),
+            primals: inputs.iter().map(|input| (*input).clone()).collect(),
+        })
+    }
+
+    fn backward(
+        &self,
+        saved: &Self::SavedBackward,
+        grad_outputs: &[Option<StructuredTensor<T>>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<StructuredTensor<T>>>> {
+        let Some(grad_out) = grad_outputs[0].as_ref() else {
+            return Ok(vec![None; saved.primals.len()]);
+        };
+        dispatch_einsum_runtime!(T, "edge_einsum_pullback", |ctx, Backend| {
+            structured_einsum_input_grads_in_backend::<Backend, _, T>(
+                ctx,
+                &saved.subscripts,
+                &saved.primals,
+                grad_out,
+                input_grad_mask,
+            )
+        })
+        .map_err(ad_invalid_argument)
+    }
+
+    fn jvp(
+        &self,
+        saved: &Self::SavedJvp,
+        tangents: &[Option<StructuredTensor<T>>],
+    ) -> AdResult<Vec<Option<StructuredTensor<T>>>> {
+        let tangent = dispatch_einsum_runtime!(T, "edge_einsum_jvp", |ctx, Backend| {
+            let primals: Vec<_> = saved.primals.iter().collect();
+            let tangents: Vec<_> = tangents.iter().map(|tangent| tangent.as_ref()).collect();
+            sum_structured_einsum_tangent_terms::<Backend, _, T>(
+                ctx,
+                &saved.subscripts,
+                &primals,
+                &tangents,
+            )
+        })
+        .map_err(ad_invalid_argument)?;
+        Ok(vec![tangent])
+    }
+}
+
+pub(crate) fn can_use_edge_einsum_reverse<T>(operands: &[&AdTensor<T>]) -> bool
+where
+    T: EinsumRuntimeValue,
+{
+    if operands
+        .iter()
+        .any(|operand| operand.structured_tangent().is_some())
+    {
+        return false;
+    }
+    let needs_reverse = operands.iter().any(|operand| operand.requires_grad());
+    needs_reverse
+        && operands
+            .iter()
+            .all(|operand| !operand.requires_grad() || operand.reverse_edge_value().is_some())
+}
+
+pub(crate) fn edge_einsum<T>(subscripts: &str, operands: &[&AdTensor<T>]) -> Result<AdTensor<T>>
+where
+    T: EinsumRuntimeValue + 'static,
+{
+    let subscripts = Subscripts::parse(subscripts).map_err(Error::from)?;
+    let op = EdgeEinsumOp::<T> {
+        subscripts,
+        _marker: PhantomData,
+    };
+
+    let edge_inputs: Vec<_> = operands
+        .iter()
+        .map(|operand| operand.reverse_edge_value())
+        .collect();
+    let plain_inputs: Vec<_> = operands
+        .iter()
+        .map(|operand| {
+            (!operand.requires_grad()).then(|| Value::new(operand.structured_primal().clone()))
+        })
+        .collect();
+    let values: Vec<&Value<StructuredTensor<T>>> = edge_inputs
+        .iter()
+        .zip(&plain_inputs)
+        .map(|(edge, plain)| match edge.as_ref() {
+            Some(value) => value.as_ref(),
+            None => plain.as_ref().expect("plain einsum operand"),
+        })
+        .collect();
+
+    let output = op.apply_one(&values).map_err(Error::from)?;
+    wrap_reverse_edge_output(output)
 }
 
 fn run_einsum_ad_in_backend<B, C, T>(

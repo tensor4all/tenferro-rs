@@ -2,6 +2,7 @@ use std::fmt;
 
 use tenferro_algebra::Scalar;
 use tenferro_device::LogicalMemorySpace;
+use tenferro_internal_ad_core::DynAdTensorRef;
 use tenferro_tensor::Tensor as DenseTensor;
 
 use super::Tensor;
@@ -19,11 +20,11 @@ impl fmt::Debug for RawDebug {
 
 impl fmt::Debug for Tensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let preview = match self {
-            Self::F32(value) => preview_field(value.structured_primal()),
-            Self::F64(value) => preview_field(value.structured_primal()),
-            Self::C32(value) => preview_field(value.structured_primal()),
-            Self::C64(value) => preview_field(value.structured_primal()),
+        let preview = match self.as_dyn_ad_ref() {
+            DynAdTensorRef::F32(value) => preview_field(value.structured_primal()),
+            DynAdTensorRef::F64(value) => preview_field(value.structured_primal()),
+            DynAdTensorRef::C32(value) => preview_field(value.structured_primal()),
+            DynAdTensorRef::C64(value) => preview_field(value.structured_primal()),
         };
 
         f.debug_struct("Tensor")

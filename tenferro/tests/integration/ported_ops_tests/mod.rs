@@ -8,6 +8,7 @@ use tenferro_prims::{CpuBackend, CpuContext, CudaContext, RocmContext};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 mod builder_coverage;
+mod eager_linalg_coverage;
 mod organization;
 mod runtime_dispatch;
 mod runtime_helpers;

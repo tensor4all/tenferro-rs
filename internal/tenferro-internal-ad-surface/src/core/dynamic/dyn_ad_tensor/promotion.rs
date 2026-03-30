@@ -1,9 +1,10 @@
 use num_complex::{Complex32, Complex64};
+use tenferro_internal_ad_core::{AdTensor, DynAdTensorRef};
 
-use super::basics::ensure_common_reverse_tape;
+use super::basics::ensure_common_reverse_tape_impl;
 use super::merge::map_ad_tensor_mixed_linear_typed;
 use super::Tensor;
-use crate::{AdTensor, Error, Result, ScalarType};
+use crate::{Error, Result, ScalarType};
 
 pub(super) fn join_scalar_types(types: &[ScalarType]) -> Result<ScalarType> {
     if types.is_empty() {
@@ -90,29 +91,58 @@ fn cast_c64_to_f32(tensor: &AdTensor<Complex64>) -> Result<AdTensor<f32>> {
     map_ad_tensor_mixed_linear_typed(tensor, |z| z.re as f32, |x| Complex64::new(x as f64, 0.0))
 }
 
+fn cast_dynadtensor_ref_from_f32(value: &AdTensor<f32>, target: ScalarType) -> Result<Tensor> {
+    match target {
+        ScalarType::F32 => Ok(Tensor::from(value.clone())),
+        ScalarType::F64 => Ok(Tensor::from(cast_f32_to_f64(value)?)),
+        ScalarType::C32 => Ok(Tensor::from(promote_f32_ad_tensor_to_c32(value)?)),
+        ScalarType::C64 => Ok(Tensor::from(cast_f32_to_c64(value)?)),
+    }
+}
+
+fn cast_dynadtensor_ref_from_f64(value: &AdTensor<f64>, target: ScalarType) -> Result<Tensor> {
+    match target {
+        ScalarType::F32 => Ok(Tensor::from(cast_f64_to_f32(value)?)),
+        ScalarType::F64 => Ok(Tensor::from(value.clone())),
+        ScalarType::C32 => Ok(Tensor::from(cast_f64_to_c32(value)?)),
+        ScalarType::C64 => Ok(Tensor::from(promote_f64_ad_tensor_to_c64(value)?)),
+    }
+}
+
+fn cast_dynadtensor_ref_from_c32(
+    value: &AdTensor<Complex32>,
+    target: ScalarType,
+) -> Result<Tensor> {
+    match target {
+        ScalarType::F32 => Ok(Tensor::from(cast_c32_to_f32(value)?)),
+        ScalarType::F64 => Ok(Tensor::from(cast_c32_to_f64(value)?)),
+        ScalarType::C32 => Ok(Tensor::from(value.clone())),
+        ScalarType::C64 => Ok(Tensor::from(cast_c32_to_c64(value)?)),
+    }
+}
+
+fn cast_dynadtensor_ref_from_c64(
+    value: &AdTensor<Complex64>,
+    target: ScalarType,
+) -> Result<Tensor> {
+    match target {
+        ScalarType::F32 => Ok(Tensor::from(cast_c64_to_f32(value)?)),
+        ScalarType::F64 => Ok(Tensor::from(cast_c64_to_f64(value)?)),
+        ScalarType::C32 => Ok(Tensor::from(cast_c64_to_c32(value)?)),
+        ScalarType::C64 => Ok(Tensor::from(value.clone())),
+    }
+}
+
 fn cast_dynadtensor(value: &Tensor, target: ScalarType) -> Result<Tensor> {
-    ensure_common_reverse_tape(&[value])?;
-    match (value, target) {
-        (Tensor::F32(value), ScalarType::F32) => Ok(Tensor::F32(value.clone())),
-        (Tensor::F32(value), ScalarType::F64) => Ok(Tensor::F64(cast_f32_to_f64(value)?)),
-        (Tensor::F32(value), ScalarType::C32) => {
-            Ok(Tensor::C32(promote_f32_ad_tensor_to_c32(value)?))
-        }
-        (Tensor::F32(value), ScalarType::C64) => Ok(Tensor::C64(cast_f32_to_c64(value)?)),
-        (Tensor::F64(value), ScalarType::F32) => Ok(Tensor::F32(cast_f64_to_f32(value)?)),
-        (Tensor::F64(value), ScalarType::F64) => Ok(Tensor::F64(value.clone())),
-        (Tensor::F64(value), ScalarType::C32) => Ok(Tensor::C32(cast_f64_to_c32(value)?)),
-        (Tensor::F64(value), ScalarType::C64) => {
-            Ok(Tensor::C64(promote_f64_ad_tensor_to_c64(value)?))
-        }
-        (Tensor::C32(value), ScalarType::F32) => Ok(Tensor::F32(cast_c32_to_f32(value)?)),
-        (Tensor::C32(value), ScalarType::F64) => Ok(Tensor::F64(cast_c32_to_f64(value)?)),
-        (Tensor::C32(value), ScalarType::C32) => Ok(Tensor::C32(value.clone())),
-        (Tensor::C32(value), ScalarType::C64) => Ok(Tensor::C64(cast_c32_to_c64(value)?)),
-        (Tensor::C64(value), ScalarType::F32) => Ok(Tensor::F32(cast_c64_to_f32(value)?)),
-        (Tensor::C64(value), ScalarType::F64) => Ok(Tensor::F64(cast_c64_to_f64(value)?)),
-        (Tensor::C64(value), ScalarType::C32) => Ok(Tensor::C32(cast_c64_to_c32(value)?)),
-        (Tensor::C64(value), ScalarType::C64) => Ok(Tensor::C64(value.clone())),
+    if value.scalar_type() == target {
+        return Ok(value.clone());
+    }
+    ensure_common_reverse_tape_impl(&[value])?;
+    match value.as_dyn_ad_ref() {
+        DynAdTensorRef::F32(value) => cast_dynadtensor_ref_from_f32(value, target),
+        DynAdTensorRef::F64(value) => cast_dynadtensor_ref_from_f64(value, target),
+        DynAdTensorRef::C32(value) => cast_dynadtensor_ref_from_c32(value, target),
+        DynAdTensorRef::C64(value) => cast_dynadtensor_ref_from_c64(value, target),
     }
 }
 
@@ -120,19 +150,31 @@ pub(super) fn promote_pair_to_common(
     lhs: &Tensor,
     rhs: &Tensor,
 ) -> Result<(ScalarType, Tensor, Tensor)> {
-    ensure_common_reverse_tape(&[lhs, rhs])?;
     let target = join_scalar_types(&[lhs.scalar_type(), rhs.scalar_type()])?;
+    if lhs.scalar_type() == target && rhs.scalar_type() == target {
+        return Ok((target, lhs.clone(), rhs.clone()));
+    }
+    ensure_common_reverse_tape_impl(&[lhs, rhs])?;
     Ok((target, lhs.promote_to(target)?, rhs.promote_to(target)?))
 }
 
 pub(super) fn promote_many_to_common(operands: &[&Tensor]) -> Result<(ScalarType, Vec<Tensor>)> {
-    ensure_common_reverse_tape(operands)?;
     let target = join_scalar_types(
         &operands
             .iter()
             .map(|operand| operand.scalar_type())
             .collect::<Vec<_>>(),
     )?;
+    if operands
+        .iter()
+        .all(|operand| operand.scalar_type() == target)
+    {
+        return Ok((
+            target,
+            operands.iter().map(|operand| (*operand).clone()).collect(),
+        ));
+    }
+    ensure_common_reverse_tape_impl(operands)?;
     let promoted = operands
         .iter()
         .map(|operand| operand.promote_to(target))
@@ -141,41 +183,26 @@ pub(super) fn promote_many_to_common(operands: &[&Tensor]) -> Result<(ScalarType
 }
 
 fn cast_dynadtensor_owned(value: Tensor, target: ScalarType) -> Result<Tensor> {
-    match (value, target) {
-        (Tensor::F32(value), ScalarType::F32) => Ok(Tensor::F32(value)),
-        (Tensor::F32(value), ScalarType::F64) => Ok(Tensor::F64(cast_f32_to_f64(&value)?)),
-        (Tensor::F32(value), ScalarType::C32) => {
-            Ok(Tensor::C32(promote_f32_ad_tensor_to_c32(&value)?))
-        }
-        (Tensor::F32(value), ScalarType::C64) => Ok(Tensor::C64(cast_f32_to_c64(&value)?)),
-        (Tensor::F64(value), ScalarType::F32) => Ok(Tensor::F32(cast_f64_to_f32(&value)?)),
-        (Tensor::F64(value), ScalarType::F64) => Ok(Tensor::F64(value)),
-        (Tensor::F64(value), ScalarType::C32) => Ok(Tensor::C32(cast_f64_to_c32(&value)?)),
-        (Tensor::F64(value), ScalarType::C64) => {
-            Ok(Tensor::C64(promote_f64_ad_tensor_to_c64(&value)?))
-        }
-        (Tensor::C32(value), ScalarType::F32) => Ok(Tensor::F32(cast_c32_to_f32(&value)?)),
-        (Tensor::C32(value), ScalarType::F64) => Ok(Tensor::F64(cast_c32_to_f64(&value)?)),
-        (Tensor::C32(value), ScalarType::C32) => Ok(Tensor::C32(value)),
-        (Tensor::C32(value), ScalarType::C64) => Ok(Tensor::C64(cast_c32_to_c64(&value)?)),
-        (Tensor::C64(value), ScalarType::F32) => Ok(Tensor::F32(cast_c64_to_f32(&value)?)),
-        (Tensor::C64(value), ScalarType::F64) => Ok(Tensor::F64(cast_c64_to_f64(&value)?)),
-        (Tensor::C64(value), ScalarType::C32) => Ok(Tensor::C32(cast_c64_to_c32(&value)?)),
-        (Tensor::C64(value), ScalarType::C64) => Ok(Tensor::C64(value)),
-    }
+    cast_dynadtensor(&value, target)
 }
 
 pub(super) fn promote_many_to_common_owned(
     operands: Vec<Tensor>,
 ) -> Result<(ScalarType, Vec<Tensor>)> {
     let operand_refs: Vec<&Tensor> = operands.iter().collect();
-    ensure_common_reverse_tape(&operand_refs)?;
     let target = join_scalar_types(
         &operand_refs
             .iter()
             .map(|operand| operand.scalar_type())
             .collect::<Vec<_>>(),
     )?;
+    if operand_refs
+        .iter()
+        .all(|operand| operand.scalar_type() == target)
+    {
+        return Ok((target, operands));
+    }
+    ensure_common_reverse_tape_impl(&operand_refs)?;
     let promoted = operands
         .into_iter()
         .map(|operand| cast_dynadtensor_owned(operand, target))

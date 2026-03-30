@@ -18,10 +18,10 @@ pub use autograd_api::{backward, grad, hvp, BackwardOptions, GradOptions, HvpOpt
 pub use core::dynamic::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor, TensorScalarDowncast,
+    Tensor, TensorScalarDowncast, TypedTensorRef,
 };
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
-pub use tenferro_internal_ad_core::{AdMode, AdTensor, AdTensorSnapshot, NodeId};
+pub use tenferro_internal_ad_core::AdMode;
 pub use tenferro_internal_error::{Error, Result};
 pub use tenferro_internal_frontend_core::{
     DynTensor, DynTensorTyped, ScalarValue, StructuredTensor,
@@ -54,4 +54,9 @@ pub mod tape {
     pub use tenferro_internal_ad_core::{
         register_closure_rule, register_mixed_rule, register_rule,
     };
+}
+
+#[doc(hidden)]
+pub mod __typed_linalg_primal {
+    pub use crate::ops::*;
 }

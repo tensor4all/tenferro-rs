@@ -1,2 +1,2 @@
-pub(crate) use tenferro_internal_ad_ops::ad::normalize_cotangent_payload;
-pub use tenferro_internal_ad_ops::ad::*;
+pub use tenferro_internal_ad_linalg::__typed_ad::*;
+pub use tenferro_internal_ad_ops::__typed_ad::*;

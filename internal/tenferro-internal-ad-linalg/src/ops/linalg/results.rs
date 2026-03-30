@@ -1,7 +1,5 @@
-use num_complex::Complex;
-use tenferro_algebra::Scalar;
-use tenferro_internal_ad_core::AdTensor;
-use tenferro_internal_frontend_core::DynTensorTyped;
+use tenferro_internal_ad_core::DynAdTensor;
+use tenferro_tensor::Tensor;
 
 /// Typed SVD result for internal builder wiring.
 ///
@@ -19,20 +17,22 @@ use tenferro_internal_frontend_core::DynTensorTyped;
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```
 #[derive(Clone)]
-pub struct TypedSvdResult<T, R = T>
-where
-    T: Scalar + DynTensorTyped,
-    R: Scalar + DynTensorTyped,
-{
+pub struct SvdResult<U, S = U, Vt = U> {
     /// Left singular vectors.
-    pub u: AdTensor<T>,
+    pub u: U,
     /// Singular values.
-    pub s: AdTensor<R>,
+    pub s: S,
     /// Right singular vectors transposed.
-    pub vt: AdTensor<T>,
+    pub vt: Vt,
 }
 
-/// Typed QR result for internal builder wiring.
+/// Typed SVD result for internal builder wiring.
+pub type TypedSvdResult = SvdResult<DynAdTensor>;
+
+/// Erased SVD result for dynamic entrypoints.
+pub type DynSvdResult = SvdResult<DynAdTensor>;
+
+/// QR result for internal builder wiring and dynamic entrypoints.
 ///
 /// # Examples
 ///
@@ -42,14 +42,15 @@ where
 /// let _r = &out.r;
 /// ```
 #[derive(Clone)]
-pub struct TypedQrResult<T: Scalar + DynTensorTyped> {
-    /// Q factor.
-    pub q: AdTensor<T>,
-    /// R factor.
-    pub r: AdTensor<T>,
+pub struct QrResult<Q, R = Q> {
+    pub q: Q,
+    pub r: R,
 }
 
-/// Typed LU result for internal builder wiring.
+pub type TypedQrResult = QrResult<DynAdTensor>;
+pub type DynQrResult = QrResult<DynAdTensor>;
+
+/// LU result for internal builder wiring and dynamic entrypoints.
 ///
 /// # Examples
 ///
@@ -60,16 +61,17 @@ pub struct TypedQrResult<T: Scalar + DynTensorTyped> {
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
-pub struct TypedLuResult<T: Scalar + DynTensorTyped> {
-    /// Permutation matrix tensor.
-    pub p: AdTensor<T>,
-    /// Lower factor.
-    pub l: AdTensor<T>,
-    /// Upper factor.
-    pub u: AdTensor<T>,
+pub struct LuResult<P, L = P, U = P> {
+    pub p: P,
+    pub l: L,
+    pub u: U,
 }
 
-/// Typed Hermitian eigen decomposition result for internal builder wiring.
+pub type TypedLuResult = LuResult<DynAdTensor>;
+pub type DynLuResult = LuResult<DynAdTensor>;
+
+/// Hermitian eigen decomposition result for internal builder wiring and
+/// dynamic entrypoints.
 ///
 /// # Examples
 ///
@@ -79,14 +81,16 @@ pub struct TypedLuResult<T: Scalar + DynTensorTyped> {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct TypedEigenResult<T: Scalar + DynTensorTyped> {
-    /// Eigenvalues.
-    pub values: AdTensor<T>,
-    /// Eigenvectors.
-    pub vectors: AdTensor<T>,
+pub struct EigenResult<Values, Vectors = Values> {
+    pub values: Values,
+    pub vectors: Vectors,
 }
 
-/// Typed general eigendecomposition result for internal builder wiring.
+pub type TypedEigenResult = EigenResult<DynAdTensor>;
+pub type DynEigenResult = EigenResult<DynAdTensor>;
+
+/// General eigendecomposition result for internal builder wiring and dynamic
+/// entrypoints.
 ///
 /// # Examples
 ///
@@ -96,18 +100,15 @@ pub struct TypedEigenResult<T: Scalar + DynTensorTyped> {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct TypedEigResult<T>
-where
-    T: Scalar,
-    Complex<T>: Scalar + DynTensorTyped,
-{
-    /// Complex eigenvalues.
-    pub values: AdTensor<Complex<T>>,
-    /// Complex eigenvectors.
-    pub vectors: AdTensor<Complex<T>>,
+pub struct EigResult<Values, Vectors = Values> {
+    pub values: Values,
+    pub vectors: Vectors,
 }
 
-/// Typed sign/logabsdet result for internal builder wiring.
+pub type TypedEigResult = EigResult<DynAdTensor>;
+pub type DynEigResult = EigResult<DynAdTensor>;
+
+/// Sign/logabsdet result for internal builder wiring and dynamic entrypoints.
 ///
 /// # Examples
 ///
@@ -117,14 +118,15 @@ where
 /// let _logabsdet = &out.logabsdet;
 /// ```
 #[derive(Clone)]
-pub struct TypedSlogdetResult<T: Scalar + DynTensorTyped> {
-    /// Sign tensor.
-    pub sign: AdTensor<T>,
-    /// Log-absolute-determinant tensor.
-    pub logabsdet: AdTensor<T>,
+pub struct SlogdetResult<Sign, LogAbsDet = Sign> {
+    pub sign: Sign,
+    pub logabsdet: LogAbsDet,
 }
 
-/// Typed least-squares result for internal builder wiring.
+pub type TypedSlogdetResult = SlogdetResult<DynAdTensor>;
+pub type DynSlogdetResult = SlogdetResult<DynAdTensor>;
+
+/// Least-squares result for internal builder wiring and dynamic entrypoints.
 ///
 /// # Examples
 ///
@@ -134,9 +136,56 @@ pub struct TypedSlogdetResult<T: Scalar + DynTensorTyped> {
 /// let _residual = &out.residual;
 /// ```
 #[derive(Clone)]
-pub struct TypedLstsqResult<T: Scalar + DynTensorTyped> {
-    /// Least squares solution.
-    pub x: AdTensor<T>,
-    /// Residual tensor.
-    pub residual: AdTensor<T>,
+pub struct LstsqResult<X, Residual = X> {
+    pub x: X,
+    pub residual: Residual,
 }
+
+pub type TypedLstsqResult = LstsqResult<DynAdTensor>;
+pub type DynLstsqResult = LstsqResult<DynAdTensor>;
+
+/// LU factorization result for dynamic eager entrypoints.
+#[derive(Clone)]
+pub struct LuFactorResult<C> {
+    pub factors: C,
+    pub pivots: Tensor<i32>,
+}
+
+pub type DynLuFactorResult = LuFactorResult<DynAdTensor>;
+
+/// LU factorization result with status codes for dynamic eager entrypoints.
+#[derive(Clone)]
+pub struct LuFactorExResult<C> {
+    pub factors: C,
+    pub pivots: Tensor<i32>,
+    pub info: Tensor<i32>,
+}
+
+pub type DynLuFactorExResult = LuFactorExResult<DynAdTensor>;
+
+/// Solve result with status codes for dynamic eager entrypoints.
+#[derive(Clone)]
+pub struct SolveExResult<C> {
+    pub solution: C,
+    pub info: Tensor<i32>,
+}
+
+pub type DynSolveExResult = SolveExResult<DynAdTensor>;
+
+/// Inverse result with status codes for dynamic eager entrypoints.
+#[derive(Clone)]
+pub struct InvExResult<C> {
+    pub inverse: C,
+    pub info: Tensor<i32>,
+}
+
+pub type DynInvExResult = InvExResult<DynAdTensor>;
+
+/// Cholesky result with status codes for dynamic eager entrypoints.
+#[derive(Clone)]
+pub struct CholeskyExResult<C> {
+    pub l: C,
+    pub info: Tensor<i32>,
+}
+
+pub type DynCholeskyExResult = CholeskyExResult<DynAdTensor>;

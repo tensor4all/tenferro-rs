@@ -93,6 +93,27 @@ fn linalg_entrypoints_report_runtime_capability_failures() {
 }
 
 #[test]
+fn eager_dyn_extra_entrypoints_use_matching_linalg_capabilities() {
+    let eager = repo_files(&[
+        "../internal/tenferro-internal-ad-linalg/src/ops/linalg/ad/eager.rs",
+        "../internal/tenferro-internal-ad-linalg/src/ops/linalg/ad/eager_impl.rs",
+    ]);
+    let start = eager
+        .find("fn lu_factor_ex_dyn_impl")
+        .expect("lu_factor_ex_dyn_impl should exist");
+    let end = eager[start..]
+        .find("fn lu_solve_dyn_impl")
+        .map(|offset| start + offset)
+        .expect("lu_solve_dyn_impl should delimit lu_factor_ex_dyn_impl");
+    let body = &eager[start..end];
+
+    assert!(
+        body.contains("LinalgCapabilityOp::LuFactorEx"),
+        "lu_factor_ex_dyn_impl must dispatch with the LuFactorEx capability bit"
+    );
+}
+
+#[test]
 fn structured_einsum_uses_shared_runtime_dispatch_path() {
     let structured_einsum = repo_file("src/structured/einsum.rs");
 

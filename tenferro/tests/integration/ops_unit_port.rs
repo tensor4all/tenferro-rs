@@ -1,13 +1,14 @@
 pub(crate) use std::collections::HashMap;
 
-pub(crate) use crate::ops_impl::*;
+pub(crate) use crate::ops::*;
 pub(crate) use crate::structured::StructuredTensor;
 pub(crate) use crate::{AdTensor, Error, Result, RuntimeContext, Tensor};
 pub(crate) use tenferro_algebra::Standard;
+pub(crate) use tenferro_internal_ad_linalg::__typed_ad::*;
 pub(crate) use tenferro_linalg::{LuPivot, NormKind, SvdOptions};
 pub(crate) use tenferro_prims::{CpuBackend, CpuContext, CudaContext, RocmContext};
 pub(crate) use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-pub(crate) use tidu::Tape;
+pub(crate) use tidu::expert::Tape;
 
 #[path = "ported_ops_tests/builder_coverage.rs"]
 mod builder_coverage;

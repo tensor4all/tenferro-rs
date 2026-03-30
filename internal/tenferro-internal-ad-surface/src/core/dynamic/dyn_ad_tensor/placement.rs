@@ -15,12 +15,7 @@ impl Tensor {
     /// assert_eq!(x.memory_space(), LogicalMemorySpace::MainMemory);
     /// ```
     pub fn memory_space(&self) -> LogicalMemorySpace {
-        match self {
-            Self::F32(value) => value.memory_space(),
-            Self::F64(value) => value.memory_space(),
-            Self::C32(value) => value.memory_space(),
-            Self::C64(value) => value.memory_space(),
-        }
+        self.as_dyn_ad_ref().memory_space()
     }
 
     /// Returns the preferred compute-device override for this tensor.
@@ -35,12 +30,7 @@ impl Tensor {
     /// assert_eq!(x.preferred_compute_device(), Some(ComputeDevice::Cpu { device_id: 0 }));
     /// ```
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
-        match self {
-            Self::F32(value) => value.preferred_compute_device(),
-            Self::F64(value) => value.preferred_compute_device(),
-            Self::C32(value) => value.preferred_compute_device(),
-            Self::C64(value) => value.preferred_compute_device(),
-        }
+        self.as_dyn_ad_ref().preferred_compute_device()
     }
 
     /// Sets the preferred compute-device override for this tensor.
@@ -55,12 +45,8 @@ impl Tensor {
     /// assert_eq!(x.preferred_compute_device(), Some(ComputeDevice::Cpu { device_id: 0 }));
     /// ```
     pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
-        match self {
-            Self::F32(value) => value.set_preferred_compute_device(device),
-            Self::F64(value) => value.set_preferred_compute_device(device),
-            Self::C32(value) => value.set_preferred_compute_device(device),
-            Self::C64(value) => value.set_preferred_compute_device(device),
-        }
+        self.as_dyn_ad_mut_ref()
+            .set_preferred_compute_device(device);
     }
 
     /// Asynchronously transfers this tensor to a target memory space.
@@ -75,12 +61,7 @@ impl Tensor {
     /// assert_eq!(y.memory_space(), LogicalMemorySpace::MainMemory);
     /// ```
     pub fn to_memory_space_async(&self, target: LogicalMemorySpace) -> Result<Self> {
-        match self {
-            Self::F32(value) => Ok(Self::F32(value.to_memory_space_async(target)?)),
-            Self::F64(value) => Ok(Self::F64(value.to_memory_space_async(target)?)),
-            Self::C32(value) => Ok(Self::C32(value.to_memory_space_async(target)?)),
-            Self::C64(value) => Ok(Self::C64(value.to_memory_space_async(target)?)),
-        }
+        Ok(self.as_dyn_ad_ref().to_memory_space_async(target)?.into())
     }
 
     /// Transfers this tensor to a target memory space and waits for readiness.
@@ -111,12 +92,7 @@ impl Tensor {
     /// x.wait();
     /// ```
     pub fn wait(&self) {
-        match self {
-            Self::F32(value) => value.wait(),
-            Self::F64(value) => value.wait(),
-            Self::C32(value) => value.wait(),
-            Self::C64(value) => value.wait(),
-        }
+        self.as_dyn_ad_ref().wait();
     }
 
     /// Returns `true` when tensor data is ready without blocking.
@@ -130,12 +106,7 @@ impl Tensor {
     /// assert!(x.is_ready());
     /// ```
     pub fn is_ready(&self) -> bool {
-        match self {
-            Self::F32(value) => value.is_ready(),
-            Self::F64(value) => value.is_ready(),
-            Self::C32(value) => value.is_ready(),
-            Self::C64(value) => value.is_ready(),
-        }
+        self.as_dyn_ad_ref().is_ready()
     }
 
     /// Convenience wrapper for synchronous transfer to CPU-visible main memory.

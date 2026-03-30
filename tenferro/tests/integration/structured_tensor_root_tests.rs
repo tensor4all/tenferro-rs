@@ -1,6 +1,5 @@
 use num_complex::{Complex32, Complex64};
 use tenferro::{ScalarType, Tensor};
-use tenferro_dynamic_compute as dynamic_compute;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 fn vector(values: &[f64]) -> DenseTensor<f64> {
@@ -54,14 +53,14 @@ fn detach_preserves_dense_and_structured_payloads() {
     let dense = Tensor::from_tensor(tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2));
     let diag = Tensor::diag(&Tensor::from_tensor(vector(&[1.0, 2.0]))).unwrap();
 
-    let dense_detached: dynamic_compute::Tensor = dense.detach();
+    let dense_detached = dense.detach();
     assert!(dense_detached.is_dense());
     assert_eq!(dense_detached.dims(), &[2, 2]);
 
-    let diag_detached: dynamic_compute::Tensor = diag.detach();
+    let diag_detached = diag.detach();
     assert!(diag_detached.is_diag());
     assert_eq!(diag_detached.axis_classes(), &[0, 0]);
-    assert_eq!(diag_detached.as_f64().unwrap().payload().dims(), &[2]);
+    assert_eq!(diag_detached.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
@@ -103,9 +102,9 @@ fn detach_covers_non_f64_runtime_variants() {
         .unwrap(),
     );
 
-    let f32_detached: dynamic_compute::Tensor = f32_value.detach();
-    let c32_detached: dynamic_compute::Tensor = c32_value.detach();
-    let c64_detached: dynamic_compute::Tensor = c64_value.detach();
+    let f32_detached = f32_value.detach();
+    let c32_detached = c32_value.detach();
+    let c64_detached = c64_value.detach();
 
     assert_eq!(f32_detached.scalar_type(), ScalarType::F32);
     assert_eq!(c32_detached.scalar_type(), ScalarType::C32);

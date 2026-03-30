@@ -50,14 +50,24 @@ mod tape {
     };
 }
 
-#[path = "../src/ops/mod.rs"]
-mod ops_impl;
-
 mod ops {
-    pub use crate::ops_impl::*;
+    pub use tenferro_internal_ad_core::ops::*;
+    pub use tenferro_internal_ad_linalg::__typed_ad::*;
+    pub use tenferro_internal_ad_linalg::__typed_results::*;
+    pub use tenferro_internal_ad_ops::__typed_einsum::*;
+    pub use tenferro_internal_ad_ops::__typed_reduction::*;
+    pub use tenferro_internal_ad_ops::__typed_scalar::*;
+    pub use tenferro_internal_ad_surface::__typed_linalg_primal::*;
 
     pub mod ad {
-        pub use crate::ops_impl::ad::*;
+        pub use tenferro_internal_ad_linalg::__typed_eager::*;
+        pub use tenferro_internal_ad_ops::__typed_ad::*;
+    }
+
+    pub mod scalar {
+        pub mod primal {
+            pub use tenferro_internal_ad_ops::__typed_scalar::primal::*;
+        }
     }
 
     pub mod tests {

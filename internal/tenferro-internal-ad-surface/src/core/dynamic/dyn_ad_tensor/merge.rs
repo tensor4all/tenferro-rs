@@ -2,13 +2,14 @@ use core::ops::Add;
 
 use chainrules::{self, ScalarAd};
 use tenferro_algebra::Scalar;
+use tenferro_internal_ad_core::AdTensor;
 use tenferro_tensor::Tensor;
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use super::super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed};
 use crate::core::{AdTensorSnapshot, DynTensor, DynTensorTyped, NodeId};
 use crate::structured::StructuredTensor;
-use crate::{tape, AdTensor, Error, Result};
+use crate::{tape, Error, Result};
 
 fn ensure_reverse_leaf_attached<T>(input: &AdTensor<T>) -> Result<()>
 where
@@ -51,7 +52,7 @@ where
                 .as_ref()
                 .map(|t| t.with_payload_like(tensor_map_unary_typed(t.payload(), map)?))
                 .transpose()?;
-            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let out = AdTensor::from_reverse_output(output_primal, &tape, output_tangent)?;
             let output_node = out
                 .reverse_node_id()
                 .ok_or_else(|| Error::InvalidAdTensor {
@@ -125,7 +126,7 @@ where
                     )
                 })
                 .transpose()?;
-            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let out = AdTensor::from_reverse_output(output_primal, &tape, output_tangent)?;
             let output_node = out
                 .reverse_node_id()
                 .ok_or_else(|| Error::InvalidAdTensor {
@@ -171,7 +172,7 @@ fn rebuild_structured<T: Scalar>(
 struct AdTensorBinaryState<T: Scalar> {
     primal: StructuredTensor<T>,
     tangent: Option<StructuredTensor<T>>,
-    reverse: Option<(NodeId, ::tidu::Tape<DynTensor>)>,
+    reverse: Option<(NodeId, ::tidu::expert::Tape<DynTensor>)>,
 }
 
 fn split_ad_tensor_state<T: Scalar>(value: AdTensorSnapshot<T>) -> AdTensorBinaryState<T> {
@@ -281,7 +282,7 @@ where
                 }
             }
             let rhs_node = rhs_reverse.map(|(node, _)| node);
-            let out = AdTensor::new_reverse_output(primal, &lhs_tape, tangent)?;
+            let out = AdTensor::from_reverse_output(primal, &lhs_tape, tangent)?;
             let output_node = out
                 .reverse_node_id()
                 .ok_or_else(|| Error::InvalidAdTensor {
@@ -304,7 +305,7 @@ where
             Ok(out.snapshot()?)
         }
         (None, Some((rhs_node, rhs_tape))) => {
-            let out = AdTensor::new_reverse_output(primal, &rhs_tape, tangent)?;
+            let out = AdTensor::from_reverse_output(primal, &rhs_tape, tangent)?;
             let output_node = out
                 .reverse_node_id()
                 .ok_or_else(|| Error::InvalidAdTensor {

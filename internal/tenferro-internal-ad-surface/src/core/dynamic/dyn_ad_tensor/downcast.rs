@@ -1,8 +1,7 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Scalar;
 
-use super::Tensor;
-use crate::{AdTensor, Error, Result};
+use super::{accessors::TypedTensorScalarTag, Tensor, TypedTensorRef};
+use crate::{Error, Result};
 
 /// Sealed helper trait for generic scalar-type dispatch on [`Tensor`].
 ///
@@ -23,62 +22,56 @@ use crate::{AdTensor, Error, Result};
 /// let vals = x.try_to_vec::<f64>().unwrap();
 /// assert_eq!(vals, vec![1.0, 2.0, 3.0]);
 /// ```
-pub trait TensorScalarDowncast: private::Sealed + Scalar + 'static {
-    /// Returns a reference to the typed AD tensor if the runtime scalar type
+#[doc(hidden)]
+pub trait TensorScalarDowncast:
+    TypedTensorScalarTag + super::accessors::TypedTensorBorrowTyped
+{
+    /// Returns a typed tensor view if the runtime scalar type
     /// matches, or `None` otherwise.
     #[doc(hidden)]
-    fn downcast_ref(tensor: &Tensor) -> Option<&AdTensor<Self>>;
+    fn downcast_ref(tensor: &Tensor) -> Option<TypedTensorRef<'_, Self>>;
 
     /// Returns the [`crate::ScalarType`] tag for this scalar.
-    #[doc(hidden)]
     fn scalar_type_tag() -> crate::ScalarType;
 }
 
-mod private {
-    pub trait Sealed {}
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
-    impl Sealed for num_complex::Complex32 {}
-    impl Sealed for num_complex::Complex64 {}
-}
-
 impl TensorScalarDowncast for f32 {
-    fn downcast_ref(tensor: &Tensor) -> Option<&AdTensor<Self>> {
+    fn downcast_ref(tensor: &Tensor) -> Option<TypedTensorRef<'_, Self>> {
         tensor.as_f32()
     }
 
     fn scalar_type_tag() -> crate::ScalarType {
-        crate::ScalarType::F32
+        <Self as TypedTensorScalarTag>::scalar_type_tag()
     }
 }
 
 impl TensorScalarDowncast for f64 {
-    fn downcast_ref(tensor: &Tensor) -> Option<&AdTensor<Self>> {
+    fn downcast_ref(tensor: &Tensor) -> Option<TypedTensorRef<'_, Self>> {
         tensor.as_f64()
     }
 
     fn scalar_type_tag() -> crate::ScalarType {
-        crate::ScalarType::F64
+        <Self as TypedTensorScalarTag>::scalar_type_tag()
     }
 }
 
 impl TensorScalarDowncast for Complex32 {
-    fn downcast_ref(tensor: &Tensor) -> Option<&AdTensor<Self>> {
+    fn downcast_ref(tensor: &Tensor) -> Option<TypedTensorRef<'_, Self>> {
         tensor.as_c32()
     }
 
     fn scalar_type_tag() -> crate::ScalarType {
-        crate::ScalarType::C32
+        <Self as TypedTensorScalarTag>::scalar_type_tag()
     }
 }
 
 impl TensorScalarDowncast for Complex64 {
-    fn downcast_ref(tensor: &Tensor) -> Option<&AdTensor<Self>> {
+    fn downcast_ref(tensor: &Tensor) -> Option<TypedTensorRef<'_, Self>> {
         tensor.as_c64()
     }
 
     fn scalar_type_tag() -> crate::ScalarType {
-        crate::ScalarType::C64
+        <Self as TypedTensorScalarTag>::scalar_type_tag()
     }
 }
 
@@ -124,7 +117,7 @@ impl Tensor {
             message: format!(
                 "try_to_vec: scalar type mismatch — tensor is {:?}, requested {:?}",
                 self.scalar_type(),
-                T::scalar_type_tag(),
+                <T as TensorScalarDowncast>::scalar_type_tag(),
             ),
         })?;
         Ok(ad.primal().to_vec())
@@ -162,7 +155,7 @@ impl Tensor {
             message: format!(
                 "try_get: scalar type mismatch — tensor is {:?}, requested {:?}",
                 self.scalar_type(),
-                T::scalar_type_tag(),
+                <T as TensorScalarDowncast>::scalar_type_tag(),
             ),
         })?;
         ad.primal()

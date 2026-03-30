@@ -992,7 +992,7 @@ fn einsum_wrong_operand_count() {
 #[test]
 fn tracked_einsum_matmul_pullback() {
     use std::sync::{Arc, Mutex};
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -1112,7 +1112,7 @@ fn tracked_einsum_matmul_pullback() {
 #[test]
 fn tracked_einsum_rejects_mixed_tapes() {
     use std::sync::{Arc, Mutex};
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -1131,7 +1131,7 @@ fn tracked_einsum_rejects_mixed_tapes() {
 
 #[test]
 fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
-    use tidu::TrackedValue;
+    use tidu::expert::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a =
@@ -1148,7 +1148,7 @@ fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
 
 #[test]
 fn tracked_einsum_rejects_invalid_subscripts() {
-    use tidu::TrackedValue;
+    use tidu::expert::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
@@ -1162,7 +1162,7 @@ fn tracked_einsum_rejects_invalid_subscripts() {
 
 #[test]
 fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
-    use tidu::TrackedValue;
+    use tidu::expert::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
@@ -1177,7 +1177,7 @@ fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
 
 #[test]
 fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
@@ -1194,7 +1194,7 @@ fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
 
 #[test]
 fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
@@ -2462,7 +2462,7 @@ fn einsum_no_fw_grad_unchanged() {
 fn hvp_via_fw_grad_composition() {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -2554,7 +2554,7 @@ fn hvp_via_fw_grad_composition() {
 fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use tidu::Tape;
+    use tidu::expert::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();

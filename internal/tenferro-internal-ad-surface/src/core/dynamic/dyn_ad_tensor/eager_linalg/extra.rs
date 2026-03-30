@@ -1,87 +1,97 @@
+use super::super::accessors::TypedTensorBorrowTyped;
 use super::{
     same_dtype_error, CholeskyExResult, InvExResult, LuFactorExResult, LuFactorResult,
     SolveExResult, Tensor,
 };
-use crate::{AdTensor, DynTensorTyped, Result};
+use crate::ops::ad;
+use crate::{DynTensorTyped, Result, TypedTensorRef};
 use tenferro_algebra::Scalar;
+use tenferro_internal_ad_core::DynAdTensorRef;
+use tenferro_internal_ad_linalg::results::{
+    DynCholeskyExResult, DynInvExResult, DynLuFactorExResult, DynLuFactorResult, DynSolveExResult,
+};
 use tenferro_tensor::Tensor as DenseTensor;
 
-pub(super) fn with_dense_primal<T, R, F>(value: &AdTensor<T>, op: &'static str, f: F) -> Result<R>
-where
-    T: Scalar + DynTensorTyped + crate::runtime::contracts::LinalgRuntimeValue,
-    F: FnOnce(&tenferro_tensor::Tensor<T>) -> Result<R>,
-{
-    let dense = Tensor::dense_primal_only(value, op)?;
-    f(&dense)
+macro_rules! match_same_dtype_dyn_ad_tensor_ref_pair {
+    ($lhs:expr, $rhs:expr, $op:literal, |$lhs_ref:ident, $rhs_ref:ident| $body:block) => {{
+        let $lhs_ref = $lhs.as_dyn_ad_ref();
+        let $rhs_ref = $rhs.as_dyn_ad_ref();
+        match ($lhs_ref, $rhs_ref) {
+            (DynAdTensorRef::F32(_), DynAdTensorRef::F32(_))
+            | (DynAdTensorRef::F64(_), DynAdTensorRef::F64(_))
+            | (DynAdTensorRef::C32(_), DynAdTensorRef::C32(_))
+            | (DynAdTensorRef::C64(_), DynAdTensorRef::C64(_)) => $body,
+            (lhs, rhs) => Err(same_dtype_error($op, lhs.scalar_type(), rhs.scalar_type())),
+        }
+    }};
 }
 
-pub(super) fn with_dense_primal_pair<T, R, F>(
-    lhs: &AdTensor<T>,
-    rhs: &AdTensor<T>,
+pub(super) fn with_dense_primal_typed<T, R, F>(
+    value: TypedTensorRef<'_, T>,
     op: &'static str,
     f: F,
 ) -> Result<R>
 where
-    T: Scalar + DynTensorTyped + crate::runtime::contracts::LinalgRuntimeValue,
+    T: Scalar
+        + TypedTensorBorrowTyped
+        + DynTensorTyped
+        + crate::runtime::contracts::LinalgRuntimeValue,
+    F: FnOnce(&tenferro_tensor::Tensor<T>) -> Result<R>,
+{
+    let dense = Tensor::dense_primal_only_typed(value, op)?;
+    f(&dense)
+}
+
+pub(super) fn with_dense_primal_pair_typed<T, R, F>(
+    lhs: TypedTensorRef<'_, T>,
+    rhs: TypedTensorRef<'_, T>,
+    op: &'static str,
+    f: F,
+) -> Result<R>
+where
+    T: Scalar
+        + TypedTensorBorrowTyped
+        + DynTensorTyped
+        + crate::runtime::contracts::LinalgRuntimeValue,
     F: FnOnce(&tenferro_tensor::Tensor<T>, &tenferro_tensor::Tensor<T>) -> Result<R>,
 {
-    let lhs = Tensor::dense_primal_only(lhs, op)?;
-    let rhs = Tensor::dense_primal_only(rhs, op)?;
+    let lhs = Tensor::dense_primal_only_typed(lhs, op)?;
+    let rhs = Tensor::dense_primal_only_typed(rhs, op)?;
     f(&lhs, &rhs)
 }
 
-fn map_lu_factor_result<T>(out: tenferro_linalg::LuFactorResult<T>) -> LuFactorResult
-where
-    T: Scalar + DynTensorTyped,
-    AdTensor<T>: Into<Tensor>,
-{
+fn map_lu_factor_result(out: DynLuFactorResult) -> LuFactorResult {
     LuFactorResult {
-        factors: Tensor::from_tensor(out.factors),
+        factors: out.factors.into(),
         pivots: out.pivots,
     }
 }
 
-fn map_lu_factor_ex_result<T>(out: tenferro_linalg::LuFactorExResult<T>) -> LuFactorExResult
-where
-    T: Scalar + DynTensorTyped,
-    AdTensor<T>: Into<Tensor>,
-{
+fn map_lu_factor_ex_result(out: DynLuFactorExResult) -> LuFactorExResult {
     LuFactorExResult {
-        factors: Tensor::from_tensor(out.factors),
+        factors: out.factors.into(),
         pivots: out.pivots,
         info: out.info,
     }
 }
 
-fn map_solve_ex_result<T>(out: tenferro_linalg::SolveExResult<T>) -> SolveExResult
-where
-    T: Scalar + DynTensorTyped,
-    AdTensor<T>: Into<Tensor>,
-{
+fn map_solve_ex_result(out: DynSolveExResult) -> SolveExResult {
     SolveExResult {
-        solution: Tensor::from_tensor(out.solution),
+        solution: out.solution.into(),
         info: out.info,
     }
 }
 
-fn map_inv_ex_result<T>(out: tenferro_linalg::InvExResult<T>) -> InvExResult
-where
-    T: Scalar + DynTensorTyped,
-    AdTensor<T>: Into<Tensor>,
-{
+fn map_inv_ex_result(out: DynInvExResult) -> InvExResult {
     InvExResult {
-        inverse: Tensor::from_tensor(out.inverse),
+        inverse: out.inverse.into(),
         info: out.info,
     }
 }
 
-fn map_cholesky_ex_result<T>(out: tenferro_linalg::CholeskyExResult<T>) -> CholeskyExResult
-where
-    T: Scalar + DynTensorTyped,
-    AdTensor<T>: Into<Tensor>,
-{
+fn map_cholesky_ex_result(out: DynCholeskyExResult) -> CholeskyExResult {
     CholeskyExResult {
-        l: Tensor::from_tensor(out.l),
+        l: out.l.into(),
         info: out.info,
     }
 }
@@ -96,20 +106,9 @@ impl Tensor {
     /// let _pivots = &out.pivots;
     /// ```
     pub fn lu_factor(&self) -> Result<LuFactorResult> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "lu_factor", |dense| {
-                Ok(map_lu_factor_result(crate::ops::lu_factor(dense).run()?))
-            }),
-            Self::F64(value) => with_dense_primal(value, "lu_factor", |dense| {
-                Ok(map_lu_factor_result(crate::ops::lu_factor(dense).run()?))
-            }),
-            Self::C32(value) => with_dense_primal(value, "lu_factor", |dense| {
-                Ok(map_lu_factor_result(crate::ops::lu_factor(dense).run()?))
-            }),
-            Self::C64(value) => with_dense_primal(value, "lu_factor", |dense| {
-                Ok(map_lu_factor_result(crate::ops::lu_factor(dense).run()?))
-            }),
-        }
+        Ok(map_lu_factor_result(ad::lu_factor_dyn(
+            self.as_dyn_ad_ref(),
+        )?))
     }
 
     /// Computes an LU factorization with numerical status information.
@@ -121,28 +120,9 @@ impl Tensor {
     /// let _info = &out.info;
     /// ```
     pub fn lu_factor_ex(&self) -> Result<LuFactorExResult> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "lu_factor_ex", |dense| {
-                Ok(map_lu_factor_ex_result(
-                    crate::ops::lu_factor_ex(dense).run()?,
-                ))
-            }),
-            Self::F64(value) => with_dense_primal(value, "lu_factor_ex", |dense| {
-                Ok(map_lu_factor_ex_result(
-                    crate::ops::lu_factor_ex(dense).run()?,
-                ))
-            }),
-            Self::C32(value) => with_dense_primal(value, "lu_factor_ex", |dense| {
-                Ok(map_lu_factor_ex_result(
-                    crate::ops::lu_factor_ex(dense).run()?,
-                ))
-            }),
-            Self::C64(value) => with_dense_primal(value, "lu_factor_ex", |dense| {
-                Ok(map_lu_factor_ex_result(
-                    crate::ops::lu_factor_ex(dense).run()?,
-                ))
-            }),
-        }
+        Ok(map_lu_factor_ex_result(ad::lu_factor_ex_dyn(
+            self.as_dyn_ad_ref(),
+        )?))
     }
 
     /// Solves `LU x = b` using pre-factorized packed LU factors and pivots.
@@ -153,41 +133,9 @@ impl Tensor {
     /// let x = factors.lu_solve(&rhs, &pivots)?;
     /// ```
     pub fn lu_solve(&self, rhs: &Self, pivots: &DenseTensor<i32>) -> Result<Self> {
-        match (self, rhs) {
-            (Self::F32(lhs), Self::F32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "lu_solve", |factors, rhs| {
-                    Ok(Self::from_tensor(
-                        crate::ops::lu_solve(factors, rhs).pivots(pivots).run()?,
-                    ))
-                })
-            }
-            (Self::F64(lhs), Self::F64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "lu_solve", |factors, rhs| {
-                    Ok(Self::from_tensor(
-                        crate::ops::lu_solve(factors, rhs).pivots(pivots).run()?,
-                    ))
-                })
-            }
-            (Self::C32(lhs), Self::C32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "lu_solve", |factors, rhs| {
-                    Ok(Self::from_tensor(
-                        crate::ops::lu_solve(factors, rhs).pivots(pivots).run()?,
-                    ))
-                })
-            }
-            (Self::C64(lhs), Self::C64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "lu_solve", |factors, rhs| {
-                    Ok(Self::from_tensor(
-                        crate::ops::lu_solve(factors, rhs).pivots(pivots).run()?,
-                    ))
-                })
-            }
-            (lhs, rhs) => Err(same_dtype_error(
-                "lu_solve",
-                lhs.scalar_type(),
-                rhs.scalar_type(),
-            )),
-        }
+        match_same_dtype_dyn_ad_tensor_ref_pair!(self, rhs, "lu_solve", |lhs_ref, rhs_ref| {
+            Ok(ad::lu_solve_dyn(lhs_ref, rhs_ref, pivots)?.into())
+        })
     }
 
     /// Solves a linear system and returns numerical status information.
@@ -199,33 +147,9 @@ impl Tensor {
     /// let _solution = &out.solution;
     /// ```
     pub fn solve_ex(&self, rhs: &Self) -> Result<SolveExResult> {
-        match (self, rhs) {
-            (Self::F32(lhs), Self::F32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "solve_ex", |a, b| {
-                    Ok(map_solve_ex_result(crate::ops::solve_ex(a, b).run()?))
-                })
-            }
-            (Self::F64(lhs), Self::F64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "solve_ex", |a, b| {
-                    Ok(map_solve_ex_result(crate::ops::solve_ex(a, b).run()?))
-                })
-            }
-            (Self::C32(lhs), Self::C32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "solve_ex", |a, b| {
-                    Ok(map_solve_ex_result(crate::ops::solve_ex(a, b).run()?))
-                })
-            }
-            (Self::C64(lhs), Self::C64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "solve_ex", |a, b| {
-                    Ok(map_solve_ex_result(crate::ops::solve_ex(a, b).run()?))
-                })
-            }
-            (lhs, rhs) => Err(same_dtype_error(
-                "solve_ex",
-                lhs.scalar_type(),
-                rhs.scalar_type(),
-            )),
-        }
+        match_same_dtype_dyn_ad_tensor_ref_pair!(self, rhs, "solve_ex", |lhs_ref, rhs_ref| {
+            Ok(map_solve_ex_result(ad::solve_ex_dyn(lhs_ref, rhs_ref)?))
+        })
     }
 
     /// Computes an inverse with numerical status information.
@@ -237,20 +161,7 @@ impl Tensor {
     /// let _inverse = &out.inverse;
     /// ```
     pub fn inv_ex(&self) -> Result<InvExResult> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "inv_ex", |dense| {
-                Ok(map_inv_ex_result(crate::ops::inv_ex(dense).run()?))
-            }),
-            Self::F64(value) => with_dense_primal(value, "inv_ex", |dense| {
-                Ok(map_inv_ex_result(crate::ops::inv_ex(dense).run()?))
-            }),
-            Self::C32(value) => with_dense_primal(value, "inv_ex", |dense| {
-                Ok(map_inv_ex_result(crate::ops::inv_ex(dense).run()?))
-            }),
-            Self::C64(value) => with_dense_primal(value, "inv_ex", |dense| {
-                Ok(map_inv_ex_result(crate::ops::inv_ex(dense).run()?))
-            }),
-        }
+        Ok(map_inv_ex_result(ad::inv_ex_dyn(self.as_dyn_ad_ref())?))
     }
 
     /// Computes a Cholesky factorization with numerical status information.
@@ -262,28 +173,9 @@ impl Tensor {
     /// let _factor = &out.l;
     /// ```
     pub fn cholesky_ex(&self) -> Result<CholeskyExResult> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "cholesky_ex", |dense| {
-                Ok(map_cholesky_ex_result(
-                    crate::ops::cholesky_ex(dense).run()?,
-                ))
-            }),
-            Self::F64(value) => with_dense_primal(value, "cholesky_ex", |dense| {
-                Ok(map_cholesky_ex_result(
-                    crate::ops::cholesky_ex(dense).run()?,
-                ))
-            }),
-            Self::C32(value) => with_dense_primal(value, "cholesky_ex", |dense| {
-                Ok(map_cholesky_ex_result(
-                    crate::ops::cholesky_ex(dense).run()?,
-                ))
-            }),
-            Self::C64(value) => with_dense_primal(value, "cholesky_ex", |dense| {
-                Ok(map_cholesky_ex_result(
-                    crate::ops::cholesky_ex(dense).run()?,
-                ))
-            }),
-        }
+        Ok(map_cholesky_ex_result(ad::cholesky_ex_dyn(
+            self.as_dyn_ad_ref(),
+        )?))
     }
 
     /// Raises a square matrix to an integer power.
@@ -294,28 +186,35 @@ impl Tensor {
     /// let squared = x.matrix_power(2)?;
     /// ```
     pub fn matrix_power(&self, exponent: i64) -> Result<Self> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "matrix_power", |dense| {
+        if let Some(value) = self.as_f32() {
+            return with_dense_primal_typed(value, "matrix_power", |dense| {
                 Ok(Self::from_tensor(
                     crate::ops::matrix_power(dense).exponent(exponent).run()?,
                 ))
-            }),
-            Self::F64(value) => with_dense_primal(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            }),
-            Self::C32(value) => with_dense_primal(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            }),
-            Self::C64(value) => with_dense_primal(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            }),
+            });
         }
+        if let Some(value) = self.as_f64() {
+            return with_dense_primal_typed(value, "matrix_power", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                ))
+            });
+        }
+        if let Some(value) = self.as_c32() {
+            return with_dense_primal_typed(value, "matrix_power", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                ))
+            });
+        }
+        if let Some(value) = self.as_c64() {
+            return with_dense_primal_typed(value, "matrix_power", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                ))
+            });
+        }
+        unreachable!("Tensor::matrix_power should have one of the supported scalar dtypes")
     }
 
     /// Computes the matrix condition number with the default spectral norm.
@@ -326,15 +225,17 @@ impl Tensor {
     /// let value = x.cond()?;
     /// ```
     pub fn cond(&self) -> Result<Self> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "cond", |dense| {
+        if let Some(value) = self.as_f32() {
+            return with_dense_primal_typed(value, "cond", |dense| {
                 Ok(Self::from_tensor(crate::ops::cond(dense).run()?))
-            }),
-            Self::F64(value) => with_dense_primal(value, "cond", |dense| {
-                Ok(Self::from_tensor(crate::ops::cond(dense).run()?))
-            }),
-            _ => Err(super::real_only_error("cond", self.scalar_type())),
+            });
         }
+        if let Some(value) = self.as_f64() {
+            return with_dense_primal_typed(value, "cond", |dense| {
+                Ok(Self::from_tensor(crate::ops::cond(dense).run()?))
+            });
+        }
+        Err(super::real_only_error("cond", self.scalar_type()))
     }
 
     /// Computes the vector cross product.
@@ -345,33 +246,31 @@ impl Tensor {
     /// let z = x.cross(&y)?;
     /// ```
     pub fn cross(&self, rhs: &Self) -> Result<Self> {
-        match (self, rhs) {
-            (Self::F32(lhs), Self::F32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "cross", |a, b| {
-                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-                })
-            }
-            (Self::F64(lhs), Self::F64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "cross", |a, b| {
-                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-                })
-            }
-            (Self::C32(lhs), Self::C32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "cross", |a, b| {
-                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-                })
-            }
-            (Self::C64(lhs), Self::C64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "cross", |a, b| {
-                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-                })
-            }
-            (lhs, rhs) => Err(same_dtype_error(
-                "cross",
-                lhs.scalar_type(),
-                rhs.scalar_type(),
-            )),
+        if let (Some(lhs), Some(rhs)) = (self.as_f32(), rhs.as_f32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
+                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+            });
         }
+        if let (Some(lhs), Some(rhs)) = (self.as_f64(), rhs.as_f64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
+                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c32(), rhs.as_c32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
+                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c64(), rhs.as_c64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
+                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+            });
+        }
+        Err(same_dtype_error(
+            "cross",
+            self.scalar_type(),
+            rhs.scalar_type(),
+        ))
     }
 
     /// Forms the orthogonal/unitary matrix from Householder reflectors and `tau`.
@@ -382,40 +281,38 @@ impl Tensor {
     /// let q = reflectors.householder_product(&tau)?;
     /// ```
     pub fn householder_product(&self, tau: &Self) -> Result<Self> {
-        match (self, tau) {
-            (Self::F32(lhs), Self::F32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "householder_product", |a, b| {
-                    Ok(Self::from_tensor(
-                        crate::ops::householder_product(a, b).run()?,
-                    ))
-                })
-            }
-            (Self::F64(lhs), Self::F64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "householder_product", |a, b| {
-                    Ok(Self::from_tensor(
-                        crate::ops::householder_product(a, b).run()?,
-                    ))
-                })
-            }
-            (Self::C32(lhs), Self::C32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "householder_product", |a, b| {
-                    Ok(Self::from_tensor(
-                        crate::ops::householder_product(a, b).run()?,
-                    ))
-                })
-            }
-            (Self::C64(lhs), Self::C64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "householder_product", |a, b| {
-                    Ok(Self::from_tensor(
-                        crate::ops::householder_product(a, b).run()?,
-                    ))
-                })
-            }
-            (lhs, rhs) => Err(same_dtype_error(
-                "householder_product",
-                lhs.scalar_type(),
-                rhs.scalar_type(),
-            )),
+        if let (Some(lhs), Some(rhs)) = (self.as_f32(), tau.as_f32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
+                Ok(Self::from_tensor(
+                    crate::ops::householder_product(a, b).run()?,
+                ))
+            });
         }
+        if let (Some(lhs), Some(rhs)) = (self.as_f64(), tau.as_f64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
+                Ok(Self::from_tensor(
+                    crate::ops::householder_product(a, b).run()?,
+                ))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c32(), tau.as_c32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
+                Ok(Self::from_tensor(
+                    crate::ops::householder_product(a, b).run()?,
+                ))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c64(), tau.as_c64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
+                Ok(Self::from_tensor(
+                    crate::ops::householder_product(a, b).run()?,
+                ))
+            });
+        }
+        Err(same_dtype_error(
+            "householder_product",
+            self.scalar_type(),
+            tau.scalar_type(),
+        ))
     }
 }

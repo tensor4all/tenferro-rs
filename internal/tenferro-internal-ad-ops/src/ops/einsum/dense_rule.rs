@@ -1,6 +1,6 @@
 use chainrules_core::{AdResult, AutodiffError};
 use tenferro_tensor::Tensor;
-use tidu::ReverseRule;
+use tidu::expert::ReverseRule;
 
 use super::super::*;
 use tenferro_prims::TensorTempPoolContext;

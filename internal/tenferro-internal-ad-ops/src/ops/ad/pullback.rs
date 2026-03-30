@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::normalize_cotangent_payload;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum as tf_einsum;
+use tenferro_internal_ad_core::AdTensor;
 use tenferro_linalg::SolveGrad;
 use tenferro_tensor::Tensor;
 
@@ -13,8 +14,8 @@ use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 use crate::structured::StructuredTensor;
 use crate::tape;
 use crate::DynTensor;
-use crate::{AdTensor, Error, Result};
-use tidu::Tape;
+use crate::{Error, Result};
+use tidu::expert::Tape;
 
 /// Reverse pullback from a reverse-mode output tensor.
 ///

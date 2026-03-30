@@ -324,7 +324,7 @@ pub fn hvp(
    input's `NodeId` from its reverse handle, paired with the corresponding `v[i]`
    wrapped as `DynTensor`
 5. Extract `TrackedValue<DynTensor>` from `output` (dispatch over F32/F64/C32/C64)
-6. Call `tape.hvp(&tracked_output, &leaf_tangents)` → `tidu::HvpResult<DynTensor>`
+6. Call `tape.hvp(&tracked_output, &leaf_tangents)` → `tidu::expert::HvpResult<DynTensor>`
 7. Project `Gradients<DynTensor>` to requested inputs by NodeId lookup
    (same projection pattern as `Tensor::pullback_wrt` in
    `tenferro/src/core/dynamic/dyn_ad_tensor/pullback.rs`)

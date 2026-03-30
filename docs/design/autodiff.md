@@ -171,7 +171,7 @@ Current frontend behavior:
 - `retain_graph = false` frees the shared tape after `tenferro::grad` /
   `tenferro::backward`
 - `create_graph = true` is currently rejected by the eager `tenferro` frontend
-- `tidu::Tape::hvp` remains available for low-level tangent-seeded reverse
+- `tidu::expert::Tape::hvp` remains available for low-level tangent-seeded reverse
   queries
 
 There is no fallback heterogeneous graph path for `V::Tangent != V`.
@@ -230,7 +230,7 @@ impl Differentiable for MyScalar {
     fn seed_cotangent(&self) -> Self::Tangent { Self(1.0) }
 }
 
-let tape = Tape::<MyScalar>::new();
+let tape = tidu::expert::Tape::<MyScalar>::new();
 let x = tape.leaf(MyScalar(2.0));
 let grads = tape.pullback(&x).unwrap();
 assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
@@ -241,7 +241,7 @@ assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
 ### Reverse mode on tensors
 
 ```rust,ignore
-use tidu::Tape;
+use tidu::expert::Tape;
 use std::cell::RefCell;
 use std::rc::Rc;
 use tenferro_algebra::Standard;

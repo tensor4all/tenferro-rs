@@ -70,7 +70,7 @@ fn tape_registry_uses_chainrules_tape_directly() {
     .unwrap();
     assert!(
         registry.contains("Tape<DynTensor>"),
-        "tape registry should register rules against tidu::Tape<DynTensor>"
+        "tape registry should register rules against tidu::expert::Tape<DynTensor>"
     );
     assert!(
         registry.contains("tape.attach_rule"),

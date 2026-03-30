@@ -151,7 +151,7 @@ fn to_memory_space_preserves_reverse_mode_and_grad_flow() {
 
         let out = moved.exp()?;
         backward(&[&out], None, &[&moved], BackwardOptions::default())?;
-        assert!(moved.grad().is_some());
+        assert!(moved.grad()?.is_some());
         Ok::<(), tenferro::Error>(())
     })
     .unwrap();

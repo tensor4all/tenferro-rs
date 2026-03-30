@@ -1,15 +1,15 @@
 pub(crate) use num_complex::Complex64;
 
+pub(crate) use crate::ops::ad::*;
 pub(crate) use crate::ops::tests::with_cpu_runtime;
-pub(crate) use crate::ops_impl::ad::*;
-pub(crate) use crate::ops_impl::{einsum_ad, sum_ad};
+pub(crate) use crate::ops::{einsum_ad, sum_ad};
 pub(crate) use crate::runtime::contracts::{EinsumRuntimeValue, ScalarRuntimeValue};
 pub(crate) use crate::structured::StructuredTensor;
 pub(crate) use crate::{AdTensor, Error, RuntimeContext};
 pub(crate) use tenferro_linalg::NormKind;
 pub(crate) use tenferro_prims::CpuContext;
 pub(crate) use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-pub(crate) use tidu::Tape;
+pub(crate) use tidu::expert::Tape;
 
 #[path = "ported_ops_ad_tests/builder_pullbacks.rs"]
 mod builder_pullbacks;

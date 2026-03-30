@@ -5,12 +5,13 @@ mod scalar_type;
 use super::*;
 use chainrules_core::Differentiable;
 use num_complex::{Complex32, Complex64};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::core::AdMode;
 use crate::structured::StructuredTensor;
-use crate::{AdTensor, Error};
+use crate::{set_default_runtime, Error, RuntimeContext};
 
 fn rank0_f64(value: f64) -> DenseTensor<f64> {
     DenseTensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
@@ -30,6 +31,10 @@ fn rank0_c64(value: Complex64) -> DenseTensor<Complex64> {
 
 fn vector_f32(values: &[f32]) -> DenseTensor<f32> {
     DenseTensor::<f32>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn vector_f64(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
 fn vector_c32(values: &[Complex32]) -> DenseTensor<Complex32> {
@@ -61,13 +66,69 @@ fn rank0_tensor_carries_scalar_metadata() {
 }
 
 #[test]
+fn typed_tensor_ref_exposes_scalar_type() {
+    let x = Tensor::from_tensor(rank0_f64(1.0));
+    assert_eq!(x.as_f64().unwrap().scalar_type(), ScalarType::F64);
+}
+
+#[test]
+fn typed_tensor_ref_can_be_built_from_tensor_accessor() {
+    let x = Tensor::from_tensor(rank0_f64(1.0));
+    let typed = x.as_f64().unwrap();
+    assert_eq!(typed.scalar_type(), ScalarType::F64);
+    assert_eq!(typed.primal().buffer().as_slice().unwrap(), &[1.0]);
+}
+
+#[test]
+fn typed_tensor_ref_node_id_matches_tensor_helper() {
+    let reverse = Tensor::new_reverse_leaf(rank0_f64(3.0)).unwrap();
+    let typed = reverse.as_f64().unwrap();
+    assert_eq!(typed.node_id(), reverse.node_id());
+}
+
+#[test]
+fn typed_tensor_ref_rejects_mismatched_tensor_accessor() {
+    let x = Tensor::from_tensor(rank0_f32(1.0));
+    assert!(x.as_f64().is_none());
+}
+
+#[test]
+fn dyn_ad_tensor_helper_snapshots_match_public_snapshot_boundaries() {
+    let primal = Tensor::from_tensor(rank0_c32(Complex32::new(2.0, -1.0)));
+    let public_snapshot = primal.primal_snapshot();
+    assert_eq!(public_snapshot.scalar_type(), primal.scalar_type());
+    assert_eq!(public_snapshot.dims(), primal.dims());
+    assert_eq!(public_snapshot.axis_classes(), primal.axis_classes());
+    assert_eq!(public_snapshot.is_dense(), primal.is_dense());
+
+    let detached = primal.detach();
+    assert_eq!(detached.scalar_type(), primal.scalar_type());
+    assert_eq!(detached.dims(), primal.dims());
+    assert_eq!(detached.axis_classes(), primal.axis_classes());
+    assert_eq!(detached.is_dense(), primal.is_dense());
+
+    let reverse = Tensor::new_reverse_leaf(rank0_f64(3.0)).unwrap();
+    let public_snapshot = reverse.primal_snapshot();
+    assert_eq!(public_snapshot.scalar_type(), reverse.scalar_type());
+    assert_eq!(public_snapshot.dims(), reverse.dims());
+    assert_eq!(public_snapshot.axis_classes(), reverse.axis_classes());
+    assert_eq!(public_snapshot.is_dense(), reverse.is_dense());
+
+    let detached = reverse.detach();
+    assert_eq!(detached.scalar_type(), reverse.scalar_type());
+    assert_eq!(detached.dims(), reverse.dims());
+    assert_eq!(detached.axis_classes(), reverse.axis_classes());
+    assert_eq!(detached.is_dense(), reverse.is_dense());
+    assert!(reverse.reverse_handle().is_some());
+}
+
+#[test]
 fn rank0_dyn_ad_tensor_mode_and_tangent() {
-    let x: Tensor = AdTensor::new_forward(
+    let x = Tensor::new_forward(
         DenseTensor::<f32>::from_slice(&[2.0_f32], &[], MemoryOrder::ColumnMajor).unwrap(),
         DenseTensor::<f32>::from_slice(&[0.5_f32], &[], MemoryOrder::ColumnMajor).unwrap(),
     )
-    .unwrap()
-    .into();
+    .unwrap();
     assert_eq!(x.scalar_type(), ScalarType::F32);
     assert_eq!(x.mode(), AdMode::Forward);
     assert_eq!(
@@ -90,8 +151,7 @@ fn dyn_tensor_and_dyn_ad_tensor_dims() {
     assert_eq!(d.axis_classes(), &[0]);
     assert!(d.is_dense());
 
-    let ad = AdTensor::new_primal(t);
-    let dad: Tensor = ad.into();
+    let dad = Tensor::from_tensor(t);
     assert_eq!(dad.dims(), &[2]);
     assert_eq!(dad.mode(), AdMode::Primal);
 }
@@ -137,6 +197,42 @@ fn dyn_ad_tensor_reverse_graph_helpers_cover_same_and_different_graphs() {
 
     assert!(tape.shares_reverse_graph(&clone_graph));
     assert!(!tape.shares_reverse_graph(&other));
+}
+
+#[test]
+fn reverse_svd_outputs_preserve_mode_and_graph_membership() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let input = Tensor::new_reverse_leaf(
+        DenseTensor::<Complex64>::from_slice(
+            &[
+                Complex64::new(4.0, 0.5),
+                Complex64::new(1.0, -0.25),
+                Complex64::new(1.0, 0.25),
+                Complex64::new(3.0, 1.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let outputs = input.svd().unwrap();
+    let tape = input.as_c64().unwrap().tape().unwrap();
+
+    assert_eq!(outputs.u.mode(), AdMode::Reverse);
+    assert_eq!(outputs.s.mode(), AdMode::Reverse);
+    assert_eq!(outputs.vt.mode(), AdMode::Reverse);
+    assert!(outputs.u.as_c64().unwrap().tape().unwrap().same_tape(&tape));
+    assert!(outputs.s.as_f64().unwrap().tape().unwrap().same_tape(&tape));
+    assert!(outputs
+        .vt
+        .as_c64()
+        .unwrap()
+        .tape()
+        .unwrap()
+        .same_tape(&tape));
 }
 
 #[test]
@@ -246,8 +342,8 @@ fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
 
 #[test]
 fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
-    let lhs: Tensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
-    let rhs: Tensor = AdTensor::new_primal(rank0_c64(Complex64::new(1.0, -3.0))).into();
+    let lhs = Tensor::from_tensor(rank0_f64(2.0_f64));
+    let rhs = Tensor::from_tensor(rank0_c64(Complex64::new(1.0, -3.0)));
     let out = lhs.scale(&rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::C64);
     assert_eq!(
@@ -258,7 +354,7 @@ fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
 
 #[test]
 fn dyn_ad_tensor_promote_to_c64_lifts_real_rank0_tensor() {
-    let x: Tensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let x = Tensor::from_tensor(rank0_f64(2.0_f64));
     let promoted = x.promote_to(ScalarType::C64).unwrap();
     assert_eq!(promoted.scalar_type(), ScalarType::C64);
     assert_eq!(
@@ -275,7 +371,7 @@ fn dyn_ad_tensor_promote_to_c64_lifts_real_rank0_tensor() {
 
 #[test]
 fn dyn_ad_tensor_promote_to_c32_lifts_real_rank0_tensor() {
-    let x: Tensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
+    let x = Tensor::from_tensor(rank0_f32(2.0_f32));
     let promoted = x.promote_to(ScalarType::C32).unwrap();
     assert_eq!(promoted.scalar_type(), ScalarType::C32);
     assert_eq!(
@@ -292,32 +388,32 @@ fn dyn_ad_tensor_promote_to_c32_lifts_real_rank0_tensor() {
 
 #[test]
 fn dyn_ad_tensor_promote_to_identity_keeps_all_supported_variants() {
-    let f32_value: Tensor = AdTensor::new_primal(rank0_f32(1.0_f32)).into();
-    let f64_value: Tensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
-    let c32_value: Tensor = AdTensor::new_primal(rank0_c32(Complex32::new(3.0, 1.0))).into();
-    let c64_value: Tensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();
+    let f32_value = Tensor::from_tensor(rank0_f32(1.0_f32));
+    let f64_value = Tensor::from_tensor(rank0_f64(2.0_f64));
+    let c32_value = Tensor::from_tensor(rank0_c32(Complex32::new(3.0, 1.0)));
+    let c64_value = Tensor::from_tensor(rank0_c64(Complex64::new(4.0, -2.0)));
 
-    assert!(matches!(
-        f32_value.promote_to(ScalarType::F32).unwrap(),
-        Tensor::F32(_)
-    ));
-    assert!(matches!(
-        f64_value.promote_to(ScalarType::F64).unwrap(),
-        Tensor::F64(_)
-    ));
-    assert!(matches!(
-        c32_value.promote_to(ScalarType::C32).unwrap(),
-        Tensor::C32(_)
-    ));
-    assert!(matches!(
-        c64_value.promote_to(ScalarType::C64).unwrap(),
-        Tensor::C64(_)
-    ));
+    assert_eq!(
+        f32_value.promote_to(ScalarType::F32).unwrap().scalar_type(),
+        ScalarType::F32
+    );
+    assert_eq!(
+        f64_value.promote_to(ScalarType::F64).unwrap().scalar_type(),
+        ScalarType::F64
+    );
+    assert_eq!(
+        c32_value.promote_to(ScalarType::C32).unwrap().scalar_type(),
+        ScalarType::C32
+    );
+    assert_eq!(
+        c64_value.promote_to(ScalarType::C64).unwrap().scalar_type(),
+        ScalarType::C64
+    );
 }
 
 #[test]
 fn dyn_ad_tensor_promote_to_supports_cross_precision_casts() {
-    let x: Tensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let x = Tensor::from_tensor(rank0_f64(2.0_f64));
     let as_f32 = x.promote_to(ScalarType::F32).unwrap();
     assert_eq!(as_f32.scalar_type(), ScalarType::F32);
     assert_eq!(
@@ -347,8 +443,8 @@ fn dyn_ad_tensor_promote_to_supports_cross_precision_casts() {
 
 #[test]
 fn rank0_dyn_ad_tensor_scale_uses_result_type_join() {
-    let lhs: Tensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
-    let rhs: Tensor = AdTensor::new_primal(rank0_f64(3.0_f64)).into();
+    let lhs = Tensor::from_tensor(rank0_f32(2.0_f32));
+    let rhs = Tensor::from_tensor(rank0_f64(3.0_f64));
     let out = lhs.scale(&rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::F64);
     assert_eq!(
@@ -359,9 +455,7 @@ fn rank0_dyn_ad_tensor_scale_uses_result_type_join() {
 
 #[test]
 fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
-    let x: Tensor = AdTensor::new_forward(rank0_f64(2.0_f64), rank0_f64(0.5_f64))
-        .unwrap()
-        .into();
+    let x = Tensor::new_forward(rank0_f64(2.0_f64), rank0_f64(0.5_f64)).unwrap();
     let promoted = x.promote_to(ScalarType::C64).unwrap();
     assert_eq!(promoted.mode(), AdMode::Forward);
     let promoted = promoted.as_c64().unwrap();
@@ -374,9 +468,7 @@ fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
 #[test]
 fn dyn_ad_tensor_promote_to_casts_reverse_grad_back_to_input_dtype() {
     let tape = Tape::<crate::DynTensor>::new();
-    let x: Tensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tape)
-        .unwrap()
-        .into();
+    let x = Tensor::new_reverse_leaf_on(rank0_f64(2.0_f64), &tape).unwrap();
     let y = x.promote_to(ScalarType::C64).unwrap();
     let y = y.as_c64().unwrap();
     let tracked = tape
@@ -442,9 +534,7 @@ fn dyn_ad_tensor_to_scalar_type_supports_cross_precision_primal_casts() {
 #[test]
 fn dyn_ad_tensor_to_scalar_type_casts_reverse_grad_back_to_input_dtype() {
     let tape = Tape::<crate::DynTensor>::new();
-    let x: Tensor = AdTensor::new_reverse_leaf(rank0_f32(2.0_f32), &tape)
-        .unwrap()
-        .into();
+    let x = Tensor::new_reverse_leaf_on(rank0_f32(2.0_f32), &tape).unwrap();
     let y = x.to_scalar_type(ScalarType::F64).unwrap();
     let y = y.as_f64().unwrap();
     let tracked = tape
@@ -472,7 +562,7 @@ fn dyn_ad_tensor_to_scalar_type_casts_reverse_grad_back_to_input_dtype() {
 }
 
 #[test]
-fn dyn_ad_tensor_pullback_wrt_covers_remaining_dtype_variants() {
+fn dyn_ad_tensor_pullback_wrt_covers_all_typed_helper_variants() {
     fn exercise_pullback(x: Tensor, alpha: Tensor, cotangent: Tensor, expected: ScalarType) {
         let out = x.scale(&alpha).unwrap();
         let grads = out.pullback_wrt(&cotangent, &[&x, &alpha]).unwrap();
@@ -484,6 +574,11 @@ fn dyn_ad_tensor_pullback_wrt_covers_remaining_dtype_variants() {
     let alpha_f32 = x_f32.new_reverse_sibling(rank0_f32(3.0)).unwrap();
     let cotangent_f32 = Tensor::new_primal(vector_f32(&[0.5, 1.25]));
     exercise_pullback(x_f32, alpha_f32, cotangent_f32, ScalarType::F32);
+
+    let x_f64 = Tensor::new_reverse_leaf(vector_f64(&[1.0, 2.0])).unwrap();
+    let alpha_f64 = x_f64.new_reverse_sibling(rank0_f64(3.0)).unwrap();
+    let cotangent_f64 = Tensor::new_primal(vector_f64(&[0.5, 1.25]));
+    exercise_pullback(x_f64, alpha_f64, cotangent_f64, ScalarType::F64);
 
     let x_c32 = Tensor::new_reverse_leaf(vector_c32(&[
         Complex32::new(1.0, 0.5),
@@ -515,9 +610,43 @@ fn dyn_ad_tensor_pullback_wrt_covers_remaining_dtype_variants() {
 }
 
 #[test]
+fn dyn_ad_tensor_pullback_wrt_rejects_legacy_tape_queries_for_edge_outputs() {
+    let x = Tensor::new_reverse_leaf(vector_f64(&[1.0, 2.0])).unwrap();
+    let alpha = x.new_reverse_sibling(rank0_f64(3.0)).unwrap();
+    let out = x.scale(&alpha).unwrap();
+    let cotangent = Tensor::new_primal(vector_f64(&[0.5, 1.25]));
+
+    let legacy_tape = Tape::<crate::DynTensor>::new();
+    let legacy = Tensor::new_reverse_leaf_on(vector_f64(&[4.0, 5.0]), &legacy_tape).unwrap();
+
+    let err = out.pullback_wrt(&cotangent, &[&legacy]).unwrap_err();
+    assert!(matches!(err, Error::MixedReverseTape { .. }));
+}
+
+#[test]
+fn dyn_ad_tensor_pullback_wrt_hits_typed_fast_path_for_edge_outputs() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(rank0_f64(1.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let y = Tensor::from_tensor(rank0_f64(2.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let out = x.exp().unwrap().add(&y.exp().unwrap()).unwrap();
+    let out_f64 = out.as_f64().unwrap();
+    assert!(out_f64.reverse_edge_value().is_some());
+    assert!(out_f64.as_tracked().is_none());
+
+    let cotangent = Tensor::new_primal(rank0_f64(1.5));
+    let grads = out.pullback_wrt(&cotangent, &[&x, &y]).unwrap();
+    assert_eq!(grads[0].as_ref().unwrap().scalar_type(), ScalarType::F64);
+    assert_eq!(grads[1].as_ref().unwrap().scalar_type(), ScalarType::F64);
+}
+
+#[test]
 fn dyn_ad_tensor_div_with_scalar_lhs_is_supported() {
-    let rhs: Tensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
-    let lhs: Tensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();
+    let rhs = Tensor::from_tensor(rank0_f64(2.0_f64));
+    let lhs = Tensor::from_tensor(rank0_c64(Complex64::new(4.0, -2.0)));
     let out = lhs.div_scalar(&rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::C64);
     assert_eq!(
@@ -530,12 +659,8 @@ fn dyn_ad_tensor_div_with_scalar_lhs_is_supported() {
 fn dyn_ad_tensor_scale_checks_reverse_tape_compatibility() {
     let tensor_tape = Tape::<crate::DynTensor>::new();
     let scalar_tape = Tape::<crate::DynTensor>::new();
-    let lhs: Tensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tensor_tape)
-        .unwrap()
-        .into();
-    let rhs: Tensor = AdTensor::new_reverse_leaf(rank0_f64(3.0_f64), &scalar_tape)
-        .unwrap()
-        .into();
+    let lhs = Tensor::new_reverse_leaf_on(rank0_f64(2.0_f64), &tensor_tape).unwrap();
+    let rhs = Tensor::new_reverse_leaf_on(rank0_f64(3.0_f64), &scalar_tape).unwrap();
     let err = match lhs.scale(&rhs) {
         Ok(_) => panic!("mixed reverse tapes should be rejected"),
         Err(err) => err,
@@ -666,8 +791,8 @@ fn dyn_ad_tensor_max_abs_diff_primal_uses_primal_values() {
         DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let rhs =
         DenseTensor::<f64>::from_slice(&[1.0, 1.5, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-    let lhs: Tensor = AdTensor::new_primal(lhs).into();
-    let rhs: Tensor = AdTensor::new_primal(rhs).into();
+    let lhs = Tensor::from_tensor(lhs);
+    let rhs = Tensor::from_tensor(rhs);
 
     let diff = lhs.max_abs_diff_primal(&rhs).unwrap();
     assert!((diff - 0.5).abs() < 1e-12, "expected diff=0.5, got {diff}");
@@ -687,7 +812,7 @@ fn dyn_ad_tensor_real_imag_part_preserve_forward_mode() {
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let x: Tensor = AdTensor::new_forward(primal, tangent).unwrap().into();
+    let x = Tensor::new_forward(primal, tangent).unwrap();
     assert!(x.is_complex());
     assert!(!x.is_real());
 
@@ -715,17 +840,17 @@ fn dyn_ad_tensor_real_imag_part_preserve_forward_mode() {
 
 #[test]
 fn dyn_ad_tensor_compose_complex_roundtrip_forward() {
-    let re = AdTensor::new_forward(
+    let re = Tensor::new_forward(
         DenseTensor::<f64>::from_slice(&[1.5], &[1], MemoryOrder::ColumnMajor).unwrap(),
         DenseTensor::<f64>::from_slice(&[0.25], &[1], MemoryOrder::ColumnMajor).unwrap(),
     )
     .unwrap();
-    let im = AdTensor::new_forward(
+    let im = Tensor::new_forward(
         DenseTensor::<f64>::from_slice(&[-2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
         DenseTensor::<f64>::from_slice(&[0.75], &[1], MemoryOrder::ColumnMajor).unwrap(),
     )
     .unwrap();
-    let z = Tensor::compose_complex(Tensor::F64(re), Tensor::F64(im)).unwrap();
+    let z = Tensor::compose_complex(re, im).unwrap();
     assert_eq!(z.scalar_type(), ScalarType::C64);
     assert_eq!(z.mode(), AdMode::Forward);
 
@@ -738,7 +863,7 @@ fn dyn_ad_tensor_compose_complex_roundtrip_forward() {
 
 #[test]
 fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
-    let re = AdTensor::new_primal(
+    let re = Tensor::from_tensor(
         DenseTensor::<Complex64>::from_slice(
             &[Complex64::new(1.0, 0.0)],
             &[1],
@@ -746,10 +871,10 @@ fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
         )
         .unwrap(),
     );
-    let im = AdTensor::new_primal(
+    let im = Tensor::from_tensor(
         DenseTensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
     );
-    let err = match Tensor::compose_complex(Tensor::C64(re), Tensor::F64(im)) {
+    let err = match Tensor::compose_complex(re, im) {
         Ok(_) => panic!("compose_complex should reject non-real input"),
         Err(err) => err,
     };
@@ -758,17 +883,17 @@ fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
 
 #[test]
 fn dyn_ad_tensor_compose_complex_checks_reverse_tape_compatibility() {
-    let re = AdTensor::new_reverse_leaf(
+    let re = Tensor::new_reverse_leaf_on(
         DenseTensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
         &Tape::<crate::DynTensor>::new(),
     )
     .unwrap();
-    let im = AdTensor::new_reverse_leaf(
+    let im = Tensor::new_reverse_leaf_on(
         DenseTensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
         &Tape::<crate::DynTensor>::new(),
     )
     .unwrap();
-    let err = match Tensor::compose_complex(Tensor::F64(re), Tensor::F64(im)) {
+    let err = match Tensor::compose_complex(re, im) {
         Ok(_) => panic!("compose_complex should reject mixed reverse tapes"),
         Err(err) => err,
     };

@@ -69,8 +69,8 @@ fn tensor_reverse_api_accumulates_gradients_on_requested_inputs() {
     let out = x.add(&y).unwrap().sum().unwrap();
     backward(&[&out], None, &[&x, &y], BackwardOptions::default()).unwrap();
 
-    let gx = x.grad().unwrap();
-    let gy = y.grad().unwrap();
+    let gx = x.grad().unwrap().unwrap();
+    let gy = y.grad().unwrap().unwrap();
     assert_eq!(gx.dims(), &[2]);
     assert_eq!(gy.dims(), &[2]);
     assert_eq!(

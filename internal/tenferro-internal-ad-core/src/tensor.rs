@@ -5,15 +5,20 @@ use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 use tenferro_internal_error::{Error, Result};
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTensor};
 use tenferro_tensor::Tensor;
-use tidu::{NodeId as ChainNodeId, Tape, TrackedValue};
+use tidu::expert::{NodeId as ChainNodeId, Tape, TrackedValue};
+use tidu::Value as ReverseValue;
 
 use crate::{AdMode, NodeId};
 
+mod reverse;
+
 #[derive(Clone)]
-struct ReverseAttachment {
+struct LegacyReverseAttachment {
     node: ChainNodeId,
     tape: Tape<DynTensor>,
 }
+
+type EdgeValueHandle<T> = Arc<ReverseValue<StructuredTensor<T>>>;
 
 enum TensorAdState<T: Scalar> {
     Primal(StructuredTensor<T>),
@@ -29,7 +34,8 @@ enum TensorAdState<T: Scalar> {
 }
 
 struct ReverseTensorState<T: Scalar> {
-    attachment: Option<ReverseAttachment>,
+    legacy_attachment: Option<LegacyReverseAttachment>,
+    edge_value: Option<EdgeValueHandle<T>>,
     grad: Option<StructuredTensor<T>>,
     hvp: Option<StructuredTensor<T>>,
     is_leaf: bool,
@@ -52,7 +58,7 @@ pub enum AdTensorSnapshot<T: Scalar> {
 
 /// Tensor newtype carrying AD mode information.
 ///
-/// Reverse-mode values participate in a homogeneous `tidu::Tape<DynTensor>`.
+/// Reverse-mode values participate in a homogeneous `tidu::expert::Tape<DynTensor>`.
 /// Scalars in reverse mode are represented as rank-0 tensors.
 ///
 /// # Examples
@@ -174,7 +180,8 @@ impl<T: Scalar> AdTensor<T> {
             primal,
             tangent,
             state: Arc::new(Mutex::new(ReverseTensorState {
-                attachment: None,
+                legacy_attachment: None,
+                edge_value: None,
                 grad: None,
                 hvp: None,
                 is_leaf: true,
@@ -199,7 +206,7 @@ impl<T: Scalar> AdTensor<T> {
             T::into_dyn(primal.clone()),
             tangent.clone().map(T::into_dyn),
         );
-        let attachment = ReverseAttachment {
+        let attachment = LegacyReverseAttachment {
             node: tracked
                 .node_id()
                 .expect("reverse placeholder carries a node"),
@@ -212,7 +219,8 @@ impl<T: Scalar> AdTensor<T> {
             primal,
             tangent,
             state: Arc::new(Mutex::new(ReverseTensorState {
-                attachment: Some(attachment),
+                legacy_attachment: Some(attachment),
+                edge_value: None,
                 grad: None,
                 hvp: None,
                 is_leaf: false,
@@ -232,7 +240,7 @@ impl<T: Scalar> AdTensor<T> {
                 state,
             } => {
                 let mut guard = lock_reverse_state(state);
-                match guard.attachment.as_ref() {
+                match guard.legacy_attachment.as_ref() {
                     Some(existing) if existing.tape.same_tape(tape) => Ok(()),
                     Some(existing) => Err(Error::MixedReverseTape {
                         expected: existing.tape.id() as u64,
@@ -254,7 +262,7 @@ impl<T: Scalar> AdTensor<T> {
                                 .map_err(Error::Autodiff)?,
                             None => tape.leaf(T::into_dyn(primal.clone())),
                         };
-                        guard.attachment = Some(ReverseAttachment {
+                        guard.legacy_attachment = Some(LegacyReverseAttachment {
                             node: tracked.node_id().expect("reverse leaf carries a node"),
                             tape: tracked
                                 .tape()
@@ -269,9 +277,38 @@ impl<T: Scalar> AdTensor<T> {
         }
     }
 
-    fn reverse_attachment(&self) -> Option<ReverseAttachment> {
+    fn reverse_attachment(&self) -> Option<LegacyReverseAttachment> {
         match &self.0 {
-            TensorAdState::Reverse { state, .. } => lock_reverse_state(state).attachment.clone(),
+            TensorAdState::Reverse { state, .. } => {
+                lock_reverse_state(state).legacy_attachment.clone()
+            }
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn reverse_edge_value(&self) -> Option<EdgeValueHandle<T>> {
+        match &self.0 {
+            TensorAdState::Reverse {
+                primal,
+                tangent,
+                state,
+            } => {
+                if tangent.is_some() {
+                    return None;
+                }
+                let mut guard = lock_reverse_state(state);
+                if let Some(edge_value) = guard.edge_value.as_ref() {
+                    return Some(edge_value.clone());
+                }
+                if guard.is_leaf && guard.legacy_attachment.is_none() {
+                    let edge_value =
+                        Arc::new(ReverseValue::new(primal.clone()).requires_grad_(true));
+                    guard.edge_value = Some(edge_value.clone());
+                    return Some(edge_value);
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -330,7 +367,7 @@ impl<T: Scalar> AdTensor<T> {
                 let guard = lock_reverse_state(state);
                 let attachment =
                     guard
-                        .attachment
+                        .legacy_attachment
                         .clone()
                         .ok_or_else(|| Error::InvalidAdTensor {
                             message: "reverse tensor is not attached to a graph yet".to_string(),
@@ -480,6 +517,27 @@ impl<T: Scalar> AdTensor<T> {
         matches!(self.0, TensorAdState::Reverse { .. })
     }
 
+    pub fn is_leaf(&self) -> bool {
+        match &self.0 {
+            TensorAdState::Reverse { state, .. } => lock_reverse_state(state).is_leaf,
+            _ => true,
+        }
+    }
+
+    pub fn with_requires_grad(&self, enabled: bool) -> Result<Self>
+    where
+        T: DynTensorTyped,
+    {
+        if enabled {
+            if self.requires_grad() && self.is_leaf() {
+                return Ok(self.clone());
+            }
+            return Self::new_pending_reverse(self.structured_primal().clone(), None);
+        }
+
+        Ok(Self::new_primal(self.structured_primal().clone()))
+    }
+
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()>
     where
         T: DynTensorTyped,
@@ -497,156 +555,6 @@ impl<T: Scalar> AdTensor<T> {
                 Ok(())
             }
             _ => Ok(()),
-        }
-    }
-
-    pub fn grad(&self) -> Option<StructuredTensor<T>>
-    where
-        T: Clone,
-    {
-        match &self.0 {
-            TensorAdState::Reverse { state, .. } => lock_reverse_state(state).grad.clone(),
-            _ => None,
-        }
-    }
-
-    pub fn hvp(&self) -> Option<StructuredTensor<T>>
-    where
-        T: Clone,
-    {
-        match &self.0 {
-            TensorAdState::Reverse { state, .. } => lock_reverse_state(state).hvp.clone(),
-            _ => None,
-        }
-    }
-
-    pub fn zero_grad(&self) -> Result<()> {
-        match &self.0 {
-            TensorAdState::Reverse { state, .. } => {
-                let mut guard = lock_reverse_state(state);
-                if !guard.is_leaf {
-                    return Err(Error::InvalidAdTensor {
-                        message: "zero_grad is valid on reverse leaf tensors only".to_string(),
-                    });
-                }
-                guard.grad = None;
-                guard.hvp = None;
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn accumulate_leaf_grad(&self, grad: StructuredTensor<T>) -> Result<()>
-    where
-        T: Clone,
-    {
-        match &self.0 {
-            TensorAdState::Reverse { state, .. } => {
-                let mut guard = lock_reverse_state(state);
-                if !guard.is_leaf {
-                    return Err(Error::InvalidAdTensor {
-                        message: "gradient accumulation requires reverse leaf tensor".to_string(),
-                    });
-                }
-                guard.grad = Some(match guard.grad.take() {
-                    Some(existing) => {
-                        <StructuredTensor<T> as chainrules_core::Differentiable>::accumulate_tangent(
-                            existing, &grad,
-                        )
-                    }
-                    None => grad,
-                });
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn accumulate_leaf_hvp(&self, hvp: StructuredTensor<T>) -> Result<()>
-    where
-        T: Clone,
-    {
-        match &self.0 {
-            TensorAdState::Reverse { state, .. } => {
-                let mut guard = lock_reverse_state(state);
-                if !guard.is_leaf {
-                    return Err(Error::InvalidAdTensor {
-                        message: "HVP accumulation requires reverse leaf tensor".to_string(),
-                    });
-                }
-                guard.hvp = Some(match guard.hvp.take() {
-                    Some(existing) => {
-                        <StructuredTensor<T> as chainrules_core::Differentiable>::accumulate_tangent(
-                            existing, &hvp,
-                        )
-                    }
-                    None => hvp,
-                });
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-impl<T: Scalar + DynTensorTyped> Clone for AdTensor<T> {
-    fn clone(&self) -> Self {
-        match &self.0 {
-            TensorAdState::Primal(value) => Self::new_primal(value.clone()),
-            TensorAdState::Forward { primal, tangent } => Self(TensorAdState::Forward {
-                primal: primal.clone(),
-                tangent: tangent.clone(),
-            }),
-            TensorAdState::Reverse {
-                primal,
-                tangent,
-                state,
-            } => Self(TensorAdState::Reverse {
-                primal: primal.clone(),
-                tangent: tangent.clone(),
-                state: Arc::clone(state),
-            }),
-        }
-    }
-}
-
-impl<T: Scalar> From<Tensor<T>> for AdTensor<T> {
-    fn from(value: Tensor<T>) -> Self {
-        Self::new_primal(StructuredTensor::from(value))
-    }
-}
-
-impl<T: Scalar> From<StructuredTensor<T>> for AdTensor<T> {
-    fn from(value: StructuredTensor<T>) -> Self {
-        Self::new_primal(value)
-    }
-}
-
-impl<T: Scalar + DynTensorTyped + 'static> TryFrom<AdTensorSnapshot<T>> for AdTensor<T> {
-    type Error = Error;
-
-    fn try_from(value: AdTensorSnapshot<T>) -> Result<Self> {
-        match value {
-            AdTensorSnapshot::Primal(primal) => Ok(Self::new_primal(primal)),
-            AdTensorSnapshot::Forward { primal, tangent } => Self::new_forward(primal, tangent),
-            AdTensorSnapshot::Reverse {
-                primal,
-                node,
-                tape,
-                tangent,
-            } => Ok(Self(TensorAdState::Reverse {
-                primal,
-                tangent,
-                state: Arc::new(Mutex::new(ReverseTensorState {
-                    attachment: Some(ReverseAttachment { node, tape }),
-                    grad: None,
-                    hvp: None,
-                    is_leaf: false,
-                })),
-            })),
         }
     }
 }

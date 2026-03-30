@@ -4,7 +4,7 @@ use chainrules_core::Differentiable as _;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_internal_ad_core as tape;
-use tenferro_internal_ad_core::{ops::*, AdTensor};
+use tenferro_internal_ad_core::{ops::*, AdTensor, DynAdTensorTyped};
 use tenferro_internal_error::{Error, Result};
 use tenferro_internal_frontend_core::DynTensorTyped;
 use tenferro_internal_runtime::contracts::*;

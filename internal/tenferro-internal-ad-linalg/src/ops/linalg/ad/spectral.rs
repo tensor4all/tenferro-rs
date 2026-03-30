@@ -15,7 +15,7 @@ pub struct EigenAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> EigenAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: RealLinalgRuntimeValue + DynAdTensorTyped,
 {
     /// Executes AD eigen decomposition.
     /// # Examples
@@ -23,7 +23,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedEigenResult<T>> {
+    pub fn run(self) -> Result<DynEigenResult> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("eigen", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -149,9 +149,9 @@ where
             }
         }
 
-        Ok(TypedEigenResult {
-            values: out_values,
-            vectors: out_vectors,
+        Ok(DynEigenResult {
+            values: out_values.into(),
+            vectors: out_vectors.into(),
         })
     }
 }
@@ -179,7 +179,7 @@ pub struct EigAdBuilder<'a, T: Scalar> {
 impl<'a, T> EigAdBuilder<'a, T>
 where
     T: ComplexLinalgRuntimeValue,
-    Complex<T>: DynTensorTyped,
+    Complex<T>: DynTensorTyped + DynAdTensorTyped,
 {
     /// Executes AD eig.
     /// # Examples
@@ -187,7 +187,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedEigResult<T>> {
+    pub fn run(self) -> Result<DynEigResult> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("eig", &operands)?;
         if has_reverse(&operands) {
@@ -237,9 +237,9 @@ where
         let out_values = wrap_dense_ad_output("eig_ad", &operands, primal.values, dvalues)?;
         let out_vectors = wrap_dense_ad_output("eig_ad", &operands, primal.vectors, dvectors)?;
 
-        Ok(TypedEigResult {
-            values: out_values,
-            vectors: out_vectors,
+        Ok(DynEigResult {
+            values: out_values.into(),
+            vectors: out_vectors.into(),
         })
     }
 }

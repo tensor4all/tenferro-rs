@@ -6,10 +6,14 @@ fn setup() -> tenferro::DefaultRuntimeGuard {
 }
 
 fn assert_tensor_close(actual: &Tensor, expected: &[f64], label: &str) {
-    let actual_data: Vec<f64> = match actual {
-        Tensor::F64(v) => v.primal().buffer().as_slice().unwrap().to_vec(),
-        _ => panic!("{label}: expected f64 tensor"),
-    };
+    let actual_data: Vec<f64> = actual
+        .as_f64()
+        .unwrap_or_else(|| panic!("{label}: expected f64 tensor"))
+        .primal()
+        .buffer()
+        .as_slice()
+        .unwrap()
+        .to_vec();
     assert_eq!(
         actual_data.len(),
         expected.len(),

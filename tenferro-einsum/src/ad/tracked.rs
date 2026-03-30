@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
-use tidu::{AdResult, Differentiable, TrackedValue};
+use tidu::expert::TrackedValue;
+use tidu::{AdResult, Differentiable};
 
 use crate::api::einsum;
 use crate::execution::backend::{BackendContext, EinsumBackend};
@@ -19,7 +20,7 @@ use super::rules::einsum_frule_impl;
 ///
 /// ```ignore
 /// use std::sync::{Arc, Mutex};
-/// use tidu::Tape;
+/// use tidu::expert::Tape;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};

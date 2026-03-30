@@ -11,7 +11,7 @@ mod support;
 
 use num_complex::Complex64;
 use tenferro_linalg::NormKind;
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use super::*;
 use crate::ops::tests::with_cpu_runtime;

@@ -9,7 +9,6 @@ use tenferro_linalg::{
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::core::NodeId;
 use crate::runtime::contracts::*;
 use crate::runtime::dispatch::*;
 use crate::structured::{
@@ -17,19 +16,27 @@ use crate::structured::{
     reverse_subscripts, to_dense_in_ctx, StructuredTensor,
 };
 use crate::tape;
-use crate::{AdTensor, Error, Result};
+use crate::{Error, Result};
 
-pub mod ad;
-pub mod einsum;
+#[path = "ad/mod.rs"]
+#[doc(hidden)]
+pub(crate) mod __typed_ad;
+#[path = "einsum/mod.rs"]
+#[doc(hidden)]
+mod __typed_einsum;
+#[path = "reduction/mod.rs"]
+#[doc(hidden)]
+mod __typed_reduction;
+#[path = "scalar/mod.rs"]
+#[doc(hidden)]
+mod __typed_scalar;
 mod linalg;
-pub mod reduction;
-pub mod scalar;
 
 mod common;
 
+pub use __typed_einsum::*;
+pub use __typed_reduction::*;
+pub use __typed_scalar::*;
 #[allow(unused_imports)]
 pub(crate) use common::*;
-pub use einsum::*;
 pub use linalg::*;
-pub use reduction::*;
-pub use scalar::*;

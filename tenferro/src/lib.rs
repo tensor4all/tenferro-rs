@@ -45,14 +45,14 @@ pub mod forward_ad {
 }
 
 #[cfg(test)]
+pub(crate) use core::DynTensor;
+#[cfg(test)]
 pub(crate) use core::DynTensorTyped;
 pub use core::{
     AdMode, CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor, TensorScalarDowncast,
+    Tensor, TensorScalarDowncast, TypedTensorRef,
 };
-#[cfg(test)]
-pub(crate) use core::{AdTensor, DynTensor};
 pub use error::{Error, Result};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;

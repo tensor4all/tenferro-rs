@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
-use tidu::{AdResult, Differentiable, NodeId, ReverseRule};
+use tidu::expert::{NodeId, ReverseRule};
+use tidu::{AdResult, Differentiable};
 
 use crate::api::einsum_with_subscripts;
 use crate::execution::backend::{BackendContext, EinsumBackend};

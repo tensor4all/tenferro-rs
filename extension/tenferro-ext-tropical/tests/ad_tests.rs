@@ -12,7 +12,7 @@ use tenferro_ext_tropical::{
     MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 
@@ -420,7 +420,7 @@ fn tracked_maxplus_matmul_pullback() {
     use tenferro_einsum::tracked_einsum;
 
     let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL).unwrap();
-    let ones_tracked = tidu::TrackedValue::new(ones);
+    let ones_tracked = tidu::expert::TrackedValue::new(ones);
 
     let ctx = Arc::new(Mutex::new(ctx()));
     let loss = tracked_einsum::<tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
@@ -838,8 +838,8 @@ fn tracked_no_grad_returns_plain_tensor() {
     let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
     // Non-tracked (no tape, no gradient)
-    let a = tidu::TrackedValue::new(a_data);
-    let b = tidu::TrackedValue::new(b_data);
+    let a = tidu::expert::TrackedValue::new(a_data);
+    let b = tidu::expert::TrackedValue::new(b_data);
 
     let c =
         tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(

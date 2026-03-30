@@ -13,7 +13,7 @@ use tenferro_internal_runtime::contracts::EinsumRuntimeValue;
 use tenferro_internal_runtime::dispatch::{with_einsum_runtime, DenseEinsumBackend};
 use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::{NodeId as ChainNodeId, Tape};
+use tidu::expert::{NodeId as ChainNodeId, Tape};
 
 use crate::{AdMode, AdTensor};
 

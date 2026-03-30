@@ -1,7 +1,7 @@
 use tenferro_internal_error::Error;
 use tenferro_internal_frontend_core::{DynTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::AdTensor;
 
@@ -90,4 +90,22 @@ fn reverse_non_leaf_rejects_leaf_only_operations() {
         .accumulate_leaf_hvp(structured_rank0_f64(1.0))
         .unwrap_err();
     assert!(matches!(hvp_err, Error::InvalidAdTensor { .. }));
+}
+
+#[test]
+fn reverse_non_leaf_allows_explicit_input_gradient_cache() {
+    let tape = Tape::<DynTensor>::new();
+    let value = AdTensor::new_reverse_output(rank0_f64(1.0), &tape, None).unwrap();
+
+    value
+        .accumulate_input_grad(structured_rank0_f64(1.0))
+        .unwrap();
+    value
+        .accumulate_input_grad(structured_rank0_f64(2.5))
+        .unwrap();
+
+    assert_eq!(
+        value.grad().unwrap().payload().buffer().as_slice().unwrap(),
+        &[3.5]
+    );
 }

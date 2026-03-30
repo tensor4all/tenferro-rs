@@ -344,7 +344,7 @@ For a detailed feature-by-feature mapping, see
 | Multi-input backward | Strong | `einsum`, `solve`, `solve_triangular`, `lstsq` |
 | Forward mode | Strong | Best supported when only a few inputs carry tangents |
 | Multi-input HVP | Partial | Explicitly exposed for `einsum` |
-| Higher-order derivatives (non-HVP) | Partial | Low-level `tidu::Tape<Tensor<T>>` flows are available, but the `tenferro` frontend validation depth is still limited |
+| Higher-order derivatives (non-HVP) | Partial | Low-level `tidu::expert::Tape<Tensor<T>>` flows are available, but the `tenferro` frontend validation depth is still limited |
 | Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |
 | Complex/real matrices | Strong | Complex `einsum`, complex `solve_triangular`, and real-to-complex `eig` are covered |
 

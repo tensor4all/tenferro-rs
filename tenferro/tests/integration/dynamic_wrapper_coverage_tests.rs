@@ -509,7 +509,8 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
         &[2, 2],
     ));
     reverse_complex_svd.set_requires_grad(true).unwrap();
-    let reverse_svd_loss = reverse_complex_svd.svd().unwrap().s.sum().unwrap();
+    let reverse_complex_svd_out = reverse_complex_svd.svd().unwrap();
+    let reverse_svd_loss = reverse_complex_svd_out.s.sum().unwrap();
     let reverse_svd_grads = grad(
         &[&reverse_svd_loss],
         &[&reverse_complex_svd],
@@ -520,6 +521,16 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     let reverse_svd_grad = reverse_svd_grads[0].as_ref().unwrap();
     assert_eq!(reverse_svd_grad.scalar_type(), ScalarType::C64);
     assert_eq!(reverse_svd_grad.dims(), &[2, 2]);
+
+    let reverse_real_eig = reverse!(matrix_f64(&[0.0, -1.0, 1.0, 0.0], &[2, 2]));
+    let eig_err = match reverse_real_eig.eig() {
+        Ok(_) => panic!("real reverse-mode eig should stay rejected by the dynamic wrapper"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        eig_err,
+        tenferro::Error::UnsupportedAdOp { op: "eig_ad" }
+    ));
 
     let complex32_err = match reverse!(matrix_c32(
         &[
@@ -542,6 +553,23 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     let mismatch_err = matrix32.solve(&rhs64).unwrap_err();
     assert!(
         matches!(mismatch_err, tenferro::Error::InvalidAdTensor { message } if message.contains("requires matching dtypes"))
+    );
+
+    let solve_ex_mismatch_err = match matrix32.solve_ex(&rhs64) {
+        Ok(_) => panic!("solve_ex should reject mixed dtypes"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(solve_ex_mismatch_err, tenferro::Error::InvalidAdTensor { message } if message.contains("solve_ex requires matching dtypes"))
+    );
+
+    let lu_factor32 = matrix32.lu_factor().unwrap();
+    let lu_solve_mismatch_err = match lu_factor32.factors.lu_solve(&rhs64, &lu_factor32.pivots) {
+        Ok(_) => panic!("lu_solve should reject mixed dtypes"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(lu_solve_mismatch_err, tenferro::Error::InvalidAdTensor { message } if message.contains("lu_solve requires matching dtypes"))
     );
 
     let lstsq_err = match matrix64.lstsq(&rhs32) {

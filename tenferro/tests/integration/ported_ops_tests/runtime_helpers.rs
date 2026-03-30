@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use ::tidu::Tape;
+use ::tidu::expert::Tape;
 
 fn dense_structured<T: tenferro_algebra::Scalar>(tensor: DenseTensor<T>) -> StructuredTensor<T> {
     StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(tensor))
@@ -133,7 +133,7 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
     })
     .unwrap();
 
-    let summed = super::scalar::primal::scalar_full_reduction_primal(
+    let summed = crate::ops::scalar::primal::scalar_full_reduction_primal(
         "runtime_helper",
         tenferro_prims::ScalarReductionOp::Sum,
         &a,

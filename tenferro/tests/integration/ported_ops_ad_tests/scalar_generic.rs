@@ -1,7 +1,7 @@
 use super::{max_abs_diff, reverse_leaf_f64, tensor_from_vec_f64 as tensor_from_slice};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::ops::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,

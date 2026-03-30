@@ -1,7 +1,7 @@
 use tenferro_internal_error::Error;
 use tenferro_internal_frontend_core::{DynTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::{AdMode, AdTensor, AdTensorSnapshot, AdValue};
 

@@ -1,7 +1,7 @@
 use super::{same_dtype_error, Tensor};
 use crate::Result;
 
-use super::extra::{with_dense_primal, with_dense_primal_pair};
+use super::extra::{with_dense_primal_pair_typed, with_dense_primal_typed};
 
 impl Tensor {
     /// Builds a Vandermonde matrix using the default options.
@@ -23,36 +23,43 @@ impl Tensor {
     /// let v = x.vander_with(Some(4), true)?;
     /// ```
     pub fn vander_with(&self, columns: Option<usize>, increasing: bool) -> Result<Self> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "vander", |dense| {
+        if let Some(value) = self.as_f32() {
+            return with_dense_primal_typed(value, "vander", |dense| {
                 let mut builder = crate::ops::vander(dense).increasing(increasing);
                 if let Some(columns) = columns {
                     builder = builder.columns(columns);
                 }
                 Ok(Self::from_tensor(builder.run()?))
-            }),
-            Self::F64(value) => with_dense_primal(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            }),
-            Self::C32(value) => with_dense_primal(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            }),
-            Self::C64(value) => with_dense_primal(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            }),
+            });
         }
+        if let Some(value) = self.as_f64() {
+            return with_dense_primal_typed(value, "vander", |dense| {
+                let mut builder = crate::ops::vander(dense).increasing(increasing);
+                if let Some(columns) = columns {
+                    builder = builder.columns(columns);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        if let Some(value) = self.as_c32() {
+            return with_dense_primal_typed(value, "vander", |dense| {
+                let mut builder = crate::ops::vander(dense).increasing(increasing);
+                if let Some(columns) = columns {
+                    builder = builder.columns(columns);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        if let Some(value) = self.as_c64() {
+            return with_dense_primal_typed(value, "vander", |dense| {
+                let mut builder = crate::ops::vander(dense).increasing(increasing);
+                if let Some(columns) = columns {
+                    builder = builder.columns(columns);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        unreachable!("Tensor::vander_with should have one of the supported scalar dtypes")
     }
 
     /// Inverts a tensorized linear map by splitting the first `ind` axes to the left.
@@ -63,28 +70,35 @@ impl Tensor {
     /// let inv = x.tensorinv(2)?;
     /// ```
     pub fn tensorinv(&self, ind: usize) -> Result<Self> {
-        match self {
-            Self::F32(value) => with_dense_primal(value, "tensorinv", |dense| {
+        if let Some(value) = self.as_f32() {
+            return with_dense_primal_typed(value, "tensorinv", |dense| {
                 Ok(Self::from_tensor(
                     crate::ops::tensorinv(dense).ind(ind).run()?,
                 ))
-            }),
-            Self::F64(value) => with_dense_primal(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            }),
-            Self::C32(value) => with_dense_primal(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            }),
-            Self::C64(value) => with_dense_primal(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            }),
+            });
         }
+        if let Some(value) = self.as_f64() {
+            return with_dense_primal_typed(value, "tensorinv", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::tensorinv(dense).ind(ind).run()?,
+                ))
+            });
+        }
+        if let Some(value) = self.as_c32() {
+            return with_dense_primal_typed(value, "tensorinv", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::tensorinv(dense).ind(ind).run()?,
+                ))
+            });
+        }
+        if let Some(value) = self.as_c64() {
+            return with_dense_primal_typed(value, "tensorinv", |dense| {
+                Ok(Self::from_tensor(
+                    crate::ops::tensorinv(dense).ind(ind).run()?,
+                ))
+            });
+        }
+        unreachable!("Tensor::tensorinv should have one of the supported scalar dtypes")
     }
 
     /// Solves a tensorized linear system using the default axis ordering.
@@ -106,48 +120,46 @@ impl Tensor {
     /// let x = a.tensorsolve_with_dims(&b, &[3, 2])?;
     /// ```
     pub fn tensorsolve_with_dims(&self, rhs: &Self, dims: &[usize]) -> Result<Self> {
-        match (self, rhs) {
-            (Self::F32(lhs), Self::F32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "tensorsolve", |a, b| {
-                    let mut builder = crate::ops::tensorsolve(a, b);
-                    if !dims.is_empty() {
-                        builder = builder.dims(dims);
-                    }
-                    Ok(Self::from_tensor(builder.run()?))
-                })
-            }
-            (Self::F64(lhs), Self::F64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "tensorsolve", |a, b| {
-                    let mut builder = crate::ops::tensorsolve(a, b);
-                    if !dims.is_empty() {
-                        builder = builder.dims(dims);
-                    }
-                    Ok(Self::from_tensor(builder.run()?))
-                })
-            }
-            (Self::C32(lhs), Self::C32(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "tensorsolve", |a, b| {
-                    let mut builder = crate::ops::tensorsolve(a, b);
-                    if !dims.is_empty() {
-                        builder = builder.dims(dims);
-                    }
-                    Ok(Self::from_tensor(builder.run()?))
-                })
-            }
-            (Self::C64(lhs), Self::C64(rhs)) => {
-                with_dense_primal_pair(lhs, rhs, "tensorsolve", |a, b| {
-                    let mut builder = crate::ops::tensorsolve(a, b);
-                    if !dims.is_empty() {
-                        builder = builder.dims(dims);
-                    }
-                    Ok(Self::from_tensor(builder.run()?))
-                })
-            }
-            (lhs, rhs) => Err(same_dtype_error(
-                "tensorsolve",
-                lhs.scalar_type(),
-                rhs.scalar_type(),
-            )),
+        if let (Some(lhs), Some(rhs)) = (self.as_f32(), rhs.as_f32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
+                let mut builder = crate::ops::tensorsolve(a, b);
+                if !dims.is_empty() {
+                    builder = builder.dims(dims);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
         }
+        if let (Some(lhs), Some(rhs)) = (self.as_f64(), rhs.as_f64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
+                let mut builder = crate::ops::tensorsolve(a, b);
+                if !dims.is_empty() {
+                    builder = builder.dims(dims);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c32(), rhs.as_c32()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
+                let mut builder = crate::ops::tensorsolve(a, b);
+                if !dims.is_empty() {
+                    builder = builder.dims(dims);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        if let (Some(lhs), Some(rhs)) = (self.as_c64(), rhs.as_c64()) {
+            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
+                let mut builder = crate::ops::tensorsolve(a, b);
+                if !dims.is_empty() {
+                    builder = builder.dims(dims);
+                }
+                Ok(Self::from_tensor(builder.run()?))
+            });
+        }
+        Err(same_dtype_error(
+            "tensorsolve",
+            self.scalar_type(),
+            rhs.scalar_type(),
+        ))
     }
 }

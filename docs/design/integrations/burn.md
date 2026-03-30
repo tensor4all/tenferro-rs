@@ -235,7 +235,7 @@ impl<B: TensorNetworkOps, C: CheckpointStrategy>
 
 ### Why not use tenferro's Tape inside Burn?
 
-tenferro has its own AD engine (`tidu::Tape`), but using two separate AD tapes would create a discontinuity: Burn couldn't propagate gradients through the boundary. Instead, we extract only the **mathematical VJP rule** from tenferro's rrule implementations and call it within Burn's backward pass. This gives Burn full visibility of the gradient flow.
+tenferro has its own AD engine (`tidu::expert::Tape`), but using two separate AD tapes would create a discontinuity: Burn couldn't propagate gradients through the boundary. Instead, we extract only the **mathematical VJP rule** from tenferro's rrule implementations and call it within Burn's backward pass. This gives Burn full visibility of the gradient flow.
 
 ### Why a separate crate?
 

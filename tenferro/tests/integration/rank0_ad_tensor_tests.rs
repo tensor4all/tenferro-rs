@@ -11,7 +11,7 @@ fn rank0_forward_tensor_exposes_primal_tangent_and_metadata() {
     assert!(x.dims().is_empty());
     assert_eq!(x.scalar_type(), tenferro::ScalarType::F64);
     assert!(!x.requires_grad());
-    assert!(x.grad().is_none());
+    assert!(x.grad().unwrap().is_none());
     assert_eq!(
         x.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[2.0_f64]
@@ -34,7 +34,7 @@ fn rank0_reverse_tensor_roundtrips_complex_primal_and_node_metadata() {
 
     assert!(x.dims().is_empty());
     assert!(x.requires_grad());
-    assert!(x.grad().is_none());
+    assert!(x.grad().unwrap().is_none());
     assert_eq!(rank0_value_c64(&x), Complex64::new(1.0, -2.0));
 }
 
@@ -70,7 +70,7 @@ fn rank0_explicit_cast_preserves_rank0_forward_tangent_across_precision_changes(
     assert!(y.dims().is_empty());
     assert_eq!(y.scalar_type(), ScalarType::F64);
     assert!(!y.requires_grad());
-    assert!(y.grad().is_none());
+    assert!(y.grad().unwrap().is_none());
     assert_eq!(
         y.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[2.5_f64]

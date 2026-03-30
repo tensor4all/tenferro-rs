@@ -1,13 +1,14 @@
 pub(super) use chainrules::ScalarAd;
 pub(super) use num_traits::NumCast;
 pub(super) use tenferro_algebra::Scalar;
+pub(super) use tenferro_internal_ad_core::AdTensor;
 pub(super) use tenferro_prims::{
     AnalyticBinaryOp, AnalyticReductionOp, AnalyticUnaryOp, ScalarBinaryOp, ScalarReductionOp,
     ScalarUnaryOp,
 };
 pub(super) use tenferro_tensor::Tensor;
 
-pub(super) use crate::{tape, AdTensor, Error, Result};
+pub(super) use crate::{tape, Error, Result};
 
 pub(super) use crate::ops::common::{
     broadcast_scalar_like, collect_reverse_input_specs, compress_structured_pullback_like,

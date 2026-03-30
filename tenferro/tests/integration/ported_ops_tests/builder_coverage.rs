@@ -1,7 +1,10 @@
 use super::*;
 use crate::core::AdMode;
-use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use ::tidu::Tape;
+use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape, reverse_leaf_c64};
+use ::tidu::expert::Tape;
+use num_complex::Complex64;
+use tenferro_internal_ad_core::DynAdTensor;
+use tenferro_internal_frontend_core::ScalarType;
 
 #[test]
 fn public_ad_builders_cover_helper_paths_and_builder_options() {
@@ -88,61 +91,85 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
         DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap(),
     );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_svd_rev.u, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_svd_rev.vt, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_svd_rev.u),
+        &cot_matrix,
+        &[&ad_multi_rev],
+    )
+    .unwrap()[0]
+        .is_some());
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_svd_rev.vt),
+        &cot_matrix,
+        &[&ad_multi_rev],
+    )
+    .unwrap()[0]
+        .is_some());
 
     let out_qr_rev = qr_ad(&ad_multi_rev).run().unwrap();
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_qr_rev.q, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_qr_rev.r, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_qr_rev.q),
+        &cot_matrix,
+        &[&ad_multi_rev]
+    )
+    .unwrap()[0]
+        .is_some());
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_qr_rev.r),
+        &cot_matrix,
+        &[&ad_multi_rev]
+    )
+    .unwrap()[0]
+        .is_some());
 
     let out_lu_rev = lu_ad(&ad_multi_rev).pivot(LuPivot::Partial).run().unwrap();
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_lu_rev.l, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_lu_rev.u, &cot_matrix, &[&ad_multi_rev]).unwrap()[0]
-            .is_some()
-    );
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_lu_rev.l),
+        &cot_matrix,
+        &[&ad_multi_rev]
+    )
+    .unwrap()[0]
+        .is_some());
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_lu_rev.u),
+        &cot_matrix,
+        &[&ad_multi_rev]
+    )
+    .unwrap()[0]
+        .is_some());
 
     let out_eigen_rev = eigen_ad(&ad_multi_rev).run().unwrap();
     let cot_values = AdTensor::new_primal(
         DenseTensor::<f64>::from_slice(&[1.0, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_eigen_rev.values, &cot_values, &[&ad_multi_rev],)
-            .unwrap()[0]
-            .is_some()
-    );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_eigen_rev.vectors, &cot_matrix, &[&ad_multi_rev],)
-            .unwrap()[0]
-            .is_some()
-    );
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_eigen_rev.values),
+        &cot_values,
+        &[&ad_multi_rev],
+    )
+    .unwrap()[0]
+        .is_some());
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_eigen_rev.vectors),
+        &cot_matrix,
+        &[&ad_multi_rev],
+    )
+    .unwrap()[0]
+        .is_some());
 
     let out_slogdet_rev = slogdet_ad(&ad_multi_rev).run().unwrap();
     let cot_scalar = AdTensor::new_primal(
         DenseTensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     );
-    assert!(
-        crate::ops::ad::pullback_wrt(&out_slogdet_rev.sign, &cot_scalar, &[&ad_multi_rev],)
-            .unwrap()[0]
-            .is_some()
-    );
     assert!(crate::ops::ad::pullback_wrt(
-        &out_slogdet_rev.logabsdet,
+        expect_dyn_f64(&out_slogdet_rev.sign),
+        &cot_scalar,
+        &[&ad_multi_rev],
+    )
+    .unwrap()[0]
+        .is_some());
+    assert!(crate::ops::ad::pullback_wrt(
+        expect_dyn_f64(&out_slogdet_rev.logabsdet),
         &cot_scalar,
         &[&ad_multi_rev],
     )

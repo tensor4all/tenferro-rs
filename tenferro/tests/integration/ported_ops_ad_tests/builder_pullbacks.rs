@@ -199,7 +199,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
     let cotangent_s =
         DenseTensor::<f64>::from_slice(&[1.0, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
     let ad_cotangent = AdTensor::new_primal(cotangent_s.clone());
-    let grads = pullback_wrt(&out.s, &ad_cotangent, &[&ad_a_rev]).unwrap();
+    let grads = pullback_wrt(expect_dyn_f64(&out.s), &ad_cotangent, &[&ad_a_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing svd dA");
 
     let expected = with_cpu_runtime("svd_rrule_expected", |ctx| {
@@ -242,7 +242,12 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     let cotangent_x =
         DenseTensor::<f64>::from_slice(&[0.3, -0.7], &[2], MemoryOrder::ColumnMajor).unwrap();
     let ad_cotangent = AdTensor::new_primal(cotangent_x.clone());
-    let grads = pullback_wrt(&out.x, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
+    let grads = pullback_wrt(
+        expect_dyn_f64(&out.x),
+        &ad_cotangent,
+        &[&ad_a_rev, &ad_b_rev],
+    )
+    .unwrap();
     let grad_a = grads[0].as_ref().expect("missing lstsq dA");
     let grad_b = grads[1].as_ref().expect("missing lstsq dB");
 
@@ -284,74 +289,95 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let qr_cot_q = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             qr_out.q.dims(),
-            qr_out.q.primal().logical_memory_space(),
+            expect_dyn_f64(&qr_out.q).primal().logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(pullback_wrt(&qr_out.q, &qr_cot_q, &[&ad_a_rev]).unwrap()[0].is_some());
+    assert!(pullback_wrt(expect_dyn_f64(&qr_out.q), &qr_cot_q, &[&ad_a_rev]).unwrap()[0].is_some());
     let qr_cot_r = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             qr_out.r.dims(),
-            qr_out.r.primal().logical_memory_space(),
+            expect_dyn_f64(&qr_out.r).primal().logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(pullback_wrt(&qr_out.r, &qr_cot_r, &[&ad_a_rev]).unwrap()[0].is_some());
+    assert!(pullback_wrt(expect_dyn_f64(&qr_out.r), &qr_cot_r, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let lu_out = lu(&ad_a_rev).unwrap();
     let lu_cot_l = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             lu_out.l.dims(),
-            lu_out.l.primal().logical_memory_space(),
+            expect_dyn_f64(&lu_out.l).primal().logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(pullback_wrt(&lu_out.l, &lu_cot_l, &[&ad_a_rev]).unwrap()[0].is_some());
+    assert!(pullback_wrt(expect_dyn_f64(&lu_out.l), &lu_cot_l, &[&ad_a_rev]).unwrap()[0].is_some());
     let lu_cot_u = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             lu_out.u.dims(),
-            lu_out.u.primal().logical_memory_space(),
+            expect_dyn_f64(&lu_out.u).primal().logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(pullback_wrt(&lu_out.u, &lu_cot_u, &[&ad_a_rev]).unwrap()[0].is_some());
+    assert!(pullback_wrt(expect_dyn_f64(&lu_out.u), &lu_cot_u, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let eigen_out = eigen(&ad_a_rev).unwrap();
     let eigen_cot_values = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             eigen_out.values.dims(),
-            eigen_out.values.primal().logical_memory_space(),
+            expect_dyn_f64(&eigen_out.values)
+                .primal()
+                .logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(pullback_wrt(&eigen_out.values, &eigen_cot_values, &[&ad_a_rev]).unwrap()[0].is_some());
+    assert!(pullback_wrt(
+        expect_dyn_f64(&eigen_out.values),
+        &eigen_cot_values,
+        &[&ad_a_rev]
+    )
+    .unwrap()[0]
+        .is_some());
     let eigen_cot_vectors = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             eigen_out.vectors.dims(),
-            eigen_out.vectors.primal().logical_memory_space(),
+            expect_dyn_f64(&eigen_out.vectors)
+                .primal()
+                .logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(
-        pullback_wrt(&eigen_out.vectors, &eigen_cot_vectors, &[&ad_a_rev]).unwrap()[0].is_some()
-    );
+    assert!(pullback_wrt(
+        expect_dyn_f64(&eigen_out.vectors),
+        &eigen_cot_vectors,
+        &[&ad_a_rev]
+    )
+    .unwrap()[0]
+        .is_some());
 
     let slogdet_out = slogdet(&ad_a_rev).unwrap();
     let slogdet_cot_sign = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             slogdet_out.sign.dims(),
-            slogdet_out.sign.primal().logical_memory_space(),
+            expect_dyn_f64(&slogdet_out.sign)
+                .primal()
+                .logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    let sign_grad = pullback_wrt(&slogdet_out.sign, &slogdet_cot_sign, &[&ad_a_rev]).unwrap();
+    let sign_grad = pullback_wrt(
+        expect_dyn_f64(&slogdet_out.sign),
+        &slogdet_cot_sign,
+        &[&ad_a_rev],
+    )
+    .unwrap();
     let sign_grad_a = sign_grad[0]
         .as_ref()
         .expect("missing slogdet sign gradient");
@@ -360,15 +386,20 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let slogdet_cot_logabs = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             slogdet_out.logabsdet.dims(),
-            slogdet_out.logabsdet.primal().logical_memory_space(),
+            expect_dyn_f64(&slogdet_out.logabsdet)
+                .primal()
+                .logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    assert!(
-        pullback_wrt(&slogdet_out.logabsdet, &slogdet_cot_logabs, &[&ad_a_rev]).unwrap()[0]
-            .is_some()
-    );
+    assert!(pullback_wrt(
+        expect_dyn_f64(&slogdet_out.logabsdet),
+        &slogdet_cot_logabs,
+        &[&ad_a_rev]
+    )
+    .unwrap()[0]
+        .is_some());
 
     let a_ls = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
@@ -384,25 +415,32 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let lstsq_cot_x = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             lstsq_out.x.dims(),
-            lstsq_out.x.primal().logical_memory_space(),
+            expect_dyn_f64(&lstsq_out.x).primal().logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    let grads_x = pullback_wrt(&lstsq_out.x, &lstsq_cot_x, &[&ad_ls_a, &ad_ls_b]).unwrap();
+    let grads_x = pullback_wrt(
+        expect_dyn_f64(&lstsq_out.x),
+        &lstsq_cot_x,
+        &[&ad_ls_a, &ad_ls_b],
+    )
+    .unwrap();
     assert!(grads_x[0].is_some());
     assert!(grads_x[1].is_some());
 
     let lstsq_cot_residual = AdTensor::new_primal(
         DenseTensor::<f64>::ones(
             lstsq_out.residual.dims(),
-            lstsq_out.residual.primal().logical_memory_space(),
+            expect_dyn_f64(&lstsq_out.residual)
+                .primal()
+                .logical_memory_space(),
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
     let grads_res = pullback_wrt(
-        &lstsq_out.residual,
+        expect_dyn_f64(&lstsq_out.residual),
         &lstsq_cot_residual,
         &[&ad_ls_a, &ad_ls_b],
     )

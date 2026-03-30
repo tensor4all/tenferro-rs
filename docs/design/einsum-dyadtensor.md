@@ -91,7 +91,7 @@ let hv = tape.hvp(&loss).unwrap();
 ```
 
 High-level eager HVP wrappers are still intentionally limited in the current
-phase; the low-level `tidu::Tape::hvp` path is the source of truth.
+phase; the low-level `tidu::expert::Tape::hvp` path is the source of truth.
 
 ## Forward-Mode Integration
 

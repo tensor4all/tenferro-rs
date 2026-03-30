@@ -2,7 +2,6 @@ use super::support::{diag_f64, vector_f64};
 use num_complex::Complex32;
 use num_complex::Complex64;
 use tenferro::{forward_ad, set_default_runtime, snapshot, RuntimeContext, ScalarValue, Tensor};
-use tenferro_dynamic_compute as dynamic_compute;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
@@ -73,23 +72,25 @@ fn try_scalar_value_rejects_non_rank0_tensors() {
 }
 
 #[test]
-fn detach_remains_compute_tensor_while_snapshot_is_export_boundary() {
-    let mut x = Tensor::from_tensor(
+fn detach_returns_primal_tensor_while_snapshot_is_export_boundary() {
+    let x = Tensor::from_tensor(
         DenseTensor::<f64>::from_slice(&[5.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    );
-    x.set_requires_grad(true).unwrap();
+    )
+    .with_requires_grad(true)
+    .unwrap();
 
-    let detached: dynamic_compute::Tensor = x.detach();
+    let detached = x.detach();
     assert_eq!(
         detached
             .as_f64()
             .unwrap()
-            .payload()
+            .primal()
             .buffer()
             .as_slice()
             .unwrap(),
         &[5.0]
     );
+    assert!(!detached.requires_grad());
 
     let snapshot = x.primal_snapshot();
     assert_eq!(snapshot.scalar_type(), tenferro::ScalarType::F64);
@@ -98,10 +99,11 @@ fn detach_remains_compute_tensor_while_snapshot_is_export_boundary() {
 
 #[test]
 fn try_scalar_value_and_primal_snapshot_cover_remaining_runtime_variants_and_modes() {
-    let mut reverse_f32 = Tensor::from_tensor(
+    let reverse_f32 = Tensor::from_tensor(
         DenseTensor::<f32>::from_slice(&[1.5_f32], &[], MemoryOrder::ColumnMajor).unwrap(),
-    );
-    reverse_f32.set_requires_grad(true).unwrap();
+    )
+    .with_requires_grad(true)
+    .unwrap();
     let reverse_snapshot = reverse_f32.primal_snapshot();
     assert!(matches!(reverse_snapshot, snapshot::DynTensor::F32(_)));
     assert_eq!(

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chainrules_core::Differentiable as _;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
+use tenferro_internal_ad_core::AdTensor;
 use tenferro_linalg::{
     CholeskyExResult, EigenResult, InvExResult, LinalgScalar, LuFactorExResult, LuFactorResult,
     LuPivot, LuResult, NormKind, QrResult, SolveExResult, SvdOptions,
@@ -17,11 +18,11 @@ use crate::structured::{
     reverse_subscripts, to_dense_in_ctx, StructuredTensor,
 };
 use crate::tape;
-use crate::{AdTensor, Error, Result};
+use crate::{Error, Result};
 
 pub mod ad;
 pub mod einsum;
-mod linalg;
+pub(crate) mod linalg;
 pub mod reduction;
 pub mod scalar;
 

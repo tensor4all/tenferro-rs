@@ -21,7 +21,7 @@ fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
 
     let out = x.scale(&a).unwrap();
     assert!(!out.requires_grad());
-    assert!(out.grad().is_none());
+    assert!(out.grad().unwrap().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(
@@ -44,7 +44,7 @@ fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
 
     let out = x.div_scalar(&a).unwrap();
     assert!(!out.requires_grad());
-    assert!(out.grad().is_none());
+    assert!(out.grad().unwrap().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(
@@ -72,7 +72,7 @@ fn c64_tensor_axpby_accepts_real_coefficients() {
 
     let out = x.axpby(&a, &y, &b).unwrap();
     assert!(!out.requires_grad());
-    assert!(out.grad().is_none());
+    assert!(out.grad().unwrap().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(

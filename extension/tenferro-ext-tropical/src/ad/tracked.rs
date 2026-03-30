@@ -3,7 +3,8 @@ use tenferro_device::{Error, Result};
 use tenferro_einsum::Subscripts;
 use tenferro_prims::TensorSemiringCore;
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::{AdResult, AutodiffError, Differentiable, NodeId, ReverseRule, TrackedValue};
+use tidu::expert::{NodeId, ReverseRule, TrackedValue};
+use tidu::{AdResult, AutodiffError, Differentiable};
 
 use crate::argmax::ArgmaxTracker;
 
@@ -12,7 +13,7 @@ use super::common::contracted_modes;
 use super::rules::tracked_forward;
 use super::TropicalScalar;
 
-/// Reverse-mode rule for tropical einsum, for integration with [`tidu::Tape`].
+/// Reverse-mode rule for tropical einsum, for integration with [`tidu::expert::Tape`].
 ///
 /// The pullback returns standard-real gradients even though the forward pass
 /// uses tropical scalars.
@@ -20,7 +21,7 @@ use super::TropicalScalar;
 /// # Examples
 ///
 /// ```ignore
-/// use tidu::ReverseRule;
+/// use tidu::expert::ReverseRule;
 /// use tenferro_ext_tropical::ad::TropicalEinsumReverseRule;
 /// use tenferro_ext_tropical::MaxPlus;
 /// use tenferro_tensor::Tensor;
@@ -72,7 +73,7 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// use tidu::Tape;
+/// use tidu::expert::Tape;
 /// use tenferro_ext_tropical::ad::tracked_tropical_einsum;
 /// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 /// use tenferro_prims::{CpuBackend, CpuContext};

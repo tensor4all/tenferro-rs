@@ -1,15 +1,15 @@
 use num_complex::Complex64;
-use tenferro::{set_default_runtime, AdMode, Error, RuntimeContext, Tensor};
-use tenferro_internal_ad_core::{pullback, AdTensor};
+use tenferro::{grad, set_default_runtime, AdMode, Error, GradOptions, RuntimeContext, Tensor};
+use tenferro_internal_ad_core::DynAdTensor;
 use tenferro_internal_frontend_core::DynTensor;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 #[test]
 fn rank0_reverse_tensor_scale_allocates_fresh_output_node() {
     let tape = Tape::<DynTensor>::new();
-    let x = AdTensor::new_reverse_leaf_with_tangent(
+    let x = DynAdTensor::new_reverse_leaf_with_tangent(
         DenseTensor::<Complex64>::from_slice(
             &[Complex64::new(1.0, 2.0)],
             &[],
@@ -25,7 +25,7 @@ fn rank0_reverse_tensor_scale_allocates_fresh_output_node() {
         &tape,
     )
     .unwrap();
-    let alpha: Tensor = AdTensor::new_reverse_leaf(
+    let alpha: Tensor = DynAdTensor::new_reverse_leaf(
         DenseTensor::<Complex64>::from_slice(
             &[Complex64::new(0.0, 1.0)],
             &[],
@@ -54,19 +54,28 @@ fn rank0_reverse_tensor_scale_allocates_fresh_output_node() {
 fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let tape = Tape::<DynTensor>::new();
-    let x = AdTensor::new_reverse_leaf(
+    let x = DynAdTensor::new_reverse_leaf(
         DenseTensor::<f64>::from_slice(&[4.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape,
     )
     .unwrap();
-    let y = Tensor::from(x.clone()).sqrt().unwrap();
-    let cotangent =
-        DenseTensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap();
-    let grads = pullback(y.as_f64().unwrap(), &cotangent).unwrap();
+    let x_tensor = Tensor::from(x.clone());
+    let y = x_tensor.sqrt().unwrap();
+    let cotangent = Tensor::from_slice(&[3.0_f64], &[]).unwrap();
+    let grads = grad(
+        &[&y],
+        &[&x_tensor],
+        Some(&[cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
     assert_eq!(
-        grads
-            .get(&x.node_id().unwrap())
+        grads[0]
+            .as_ref()
             .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
             .buffer()
             .as_slice()
             .unwrap(),
@@ -78,13 +87,13 @@ fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
 fn rank0_reverse_tensor_scale_returns_error_on_mixed_reverse_tapes() {
     let tape_a = Tape::<DynTensor>::new();
     let tape_b = Tape::<DynTensor>::new();
-    let x: Tensor = AdTensor::new_reverse_leaf(
+    let x: Tensor = DynAdTensor::new_reverse_leaf(
         DenseTensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_a,
     )
     .unwrap()
     .into();
-    let y: Tensor = AdTensor::new_reverse_leaf(
+    let y: Tensor = DynAdTensor::new_reverse_leaf(
         DenseTensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_b,
     )
@@ -101,13 +110,13 @@ fn rank0_reverse_tensor_scale_returns_error_on_mixed_reverse_tapes() {
 fn rank0_reverse_tensor_div_scalar_returns_error_on_mixed_reverse_tapes() {
     let tape_a = Tape::<DynTensor>::new();
     let tape_b = Tape::<DynTensor>::new();
-    let x: Tensor = AdTensor::new_reverse_leaf(
+    let x: Tensor = DynAdTensor::new_reverse_leaf(
         DenseTensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_a,
     )
     .unwrap()
     .into();
-    let y: Tensor = AdTensor::new_reverse_leaf(
+    let y: Tensor = DynAdTensor::new_reverse_leaf(
         DenseTensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_b,
     )

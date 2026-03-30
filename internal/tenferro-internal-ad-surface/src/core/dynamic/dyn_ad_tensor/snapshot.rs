@@ -1,40 +1,5 @@
 use super::Tensor;
 use crate::{snapshot, ScalarValue};
-use tenferro_algebra::Conjugate;
-use tenferro_device::LogicalMemorySpace;
-use tenferro_dynamic_compute as dynamic_compute;
-use tenferro_tensor::MemoryOrder;
-
-fn read_rank0_scalar<T>(
-    tensor: &tenferro_tensor::Tensor<T>,
-    op_name: &'static str,
-) -> crate::Result<T>
-where
-    T: tenferro_algebra::Scalar + Conjugate + Copy,
-{
-    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let is_conjugated = contiguous.is_conjugated();
-    let contiguous = if contiguous.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        contiguous
-    } else {
-        contiguous
-            .to_memory_space_async(LogicalMemorySpace::MainMemory)
-            .map_err(crate::Error::from)?
-    };
-    let offset =
-        usize::try_from(contiguous.offset()).map_err(|_| crate::Error::InvalidAdTensor {
-            message: format!("{op_name} computed negative rank-0 offset"),
-        })?;
-    contiguous
-        .buffer()
-        .as_slice()
-        .and_then(|values| values.get(offset))
-        .copied()
-        .map(|value| if is_conjugated { value.conj() } else { value })
-        .ok_or_else(|| crate::Error::InvalidAdTensor {
-            message: format!("{op_name} could not materialize rank-0 tensor on host memory"),
-        })
-}
 
 impl Tensor {
     /// Returns a detached primal tensor while intentionally dropping AD
@@ -54,18 +19,13 @@ impl Tensor {
     ///     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     ///
-    /// let detached: tenferro_dynamic_compute::Tensor = x.detach();
+    /// let detached = x.detach();
     /// assert_eq!(detached.scalar_type(), x.scalar_type());
     /// assert_eq!(detached.scalar_type(), x.scalar_type());
     /// assert!(detached.is_dense());
     /// ```
-    pub fn detach(&self) -> dynamic_compute::Tensor {
-        match self {
-            Self::F32(value) => dynamic_compute::Tensor::F32(value.structured_primal().clone()),
-            Self::F64(value) => dynamic_compute::Tensor::F64(value.structured_primal().clone()),
-            Self::C32(value) => dynamic_compute::Tensor::C32(value.structured_primal().clone()),
-            Self::C64(value) => dynamic_compute::Tensor::C64(value.structured_primal().clone()),
-        }
+    pub fn detach(&self) -> Tensor {
+        Tensor::from(self.as_dyn_ad_ref().primal_snapshot())
     }
 
     /// Returns a primal-only snapshot suitable for export, storage, or FFI.
@@ -83,12 +43,11 @@ impl Tensor {
     /// assert!(matches!(snapshot, snapshot::DynTensor::F64(_)));
     /// ```
     pub fn primal_snapshot(&self) -> snapshot::DynTensor {
-        match self {
-            Self::F32(value) => snapshot::DynTensor::F32(value.structured_primal().clone()),
-            Self::F64(value) => snapshot::DynTensor::F64(value.structured_primal().clone()),
-            Self::C32(value) => snapshot::DynTensor::C32(value.structured_primal().clone()),
-            Self::C64(value) => snapshot::DynTensor::C64(value.structured_primal().clone()),
-        }
+        self.as_dyn_ad_ref().primal_snapshot()
+    }
+
+    pub(crate) fn tangent_snapshot(&self) -> Option<snapshot::DynTensor> {
+        self.as_dyn_ad_ref().tangent_snapshot()
     }
 
     /// Extracts the scalar value of a rank-0 tensor without casting.
@@ -102,32 +61,6 @@ impl Tensor {
     /// assert_eq!(x.try_scalar_value().unwrap(), ScalarValue::F64(3.0));
     /// ```
     pub fn try_scalar_value(&self) -> crate::Result<ScalarValue> {
-        if self.ndim() != 0 {
-            return Err(crate::Error::InvalidAdTensor {
-                message: format!(
-                    "try_scalar_value requires rank-0 tensor, got dims {:?}",
-                    self.dims()
-                ),
-            });
-        }
-
-        match self {
-            Self::F32(value) => Ok(ScalarValue::F32(read_rank0_scalar(
-                value.primal(),
-                "Tensor::try_scalar_value",
-            )?)),
-            Self::F64(value) => Ok(ScalarValue::F64(read_rank0_scalar(
-                value.primal(),
-                "Tensor::try_scalar_value",
-            )?)),
-            Self::C32(value) => Ok(ScalarValue::C32(read_rank0_scalar(
-                value.primal(),
-                "Tensor::try_scalar_value",
-            )?)),
-            Self::C64(value) => Ok(ScalarValue::C64(read_rank0_scalar(
-                value.primal(),
-                "Tensor::try_scalar_value",
-            )?)),
-        }
+        self.as_dyn_ad_ref().try_scalar_value()
     }
 }

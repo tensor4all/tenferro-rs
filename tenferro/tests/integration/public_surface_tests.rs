@@ -119,6 +119,12 @@ fn tensor_public_surface_reexports_memory_order() {
 }
 
 #[test]
+fn tensor_typed_accessor_exposes_scalar_type_via_wrapper() {
+    let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
+    assert_eq!(x.as_f64().unwrap().scalar_type(), ScalarType::F64);
+}
+
+#[test]
 fn tensor_debug_includes_dense_value_preview() {
     let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
     let rendered = format!("{x:?}");
@@ -185,12 +191,155 @@ fn tensor_public_forward_constructor_preserves_tangent() {
 #[test]
 fn tensor_public_reverse_api_tracks_requested_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let mut x = Tensor::from_tensor(scalar_f64(2.0));
-    x.set_requires_grad(true).unwrap();
+    let x = Tensor::from_tensor(scalar_f64(2.0))
+        .with_requires_grad(true)
+        .unwrap();
     let out = x.exp().unwrap();
     backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
     assert!(x.requires_grad());
-    assert!(x.grad().is_some());
+    assert!(x.grad().unwrap().is_some());
+    assert!(x.is_leaf());
+}
+
+#[test]
+fn tensor_with_requires_grad_detaches_nonleaf_outputs_into_new_leafs() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(scalar_f64(2.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let y = x.exp().unwrap();
+    let z = y.with_requires_grad(true).unwrap();
+    let out = z.exp().unwrap();
+
+    backward(&[&out], None, &[&z], BackwardOptions::default()).unwrap();
+
+    assert!(x.grad().unwrap().is_none());
+    assert!(z.grad().unwrap().is_some());
+    assert!(z.is_leaf());
+}
+
+#[test]
+fn tensor_reverse_add_joins_independent_nonleaf_graphs_without_helper() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(scalar_f64(2.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let y = Tensor::from_tensor(scalar_f64(3.0))
+        .with_requires_grad(true)
+        .unwrap();
+
+    let out_x = x.exp().unwrap();
+    let out_y = y.exp().unwrap();
+    let out = out_x.add(&out_y).unwrap();
+
+    backward(&[&out], None, &[&x, &y], BackwardOptions::default()).unwrap();
+
+    let grad_x_tensor = x.grad().unwrap().unwrap();
+    let grad_y_tensor = y.grad().unwrap().unwrap();
+    let grad_x = grad_x_tensor.as_f64().unwrap();
+    let grad_y = grad_y_tensor.as_f64().unwrap();
+    let values_x = grad_x.primal().buffer().as_slice().unwrap();
+    let values_y = grad_y.primal().buffer().as_slice().unwrap();
+
+    assert!((values_x[0] - 2.0_f64.exp()).abs() < 1e-12);
+    assert!((values_y[0] - 3.0_f64.exp()).abs() < 1e-12);
+}
+
+#[test]
+fn tensor_reverse_einsum_joins_independent_nonleaf_graphs_without_helper() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]))
+        .with_requires_grad(true)
+        .unwrap();
+    let y = Tensor::from_tensor(vector_f64(&[3.0, 4.0]))
+        .with_requires_grad(true)
+        .unwrap();
+
+    let out_x = x.exp().unwrap();
+    let out_y = y.exp().unwrap();
+    let loss = Tensor::einsum("i,i->", &[&out_x, &out_y]).unwrap();
+
+    backward(&[&loss], None, &[&x, &y], BackwardOptions::default()).unwrap();
+
+    let grad_x = x
+        .grad()
+        .unwrap()
+        .unwrap()
+        .as_f64()
+        .unwrap()
+        .primal()
+        .clone();
+    let grad_y = y
+        .grad()
+        .unwrap()
+        .unwrap()
+        .as_f64()
+        .unwrap()
+        .primal()
+        .clone();
+    let values_x = grad_x.buffer().as_slice().unwrap();
+    let values_y = grad_y.buffer().as_slice().unwrap();
+
+    let expected = [4.0_f64.exp(), 6.0_f64.exp()];
+    for (actual, want) in values_x.iter().zip(expected) {
+        assert!((*actual - want).abs() < 1e-12);
+    }
+    for (actual, want) in values_y.iter().zip(expected) {
+        assert!((*actual - want).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn tensor_reverse_qr_outputs_join_independent_nonleaf_graphs_without_helper() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(
+        // Keep exp(x) full-rank so QR backward does not hit a singular R.
+        DenseTensor::<f64>::from_slice(&[1.0, 3.0, 1.5, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    )
+    .with_requires_grad(true)
+    .unwrap();
+    let y = Tensor::from_tensor(
+        DenseTensor::<f64>::from_slice(&[2.0, 1.0, 0.5, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    )
+    .with_requires_grad(true)
+    .unwrap();
+
+    let left = x.exp().unwrap().qr().unwrap().r;
+    let right = y.exp().unwrap().qr().unwrap().r;
+    let loss = Tensor::einsum("ij,ij->", &[&left, &right]).unwrap();
+
+    backward(&[&loss], None, &[&x, &y], BackwardOptions::default()).unwrap();
+
+    assert!(x.grad().unwrap().is_some());
+    assert!(y.grad().unwrap().is_some());
+}
+
+#[test]
+fn tensor_reverse_svd_outputs_join_independent_nonleaf_graphs_without_helper() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(
+        DenseTensor::<f64>::from_slice(&[1.0, 3.0, 2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    )
+    .with_requires_grad(true)
+    .unwrap();
+    let y = Tensor::from_tensor(
+        DenseTensor::<f64>::from_slice(&[2.0, 1.0, 0.5, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    )
+    .with_requires_grad(true)
+    .unwrap();
+
+    let left = x.exp().unwrap().svd().unwrap().vt;
+    let right = y.exp().unwrap().svd().unwrap().vt;
+    let loss = Tensor::einsum("ij,ij->", &[&left, &right]).unwrap();
+
+    backward(&[&loss], None, &[&x, &y], BackwardOptions::default()).unwrap();
+
+    assert!(x.grad().unwrap().is_some());
+    assert!(y.grad().unwrap().is_some());
 }
 
 #[test]
@@ -221,6 +370,7 @@ fn tensor_public_to_scalar_type_supports_cross_precision_cast() {
 
     let detached = y.detach();
     assert_eq!(detached.scalar_type(), ScalarType::F32);
+    assert!(!detached.requires_grad());
 }
 
 #[test]
@@ -497,6 +647,7 @@ fn tensor_public_pullback_wrt_does_not_require_typed_api() {
     assert_eq!(
         x.grad()
             .unwrap()
+            .unwrap()
             .as_f64()
             .unwrap()
             .primal()
@@ -508,6 +659,7 @@ fn tensor_public_pullback_wrt_does_not_require_typed_api() {
     assert_eq!(
         a.grad()
             .unwrap()
+            .unwrap()
             .as_f64()
             .unwrap()
             .primal()
@@ -516,4 +668,40 @@ fn tensor_public_pullback_wrt_does_not_require_typed_api() {
             .unwrap(),
         &[3.0]
     );
+}
+
+#[test]
+fn tensor_public_backward_handles_edge_outputs_without_typed_api() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = Tensor::from_tensor(scalar_f64(2.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let y = Tensor::from_tensor(scalar_f64(3.0))
+        .with_requires_grad(true)
+        .unwrap();
+    let out = x.exp().unwrap().add(&y.exp().unwrap()).unwrap();
+    let cotangent = Tensor::from_tensor(scalar_f64(1.5));
+
+    out.backward(Some(&cotangent), &[&x, &y], BackwardOptions::default())
+        .unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_y = y.grad().unwrap().unwrap();
+    let grad_x_values = grad_x
+        .as_f64()
+        .unwrap()
+        .primal()
+        .buffer()
+        .as_slice()
+        .unwrap();
+    let grad_y_values = grad_y
+        .as_f64()
+        .unwrap()
+        .primal()
+        .buffer()
+        .as_slice()
+        .unwrap();
+
+    assert!((grad_x_values[0] - 1.5 * 2.0_f64.exp()).abs() < 1e-12);
+    assert!((grad_y_values[0] - 1.5 * 3.0_f64.exp()).abs() < 1e-12);
 }

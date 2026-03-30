@@ -9,13 +9,9 @@
 
 #![allow(clippy::multiple_bound_locations)]
 
-pub use tenferro_internal_ad_core::AdTensor;
 pub use tenferro_internal_error::{Error, Result};
-#[doc(hidden)]
-pub use tenferro_internal_frontend_core::DynTensorTyped;
 
-#[doc(hidden)]
-pub mod runtime {
+pub(crate) mod runtime {
     pub mod contracts {
         pub use tenferro_internal_runtime::contracts::*;
     }
@@ -25,20 +21,45 @@ pub mod runtime {
     }
 }
 
-#[doc(hidden)]
-pub mod structured {
+pub(crate) mod structured {
     pub use tenferro_internal_frontend_core::StructuredTensor;
 }
 
 mod ops;
 
 pub mod eager {
-    pub use crate::ops::linalg::ad::eager::*;
+    pub use crate::ops::linalg::ad::eager::{
+        cholesky_dyn, cholesky_ex_dyn, det_dyn, eig_dyn, eigen_dyn, inv_dyn, inv_ex_dyn, lstsq_dyn,
+        lu_dyn, lu_factor_dyn, lu_factor_ex_dyn, lu_solve_dyn, matrix_exp_dyn, norm_dyn, pinv_dyn,
+        qr_dyn, slogdet_dyn, solve_dyn, solve_ex_dyn, solve_triangular_dyn, svd_dyn,
+    };
 }
 
 pub mod results {
-    pub use crate::ops::linalg::results::*;
+    pub use crate::ops::linalg::results::{
+        DynCholeskyExResult, DynEigResult, DynEigenResult, DynInvExResult, DynLstsqResult,
+        DynLuFactorExResult, DynLuFactorResult, DynLuResult, DynQrResult, DynSlogdetResult,
+        DynSolveExResult, DynSvdResult,
+    };
 }
 
-pub use ops::linalg::ad::*;
-pub use ops::linalg::results::*;
+#[doc(hidden)]
+pub mod __typed_ad {
+    pub use crate::ops::linalg::ad::{
+        cholesky_ad, det_ad, eig_ad, eigen_ad, inv_ad, lstsq_ad, lu_ad, matrix_exp_ad, norm_ad,
+        pinv_ad, qr_ad, slogdet_ad, solve_ad, solve_triangular_ad, svd_ad, CholeskyAdBuilder,
+        DetAdBuilder, EigAdBuilder, EigenAdBuilder, InvAdBuilder, LstsqAdBuilder, LuAdBuilder,
+        MatrixExpAdBuilder, NormAdBuilder, PinvAdBuilder, QrAdBuilder, SlogdetAdBuilder,
+        SolveAdBuilder, SolveTriangularAdBuilder, SvdAdBuilder,
+    };
+}
+
+#[doc(hidden)]
+pub mod __typed_eager {
+    pub use crate::ops::linalg::ad::eager::*;
+}
+
+#[doc(hidden)]
+pub mod __typed_results {
+    pub use crate::ops::linalg::results::*;
+}

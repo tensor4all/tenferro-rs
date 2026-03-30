@@ -1,7 +1,7 @@
 use super::promotion::{promote_many_to_common, promote_many_to_common_owned};
 use super::Tensor;
 use crate::ops::ad;
-use crate::{AdTensor, Error, Result};
+use crate::{Error, Result};
 
 impl Tensor {
     fn einsum_with_refs(subscripts: &str, operands: &[&Self]) -> Result<Self> {
@@ -13,45 +13,12 @@ impl Tensor {
         let (target, promoted) = promote_many_to_common(operands)?;
 
         match target {
-            crate::ScalarType::F32 => {
-                let refs: Vec<&AdTensor<f32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f32"),
-                    })
-                    .collect();
-                Ok(Self::F32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::F64 => {
-                let refs: Vec<&AdTensor<f64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f64"),
-                    })
-                    .collect();
-                Ok(Self::F64(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C32 => {
-                let refs: Vec<&AdTensor<num_complex::Complex32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c32"),
-                    })
-                    .collect();
-                Ok(Self::C32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C64 => {
-                let refs: Vec<&AdTensor<num_complex::Complex64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c64"),
-                    })
-                    .collect();
-                Ok(Self::C64(ad::einsum(subscripts, &refs)?))
+            crate::ScalarType::F32
+            | crate::ScalarType::F64
+            | crate::ScalarType::C32
+            | crate::ScalarType::C64 => {
+                let refs: Vec<_> = promoted.iter().map(Tensor::as_dyn_ad_ref).collect();
+                Ok(ad::einsum_dyn(subscripts, &refs)?.into())
             }
         }
     }
@@ -65,45 +32,12 @@ impl Tensor {
         let (target, promoted) = promote_many_to_common_owned(operands)?;
 
         match target {
-            crate::ScalarType::F32 => {
-                let refs: Vec<&AdTensor<f32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f32"),
-                    })
-                    .collect();
-                Ok(Self::F32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::F64 => {
-                let refs: Vec<&AdTensor<f64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f64"),
-                    })
-                    .collect();
-                Ok(Self::F64(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C32 => {
-                let refs: Vec<&AdTensor<num_complex::Complex32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c32"),
-                    })
-                    .collect();
-                Ok(Self::C32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C64 => {
-                let refs: Vec<&AdTensor<num_complex::Complex64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c64"),
-                    })
-                    .collect();
-                Ok(Self::C64(ad::einsum(subscripts, &refs)?))
+            crate::ScalarType::F32
+            | crate::ScalarType::F64
+            | crate::ScalarType::C32
+            | crate::ScalarType::C64 => {
+                let refs: Vec<_> = promoted.iter().map(Tensor::as_dyn_ad_ref).collect();
+                Ok(ad::einsum_dyn(subscripts, &refs)?.into())
             }
         }
     }
@@ -125,12 +59,7 @@ impl Tensor {
     /// assert!(y.dims().is_empty());
     /// ```
     pub fn sum(&self) -> Result<Self> {
-        match self {
-            Self::F32(value) => Ok(Self::F32(ad::sum(value)?)),
-            Self::F64(value) => Ok(Self::F64(ad::sum(value)?)),
-            Self::C32(value) => Ok(Self::C32(ad::sum(value)?)),
-            Self::C64(value) => Ok(Self::C64(ad::sum(value)?)),
-        }
+        Ok(ad::sum_dyn(self.as_dyn_ad_ref())?.into())
     }
 
     /// Runs eager AD einsum on dynamic tensors after applying the standard

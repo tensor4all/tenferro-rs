@@ -13,7 +13,7 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue,
+    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue + DynAdTensorTyped,
 {
     /// Executes AD slogdet.
     /// # Examples
@@ -21,7 +21,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedSlogdetResult<T>> {
+    pub fn run(self) -> Result<DynSlogdetResult> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("slogdet", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -127,9 +127,9 @@ where
             }
         }
 
-        Ok(TypedSlogdetResult {
-            sign: out_sign,
-            logabsdet: out_logabsdet,
+        Ok(DynSlogdetResult {
+            sign: out_sign.into(),
+            logabsdet: out_logabsdet.into(),
         })
     }
 }

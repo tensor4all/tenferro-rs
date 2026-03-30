@@ -3,8 +3,9 @@
 use chainrules_core::NodeId;
 use num_complex::Complex64;
 use tenferro_algebra::Scalar;
+use tenferro_internal_ad_core::DynAdTensor;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
-use tidu::Tape;
+use tidu::expert::Tape;
 
 use crate::core::AdMode;
 use crate::structured::StructuredTensor;
@@ -56,16 +57,56 @@ pub(super) fn reverse_leaf_c64(
     AdTensor::new_reverse_leaf(tensor, tape).unwrap()
 }
 
-pub(super) fn assert_forward_mode<T: Scalar>(tensor: &AdTensor<T>) {
+pub(super) trait AdTensorLike {
+    fn mode(&self) -> AdMode;
+    fn has_tangent(&self) -> bool;
+    fn node_id(&self) -> Option<crate::NodeId>;
+    fn tape(&self) -> Option<Tape<crate::DynTensor>>;
+}
+
+impl<T: Scalar> AdTensorLike for AdTensor<T> {
+    fn mode(&self) -> AdMode {
+        AdTensor::mode(self)
+    }
+
+    fn has_tangent(&self) -> bool {
+        AdTensor::tangent(self).is_some()
+    }
+
+    fn node_id(&self) -> Option<crate::NodeId> {
+        AdTensor::node_id(self)
+    }
+
+    fn tape(&self) -> Option<Tape<crate::DynTensor>> {
+        AdTensor::tape(self)
+    }
+}
+
+impl AdTensorLike for DynAdTensor {
+    fn mode(&self) -> AdMode {
+        DynAdTensor::mode(self)
+    }
+
+    fn has_tangent(&self) -> bool {
+        DynAdTensor::has_tangent(self)
+    }
+
+    fn node_id(&self) -> Option<crate::NodeId> {
+        DynAdTensor::node_id(self)
+    }
+
+    fn tape(&self) -> Option<Tape<crate::DynTensor>> {
+        DynAdTensor::tape(self)
+    }
+}
+
+pub(super) fn assert_forward_mode<T: AdTensorLike>(tensor: &T) {
     assert_eq!(tensor.mode(), AdMode::Forward);
-    assert!(tensor.tangent().is_some());
+    assert!(tensor.has_tangent());
     assert!(tensor.node_id().is_none());
 }
 
-pub(super) fn assert_reverse_on_tape<T: Scalar>(
-    tensor: &AdTensor<T>,
-    tape: &Tape<crate::DynTensor>,
-) {
+pub(super) fn assert_reverse_on_tape<T: AdTensorLike>(tensor: &T, tape: &Tape<crate::DynTensor>) {
     assert_eq!(tensor.mode(), AdMode::Reverse);
     assert!(tensor.node_id().is_some());
     let actual_tape = tensor
@@ -78,6 +119,10 @@ pub(super) fn node_id<T: Scalar>(tensor: &AdTensor<T>) -> NodeId {
     tensor
         .node_id()
         .expect("reverse tensor should expose a node id")
+}
+
+pub(super) fn expect_dyn_f64(tensor: &DynAdTensor) -> &AdTensor<f64> {
+    tensor.as_f64().expect("expected f64 dyn AD tensor in test")
 }
 
 pub(super) fn as_slice<T>(t: &T) -> &[f64]

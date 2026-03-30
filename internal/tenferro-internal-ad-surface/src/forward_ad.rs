@@ -1,8 +1,6 @@
 use std::cell::Cell;
 
-use tenferro_dynamic_compute as dynamic_compute;
-
-use crate::{AdTensor, Error, Result, Tensor};
+use crate::{Error, Result, Tensor};
 
 thread_local! {
     static DUAL_LEVEL_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -46,38 +44,36 @@ impl DualLevel {
     /// assert!(tangent.is_some());
     /// ```
     pub fn make_dual(&self, primal: &Tensor, tangent: &Tensor) -> Result<Tensor> {
-        match (primal.detach(), tangent.detach()) {
-            (dynamic_compute::Tensor::F32(primal), dynamic_compute::Tensor::F32(tangent)) => {
-                Ok(Tensor::F32(AdTensor::new_forward(
-                    primal.clone(),
-                    tangent.clone(),
-                )?))
-            }
-            (dynamic_compute::Tensor::F64(primal), dynamic_compute::Tensor::F64(tangent)) => {
-                Ok(Tensor::F64(AdTensor::new_forward(
-                    primal.clone(),
-                    tangent.clone(),
-                )?))
-            }
-            (dynamic_compute::Tensor::C32(primal), dynamic_compute::Tensor::C32(tangent)) => {
-                Ok(Tensor::C32(AdTensor::new_forward(
-                    primal.clone(),
-                    tangent.clone(),
-                )?))
-            }
-            (dynamic_compute::Tensor::C64(primal), dynamic_compute::Tensor::C64(tangent)) => {
-                Ok(Tensor::C64(AdTensor::new_forward(
-                    primal.clone(),
-                    tangent.clone(),
-                )?))
-            }
-            (primal, tangent) => Err(Error::InvalidAdTensor {
-                message: format!(
-                    "forward_ad::make_dual requires matching dtypes, got primal {:?} and tangent {:?}",
-                    primal.scalar_type(),
-                    tangent.scalar_type()
+        match (primal.as_f32(), tangent.as_f32()) {
+            (Some(primal), Some(tangent)) => Tensor::new_forward(
+                primal.structured_primal().clone(),
+                tangent.structured_primal().clone(),
+            ),
+            _ => match (primal.as_f64(), tangent.as_f64()) {
+                (Some(primal), Some(tangent)) => Tensor::new_forward(
+                    primal.structured_primal().clone(),
+                    tangent.structured_primal().clone(),
                 ),
-            }),
+                _ => match (primal.as_c32(), tangent.as_c32()) {
+                    (Some(primal), Some(tangent)) => Tensor::new_forward(
+                        primal.structured_primal().clone(),
+                        tangent.structured_primal().clone(),
+                    ),
+                    _ => match (primal.as_c64(), tangent.as_c64()) {
+                        (Some(primal), Some(tangent)) => Tensor::new_forward(
+                            primal.structured_primal().clone(),
+                            tangent.structured_primal().clone(),
+                        ),
+                        _ => Err(Error::InvalidAdTensor {
+                            message: format!(
+                                "forward_ad::make_dual requires matching dtypes, got primal {:?} and tangent {:?}",
+                                primal.scalar_type(),
+                                tangent.scalar_type()
+                            ),
+                        }),
+                    },
+                },
+            },
         }
     }
 
@@ -99,36 +95,10 @@ impl DualLevel {
     /// assert!(tangent.is_some());
     /// ```
     pub fn unpack_dual(&self, value: &Tensor) -> Result<(Tensor, Option<Tensor>)> {
-        Ok(match value {
-            Tensor::F32(value) => (
-                Tensor::F32(AdTensor::new_primal(value.structured_primal().clone())),
-                value
-                    .structured_tangent()
-                    .cloned()
-                    .map(|tangent| Tensor::F32(AdTensor::new_primal(tangent))),
-            ),
-            Tensor::F64(value) => (
-                Tensor::F64(AdTensor::new_primal(value.structured_primal().clone())),
-                value
-                    .structured_tangent()
-                    .cloned()
-                    .map(|tangent| Tensor::F64(AdTensor::new_primal(tangent))),
-            ),
-            Tensor::C32(value) => (
-                Tensor::C32(AdTensor::new_primal(value.structured_primal().clone())),
-                value
-                    .structured_tangent()
-                    .cloned()
-                    .map(|tangent| Tensor::C32(AdTensor::new_primal(tangent))),
-            ),
-            Tensor::C64(value) => (
-                Tensor::C64(AdTensor::new_primal(value.structured_primal().clone())),
-                value
-                    .structured_tangent()
-                    .cloned()
-                    .map(|tangent| Tensor::C64(AdTensor::new_primal(tangent))),
-            ),
-        })
+        Ok((
+            Tensor::from(value.primal_snapshot()),
+            value.tangent_snapshot().map(Tensor::from),
+        ))
     }
 }
 

@@ -8,6 +8,7 @@
 //! ```
 
 mod core;
+mod dyn_ad_tensor;
 pub mod ops;
 mod registry;
 mod tape;
@@ -16,6 +17,10 @@ mod tensor;
 #[doc(hidden)]
 pub use core::AdValue;
 pub use core::{AdMode, NodeId};
+pub use dyn_ad_tensor::{
+    DynAdTensor, DynAdTensorBorrowTyped, DynAdTensorMutRef, DynAdTensorRef, DynAdTensorRefTyped,
+    DynAdTensorTyped,
+};
 #[doc(hidden)]
 pub use ops::*;
 pub use registry::{register_closure_rule, register_mixed_rule, register_rule};

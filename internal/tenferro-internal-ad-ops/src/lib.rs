@@ -8,24 +8,33 @@
 //! ```
 
 mod core;
-pub mod ops;
+pub(crate) mod ops;
 mod runtime;
 mod structured;
 mod tape;
 
-pub use core::{DynTensor, DynTensorTyped, NodeId};
-pub use ops::*;
-pub use tenferro_internal_ad_core::{AdMode, AdTensor};
+pub(crate) use core::{DynTensor, DynTensorTyped, NodeId};
+pub use tenferro_internal_ad_core::AdMode;
 pub use tenferro_internal_error::{Error, Result};
 
-#[doc(hidden)]
-pub use tenferro_internal_frontend_core::StructuredTensor;
+pub(crate) use tenferro_internal_frontend_core::StructuredTensor;
 
 pub mod ad {
+    pub use crate::ops::ad::{
+        acos_dyn, acosh_dyn, add_dyn, asin_dyn, asinh_dyn, atan2_dyn, atan_dyn, atanh_dyn, cos_dyn,
+        cosh_dyn, einsum_dyn, exp_dyn, expm1_dyn, hypot_dyn, log1p_dyn, log_dyn, mean_dyn,
+        normalize_cotangent_payload, pow_dyn, sin_dyn, sinh_dyn, sqrt_dyn, std_dyn, sum_dyn,
+        tanh_dyn, var_dyn,
+    };
+}
+
+#[doc(hidden)]
+pub mod __typed_ad {
     pub use crate::ops::ad::*;
 }
 
-pub mod einsum {
+#[doc(hidden)]
+pub mod __typed_einsum {
     pub mod ad {
         pub use crate::ops::einsum::ad::*;
     }
@@ -33,7 +42,8 @@ pub mod einsum {
     pub use crate::ops::einsum::*;
 }
 
-pub mod reduction {
+#[doc(hidden)]
+pub mod __typed_reduction {
     pub mod ad {
         pub use crate::ops::reduction::ad::*;
     }
@@ -41,7 +51,8 @@ pub mod reduction {
     pub use crate::ops::reduction::*;
 }
 
-pub mod scalar {
+#[doc(hidden)]
+pub mod __typed_scalar {
     pub mod ad {
         pub use crate::ops::scalar::ad::*;
     }
