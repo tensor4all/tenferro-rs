@@ -301,6 +301,43 @@ fn tensor_dynamic_scalar_wrappers_cover_success_and_error_paths() {
 }
 
 #[test]
+fn tensor_real_only_ops_reject_all_complex_variants() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let c32_scalar = primal!(scalar_c32(Complex32::new(0.5, -0.25)));
+    let c64_scalar = primal!(scalar_c64(Complex64::new(0.5, 0.25)));
+
+    let c32_vec = primal!(vector_c32(&[
+        Complex32::new(1.0, 0.0),
+        Complex32::new(3.0, 0.0)
+    ]));
+    let c64_vec = primal!(vector_c64(&[
+        Complex64::new(1.0, 0.0),
+        Complex64::new(3.0, 0.0)
+    ]));
+
+    for (label, result) in [
+        ("c32.var()", c32_scalar.var()),
+        ("c64.var()", c64_scalar.var()),
+        ("c32.std()", c32_vec.std()),
+        ("c64.std()", c64_vec.std()),
+        ("c32.atan2(&c32)", c32_scalar.atan2(&c32_scalar)),
+        ("c64.atan2(&c64)", c64_scalar.atan2(&c64_scalar)),
+        ("c32.hypot(&c32)", c32_scalar.hypot(&c32_scalar)),
+        ("c64.hypot(&c64)", c64_scalar.hypot(&c64_scalar)),
+    ] {
+        let err = match result {
+            Ok(_) => panic!("{label}: complex inputs should be rejected by real-only wrappers"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, tenferro::Error::InvalidAdTensor { ref message } if message.contains("requires real-valued")),
+            "{label}: unexpected error: {err:?}"
+        );
+    }
+}
+
+#[test]
 fn tensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
