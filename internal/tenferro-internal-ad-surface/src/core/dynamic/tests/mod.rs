@@ -627,6 +627,19 @@ fn dyn_tensor_max_on_complex_requires_abs_first() {
 }
 
 #[test]
+fn dyn_tensor_max_on_complex32_requires_abs_first() {
+    let t = DenseTensor::<Complex32>::from_slice(
+        &[Complex32::new(1.0, 2.0)],
+        &[1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let x: DynTensor = t.into();
+    let err = x.max().unwrap_err();
+    assert!(matches!(err, Error::InvalidAdTensor { message } if message.contains("abs_tensor")));
+}
+
+#[test]
 fn dyn_tensor_max_abs_diff_detects_value_difference() {
     let lhs_t = DenseTensor::<f64>::from_slice(
         &(0..12).map(|x| x as f64).collect::<Vec<_>>(),
