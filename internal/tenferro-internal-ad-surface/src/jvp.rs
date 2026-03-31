@@ -49,6 +49,10 @@ fn invalid_argument(message: impl Into<String>) -> Error {
     }
 }
 
+fn unsupported_jvp(op: &'static str) -> Error {
+    Error::UnsupportedAdOp { op }
+}
+
 fn validate_compatibility(index: usize, primal: &Tensor, tangent: &Tensor) -> Result<()> {
     if primal.scalar_type() != tangent.scalar_type() {
         return Err(invalid_argument(format!(
@@ -155,6 +159,14 @@ pub(crate) fn qr_tangents(input: &Tensor, q: &Tensor, r: &Tensor) -> Result<()> 
     Ok(())
 }
 
+pub(crate) fn unsupported_if_active(op: &'static str) -> Result<()> {
+    if is_active() {
+        Err(unsupported_jvp(op))
+    } else {
+        Ok(())
+    }
+}
+
 pub fn jvp<F>(f: F, primals: &[Tensor], tangents: &[Option<Tensor>]) -> Result<JvpResult>
 where
     F: FnOnce(&[Tensor]) -> Result<Vec<Tensor>>,
@@ -194,4 +206,24 @@ where
 
 pub(crate) fn forward_id(tensor: &Tensor) -> usize {
     tensor.primal() as *const DynTensor as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_id;
+    use crate::Tensor;
+
+    fn round_trip(tensor: Tensor) -> (Tensor, usize) {
+        let id = forward_id(&tensor);
+        (tensor, id)
+    }
+
+    #[test]
+    fn forward_id_is_stable_across_moves() {
+        let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+        let before = forward_id(&x);
+        let (x, moved_id) = round_trip(x);
+        assert_eq!(before, moved_id);
+        assert_eq!(before, forward_id(&x));
+    }
 }

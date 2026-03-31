@@ -136,6 +136,7 @@ impl Tensor {
     }
 
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
+        jvp::unsupported_if_active("einsum")?;
         let values = operands
             .iter()
             .map(|tensor| tensor.value())
@@ -144,6 +145,7 @@ impl Tensor {
     }
 
     pub fn solve(&self, rhs: &Self) -> Result<Self> {
+        jvp::unsupported_if_active("solve")?;
         Ok(Self::from_value(solve_dyn_values(
             self.value(),
             rhs.value(),
@@ -151,10 +153,12 @@ impl Tensor {
     }
 
     pub fn det(&self) -> Result<Self> {
+        jvp::unsupported_if_active("det")?;
         Ok(Self::from_value(det_dyn_value(self.value())?))
     }
 
     pub fn norm(&self, kind: NormKind) -> Result<Self> {
+        jvp::unsupported_if_active("norm")?;
         Ok(Self::from_value(norm_dyn_value(self.value(), kind)?))
     }
 
@@ -166,6 +170,7 @@ impl Tensor {
     }
 
     pub fn svd(&self, options: Option<SvdOptions>) -> Result<SvdResult> {
+        jvp::unsupported_if_active("svd")?;
         Ok(svd_dyn_value(self.value(), options)?.into())
     }
 

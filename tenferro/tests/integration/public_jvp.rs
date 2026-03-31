@@ -118,3 +118,18 @@ fn qr_without_installed_runtime_reports_runtime_missing() {
 
     assert!(matches!(err, Error::RuntimeNotConfigured));
 }
+
+#[test]
+fn unsupported_einsum_under_jvp_reports_unsupported_ad_op() {
+    let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+    let dx = Tensor::from_slice(&[3.0_f64, 4.0], &[2]).unwrap();
+
+    let err = jvp(
+        |inputs| Tensor::einsum("i->i", &[&inputs[0]]).map(|out| vec![out]),
+        &[x],
+        &[Some(dx)],
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, Error::UnsupportedAdOp { op: "einsum" }));
+}
