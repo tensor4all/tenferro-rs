@@ -5,13 +5,14 @@ use num_traits::{Float, NumCast, ToPrimitive};
 use tenferro_algebra::Conjugate;
 use tenferro_linalg::{
     cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eigen, eigen_frule, eigen_rrule,
-    householder_product, inv_frule, inv_rrule, lu_frule, lu_rrule, matrix_exp_frule,
-    matrix_exp_rrule, norm_frule, norm_frule_complex, norm_rrule, norm_rrule_complex, pinv,
-    pinv_frule, pinv_rrule, qr_frule, qr_rrule, slogdet_frule, slogdet_rrule, solve, solve_frule,
-    solve_rrule, solve_triangular_frule, solve_triangular_rrule, svd, svd_frule, svd_rrule,
-    tensorinv, tensorsolve, vander, EigenCotangent, LiftPermutationMatrixTensor, LuCotangent,
-    LuPivot, MatrixExpAbsTensor, NormKind, QrCotangent, ScaleTensorByRealSameShape,
-    SlogdetCotangent, SlogdetFruleDispatch, SlogdetRruleDispatch, SolveGrad, SvdCotangent,
+    householder_product, inv_frule, inv_rrule, lstsq_frule, lstsq_rrule, lu_frule, lu_rrule,
+    matrix_exp_frule, matrix_exp_rrule, norm_frule, norm_frule_complex, norm_rrule,
+    norm_rrule_complex, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule, slogdet_frule,
+    slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule, solve_triangular_rrule,
+    svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander, EigenCotangent,
+    LiftPermutationMatrixTensor, LuCotangent, LuPivot, MatrixExpAbsTensor, NormKind, QrCotangent,
+    ScaleTensorByRealSameShape, SlogdetCotangent, SlogdetFruleDispatch, SlogdetRruleDispatch,
+    SolveGrad, SvdCotangent,
 };
 use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
@@ -121,6 +122,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                     }
                 }
                 ReplayKind::SolveTriangularIdentity => replay_solve_triangular(record),
+                ReplayKind::LstsqIdentity => replay_lstsq(record),
                 ReplayKind::CholeskyIdentity => replay_cholesky(record),
                 ReplayKind::InvIdentity => replay_inv(record),
                 ReplayKind::DetIdentity => replay_det(record),
@@ -293,6 +295,10 @@ fn solve_rhs_core_rank(a: &DbTensor, b: &DbTensor) -> usize {
     }
 }
 
+fn lstsq_residual_core_rank(a: &DbTensor, b: &DbTensor) -> usize {
+    solve_rhs_core_rank(a, b).saturating_sub(1)
+}
+
 fn decode_inputs(record: &CaseRecord) -> Result<BTreeMap<String, Tensor<f64>>, String> {
     let mut inputs = BTreeMap::new();
     for (name, tensor) in &record.inputs {
@@ -453,6 +459,14 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
                 record.inputs.get("b").unwrap(),
             ))
         }
+        ("lstsq_grad_oriented", "identity", "output_0") => Ok(solve_rhs_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
+        ("lstsq_grad_oriented", "identity", "output_1") => Ok(lstsq_residual_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
         ("cholesky", "identity", "value") => Ok(2),
         ("cholesky_ex", "identity", "output_0")
         | ("inv", "identity", "value")
@@ -2364,6 +2378,105 @@ fn replay_solve_triangular(record: &CaseRecord) -> Result<bool, String> {
     )?;
     check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
+}
+
+fn empty_observable_tensor_typed<T: OracleDbScalar>(
+    expected: &Tensor<T>,
+) -> Result<Tensor<T>, String> {
+    Tensor::<T>::zeros(
+        expected.dims(),
+        tenferro_device::LogicalMemorySpace::MainMemory,
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .map_err(|err| format!("failed to materialize empty observable tensor: {err}"))
+}
+
+fn replay_lstsq_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar<Real = T> + num_traits::Float + Conjugate,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+
+    let empty_expected = expected_jvp_torch
+        .get("output_1")
+        .ok_or_else(|| format!("missing output_1 for {}", record.case_id))?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_value, dvalue) = lstsq_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        direction.get("a").unwrap(),
+        direction.get("b").unwrap(),
+    )
+    .map_err(|err| format!("lstsq_frule failed: {err}"))?;
+    let grad = lstsq_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        cotangent
+            .get("output_0")
+            .ok_or_else(|| format!("missing output_0 cotangent for {}", record.case_id))?,
+    )
+    .map_err(|err| format!("lstsq_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([
+        (String::from("output_0"), dvalue.x),
+        (
+            String::from("output_1"),
+            empty_observable_tensor_typed(empty_expected)?,
+        ),
+    ]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad.a), (String::from("b"), grad.b)]);
+    compare_tensor_maps_typed("lstsq.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "lstsq.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("lstsq.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+
+    let cotangent_output_0 = cotangent
+        .get("output_0")
+        .ok_or_else(|| format!("missing output_0 cotangent for {}", record.case_id))?
+        .clone();
+    let hvp_checked =
+        validate_hvp_typed("lstsq", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = lstsq_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                perturbed.get("b").unwrap(),
+                &cotangent_output_0,
+            )
+            .map_err(|err| format!("lstsq_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([
+                (String::from("a"), grad.a),
+                (String::from("b"), grad.b),
+            ]))
+        })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_lstsq(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_lstsq_typed::<f32>(record),
+        "float64" => replay_lstsq_typed::<f64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
 }
 
 fn replay_cholesky_t<T>(record: &CaseRecord) -> Result<bool, String>

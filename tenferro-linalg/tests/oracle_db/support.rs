@@ -7,6 +7,7 @@ use crate::db::CaseRecord;
 pub enum ReplayKind {
     SolveIdentity,
     SolveTriangularIdentity,
+    LstsqIdentity,
     CholeskyIdentity,
     InvIdentity,
     DetIdentity,
@@ -99,6 +100,38 @@ fn matrix_axes_order(value: &Value, rank: usize) -> Option<Vec<usize>> {
 
 fn matrix_axes_cover_rank(value: &Value, rank: usize) -> bool {
     matrix_axes_order(value, rank).is_some()
+}
+
+fn replayable_lstsq_subset(record: &CaseRecord) -> bool {
+    if !matches!(record.dtype.as_str(), "float32" | "float64") {
+        return false;
+    }
+    let Some(a) = record.inputs.get("a") else {
+        return false;
+    };
+    if a.shape.len() < 2 {
+        return false;
+    }
+    let m = a.shape[a.shape.len() - 2];
+    let n = a.shape[a.shape.len() - 1];
+    if m < n {
+        return false;
+    }
+    if m > n
+        && matches!(
+            record.op_kwargs.get("driver").and_then(Value::as_str),
+            Some("gelsy")
+        )
+    {
+        return false;
+    }
+    let Some(probe) = record.probes.first() else {
+        return false;
+    };
+    let Some(output_1) = probe.pytorch_ref.jvp.get("output_1") else {
+        return false;
+    };
+    output_1.shape.iter().product::<usize>() == 0
 }
 
 pub fn replayable_norm_kind(record: &CaseRecord) -> Option<NormKind> {
@@ -370,9 +403,15 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             ReplayKind::PinvIdentity,
             "tenferro replay currently supports this family only for float64/complex64/complex128",
         ),
-        ("lstsq_grad_oriented", "identity", "identity", "success") => RecordSupport::Unsupported {
-            reason: "tenferro replay does not implement this solver/decomposition family yet",
-        },
+        ("lstsq_grad_oriented", "identity", "identity", "success") => {
+            if replayable_lstsq_subset(record) {
+                RecordSupport::Supported(ReplayKind::LstsqIdentity)
+            } else {
+                RecordSupport::Unsupported {
+                    reason: "tenferro replay currently supports only the real-valued m>=n least-squares subset with empty residual summaries",
+                }
+            }
+        }
         _ => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this oracle family yet",
         },

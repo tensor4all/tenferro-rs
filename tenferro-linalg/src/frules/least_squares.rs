@@ -1,5 +1,14 @@
 use super::*;
 
+fn rhs_output_dims(core_rows: usize, nrhs: usize, batch_dims: &[usize]) -> Vec<usize> {
+    let core_dims = if nrhs == 1 {
+        vec![core_rows]
+    } else {
+        vec![core_rows, nrhs]
+    };
+    output_dims(&core_dims, batch_dims)
+}
+
 /// Forward-mode AD rule for least squares (JVP / pushforward).
 ///
 /// # Examples
@@ -50,36 +59,41 @@ where
     let (x_data, _) = extract_data(&result.x)?;
     let (da_data, _) = extract_data(tangent_a)?;
     let (db_data, _) = extract_data(tangent_b)?;
+    let nrhs = if b.ndim() == 1 + batch_dims.len() {
+        1
+    } else {
+        b.dims()[1]
+    };
 
-    let mut dx_data = vec![T::zero(); n * bc];
-    let mut dres_data = vec![T::zero(); m * bc];
+    let mut dx_data = vec![T::zero(); n * nrhs * bc];
+    let mut dres_data = vec![T::zero(); m * nrhs * bc];
 
     for batch in 0..bc {
         let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-        let x_b = &x_data[batch * n..(batch + 1) * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
         let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
-        let db_b = &db_data[batch * m..(batch + 1) * m];
+        let db_b = &db_data[batch * m * nrhs..(batch + 1) * m * nrhs];
 
-        // dA x (m×1)
-        let da_x = backend_mat_mul(ctx, da_b, m, n, x_b, 1)?;
+        // dA x (m×nrhs)
+        let da_x = backend_mat_mul(ctx, da_b, m, n, x_b, nrhs)?;
         // db - dA x
         let rhs: Vec<T> = db_b.iter().zip(da_x.iter()).map(|(&a, &b)| a - b).collect();
 
         // A^+ rhs = (A^T A)^{-1} A^T rhs
-        let at_rhs = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, &rhs, 1)?;
+        let at_rhs = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, &rhs, nrhs)?;
         let ata = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, a_b, n)?;
-        let dx_b_vec = backend_solve(ctx, &ata, &at_rhs, n, 1)?;
-        dx_data[batch * n..(batch + 1) * n].copy_from_slice(&dx_b_vec);
+        let dx_b_vec = backend_solve(ctx, &ata, &at_rhs, n, nrhs)?;
+        dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
 
         // d(residual) = db - dA x - A dx
-        let a_dx = backend_mat_mul(ctx, a_b, m, n, &dx_b_vec, 1)?;
-        for i in 0..m {
-            dres_data[batch * m + i] = rhs[i] - a_dx[i];
+        let a_dx = backend_mat_mul(ctx, a_b, m, n, &dx_b_vec, nrhs)?;
+        for i in 0..m * nrhs {
+            dres_data[batch * m * nrhs + i] = rhs[i] - a_dx[i];
         }
     }
 
-    let x_dims = output_dims(&[n], batch_dims);
-    let res_dims = output_dims(&[m], batch_dims);
+    let x_dims = rhs_output_dims(n, nrhs, batch_dims);
+    let res_dims = rhs_output_dims(m, nrhs, batch_dims);
     let dresult = LstsqResult {
         x: tensor_from_data(dx_data, &x_dims)
             .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,

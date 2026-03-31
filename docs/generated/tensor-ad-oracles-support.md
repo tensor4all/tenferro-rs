@@ -5,10 +5,10 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 ## Summary
 
 - Total published records: 9572
-- Supported success records: 2555
-- Supported success records with HVP payloads: 1831
+- Supported success records: 2579
+- Supported success records with HVP payloads: 1843
 - Expected error records: 2
-- Unsupported success records: 7015
+- Unsupported success records: 6991
 
 ## Supported
 
@@ -23,6 +23,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | householder_product | identity | identity | 8 |
 | inv | identity | identity | 24 |
 | inv_ex | identity | identity | 24 |
+| lstsq_grad_oriented | identity | identity | 24 |
 | lu | identity | identity | 80 |
 | lu_factor | identity | identity | 20 |
 | lu_factor_ex | identity | identity | 20 |
@@ -126,7 +127,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | log2 | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | logaddexp | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | logit | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
-| lstsq_grad_oriented | identity | identity | 144 | tenferro replay does not implement this solver/decomposition family yet |
+| lstsq_grad_oriented | identity | identity | 120 | tenferro replay currently supports only the real-valued m>=n least-squares subset with empty residual summaries |
 | lu_factor | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_factor_ex | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_solve | identity | identity | 924 | tenferro replay currently supports this family only for float64 |

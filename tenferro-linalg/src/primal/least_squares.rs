@@ -42,20 +42,40 @@ where
     let q_input = ensure_col_major(&qr_result.q);
     let r_input = ensure_col_major(&qr_result.r);
     let b_input = ensure_col_major(b);
+    let rhs_is_vector = b_input.ndim() == 1 + batch_dims.len();
 
     let k = m.min(n);
-    let rhs_matrix = b_input.unsqueeze(1)?;
+    let rhs_matrix = if rhs_is_vector {
+        b_input.unsqueeze(1)?
+    } else {
+        b_input.clone()
+    };
 
     let mut q_perm = vec![1, 0];
     q_perm.extend(2..q_input.ndim());
     let q_adj = q_input.conj().permute(&q_perm)?;
-    let qtb =
-        crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &q_adj, &rhs_matrix, k, m, 1)?;
+    let nrhs = rhs_matrix.dims()[1];
+    let qtb = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+        ctx,
+        &q_adj,
+        &rhs_matrix,
+        k,
+        m,
+        nrhs,
+    )?;
     let x_matrix = solve_triangular(ctx, &r_input, &qtb, true)?;
-    let x = x_matrix.squeeze_dim(1)?;
+    let x = if rhs_is_vector {
+        x_matrix.squeeze_dim(1)?
+    } else {
+        x_matrix
+    };
     let projected_rhs =
-        crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &q_input, &qtb, m, k, 1)?
-            .squeeze_dim(1)?;
+        crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &q_input, &qtb, m, k, nrhs)?;
+    let projected_rhs = if rhs_is_vector {
+        projected_rhs.squeeze_dim(1)?
+    } else {
+        projected_rhs
+    };
     let residual = crate::prims_bridge::scalar_binary_same_shape(
         ctx,
         &b_input,

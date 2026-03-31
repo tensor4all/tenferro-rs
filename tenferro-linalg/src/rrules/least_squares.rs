@@ -1,5 +1,14 @@
 use super::*;
 
+fn rhs_output_dims(core_rows: usize, nrhs: usize, batch_dims: &[usize]) -> Vec<usize> {
+    let core_dims = if nrhs == 1 {
+        vec![core_rows]
+    } else {
+        vec![core_rows, nrhs]
+    };
+    output_dims(&core_dims, batch_dims)
+}
+
 /// Reverse-mode AD rule for least squares (VJP / pullback).
 ///
 /// Returns cotangents for both `A` and `b`.
@@ -58,31 +67,36 @@ where
     let (x_data, _) = extract_data(&result.x)?;
     let (r_data, _) = extract_data(&result.residual)?;
     let (dx_data, _) = extract_data(cotangent_x)?;
+    let nrhs = if b.ndim() == 1 + batch_dims.len() {
+        1
+    } else {
+        b.dims()[1]
+    };
 
     let mut grad_a_data = vec![T::zero(); m * n * bc];
-    let mut grad_b_data = vec![T::zero(); m * bc];
+    let mut grad_b_data = vec![T::zero(); m * nrhs * bc];
 
     for batch in 0..bc {
         let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-        let x_b = &x_data[batch * n..(batch + 1) * n];
-        let r_b = &r_data[batch * m..(batch + 1) * m];
-        let dx_b = &dx_data[batch * n..(batch + 1) * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let r_b = &r_data[batch * m * nrhs..(batch + 1) * m * nrhs];
+        let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
         let (q_d, r_d) = backend_qr(ctx, a_b, m, n)?;
-        let y = backend_solve_tri(ctx, &transpose(&r_d, n, n), dx_b, n, 1, false)?;
-        let z = backend_solve_tri(ctx, &r_d, &y, n, 1, true)?;
-        let grad_b = backend_mat_mul(ctx, &q_d, m, n, &y, 1)?;
+        let y = backend_solve_tri(ctx, &transpose(&r_d, n, n), dx_b, n, nrhs, false)?;
+        let z = backend_solve_tri(ctx, &r_d, &y, n, nrhs, true)?;
+        let grad_b = backend_mat_mul(ctx, &q_d, m, n, &y, nrhs)?;
+        let residual_term = backend_mat_mul(ctx, r_b, m, nrhs, &transpose(&z, n, nrhs), n)?;
+        let x_term = backend_mat_mul(ctx, &grad_b, m, nrhs, &transpose(x_b, n, nrhs), n)?;
 
-        for j in 0..n {
-            for i in 0..m {
-                grad_a_data[batch * m * n + i + j * m] = r_b[i] * z[j] - grad_b[i] * x_b[j];
-            }
+        for i in 0..m * n {
+            grad_a_data[batch * m * n + i] = residual_term[i] - x_term[i];
         }
-        grad_b_data[batch * m..(batch + 1) * m].copy_from_slice(&grad_b);
+        grad_b_data[batch * m * nrhs..(batch + 1) * m * nrhs].copy_from_slice(&grad_b);
     }
 
     let a_dims = output_dims(&[m, n], batch_dims);
-    let b_dims = output_dims(&[m], batch_dims);
+    let b_dims = rhs_output_dims(m, nrhs, batch_dims);
     Ok(LstsqGrad {
         a: tensor_from_data(grad_a_data, &a_dims)
             .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
