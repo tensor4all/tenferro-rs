@@ -2,20 +2,36 @@
 
 //! `tenferro`: AD-aware tensor interface layer on top of `tenferro-rs`.
 //!
+//! The public surface includes reverse-mode helpers plus a narrow JVP
+//! transform, [`jvp`], which returns [`JvpResult`] with primal outputs and
+//! optional output tangents for the currently wired operations.
+//!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro::Tensor;
+//! use tenferro::{jvp, Tensor};
 //!
 //! let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-//! let y = x.exp().unwrap().sum().unwrap();
-//! assert_eq!(y.dims(), &[] as &[usize]);
+//! let primals = [x];
+//! let tangents = [Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2]).unwrap())];
+//!
+//! let result = jvp(
+//!     |inputs| Ok(vec![inputs[0].add(&inputs[0]).unwrap().exp().unwrap().sum().unwrap()]),
+//!     &primals,
+//!     &tangents,
+//! )
+//! .unwrap();
+//!
+//! assert_eq!(result.outputs.len(), 1);
+//! assert_eq!(result.output_tangents.len(), 1);
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
 //! The primary public frontend is [`Tensor`], backed by `tidu`'s
 //! `Value<DynTensor>` carrier. Custom downstream operations should use
-//! [`LinearizableOp`] and [`LinearizedOp`] directly.
+//! [`LinearizableOp`] and [`LinearizedOp`] directly; `jvp` is not a public
+//! dual-builder API and does not imply higher-order forward-mode or HVP
+//! support.
 //!
 //! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
 //! [`Tensor::solve`], [`Tensor::det`], [`Tensor::norm`], [`Tensor::qr`], and

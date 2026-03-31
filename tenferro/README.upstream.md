@@ -14,6 +14,9 @@ The current public surface is intentionally narrow:
   - `Tensor::grad`
   - `Tensor::backward`
   - free `grad(...)` / `backward(...)`
+- Public JVP transform:
+  - `jvp(...)`
+  - `JvpResult` with `outputs` and `output_tangents`
 - Direct tensor methods:
   - elementwise/reduction: `add`, `exp`, `sum`
   - tensor contraction: `einsum`
@@ -27,6 +30,11 @@ The current public surface is intentionally narrow:
 `Tensor` is a public façade over `tidu::Value<DynTensor>`. Reverse-mode graph
 state lives in the `Value` carrier; `tenferro` does not keep a second legacy
 carrier layer.
+
+The public `jvp(...)` transform is a small forward-mode seam for the currently
+wired tensor methods. It returns both the primal outputs and optional output
+tangents in `JvpResult`. It is not a public dual-builder API, and it does not
+promise higher-order forward-mode or HVP support.
 
 ## Runtime-backed operations
 
@@ -46,14 +54,20 @@ Install a default runtime with `set_default_runtime(...)` or use
 `runtime::with_runtime(...)` for an explicit scoped call.
 
 ```rust
-use tenferro::{set_default_runtime, RuntimeContext, Tensor};
-use tenferro_prims::CpuContext;
+use tenferro::{jvp, Tensor};
 
-let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])?;
+let result = jvp(
+    |inputs| {
+        let y = inputs[0].add(&inputs[0])?.exp()?.sum()?;
+        Ok(vec![y])
+    },
+    &[x.clone()],
+    &[Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2])?)],
+)?;
 
-let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2])?;
-let qr = a.qr()?;
-assert_eq!(qr.q.dims(), &[2, 2]);
+assert_eq!(result.outputs.len(), 1);
+assert_eq!(result.output_tangents.len(), 1);
 # Ok::<(), tenferro::Error>(())
 ```
 
