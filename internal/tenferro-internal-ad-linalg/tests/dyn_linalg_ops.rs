@@ -32,6 +32,10 @@ fn f64_values(tensor: &DynTensor) -> Vec<f64> {
     }
 }
 
+fn any_nonzero(values: &[f64]) -> bool {
+    values.iter().any(|value| value.abs() > 1.0e-12)
+}
+
 #[test]
 fn solve_det_and_norm_dyn_values_use_linearized_runtime() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
@@ -75,33 +79,57 @@ fn solve_det_and_norm_dyn_values_use_linearized_runtime() {
 }
 
 #[test]
-fn qr_and_svd_dyn_values_return_value_wrapped_outputs() {
+fn dyn_linalg_ops_qr_linearized_jvp_preserves_packaging_and_optional_tangent_behavior() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = new_reverse_leaf(dyn_f64(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0], &[3, 2]));
+    let a = new_reverse_leaf(dyn_f64(&[2.0, 1.0, 0.0, 1.0], &[2, 2]));
 
     let qr = qr_dyn_value(&a).unwrap();
-    assert_eq!(qr.q.primal().dims(), &[3, 2]);
+    assert_eq!(qr.q.primal().dims(), &[2, 2]);
     assert_eq!(qr.r.primal().dims(), &[2, 2]);
+
+    let qr_op = QrOp;
+    let qr_outputs = qr_op.primal(&[a.primal()]).unwrap();
+    let qr_linearized = qr_op.linearize(&[a.primal()], &qr_outputs).unwrap();
+
+    let qr_none = qr_linearized.jvp(&[None]).unwrap();
+    assert!(qr_none.iter().all(Option::is_none));
+
+    let qr_jvp = qr_linearized
+        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0], &[2, 2]))])
+        .unwrap();
+    assert_eq!(qr_jvp.len(), 2);
+    assert_eq!(qr_jvp[0].as_ref().unwrap().dims(), &[2, 2]);
+    assert_eq!(qr_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
+    assert!(any_nonzero(&f64_values(qr_jvp[0].as_ref().unwrap())));
+    assert!(any_nonzero(&f64_values(qr_jvp[1].as_ref().unwrap())));
+}
+
+#[test]
+fn dyn_linalg_ops_svd_linearized_jvp_preserves_packaging_and_optional_tangent_behavior() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = new_reverse_leaf(dyn_f64(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], &[3, 2]));
 
     let svd = svd_dyn_value(&a, None).unwrap();
     assert_eq!(svd.u.primal().dims(), &[3, 2]);
     assert_eq!(svd.s.primal().dims(), &[2]);
     assert_eq!(svd.vt.primal().dims(), &[2, 2]);
 
-    let qr_op = QrOp;
-    let qr_outputs = qr_op.primal(&[a.primal()]).unwrap();
-    let qr_linearized = qr_op.linearize(&[a.primal()], &qr_outputs).unwrap();
-    let qr_jvp = qr_linearized
-        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]))])
-        .unwrap();
-    assert_eq!(qr_jvp.len(), 2);
-
     let svd_op = SvdOp::default();
     let svd_outputs = svd_op.primal(&[a.primal()]).unwrap();
     let svd_linearized = svd_op.linearize(&[a.primal()], &svd_outputs).unwrap();
+    let svd_none = svd_linearized.jvp(&[None]).unwrap();
+    assert!(svd_none.iter().all(Option::is_none));
+
     let svd_jvp = svd_linearized
         .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]))])
         .unwrap();
     assert_eq!(svd_jvp.len(), 3);
+    assert_eq!(svd_jvp[0].as_ref().unwrap().dims(), &[3, 2]);
+    assert_eq!(svd_jvp[1].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(svd_jvp[2].as_ref().unwrap().dims(), &[2, 2]);
+    assert!(any_nonzero(&f64_values(svd_jvp[0].as_ref().unwrap())));
+    assert!(any_nonzero(&f64_values(svd_jvp[1].as_ref().unwrap())));
+    assert!(any_nonzero(&f64_values(svd_jvp[2].as_ref().unwrap())));
 }

@@ -4,7 +4,9 @@ use tenferro_internal_runtime::{set_default_runtime, RuntimeContext};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use tenferro_internal_ad_ops::{add_dyn_values, einsum_dyn_values, sum_dyn_value, AddOp, EinsumOp};
+use tenferro_internal_ad_ops::{
+    add_dyn_values, einsum_dyn_values, sum_dyn_value, AddOp, EinsumOp, ExpOp,
+};
 
 fn dyn_vec(values: &[f64], dims: &[usize]) -> DynTensor {
     let dense = Tensor::<f64>::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap();
@@ -29,7 +31,7 @@ fn f64_values(tensor: &DynTensor) -> Vec<f64> {
 }
 
 #[test]
-fn add_and_sum_dyn_values_use_linearized_runtime() {
+fn linearized_ops_add_and_sum_dyn_values_use_linearized_runtime() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let x = new_reverse_leaf(dyn_vec(&[1.0, 2.0], &[2]));
@@ -55,7 +57,7 @@ fn add_and_sum_dyn_values_use_linearized_runtime() {
 }
 
 #[test]
-fn einsum_dyn_values_expose_vjp_and_jvp() {
+fn linearized_ops_einsum_dyn_values_expose_vjp_and_jvp() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let x = new_reverse_leaf(dyn_vec(&[1.0, 2.0], &[2]));
@@ -75,4 +77,22 @@ fn einsum_dyn_values_expose_vjp_and_jvp() {
         .unwrap();
 
     assert_eq!(f64_values(&jvp[0].clone().unwrap()), vec![3.0]);
+}
+
+#[test]
+fn linearized_ops_exp_linearized_jvp_uses_saved_output_value() {
+    let x = new_reverse_leaf(dyn_vec(&[0.0, 1.0], &[2]));
+
+    let op = ExpOp;
+    let outputs = op.primal(&[x.primal()]).unwrap();
+    let output_values = f64_values(&outputs[0]);
+    assert_eq!(output_values, vec![1.0, std::f64::consts::E]);
+
+    let linearized = op.linearize(&[x.primal()], &outputs).unwrap();
+    let jvp = linearized.jvp(&[Some(dyn_vec(&[1.0, 2.0], &[2]))]).unwrap();
+
+    assert_eq!(
+        f64_values(&jvp[0].clone().unwrap()),
+        vec![1.0, 2.0 * std::f64::consts::E]
+    );
 }
