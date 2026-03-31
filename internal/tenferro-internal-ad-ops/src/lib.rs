@@ -7,48 +7,13 @@
 //! // to be consumed directly.
 //! ```
 
-mod core;
-pub mod ops;
+mod math;
 mod runtime;
-mod structured;
-mod tape;
 
-pub use core::{DynTensor, DynTensorTyped, NodeId};
-pub use ops::*;
-pub use tenferro_internal_ad_core::{AdMode, AdTensor};
+pub use math::{einsum_frule, einsum_rrule, solve_triangular_rrule};
 pub use tenferro_internal_error::{Error, Result};
-
-#[doc(hidden)]
-pub use tenferro_internal_frontend_core::StructuredTensor;
+pub use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTensor};
 
 pub mod ad {
-    pub use crate::ops::ad::*;
-}
-
-pub mod einsum {
-    pub mod ad {
-        pub use crate::ops::einsum::ad::*;
-    }
-
-    pub use crate::ops::einsum::*;
-}
-
-pub mod reduction {
-    pub mod ad {
-        pub use crate::ops::reduction::ad::*;
-    }
-
-    pub use crate::ops::reduction::*;
-}
-
-pub mod scalar {
-    pub mod ad {
-        pub use crate::ops::scalar::ad::*;
-    }
-
-    pub mod primal {
-        pub use crate::ops::scalar::primal::*;
-    }
-
-    pub use crate::ops::scalar::*;
+    pub use crate::math::{einsum_frule, einsum_rrule, solve_triangular_rrule};
 }

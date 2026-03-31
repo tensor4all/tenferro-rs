@@ -9,9 +9,7 @@
 ///     if flag {
 ///         Ok(())
 ///     } else {
-///         Err(Error::InvalidAdTensor {
-///             message: "demo".into(),
-///         })
+///         Err(Error::UnsupportedAdOp { op: "demo" })
 ///     }
 /// }
 ///
@@ -28,9 +26,7 @@ pub use tenferro_internal_error::Error;
 /// use tenferro::{Error, Result};
 ///
 /// let ok: Result<i32> = Ok(1);
-/// let err: Result<i32> = Err(Error::InvalidAdTensor {
-///     message: "sample".into(),
-/// });
+/// let err: Result<i32> = Err(Error::UnsupportedAdOp { op: "sample" });
 ///
 /// assert_eq!(ok.unwrap(), 1);
 /// assert!(err.is_err());
