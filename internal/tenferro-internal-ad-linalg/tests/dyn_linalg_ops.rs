@@ -132,7 +132,7 @@ fn solve_det_and_norm_dyn_values_use_linearized_runtime() {
     let det_none = det_linearized.jvp(&[None]).unwrap();
     assert_all_none(&det_none);
     let det_jvp = det_linearized
-        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]))])
+        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0], &[2, 2]))])
         .unwrap();
     assert_eq!(f64_values(&det_jvp[0].clone().unwrap()), vec![3.0]);
 

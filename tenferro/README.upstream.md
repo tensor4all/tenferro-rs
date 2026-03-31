@@ -62,7 +62,7 @@ let result = jvp(
         let y = inputs[0].add(&inputs[0])?.exp()?.sum()?;
         Ok(vec![y])
     },
-    &[x.clone()],
+    &[x],
     &[Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2])?)],
 )?;
 
