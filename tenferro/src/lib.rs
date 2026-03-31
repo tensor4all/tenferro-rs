@@ -9,7 +9,7 @@
 //!
 //! let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
 //! let y = x.exp().unwrap().sum().unwrap();
-//! assert_eq!(y.dims(), &[]);
+//! assert_eq!(y.dims(), &[] as &[usize]);
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
@@ -34,6 +34,7 @@ pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 pub use tenferro_internal_ad_surface::{
     backward, grad, with_ad_policy, AdExecutionPolicy, BackwardOptions, CheckpointHint,
-    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, Schema, SlotSchema, Value,
+    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, NormKind, Schema, SlotSchema,
+    SvdOptions, Value,
 };
 pub use tenferro_tensor::MemoryOrder;

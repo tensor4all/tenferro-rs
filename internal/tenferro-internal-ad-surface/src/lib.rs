@@ -28,6 +28,7 @@ pub use tenferro_internal_frontend_core::{
 pub use tenferro_internal_runtime::{
     set_default_runtime, with_default_runtime, with_runtime, DefaultRuntimeGuard, RuntimeContext,
 };
+pub use tenferro_linalg::{NormKind, SvdOptions};
 pub use tenferro_tensor::MemoryOrder;
 pub use tidu::{with_ad_policy, AdExecutionPolicy, CheckpointMode};
 

@@ -1,10 +1,15 @@
 use chainrules_core::AutodiffError;
 use std::fmt;
-use tenferro_internal_ad_ops::{add_dyn_values, exp_dyn_value, sum_dyn_value};
+use tenferro_internal_ad_linalg::{
+    det_dyn_value, norm_dyn_value, qr_dyn_value, solve_dyn_values, svd_dyn_value,
+};
+use tenferro_internal_ad_ops::{add_dyn_values, einsum_dyn_values, exp_dyn_value, sum_dyn_value};
 use tenferro_internal_frontend_core::tensor_ops::tensor_element;
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, ScalarType, StructuredTensor};
+use tenferro_linalg::{NormKind, SvdOptions};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
+use super::{QrResult, SvdResult};
 use crate::{Error, Result};
 
 pub struct Tensor {
@@ -118,6 +123,37 @@ impl Tensor {
 
     pub fn sum(&self) -> Result<Self> {
         Ok(Self::from_value(sum_dyn_value(self.value())?))
+    }
+
+    pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
+        let values = operands
+            .iter()
+            .map(|tensor| tensor.value())
+            .collect::<Vec<_>>();
+        Ok(Self::from_value(einsum_dyn_values(subscripts, &values)?))
+    }
+
+    pub fn solve(&self, rhs: &Self) -> Result<Self> {
+        Ok(Self::from_value(solve_dyn_values(
+            self.value(),
+            rhs.value(),
+        )?))
+    }
+
+    pub fn det(&self) -> Result<Self> {
+        Ok(Self::from_value(det_dyn_value(self.value())?))
+    }
+
+    pub fn norm(&self, kind: NormKind) -> Result<Self> {
+        Ok(Self::from_value(norm_dyn_value(self.value(), kind)?))
+    }
+
+    pub fn qr(&self) -> Result<QrResult> {
+        Ok(qr_dyn_value(self.value())?.into())
+    }
+
+    pub fn svd(&self, options: Option<SvdOptions>) -> Result<SvdResult> {
+        Ok(svd_dyn_value(self.value(), options)?.into())
     }
 
     pub fn try_to_vec<T>(&self) -> Result<Vec<T>>
