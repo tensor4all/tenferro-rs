@@ -32,8 +32,20 @@ fn f64_values(tensor: &DynTensor) -> Vec<f64> {
     }
 }
 
-fn any_nonzero(values: &[f64]) -> bool {
-    values.iter().any(|value| value.abs() > 1.0e-12)
+fn max_abs_diff(lhs: &[f64], rhs: &[f64]) -> f64 {
+    assert_eq!(lhs.len(), rhs.len());
+    lhs.iter()
+        .zip(rhs)
+        .map(|(lhs, rhs)| (lhs - rhs).abs())
+        .fold(0.0, f64::max)
+}
+
+fn assert_vec_close(lhs: &[f64], rhs: &[f64], tol: f64) {
+    assert!(
+        max_abs_diff(lhs, rhs) <= tol,
+        "left: {lhs:?}\nright: {rhs:?}\nmax_abs_diff: {}",
+        max_abs_diff(lhs, rhs)
+    );
 }
 
 #[test]
@@ -82,11 +94,16 @@ fn solve_det_and_norm_dyn_values_use_linearized_runtime() {
 fn dyn_linalg_ops_qr_linearized_jvp_preserves_packaging_and_optional_tangent_behavior() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = new_reverse_leaf(dyn_f64(&[2.0, 1.0, 0.0, 1.0], &[2, 2]));
+    let a = new_reverse_leaf(dyn_f64(&[3.0, 0.0, 0.0, 4.0], &[2, 2]));
 
     let qr = qr_dyn_value(&a).unwrap();
     assert_eq!(qr.q.primal().dims(), &[2, 2]);
     assert_eq!(qr.r.primal().dims(), &[2, 2]);
+    let q_values = f64_values(qr.q.primal());
+    let r_values = f64_values(qr.r.primal());
+    assert_vec_close(&q_values, &[1.0, 0.0, 0.0, 1.0], 1.0e-12);
+    assert_vec_close(&r_values, &[3.0, 0.0, 0.0, 4.0], 1.0e-12);
+    assert!(max_abs_diff(&q_values, &r_values) > 1.0e-3);
 
     let qr_op = QrOp;
     let qr_outputs = qr_op.primal(&[a.primal()]).unwrap();
@@ -101,20 +118,68 @@ fn dyn_linalg_ops_qr_linearized_jvp_preserves_packaging_and_optional_tangent_beh
     assert_eq!(qr_jvp.len(), 2);
     assert_eq!(qr_jvp[0].as_ref().unwrap().dims(), &[2, 2]);
     assert_eq!(qr_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
-    assert!(any_nonzero(&f64_values(qr_jvp[0].as_ref().unwrap())));
-    assert!(any_nonzero(&f64_values(qr_jvp[1].as_ref().unwrap())));
+
+    let epsilon = 1.0e-6;
+    let tangent = [1.0, 0.0, 0.0, 0.0];
+    let perturbed_plus = new_reverse_leaf(dyn_f64(
+        &[
+            3.0 + epsilon * tangent[0],
+            0.0 + epsilon * tangent[1],
+            0.0 + epsilon * tangent[2],
+            4.0 + epsilon * tangent[3],
+        ],
+        &[2, 2],
+    ));
+    let perturbed_minus = new_reverse_leaf(dyn_f64(
+        &[
+            3.0 - epsilon * tangent[0],
+            0.0 - epsilon * tangent[1],
+            0.0 - epsilon * tangent[2],
+            4.0 - epsilon * tangent[3],
+        ],
+        &[2, 2],
+    ));
+    let qr_plus = qr_dyn_value(&perturbed_plus).unwrap();
+    let qr_minus = qr_dyn_value(&perturbed_minus).unwrap();
+    let expected_q = f64_values(qr_plus.q.primal())
+        .iter()
+        .zip(f64_values(qr_minus.q.primal()))
+        .map(|(plus, minus)| (plus - minus) / (2.0 * epsilon))
+        .collect::<Vec<_>>();
+    let expected_r = f64_values(qr_plus.r.primal())
+        .iter()
+        .zip(f64_values(qr_minus.r.primal()))
+        .map(|(plus, minus)| (plus - minus) / (2.0 * epsilon))
+        .collect::<Vec<_>>();
+    assert_vec_close(
+        &f64_values(qr_jvp[0].as_ref().unwrap()),
+        &expected_q,
+        5.0e-4,
+    );
+    assert_vec_close(
+        &f64_values(qr_jvp[1].as_ref().unwrap()),
+        &expected_r,
+        5.0e-4,
+    );
 }
 
 #[test]
 fn dyn_linalg_ops_svd_linearized_jvp_preserves_packaging_and_optional_tangent_behavior() {
     let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = new_reverse_leaf(dyn_f64(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], &[3, 2]));
+    let a = new_reverse_leaf(dyn_f64(&[3.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]));
 
     let svd = svd_dyn_value(&a, None).unwrap();
     assert_eq!(svd.u.primal().dims(), &[3, 2]);
     assert_eq!(svd.s.primal().dims(), &[2]);
     assert_eq!(svd.vt.primal().dims(), &[2, 2]);
+    assert_vec_close(&f64_values(svd.s.primal()), &[3.0, 1.0], 1.0e-12);
+    assert_vec_close(
+        &f64_values(svd.u.primal()),
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        1.0e-12,
+    );
+    assert_vec_close(&f64_values(svd.vt.primal()), &[1.0, 0.0, 0.0, 1.0], 1.0e-12);
 
     let svd_op = SvdOp::default();
     let svd_outputs = svd_op.primal(&[a.primal()]).unwrap();
@@ -129,7 +194,61 @@ fn dyn_linalg_ops_svd_linearized_jvp_preserves_packaging_and_optional_tangent_be
     assert_eq!(svd_jvp[0].as_ref().unwrap().dims(), &[3, 2]);
     assert_eq!(svd_jvp[1].as_ref().unwrap().dims(), &[2]);
     assert_eq!(svd_jvp[2].as_ref().unwrap().dims(), &[2, 2]);
-    assert!(any_nonzero(&f64_values(svd_jvp[0].as_ref().unwrap())));
-    assert!(any_nonzero(&f64_values(svd_jvp[1].as_ref().unwrap())));
-    assert!(any_nonzero(&f64_values(svd_jvp[2].as_ref().unwrap())));
+
+    let epsilon = 1.0e-6;
+    let tangent = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let perturbed_plus = new_reverse_leaf(dyn_f64(
+        &[
+            3.0 + epsilon * tangent[0],
+            0.0 + epsilon * tangent[1],
+            0.0 + epsilon * tangent[2],
+            0.0 + epsilon * tangent[3],
+            0.0 + epsilon * tangent[4],
+            0.0 + epsilon * tangent[5],
+        ],
+        &[3, 2],
+    ));
+    let perturbed_minus = new_reverse_leaf(dyn_f64(
+        &[
+            3.0 - epsilon * tangent[0],
+            0.0 - epsilon * tangent[1],
+            0.0 - epsilon * tangent[2],
+            0.0 - epsilon * tangent[3],
+            0.0 - epsilon * tangent[4],
+            0.0 - epsilon * tangent[5],
+        ],
+        &[3, 2],
+    ));
+    let svd_plus = svd_dyn_value(&perturbed_plus, None).unwrap();
+    let svd_minus = svd_dyn_value(&perturbed_minus, None).unwrap();
+    let expected_u = f64_values(svd_plus.u.primal())
+        .iter()
+        .zip(f64_values(svd_minus.u.primal()))
+        .map(|(plus, minus)| (plus - minus) / (2.0 * epsilon))
+        .collect::<Vec<_>>();
+    let expected_s = f64_values(svd_plus.s.primal())
+        .iter()
+        .zip(f64_values(svd_minus.s.primal()))
+        .map(|(plus, minus)| (plus - minus) / (2.0 * epsilon))
+        .collect::<Vec<_>>();
+    let expected_vt = f64_values(svd_plus.vt.primal())
+        .iter()
+        .zip(f64_values(svd_minus.vt.primal()))
+        .map(|(plus, minus)| (plus - minus) / (2.0 * epsilon))
+        .collect::<Vec<_>>();
+    assert_vec_close(
+        &f64_values(svd_jvp[0].as_ref().unwrap()),
+        &expected_u,
+        5.0e-4,
+    );
+    assert_vec_close(
+        &f64_values(svd_jvp[1].as_ref().unwrap()),
+        &expected_s,
+        5.0e-4,
+    );
+    assert_vec_close(
+        &f64_values(svd_jvp[2].as_ref().unwrap()),
+        &expected_vt,
+        5.0e-4,
+    );
 }
