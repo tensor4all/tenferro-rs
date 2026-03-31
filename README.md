@@ -197,7 +197,7 @@ fn main() {
 
     // 2. Create tensors and enable gradient tracking.
     let mut x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3]).unwrap();
-    x.requires_grad_(true);
+    x = x.with_requires_grad(true);
 
     // 3. Forward pass: loss = sum(exp(x))
     let loss = x.exp().unwrap().sum().unwrap();
@@ -344,7 +344,7 @@ For a detailed feature-by-feature mapping, see
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Reverse-mode frontend | Strong | `Tensor::requires_grad_`, `Tensor::grad`, `Tensor::backward`, and top-level `grad` / `backward` helpers |
+| Reverse-mode frontend | Strong | `Tensor::with_requires_grad`, `Tensor::grad`, `Tensor::backward`, and top-level `grad` / `backward` helpers |
 | Custom op integration | Available | Downstream custom ops should implement `LinearizableOp` + `LinearizedOp` and supply `jvp` / `vjp` |
 | Public JVP/HVP frontend | Not exposed | This cut focuses on reverse-mode frontend APIs; there is no public HVP helper |
 | Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |

@@ -8,5 +8,5 @@ pub fn new_dyn_value(primal: DynTensor) -> DynValue {
 }
 
 pub fn new_reverse_leaf(primal: DynTensor) -> DynValue {
-    tidu::Value::new(primal).requires_grad_(true)
+    tidu::Value::new(primal).with_requires_grad(true)
 }

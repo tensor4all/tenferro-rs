@@ -238,7 +238,7 @@ where
 {
     let structured = T::structured_ref(value)
         .ok_or_else(|| invalid_argument(format!("{context} requires matching dtypes")))?;
-    Ok(structured.to_dense()?)
+    structured.to_dense()
 }
 
 fn collect_dense_dyn_tensors<T>(values: &[&DynTensor], context: &str) -> Result<Vec<DenseTensor<T>>>

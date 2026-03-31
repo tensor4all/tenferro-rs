@@ -1,4 +1,5 @@
 use super::*;
+use crate::tensor::TensorParts;
 
 fn view_as_real_strides(strides: &[isize]) -> Result<Vec<isize>> {
     let mut output = Vec::with_capacity(strides.len() + 1);
@@ -89,17 +90,17 @@ impl Tensor<Complex32> {
             })?;
         let buffer = self.buffer().reinterpret_as::<f32>(buffer_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
-        Ok(Tensor::from_parts(
+        Ok(Tensor::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            self.logical_memory_space(),
-            self.preferred_compute_device(),
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: self.logical_memory_space(),
+            preferred_compute_device: self.preferred_compute_device(),
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Return a zero-copy view of the real part of a resolved complex tensor.
@@ -191,17 +192,17 @@ impl Tensor<Complex64> {
             })?;
         let buffer = self.buffer().reinterpret_as::<f64>(buffer_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
-        Ok(Tensor::from_parts(
+        Ok(Tensor::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            self.logical_memory_space(),
-            self.preferred_compute_device(),
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: self.logical_memory_space(),
+            preferred_compute_device: self.preferred_compute_device(),
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Return a zero-copy view of the real part of a resolved complex tensor.
@@ -295,17 +296,17 @@ impl Tensor<f32> {
         let source_len = self.buffer().len() / 2;
         let buffer = self.buffer().reinterpret_as::<Complex32>(source_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
-        Ok(Tensor::from_parts(
+        Ok(Tensor::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            self.logical_memory_space(),
-            self.preferred_compute_device(),
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: self.logical_memory_space(),
+            preferred_compute_device: self.preferred_compute_device(),
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 }
 
@@ -351,16 +352,16 @@ impl Tensor<f64> {
         let source_len = self.buffer().len() / 2;
         let buffer = self.buffer().reinterpret_as::<Complex64>(source_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
-        Ok(Tensor::from_parts(
+        Ok(Tensor::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            self.logical_memory_space(),
-            self.preferred_compute_device(),
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: self.logical_memory_space(),
+            preferred_compute_device: self.preferred_compute_device(),
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 }

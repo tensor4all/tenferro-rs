@@ -34,7 +34,7 @@ impl ForwardJvpContext {
 }
 
 thread_local! {
-    static FORWARD_JVP_STACK: RefCell<Vec<ForwardJvpContext>> = RefCell::new(Vec::new());
+    static FORWARD_JVP_STACK: RefCell<Vec<ForwardJvpContext>> = const { RefCell::new(Vec::new()) };
 }
 
 struct ForwardJvpGuard;

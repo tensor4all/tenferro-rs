@@ -190,7 +190,7 @@ where
         NormKind::L1 => {
             // dA = dn * sign(A) on columns that attain max absolute column sum.
             // At ties, average uniformly over active columns.
-            for batch in 0..bc {
+            for (batch, &dn_batch) in dn_data.iter().enumerate().take(bc) {
                 if m == 0 || n == 0 {
                     continue;
                 }
@@ -218,7 +218,7 @@ where
                     continue;
                 }
                 let active_count = scalar_from::<T>(active_cols.len() as f64).map_err(to_ad_err)?;
-                let dn = dn_data[batch] / active_count;
+                let dn = dn_batch / active_count;
                 for j in active_cols {
                     for i in 0..m {
                         let v = a_data[base + i + j * m];
@@ -237,7 +237,7 @@ where
         NormKind::Inf => {
             // dA = dn * sign(A) on rows that attain max absolute row sum.
             // At ties, average uniformly over active rows.
-            for batch in 0..bc {
+            for (batch, &dn_batch) in dn_data.iter().enumerate().take(bc) {
                 if m == 0 || n == 0 {
                     continue;
                 }
@@ -265,7 +265,7 @@ where
                     continue;
                 }
                 let active_count = scalar_from::<T>(active_rows.len() as f64).map_err(to_ad_err)?;
-                let dn = dn_data[batch] / active_count;
+                let dn = dn_batch / active_count;
                 for i in active_rows {
                     for j in 0..n {
                         let v = a_data[base + i + j * m];

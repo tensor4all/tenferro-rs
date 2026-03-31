@@ -18,10 +18,10 @@ fn tensor_einsum_is_public_and_backpropagates() {
     let _runtime = with_cpu_runtime();
     let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let y = Tensor::from_slice(&[3.0_f64, 4.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
 
     let out = Tensor::einsum("i,i->", &[&x, &y]).unwrap();
     assert_eq!(out.dims(), &[] as &[usize]);
@@ -62,7 +62,7 @@ fn tensor_qr_and_svd_return_tensor_wrappers() {
     let _runtime = with_cpu_runtime();
     let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0, 0.0, 1.0], &[3, 2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
 
     let qr = a.qr().unwrap();
     assert_eq!(qr.q.dims(), &[3, 2]);

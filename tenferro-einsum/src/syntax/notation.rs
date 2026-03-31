@@ -7,7 +7,7 @@ use tenferro_device::{Error, Result};
 /// "Unicode alphanumeric label" contract while still allowing digits,
 /// accented letters, Greek, and CJK characters.
 pub(crate) fn char_to_label(c: char) -> Result<u32> {
-    if c >= '\u{E000}' && c <= '\u{F8FF}' {
+    if ('\u{E000}'..='\u{F8FF}').contains(&c) {
         return Ok(c as u32);
     }
 

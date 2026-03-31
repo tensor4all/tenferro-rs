@@ -4,7 +4,7 @@ use tenferro_internal_ad_surface::{backward, grad, BackwardOptions, GradOptions,
 fn reverse_only_surface_uses_tidu_value_carrier() {
     let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let out = x.exp().unwrap().sum().unwrap();
 
     backward(&[&out], None, BackwardOptions::default()).unwrap();
@@ -19,10 +19,10 @@ fn reverse_only_surface_uses_tidu_value_carrier() {
 fn functional_grad_uses_value_vjp() {
     let x = Tensor::from_slice(&[1.0_f64, 0.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let y = Tensor::from_slice(&[2.0_f64, 3.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let out = x.add(&y).unwrap().sum().unwrap();
 
     let grads = grad(&[&out], &[&x, &y], None, GradOptions::default()).unwrap();

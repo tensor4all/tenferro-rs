@@ -15,7 +15,7 @@ fn tensor_from_slice_reports_dtype_shape_and_layout_flags() {
 fn tensor_detach_drops_reverse_tracking() {
     let value = Tensor::from_slice(&[1.0_f64, 2.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
 
     let detached = value.detach();
 

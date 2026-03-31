@@ -66,23 +66,35 @@ pub struct Tensor<T> {
     fw_grad: Option<Box<Tensor<T>>>,
 }
 
+pub(crate) struct TensorParts<T> {
+    pub(crate) buffer: DataBuffer<T>,
+    pub(crate) dims: Arc<[usize]>,
+    pub(crate) strides: Arc<[isize]>,
+    pub(crate) offset: isize,
+    pub(crate) logical_memory_space: LogicalMemorySpace,
+    pub(crate) preferred_compute_device: Option<ComputeDevice>,
+    pub(crate) event: Option<CompletionEvent>,
+    pub(crate) conjugated: bool,
+    pub(crate) fw_grad: Option<Box<Tensor<T>>>,
+}
+
 impl<T> Clone for Tensor<T> {
     /// Shallow clone: shares the underlying data buffer.
     ///
     /// For a deep copy, materialize into a new allocation with
     /// [`Tensor::contiguous`] or another explicit data-producing operation.
     fn clone(&self) -> Self {
-        Self::from_parts(
-            self.buffer.clone(),
-            self.dims.clone(),
-            self.strides.clone(),
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event.clone(),
-            self.conjugated,
-            self.fw_grad.clone(),
-        )
+        Self::from_parts(TensorParts {
+            buffer: self.buffer.clone(),
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event.clone(),
+            conjugated: self.conjugated,
+            fw_grad: self.fw_grad.clone(),
+        })
     }
 }
 
@@ -111,17 +123,18 @@ impl<T> std::fmt::Debug for Tensor<T> {
 /// These operate only on tensor metadata (dims, strides, offset, buffer
 /// reference) and never read or write element values.
 impl<T> Tensor<T> {
-    pub(crate) fn from_parts(
-        buffer: DataBuffer<T>,
-        dims: Arc<[usize]>,
-        strides: Arc<[isize]>,
-        offset: isize,
-        logical_memory_space: LogicalMemorySpace,
-        preferred_compute_device: Option<ComputeDevice>,
-        event: Option<CompletionEvent>,
-        conjugated: bool,
-        fw_grad: Option<Box<Tensor<T>>>,
-    ) -> Self {
+    pub(crate) fn from_parts(parts: TensorParts<T>) -> Self {
+        let TensorParts {
+            buffer,
+            dims,
+            strides,
+            offset,
+            logical_memory_space,
+            preferred_compute_device,
+            event,
+            conjugated,
+            fw_grad,
+        } = parts;
         Self {
             buffer,
             dims,
@@ -144,17 +157,17 @@ impl<T> Tensor<T> {
         conjugated: bool,
     ) -> Self {
         let strides = Arc::from(compute_contiguous_strides(dims.as_ref(), order));
-        Self::from_parts(
-            DataBuffer::from_vec(data),
+        Self::from_parts(TensorParts {
+            buffer: DataBuffer::from_vec(data),
             dims,
             strides,
-            0,
+            offset: 0,
             logical_memory_space,
             preferred_compute_device,
-            None,
+            event: None,
             conjugated,
-            None,
-        )
+            fw_grad: None,
+        })
     }
 
     pub(crate) fn shared_view_with(
@@ -163,17 +176,17 @@ impl<T> Tensor<T> {
         strides: Arc<[isize]>,
         offset: isize,
     ) -> Self {
-        Self::from_parts(
-            self.buffer.clone(),
+        Self::from_parts(TensorParts {
+            buffer: self.buffer.clone(),
             dims,
             strides,
             offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            None,
-            self.conjugated,
-            None,
-        )
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+            fw_grad: None,
+        })
     }
 
     pub(crate) fn materialized_from_vec(&self, data: Vec<T>, order: MemoryOrder) -> Self {

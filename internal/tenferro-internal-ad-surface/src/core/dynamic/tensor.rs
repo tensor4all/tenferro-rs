@@ -85,9 +85,9 @@ impl Tensor {
         self.inner.requires_grad()
     }
 
-    pub fn requires_grad_(self, enabled: bool) -> Self {
+    pub fn with_requires_grad(self, enabled: bool) -> Self {
         Self {
-            inner: self.inner.requires_grad_(enabled),
+            inner: self.inner.with_requires_grad(enabled),
         }
     }
 

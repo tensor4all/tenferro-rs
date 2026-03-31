@@ -4,7 +4,7 @@ use tenferro::{backward, grad, BackwardOptions, GradOptions, Tensor};
 fn tensor_backward_accumulates_leaf_gradient() {
     let x = Tensor::from_slice(&[0.0_f64, 1.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
 
     let out = x.exp().unwrap().sum().unwrap();
     out.backward().unwrap();
@@ -20,10 +20,10 @@ fn tensor_backward_accumulates_leaf_gradient() {
 fn functional_grad_matches_additive_vjp() {
     let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let y = Tensor::from_slice(&[3.0_f64, 4.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
 
     let out = x.add(&y).unwrap().sum().unwrap();
     let grads = grad(&[&out], &[&x, &y], None, GradOptions::default()).unwrap();
@@ -43,7 +43,7 @@ fn functional_grad_matches_additive_vjp() {
 fn free_backward_uses_default_seed() {
     let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2])
         .unwrap()
-        .requires_grad_(true);
+        .with_requires_grad(true);
     let out = x.exp().unwrap().sum().unwrap();
 
     backward(&[&out], None, BackwardOptions::default()).unwrap();

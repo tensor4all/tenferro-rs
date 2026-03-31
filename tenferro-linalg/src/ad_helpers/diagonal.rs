@@ -11,6 +11,7 @@ fn batch_modes(rank: usize) -> Vec<u32> {
     (2..rank as u32).collect()
 }
 
+#[cfg(test)]
 fn validate_square_output_dims<'a>(
     output_dims: &'a [usize],
     op_name: &str,
@@ -30,6 +31,7 @@ fn validate_square_output_dims<'a>(
     Ok((output_dims[0], &output_dims[2..]))
 }
 
+#[cfg(test)]
 fn diag_shape_from_output_dims(output_dims: &[usize]) -> Vec<usize> {
     let mut dims = Vec::with_capacity(output_dims.len().saturating_sub(1));
     dims.push(output_dims[0]);
@@ -37,11 +39,13 @@ fn diag_shape_from_output_dims(output_dims: &[usize]) -> Vec<usize> {
     dims
 }
 
+#[cfg(test)]
 enum DiagonalScatterKind {
     AntiTrace { modes_a: Vec<u32> },
     AntiDiag { modes_a: Vec<u32> },
 }
 
+#[cfg(test)]
 fn classify_diagonal_scatter(
     input_dims: &[usize],
     output_dims: &[usize],
@@ -67,6 +71,7 @@ fn classify_diagonal_scatter(
     )))
 }
 
+#[cfg(test)]
 pub(crate) fn diag_extract<T: LinalgScalar>(input: &Tensor<T>) -> Result<Tensor<T>> {
     validate_square(input)?;
     let diagonal = input.diagonal(&[(0, 1)])?;
@@ -107,6 +112,7 @@ where
     Ok(output)
 }
 
+#[cfg(test)]
 fn diag_scatter_into<T, C>(
     ctx: &mut C,
     input: &Tensor<T>,
@@ -140,6 +146,7 @@ where
     prims_bridge::semiring_core_single_input_into(ctx, &desc, input, T::one(), beta, output)
 }
 
+#[cfg(test)]
 pub(crate) fn diag_scatter<T, C>(
     ctx: &mut C,
     input: &Tensor<T>,
@@ -158,6 +165,7 @@ where
     Ok(output)
 }
 
+#[cfg(test)]
 pub(crate) fn diag_embed<T, C>(
     ctx: &mut C,
     input: &Tensor<T>,
@@ -170,6 +178,7 @@ where
     diag_scatter(ctx, input, output_dims)
 }
 
+#[cfg(test)]
 pub(crate) fn diag_scatter_add<T, C>(
     ctx: &mut C,
     input: &Tensor<T>,

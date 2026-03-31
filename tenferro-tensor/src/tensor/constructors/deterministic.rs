@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
-use super::super::Tensor;
+use super::super::{Tensor, TensorParts};
 use crate::layout::validate_layout_against_len;
 use crate::{DataBuffer, MemoryOrder};
 
@@ -125,17 +125,17 @@ impl<T: Scalar> Tensor<T> {
         let n_elements: usize = dims.iter().product();
         let buffer = DataBuffer::zeros_on_device(n_elements, memory_space)?;
         let strides = crate::layout::compute_contiguous_strides(dims, order);
-        Ok(Self::from_parts(
+        Ok(Self::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
-            0,
-            memory_space,
-            None,
-            None,
-            false,
-            None,
-        ))
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Create a tensor with allocated storage.
@@ -169,17 +169,17 @@ impl<T: Scalar> Tensor<T> {
         let n_elements: usize = dims.iter().product();
         let buffer = DataBuffer::allocate_uninit_on_device(n_elements, memory_space)?;
         let strides = crate::layout::compute_contiguous_strides(dims, order);
-        Ok(Self::from_parts(
+        Ok(Self::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
-            0,
-            memory_space,
-            None,
-            None,
-            false,
-            None,
-        ))
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Create a tensor filled with ones.
@@ -235,17 +235,17 @@ impl<T: Scalar> Tensor<T> {
         // between strided elements that should not hold garbage.
         let buffer = DataBuffer::zeros_on_device(storage_len, memory_space)?;
         validate_layout_against_len(dims, strides, offset, buffer.len())?;
-        Ok(Self::from_parts(
+        Ok(Self::from_parts(TensorParts {
             buffer,
-            Arc::from(dims),
-            Arc::from(strides),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            memory_space,
-            None,
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Create a tensor filled with `value`.
@@ -354,17 +354,17 @@ impl<T: Scalar> Tensor<T> {
         offset: isize,
     ) -> Result<Self> {
         validate_layout_against_len(dims, strides, offset, data.len())?;
-        Ok(Self::from_parts(
-            DataBuffer::from_vec(data),
-            Arc::from(dims),
-            Arc::from(strides),
+        Ok(Self::from_parts(TensorParts {
+            buffer: DataBuffer::from_vec(data),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            LogicalMemorySpace::MainMemory,
-            None,
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: LogicalMemorySpace::MainMemory,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Create a tensor from externally-owned CPU-accessible memory.
@@ -395,17 +395,17 @@ impl<T: Scalar> Tensor<T> {
         release: impl FnOnce() + Send + 'static,
     ) -> Result<Self> {
         validate_layout_against_len(dims, strides, offset, len)?;
-        Ok(Self::from_parts(
-            DataBuffer::from_external(ptr, len, release),
-            Arc::from(dims),
-            Arc::from(strides),
+        Ok(Self::from_parts(TensorParts {
+            buffer: DataBuffer::from_external(ptr, len, release),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
-            LogicalMemorySpace::MainMemory,
-            None,
-            None,
-            false,
-            None,
-        ))
+            logical_memory_space: LogicalMemorySpace::MainMemory,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 
     /// Try to extract the underlying data as `Vec<T>`.

@@ -10,7 +10,7 @@ The current public surface is intentionally narrow:
   - `Tensor`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
 - Reverse-mode helpers:
-  - `Tensor::requires_grad_`
+  - `Tensor::with_requires_grad`
   - `Tensor::grad`
   - `Tensor::backward`
   - free `grad(...)` / `backward(...)`

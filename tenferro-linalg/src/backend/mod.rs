@@ -48,26 +48,10 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 // Submodules
 // ============================================================================
 
-// Slice-level backend (internal implementation detail)
-#[cfg(feature = "linalg-lapack")]
-pub(crate) mod blas_lapack_backend;
-#[cfg(feature = "linalg-faer")]
-pub(crate) mod faer_backend;
-
 // Tensor-level API and types
-pub(crate) mod cpu_tensor_impl;
 pub mod tensor_api;
 pub mod tensor_context;
 pub(crate) mod tensor_helpers;
-
-// Device backends
-pub(crate) mod cpu;
-#[cfg(feature = "linalg-faer")]
-pub(crate) mod cpu_faer;
-#[cfg(feature = "linalg-lapack")]
-pub(crate) mod cpu_lapack;
-pub(crate) mod cuda;
-pub(crate) mod hip;
 
 // ============================================================================
 // Re-exports
@@ -82,8 +66,10 @@ pub use tensor_context::TensorLinalgContextFor;
 
 // CPU backend (public)
 #[cfg(feature = "linalg-lapack")]
-pub use blas_lapack_backend::BlasLapackBackend;
+pub use tenferro_linalg_prims::backend::BlasLapackBackend;
 pub use tenferro_linalg_prims::backend::CpuTensorLinalgBackend;
+#[cfg(feature = "linalg-faer")]
+pub use tenferro_linalg_prims::backend::FaerBackend;
 
 // GPU backend stubs (public)
 pub(crate) use tenferro_linalg_prims::backend::col_major_strides;
