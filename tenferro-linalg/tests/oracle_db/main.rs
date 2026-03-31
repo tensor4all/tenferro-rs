@@ -625,7 +625,7 @@ fn oracle_db_marks_supported_lstsq_subset_for_replay() {
 }
 
 #[test]
-fn oracle_db_leaves_unsupported_vector_norm_family_rejected() {
+fn oracle_db_marks_supported_vector_norm_subset_for_replay() {
     let record = db::parse_case_record_value(json!({
         "case_id": "vector_norm_f64_identity_001",
         "op": "vector_norm",
@@ -640,7 +640,7 @@ fn oracle_db_leaves_unsupported_vector_norm_family_rejected() {
                 "data": [1.0, 2.0]
             }
         },
-        "op_kwargs": { "ord": 2, "dim": 0, "keepdim": false },
+        "op_kwargs": { "ord": 2, "dim": [0], "keepdim": true },
         "observable": { "kind": "identity" },
         "comparison": {
             "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
@@ -648,7 +648,38 @@ fn oracle_db_leaves_unsupported_vector_norm_family_rejected() {
         },
         "probes": []
     }))
-    .expect("unsupported vector norm record should parse");
+    .expect("supported vector norm record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_leaves_unsupported_vector_norm_subset_rejected() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "vector_norm_f64_identity_scalar",
+        "op": "vector_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [],
+                "order": "row_major",
+                "data": [1.0]
+            }
+        },
+        "op_kwargs": { "ord": 2 },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("unsupported scalar vector norm record should parse");
     assert!(matches!(
         support::classify_record(&record),
         support::RecordSupport::Unsupported { .. }

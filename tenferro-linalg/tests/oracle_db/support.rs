@@ -139,6 +139,7 @@ pub fn replayable_norm_kind(record: &CaseRecord) -> Option<NormKind> {
     let kind = match record.op.as_str() {
         "norm" => replayable_norm_kind_from_norm(record, rank)?,
         "matrix_norm" => replayable_norm_kind_from_matrix_norm(record, rank)?,
+        "vector_norm" => replayable_norm_kind_from_vector_norm(record, rank)?,
         _ => return None,
     };
     if is_complex_dtype(&record.dtype) {
@@ -152,31 +153,34 @@ pub fn replayable_norm_kind(record: &CaseRecord) -> Option<NormKind> {
     }
 }
 
+fn replayable_vector_ord(value: Option<&Value>) -> Option<NormKind> {
+    match value {
+        None | Some(Value::Null) => Some(NormKind::Lp(2.0)),
+        Some(Value::Number(_) | Value::String(_)) => {
+            let ord = value_as_f64(value?)?;
+            if ord == 1.0 {
+                Some(NormKind::L1)
+            } else if ord == 2.0 {
+                Some(NormKind::Lp(2.0))
+            } else if ord.is_infinite() && ord.is_sign_positive() {
+                Some(NormKind::Inf)
+            } else if ord >= 1.0 {
+                Some(NormKind::Lp(ord))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn replayable_norm_kind_from_norm(record: &CaseRecord, rank: usize) -> Option<NormKind> {
     if rank == 0 || rank > 2 {
         return None;
     }
 
     if rank == 1 {
-        let arg = record.op_args.first();
-        return match arg {
-            None | Some(Value::Null) => Some(NormKind::Lp(2.0)),
-            Some(Value::Number(_) | Value::String(_)) => {
-                let ord = value_as_f64(arg?)?;
-                if ord == 1.0 {
-                    Some(NormKind::L1)
-                } else if ord == 2.0 {
-                    Some(NormKind::Lp(2.0))
-                } else if ord.is_infinite() && ord.is_sign_positive() {
-                    Some(NormKind::Inf)
-                } else if ord >= 1.0 {
-                    Some(NormKind::Lp(ord))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
+        return replayable_vector_ord(record.op_args.first());
     }
 
     if let Some(dim) = record.op_kwargs.get("dim") {
@@ -209,6 +213,29 @@ fn replayable_norm_kind_from_norm(record: &CaseRecord, rank: usize) -> Option<No
         }
         _ => None,
     }
+}
+
+fn replayable_norm_kind_from_vector_norm(record: &CaseRecord, rank: usize) -> Option<NormKind> {
+    if rank != 1 {
+        return None;
+    }
+
+    match record.op_kwargs.get("dim") {
+        None => {}
+        Some(Value::Number(_)) => {
+            if normalized_axis(record.op_kwargs.get("dim")?, rank)? != 0 {
+                return None;
+            }
+        }
+        Some(Value::Array(values)) if values.len() == 1 => {
+            if normalized_axis(values.first()?, rank)? != 0 {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+
+    replayable_vector_ord(record.op_kwargs.get("ord"))
 }
 
 fn replayable_norm_kind_from_matrix_norm(record: &CaseRecord, rank: usize) -> Option<NormKind> {
@@ -375,19 +402,19 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
         ),
         ("norm", "identity", "identity", "success")
-        | ("matrix_norm", "identity", "identity", "success") => {
+        | ("matrix_norm", "identity", "identity", "success")
+        | ("vector_norm", "identity", "identity", "success") => {
             if replayable_norm_kind(record).is_some() {
                 RecordSupport::Supported(ReplayKind::NormIdentity)
             } else {
                 RecordSupport::Unsupported {
-                    reason: "tenferro replay currently supports only the scalar-output norm subset covered by current NormKind AD rules",
+                    reason: "tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules",
                 }
             }
         }
         ("eigvals", "identity", "identity", "success")
         | ("eigvalsh", "identity", "identity", "success")
-        | ("svdvals", "identity", "identity", "success")
-        | ("vector_norm", "identity", "identity", "success") => RecordSupport::Unsupported {
+        | ("svdvals", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this scalar-output oracle family yet",
         },
         ("diagonal", "identity", "identity", "success") => RecordSupport::Unsupported {

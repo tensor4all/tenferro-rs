@@ -478,7 +478,9 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
         | ("pinv", "identity", "value") => Ok(2),
         ("det", "identity", "value") => Ok(0),
         ("cond", "identity", "value") => Ok(0),
-        ("norm", "identity", "value") | ("matrix_norm", "identity", "value") => Ok(0),
+        ("norm", "identity", "value")
+        | ("matrix_norm", "identity", "value")
+        | ("vector_norm", "identity", "value") => Ok(0),
         ("slogdet", "identity", "output_0") | ("slogdet", "identity", "output_1") => Ok(0),
         ("qr", "identity", "output_0") | ("qr", "identity", "output_1") => Ok(2),
         ("lu", "identity", "output_1") | ("lu", "identity", "output_2") => Ok(2),

@@ -5,10 +5,10 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 ## Summary
 
 - Total published records: 9572
-- Supported success records: 2579
-- Supported success records with HVP payloads: 1843
+- Supported success records: 2627
+- Supported success records with HVP payloads: 1867
 - Expected error records: 2
-- Unsupported success records: 6991
+- Unsupported success records: 6943
 
 ## Supported
 
@@ -48,6 +48,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | tensorsolve | identity | identity | 4 |
 | vander | identity | identity | 10 |
 | vecdot | identity | identity | 44 |
+| vector_norm | identity | identity | 48 |
 
 ## Expected Errors
 
@@ -131,7 +132,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | lu_factor | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_factor_ex | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_solve | identity | identity | 924 | tenferro replay currently supports this family only for float64 |
-| matrix_norm | identity | identity | 208 | tenferro replay currently supports only the scalar-output norm subset covered by current NormKind AD rules |
+| matrix_norm | identity | identity | 208 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
 | matrix_power | identity | identity | 54 | tenferro replay currently supports this family only for float64 |
 | max_binary | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | maximum | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
@@ -165,7 +166,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | nn_functional_softsign | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_tanhshrink | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_threshold | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
-| norm | identity | identity | 200 | tenferro replay currently supports only the scalar-output norm subset covered by current NormKind AD rules |
+| norm | identity | identity | 200 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
 | pinv | identity | identity | 24 | tenferro replay currently supports this family only for float64/complex64/complex128 |
 | pinv_hermitian | identity | identity | 24 | tenferro replay currently supports this family only for float64 |
 | pinv_singular | identity | identity | 144 | tenferro replay currently supports this family only for float64 |
@@ -224,5 +225,5 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | var | identity | identity | 56 | tenferro replay does not implement this oracle family yet |
 | var_unbiased | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
 | vecdot | identity | identity | 132 | tenferro replay currently supports this family only for float64 |
-| vector_norm | identity | identity | 720 | tenferro replay does not implement this scalar-output oracle family yet |
+| vector_norm | identity | identity | 672 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
 | xlogy | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
