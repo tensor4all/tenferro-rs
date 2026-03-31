@@ -24,6 +24,7 @@
 
 mod core;
 pub mod error;
+mod jvp;
 pub mod runtime;
 mod scalar_value;
 pub mod snapshot;
@@ -34,6 +35,7 @@ pub use core::{
     Tensor,
 };
 pub use error::{Error, Result};
+pub use jvp::{jvp, JvpResult};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
