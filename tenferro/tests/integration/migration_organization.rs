@@ -30,6 +30,9 @@ fn migration_files() -> Vec<PathBuf> {
         "internal/tenferro-internal-ad-ops/src",
         "internal/tenferro-internal-ad-linalg/src",
         "internal/tenferro-internal-ad-surface/src",
+        "internal/tenferro-internal-frontend-core/src",
+        "internal/tenferro-internal-error/src",
+        "internal/tenferro-internal-runtime/src",
     ] {
         collect_rs_files(&root.join(relative), &mut files);
     }
@@ -41,7 +44,15 @@ fn migration_files() -> Vec<PathBuf> {
 fn linearize_hard_cut_forbids_legacy_ad_names() {
     for path in migration_files() {
         let text = fs::read_to_string(&path).unwrap();
-        for forbidden in ["Tape", "TrackedValue", "expert", "AdTensor", "DynAdTensor"] {
+        for forbidden in [
+            "Tape",
+            "TrackedValue",
+            "expert",
+            "AdTensor",
+            "DynAdTensor",
+            "InvalidAdTensor",
+            "MixedReverseTape",
+        ] {
             assert!(
                 !text.contains(forbidden),
                 "forbidden legacy token `{forbidden}` still present in {}",

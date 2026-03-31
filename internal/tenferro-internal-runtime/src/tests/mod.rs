@@ -55,11 +55,11 @@ fn with_runtime_restores_previous_runtime_after_error() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let err: Result<()> = with_runtime(RuntimeContext::Cpu(CpuContext::new(2)), || {
-        Err(Error::InvalidAdTensor {
+        Err(Error::InvalidTensorOperands {
             message: "boom".to_string(),
         })
     });
-    assert!(matches!(err, Err(Error::InvalidAdTensor { .. })));
+    assert!(matches!(err, Err(Error::InvalidTensorOperands { .. })));
 
     let outer_after = with_default_runtime(|ctx| Ok(ctx.name())).unwrap();
     assert_eq!(outer_after, "cpu");

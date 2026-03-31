@@ -16,6 +16,11 @@
 //! The primary public frontend is [`Tensor`], backed by `tidu`'s
 //! `Value<DynTensor>` carrier. Custom downstream operations should use
 //! [`LinearizableOp`] and [`LinearizedOp`] directly.
+//!
+//! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
+//! [`Tensor::solve`], [`Tensor::det`], [`Tensor::norm`], [`Tensor::qr`], and
+//! [`Tensor::svd`] require an installed runtime via [`set_default_runtime`] or
+//! [`runtime::with_runtime`].
 
 mod core;
 pub mod error;
