@@ -10,6 +10,17 @@ use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 use crate::{Error, Result};
 
 /// Stateless reverse-mode rule (VJP) for einsum over dense primals.
+pub fn einsum_primal<'a, T>(subscripts: &'a str, operands: &'a [&'a Tensor<T>]) -> Result<Tensor<T>>
+where
+    T: EinsumRuntimeValue,
+{
+    dispatch_einsum_runtime!(T, "einsum", |ctx, Backend| {
+        tf_einsum::einsum::<Standard<T>, Backend>(ctx, subscripts, operands, None)
+            .map_err(Error::from)
+    })
+}
+
+/// Stateless reverse-mode rule (VJP) for einsum over dense primals.
 pub fn einsum_rrule<'a, T>(
     subscripts: &'a str,
     operands: &'a [&'a Tensor<T>],

@@ -7,6 +7,8 @@
 //! // to be consumed directly.
 //! ```
 
+mod linearized;
+
 pub use tenferro_internal_error::{Error, Result};
 #[doc(hidden)]
 pub use tenferro_internal_frontend_core::DynTensorTyped;
@@ -18,4 +20,8 @@ pub mod results {
     };
 }
 
+pub use linearized::{
+    det_dyn_value, norm_dyn_value, qr_dyn_value, solve_dyn_values, svd_dyn_value, DetOp,
+    DynQrValues, DynSvdValues, NormOp, QrOp, SolveOp, SvdOp,
+};
 pub use results::*;

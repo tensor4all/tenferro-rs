@@ -12,6 +12,7 @@ test = false
 doctest = false
 
 [dependencies]
+tenferro-internal-ad-core = { path = "../tenferro-internal-ad-core" }
 tenferro-internal-error = { path = "../tenferro-internal-error" }
 tenferro-internal-runtime = { path = "../tenferro-internal-runtime" }
 tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
@@ -20,3 +21,8 @@ tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 tenferro-linalg = { path = "../../tenferro-linalg" }
 chainrules-core.workspace = true
+num-complex.workspace = true
+num-traits.workspace = true
+
+[dev-dependencies]
+tenferro-prims = { path = "../../tenferro-prims" }

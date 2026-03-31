@@ -1,0 +1,883 @@
+use chainrules_core::AutodiffError;
+use num_complex::{Complex32, Complex64};
+use num_traits::Zero;
+use tenferro_algebra::Scalar;
+use tenferro_internal_ad_core::{
+    AdResult, CheckpointHint, DynValue, LinearizableOp, LinearizedOp, Schema, SlotSchema,
+};
+use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTensor};
+use tenferro_internal_runtime::contracts::LinalgRuntimeValue;
+use tenferro_internal_runtime::dispatch::{
+    with_linalg_runtime, NormLinalgDispatchValue, ScaledRealLinalgDispatchValue,
+};
+use tenferro_linalg::backend::LinalgCapabilityOp;
+use tenferro_linalg::{
+    det, det_frule, det_rrule, norm, norm_frule, norm_rrule, qr, qr_frule, qr_rrule, solve,
+    solve_frule, solve_rrule, svd, svd_frule, svd_rrule, NormKind, QrCotangent, SvdCotangent,
+    SvdOptions,
+};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+
+use crate::{Error, Result};
+
+#[derive(Clone, Copy)]
+pub struct SolveOp;
+
+#[derive(Clone, Copy)]
+pub struct NormOp {
+    kind: NormKind,
+}
+
+#[derive(Clone, Copy)]
+pub struct DetOp;
+
+#[derive(Clone, Copy)]
+pub struct QrOp;
+
+#[derive(Clone, Default)]
+pub struct SvdOp {
+    options: Option<SvdOptions>,
+}
+
+pub struct DynQrValues {
+    pub q: DynValue,
+    pub r: DynValue,
+}
+
+pub struct DynSvdValues {
+    pub u: DynValue,
+    pub s: DynValue,
+    pub vt: DynValue,
+}
+
+#[doc(hidden)]
+pub struct SolveLinearized {
+    a: DynTensor,
+    b: DynTensor,
+}
+
+#[doc(hidden)]
+pub struct NormLinearized {
+    input: DynTensor,
+    kind: NormKind,
+}
+
+#[doc(hidden)]
+pub struct DetLinearized {
+    input: DynTensor,
+}
+
+#[doc(hidden)]
+pub struct QrLinearized {
+    input: DynTensor,
+}
+
+#[doc(hidden)]
+pub struct SvdLinearized {
+    input: DynTensor,
+    options: Option<SvdOptions>,
+}
+
+fn differentiable_schema(slots: usize) -> Schema {
+    Schema {
+        slots: (0..slots)
+            .map(|_| SlotSchema {
+                differentiable: true,
+                auxiliary: false,
+            })
+            .collect(),
+    }
+}
+
+fn invalid_argument(message: impl Into<String>) -> Error {
+    AutodiffError::InvalidArgument(message.into()).into()
+}
+
+fn into_ad_error(error: Error) -> AutodiffError {
+    match error {
+        Error::Autodiff(error) => error,
+        other => AutodiffError::InvalidArgument(other.to_string()),
+    }
+}
+
+macro_rules! dispatch_linalg {
+    ($ty:ty, $op:expr, $cap:expr, |$ctx:ident| $body:expr) => {{
+        with_linalg_runtime::<$ty, _>($op, $cap, |$ctx| $body, |$ctx| $body, |$ctx| $body)
+    }};
+}
+
+fn dense_dyn_tensor_typed<T>(value: &DynTensor, context: &str) -> Result<DenseTensor<T>>
+where
+    T: DynTensorTyped + Copy,
+{
+    let structured = T::structured_ref(value)
+        .ok_or_else(|| invalid_argument(format!("{context} requires matching dtypes")))?;
+    Ok(structured.to_dense()?)
+}
+
+fn optional_dense_dyn_tensor_typed<T>(
+    value: &Option<DynTensor>,
+    context: &str,
+) -> Result<Option<DenseTensor<T>>>
+where
+    T: DynTensorTyped + Copy,
+{
+    value
+        .as_ref()
+        .map(|tensor| dense_dyn_tensor_typed::<T>(tensor, context))
+        .transpose()
+}
+
+fn dense_zeros_like<T>(like: &DenseTensor<T>) -> Result<DenseTensor<T>>
+where
+    T: Scalar + Zero + Copy,
+{
+    let total: usize = like.dims().iter().product();
+    DenseTensor::from_slice(
+        &vec![T::zero(); total],
+        like.dims(),
+        MemoryOrder::ColumnMajor,
+    )
+    .map_err(Error::from)
+}
+
+fn dense_optional_or_zero<T>(
+    value: &Option<DynTensor>,
+    like: &DenseTensor<T>,
+    context: &str,
+) -> Result<DenseTensor<T>>
+where
+    T: DynTensorTyped + Scalar + Zero + Copy,
+{
+    optional_dense_dyn_tensor_typed::<T>(value, context)?.map_or_else(|| dense_zeros_like(like), Ok)
+}
+
+fn dyn_from_dense<T>(value: DenseTensor<T>) -> DynTensor
+where
+    T: DynTensorTyped + Copy,
+{
+    T::into_dyn(StructuredTensor::from(value))
+}
+
+fn solve_primal_t<T>(a: &StructuredTensor<T>, b: &StructuredTensor<T>) -> Result<DynTensor>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+{
+    let dense_a = a.to_dense()?;
+    let dense_b = b.to_dense()?;
+    let output = dispatch_linalg!(T, "solve_dyn_value", LinalgCapabilityOp::Solve, |ctx| {
+        solve(ctx, &dense_a, &dense_b).map_err(Error::from)
+    })?;
+    Ok(dyn_from_dense(output))
+}
+
+fn solve_jvp_t<T>(
+    a: &StructuredTensor<T>,
+    b: &StructuredTensor<T>,
+    tangents: &[Option<DynTensor>],
+) -> Result<Option<DynTensor>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
+{
+    if tangents.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let dense_a = a.to_dense()?;
+    let dense_b = b.to_dense()?;
+    let tangent_a = dense_optional_or_zero(&tangents[0], &dense_a, "solve_jvp tangent_a")?;
+    let tangent_b = dense_optional_or_zero(&tangents[1], &dense_b, "solve_jvp tangent_b")?;
+    let (_, tangent) = dispatch_linalg!(T, "solve_jvp", LinalgCapabilityOp::Solve, |ctx| {
+        solve_frule(ctx, &dense_a, &dense_b, &tangent_a, &tangent_b).map_err(Error::from)
+    })?;
+    Ok(Some(dyn_from_dense(tangent)))
+}
+
+fn solve_vjp_t<T>(
+    a: &StructuredTensor<T>,
+    b: &StructuredTensor<T>,
+    cotangent: &DynTensor,
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+{
+    if !input_grad_mask.iter().any(|needed| *needed) {
+        return Ok(vec![None, None]);
+    }
+    let dense_a = a.to_dense()?;
+    let dense_b = b.to_dense()?;
+    let dense_cotangent = dense_dyn_tensor_typed::<T>(cotangent, "solve_vjp")?;
+    let grad = dispatch_linalg!(T, "solve_vjp", LinalgCapabilityOp::Solve, |ctx| {
+        solve_rrule(ctx, &dense_a, &dense_b, &dense_cotangent).map_err(Error::from)
+    })?;
+    Ok(vec![
+        input_grad_mask[0].then(|| dyn_from_dense(grad.a)),
+        input_grad_mask[1].then(|| dyn_from_dense(grad.b)),
+    ])
+}
+
+fn norm_primal_t<T>(input: &StructuredTensor<T>, kind: NormKind) -> Result<DynTensor>
+where
+    T: NormLinalgDispatchValue + DynTensorTyped + Copy,
+{
+    let dense_input = input.to_dense()?;
+    let output = dispatch_linalg!(T, "norm_dyn_value", LinalgCapabilityOp::Norm, |ctx| {
+        norm(ctx, &dense_input, kind).map_err(Error::from)
+    })?;
+    Ok(dyn_from_dense(output))
+}
+
+fn norm_jvp_t<T>(
+    input: &StructuredTensor<T>,
+    tangent: &Option<DynTensor>,
+    kind: NormKind,
+) -> Result<Option<DynTensor>>
+where
+    T: NormLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+{
+    if tangent.is_none() {
+        return Ok(None);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "norm_jvp tangent")?;
+    let (_, output_tangent) = dispatch_linalg!(T, "norm_jvp", LinalgCapabilityOp::Norm, |ctx| {
+        norm_frule(ctx, &dense_input, &dense_tangent, kind).map_err(Error::from)
+    })?;
+    Ok(Some(dyn_from_dense(output_tangent)))
+}
+
+fn norm_vjp_t<T>(
+    input: &StructuredTensor<T>,
+    cotangent: &DynTensor,
+    kind: NormKind,
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: NormLinalgDispatchValue + DynTensorTyped + Copy,
+{
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_cotangent = dense_dyn_tensor_typed::<T>(cotangent, "norm_vjp")?;
+    let grad = dispatch_linalg!(T, "norm_vjp", LinalgCapabilityOp::Norm, |ctx| {
+        norm_rrule(ctx, &dense_input, &dense_cotangent, kind).map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
+fn det_primal_t<T>(input: &StructuredTensor<T>) -> Result<DynTensor>
+where
+    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Copy,
+{
+    let dense_input = input.to_dense()?;
+    let output = dispatch_linalg!(T, "det_dyn_value", LinalgCapabilityOp::Det, |ctx| {
+        det(ctx, &dense_input).map_err(Error::from)
+    })?;
+    Ok(dyn_from_dense(output))
+}
+
+fn det_jvp_t<T>(
+    input: &StructuredTensor<T>,
+    tangent: &Option<DynTensor>,
+) -> Result<Option<DynTensor>>
+where
+    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+{
+    if tangent.is_none() {
+        return Ok(None);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "det_jvp tangent")?;
+    let (_, output_tangent) = dispatch_linalg!(T, "det_jvp", LinalgCapabilityOp::Det, |ctx| {
+        det_frule(ctx, &dense_input, &dense_tangent).map_err(Error::from)
+    })?;
+    Ok(Some(dyn_from_dense(output_tangent)))
+}
+
+fn det_vjp_t<T>(
+    input: &StructuredTensor<T>,
+    cotangent: &DynTensor,
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Copy,
+{
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_cotangent = dense_dyn_tensor_typed::<T>(cotangent, "det_vjp")?;
+    let grad = dispatch_linalg!(T, "det_vjp", LinalgCapabilityOp::Det, |ctx| {
+        det_rrule(ctx, &dense_input, &dense_cotangent).map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
+fn qr_primal_t<T>(input: &StructuredTensor<T>) -> Result<Vec<DynTensor>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+{
+    let dense_input = input.to_dense()?;
+    let output = dispatch_linalg!(T, "qr_dyn_value", LinalgCapabilityOp::Qr, |ctx| {
+        qr(ctx, &dense_input).map_err(Error::from)
+    })?;
+    Ok(vec![dyn_from_dense(output.q), dyn_from_dense(output.r)])
+}
+
+fn qr_jvp_t<T>(
+    input: &StructuredTensor<T>,
+    tangent: &Option<DynTensor>,
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
+{
+    if tangent.is_none() {
+        return Ok(vec![None, None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "qr_jvp tangent")?;
+    let (_, tangent_output) = dispatch_linalg!(T, "qr_jvp", LinalgCapabilityOp::Qr, |ctx| {
+        qr_frule(ctx, &dense_input, &dense_tangent).map_err(Error::from)
+    })?;
+    Ok(vec![
+        Some(dyn_from_dense(tangent_output.q)),
+        Some(dyn_from_dense(tangent_output.r)),
+    ])
+}
+
+fn qr_vjp_t<T>(
+    input: &StructuredTensor<T>,
+    output_cotangents: &[Option<DynTensor>],
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+{
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let cotangent = QrCotangent {
+        q: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[0], "qr_vjp q")?,
+        r: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[1], "qr_vjp r")?,
+    };
+    if cotangent.q.is_none() && cotangent.r.is_none() {
+        return Ok(vec![None]);
+    }
+    let grad = dispatch_linalg!(T, "qr_vjp", LinalgCapabilityOp::Qr, |ctx| {
+        qr_rrule(ctx, &dense_input, &cotangent).map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
+fn svd_primal_t<T>(
+    input: &StructuredTensor<T>,
+    options: Option<&SvdOptions>,
+) -> Result<Vec<DynTensor>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+    T::Real: DynTensorTyped + Copy + tenferro_tensor::KeepCountScalar,
+{
+    let dense_input = input.to_dense()?;
+    let output = dispatch_linalg!(T, "svd_dyn_value", LinalgCapabilityOp::ThinSvd, |ctx| {
+        svd(ctx, &dense_input, options).map_err(Error::from)
+    })?;
+    Ok(vec![
+        dyn_from_dense(output.u),
+        dyn_from_dense(output.s),
+        dyn_from_dense(output.vt),
+    ])
+}
+
+fn svd_jvp_t<T>(
+    input: &StructuredTensor<T>,
+    tangent: &Option<DynTensor>,
+    options: Option<&SvdOptions>,
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
+    T::Real: DynTensorTyped + Copy + num_traits::Float + tenferro_tensor::KeepCountScalar,
+{
+    if tangent.is_none() {
+        return Ok(vec![None, None, None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "svd_jvp tangent")?;
+    let (_, tangent_output) = dispatch_linalg!(T, "svd_jvp", LinalgCapabilityOp::ThinSvd, |ctx| {
+        svd_frule(ctx, &dense_input, &dense_tangent, options).map_err(Error::from)
+    })?;
+    Ok(vec![
+        Some(dyn_from_dense(tangent_output.u)),
+        Some(dyn_from_dense(tangent_output.s)),
+        Some(dyn_from_dense(tangent_output.vt)),
+    ])
+}
+
+fn svd_vjp_t<T>(
+    input: &StructuredTensor<T>,
+    output_cotangents: &[Option<DynTensor>],
+    input_grad_mask: &[bool],
+    options: Option<&SvdOptions>,
+) -> Result<Vec<Option<DynTensor>>>
+where
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+    T::Real: DynTensorTyped + Copy + num_traits::Float + tenferro_tensor::KeepCountScalar,
+{
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let cotangent = SvdCotangent {
+        u: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[0], "svd_vjp u")?,
+        s: optional_dense_dyn_tensor_typed::<T::Real>(&output_cotangents[1], "svd_vjp s")?,
+        vt: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[2], "svd_vjp vt")?,
+    };
+    if cotangent.u.is_none() && cotangent.s.is_none() && cotangent.vt.is_none() {
+        return Ok(vec![None]);
+    }
+    let grad = dispatch_linalg!(T, "svd_vjp", LinalgCapabilityOp::ThinSvd, |ctx| {
+        svd_rrule(ctx, &dense_input, &cotangent, options).map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
+impl NormOp {
+    pub fn new(kind: NormKind) -> Self {
+        Self { kind }
+    }
+}
+
+impl SvdOp {
+    pub fn new(options: Option<SvdOptions>) -> Self {
+        Self { options }
+    }
+}
+
+impl LinearizableOp<DynTensor> for SolveOp {
+    type Linearized = SolveLinearized;
+
+    fn primal(&self, inputs: &[&DynTensor]) -> AdResult<Vec<DynTensor>> {
+        let output = match (inputs[0], inputs[1]) {
+            (DynTensor::F32(a), DynTensor::F32(b)) => solve_primal_t::<f32>(a, b),
+            (DynTensor::F64(a), DynTensor::F64(b)) => solve_primal_t::<f64>(a, b),
+            (DynTensor::C32(a), DynTensor::C32(b)) => solve_primal_t::<Complex32>(a, b),
+            (DynTensor::C64(a), DynTensor::C64(b)) => solve_primal_t::<Complex64>(a, b),
+            _ => Err(invalid_argument("solve requires matching dtypes")),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![output])
+    }
+
+    fn input_schema(&self, _inputs: &[&DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(2))
+    }
+
+    fn output_schema(&self, _inputs: &[&DynTensor], _outputs: &[DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn linearize(
+        &self,
+        inputs: &[&DynTensor],
+        _outputs: &[DynTensor],
+    ) -> AdResult<Self::Linearized> {
+        Ok(SolveLinearized {
+            a: inputs[0].clone(),
+            b: inputs[1].clone(),
+        })
+    }
+
+    fn checkpoint_hint(&self) -> CheckpointHint {
+        CheckpointHint::ExpensiveReplay
+    }
+}
+
+impl LinearizedOp<DynTensor> for SolveLinearized {
+    fn jvp(&self, input_tangents: &[Option<DynTensor>]) -> AdResult<Vec<Option<DynTensor>>> {
+        let tangent = match (&self.a, &self.b) {
+            (DynTensor::F32(a), DynTensor::F32(b)) => solve_jvp_t::<f32>(a, b, input_tangents),
+            (DynTensor::F64(a), DynTensor::F64(b)) => solve_jvp_t::<f64>(a, b, input_tangents),
+            (DynTensor::C32(a), DynTensor::C32(b)) => {
+                solve_jvp_t::<Complex32>(a, b, input_tangents)
+            }
+            (DynTensor::C64(a), DynTensor::C64(b)) => {
+                solve_jvp_t::<Complex64>(a, b, input_tangents)
+            }
+            _ => Err(invalid_argument(
+                "solve linearization requires matching dtypes",
+            )),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![tangent])
+    }
+
+    fn vjp(
+        &self,
+        output_cotangents: &[Option<DynTensor>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<DynTensor>>> {
+        let Some(cotangent) = output_cotangents[0].as_ref() else {
+            return Ok(vec![None, None]);
+        };
+        match (&self.a, &self.b) {
+            (DynTensor::F32(a), DynTensor::F32(b)) => {
+                solve_vjp_t::<f32>(a, b, cotangent, input_grad_mask)
+            }
+            (DynTensor::F64(a), DynTensor::F64(b)) => {
+                solve_vjp_t::<f64>(a, b, cotangent, input_grad_mask)
+            }
+            (DynTensor::C32(a), DynTensor::C32(b)) => {
+                solve_vjp_t::<Complex32>(a, b, cotangent, input_grad_mask)
+            }
+            (DynTensor::C64(a), DynTensor::C64(b)) => {
+                solve_vjp_t::<Complex64>(a, b, cotangent, input_grad_mask)
+            }
+            _ => Err(invalid_argument(
+                "solve linearization requires matching dtypes",
+            )),
+        }
+        .map_err(into_ad_error)
+    }
+}
+
+impl LinearizableOp<DynTensor> for NormOp {
+    type Linearized = NormLinearized;
+
+    fn primal(&self, inputs: &[&DynTensor]) -> AdResult<Vec<DynTensor>> {
+        let output = match inputs[0] {
+            DynTensor::F32(input) => norm_primal_t::<f32>(input, self.kind),
+            DynTensor::F64(input) => norm_primal_t::<f64>(input, self.kind),
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "norm AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![output])
+    }
+
+    fn input_schema(&self, _inputs: &[&DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn output_schema(&self, _inputs: &[&DynTensor], _outputs: &[DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn linearize(
+        &self,
+        inputs: &[&DynTensor],
+        _outputs: &[DynTensor],
+    ) -> AdResult<Self::Linearized> {
+        Ok(NormLinearized {
+            input: inputs[0].clone(),
+            kind: self.kind,
+        })
+    }
+
+    fn checkpoint_hint(&self) -> CheckpointHint {
+        CheckpointHint::CheapReplay
+    }
+}
+
+impl LinearizedOp<DynTensor> for NormLinearized {
+    fn jvp(&self, input_tangents: &[Option<DynTensor>]) -> AdResult<Vec<Option<DynTensor>>> {
+        let tangent = match &self.input {
+            DynTensor::F32(input) => norm_jvp_t::<f32>(input, &input_tangents[0], self.kind),
+            DynTensor::F64(input) => norm_jvp_t::<f64>(input, &input_tangents[0], self.kind),
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "norm AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![tangent])
+    }
+
+    fn vjp(
+        &self,
+        output_cotangents: &[Option<DynTensor>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<DynTensor>>> {
+        let Some(cotangent) = output_cotangents[0].as_ref() else {
+            return Ok(vec![None]);
+        };
+        match &self.input {
+            DynTensor::F32(input) => {
+                norm_vjp_t::<f32>(input, cotangent, self.kind, input_grad_mask)
+            }
+            DynTensor::F64(input) => {
+                norm_vjp_t::<f64>(input, cotangent, self.kind, input_grad_mask)
+            }
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "norm AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)
+    }
+}
+
+impl LinearizableOp<DynTensor> for DetOp {
+    type Linearized = DetLinearized;
+
+    fn primal(&self, inputs: &[&DynTensor]) -> AdResult<Vec<DynTensor>> {
+        let output = match inputs[0] {
+            DynTensor::F32(input) => det_primal_t::<f32>(input),
+            DynTensor::F64(input) => det_primal_t::<f64>(input),
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "det AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![output])
+    }
+
+    fn input_schema(&self, _inputs: &[&DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn output_schema(&self, _inputs: &[&DynTensor], _outputs: &[DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn linearize(
+        &self,
+        inputs: &[&DynTensor],
+        _outputs: &[DynTensor],
+    ) -> AdResult<Self::Linearized> {
+        Ok(DetLinearized {
+            input: inputs[0].clone(),
+        })
+    }
+
+    fn checkpoint_hint(&self) -> CheckpointHint {
+        CheckpointHint::ExpensiveReplay
+    }
+}
+
+impl LinearizedOp<DynTensor> for DetLinearized {
+    fn jvp(&self, input_tangents: &[Option<DynTensor>]) -> AdResult<Vec<Option<DynTensor>>> {
+        let tangent = match &self.input {
+            DynTensor::F32(input) => det_jvp_t::<f32>(input, &input_tangents[0]),
+            DynTensor::F64(input) => det_jvp_t::<f64>(input, &input_tangents[0]),
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "det AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)?;
+        Ok(vec![tangent])
+    }
+
+    fn vjp(
+        &self,
+        output_cotangents: &[Option<DynTensor>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<DynTensor>>> {
+        let Some(cotangent) = output_cotangents[0].as_ref() else {
+            return Ok(vec![None]);
+        };
+        match &self.input {
+            DynTensor::F32(input) => det_vjp_t::<f32>(input, cotangent, input_grad_mask),
+            DynTensor::F64(input) => det_vjp_t::<f64>(input, cotangent, input_grad_mask),
+            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+                "det AD currently supports real dtypes only",
+            )),
+        }
+        .map_err(into_ad_error)
+    }
+}
+
+impl LinearizableOp<DynTensor> for QrOp {
+    type Linearized = QrLinearized;
+
+    fn primal(&self, inputs: &[&DynTensor]) -> AdResult<Vec<DynTensor>> {
+        match inputs[0] {
+            DynTensor::F32(input) => qr_primal_t::<f32>(input),
+            DynTensor::F64(input) => qr_primal_t::<f64>(input),
+            DynTensor::C32(input) => qr_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => qr_primal_t::<Complex64>(input),
+        }
+        .map_err(into_ad_error)
+    }
+
+    fn input_schema(&self, _inputs: &[&DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn output_schema(&self, _inputs: &[&DynTensor], _outputs: &[DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(2))
+    }
+
+    fn linearize(
+        &self,
+        inputs: &[&DynTensor],
+        _outputs: &[DynTensor],
+    ) -> AdResult<Self::Linearized> {
+        Ok(QrLinearized {
+            input: inputs[0].clone(),
+        })
+    }
+
+    fn checkpoint_hint(&self) -> CheckpointHint {
+        CheckpointHint::ExpensiveReplay
+    }
+}
+
+impl LinearizedOp<DynTensor> for QrLinearized {
+    fn jvp(&self, input_tangents: &[Option<DynTensor>]) -> AdResult<Vec<Option<DynTensor>>> {
+        match &self.input {
+            DynTensor::F32(input) => qr_jvp_t::<f32>(input, &input_tangents[0]),
+            DynTensor::F64(input) => qr_jvp_t::<f64>(input, &input_tangents[0]),
+            DynTensor::C32(input) => qr_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => qr_jvp_t::<Complex64>(input, &input_tangents[0]),
+        }
+        .map_err(into_ad_error)
+    }
+
+    fn vjp(
+        &self,
+        output_cotangents: &[Option<DynTensor>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<DynTensor>>> {
+        match &self.input {
+            DynTensor::F32(input) => qr_vjp_t::<f32>(input, output_cotangents, input_grad_mask),
+            DynTensor::F64(input) => qr_vjp_t::<f64>(input, output_cotangents, input_grad_mask),
+            DynTensor::C32(input) => {
+                qr_vjp_t::<Complex32>(input, output_cotangents, input_grad_mask)
+            }
+            DynTensor::C64(input) => {
+                qr_vjp_t::<Complex64>(input, output_cotangents, input_grad_mask)
+            }
+        }
+        .map_err(into_ad_error)
+    }
+}
+
+impl LinearizableOp<DynTensor> for SvdOp {
+    type Linearized = SvdLinearized;
+
+    fn primal(&self, inputs: &[&DynTensor]) -> AdResult<Vec<DynTensor>> {
+        match inputs[0] {
+            DynTensor::F32(input) => svd_primal_t::<f32>(input, self.options.as_ref()),
+            DynTensor::F64(input) => svd_primal_t::<f64>(input, self.options.as_ref()),
+            DynTensor::C32(input) => svd_primal_t::<Complex32>(input, self.options.as_ref()),
+            DynTensor::C64(input) => svd_primal_t::<Complex64>(input, self.options.as_ref()),
+        }
+        .map_err(into_ad_error)
+    }
+
+    fn input_schema(&self, _inputs: &[&DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(1))
+    }
+
+    fn output_schema(&self, _inputs: &[&DynTensor], _outputs: &[DynTensor]) -> AdResult<Schema> {
+        Ok(differentiable_schema(3))
+    }
+
+    fn linearize(
+        &self,
+        inputs: &[&DynTensor],
+        _outputs: &[DynTensor],
+    ) -> AdResult<Self::Linearized> {
+        Ok(SvdLinearized {
+            input: inputs[0].clone(),
+            options: self.options.clone(),
+        })
+    }
+
+    fn checkpoint_hint(&self) -> CheckpointHint {
+        CheckpointHint::ExpensiveReplay
+    }
+}
+
+impl LinearizedOp<DynTensor> for SvdLinearized {
+    fn jvp(&self, input_tangents: &[Option<DynTensor>]) -> AdResult<Vec<Option<DynTensor>>> {
+        match &self.input {
+            DynTensor::F32(input) => {
+                svd_jvp_t::<f32>(input, &input_tangents[0], self.options.as_ref())
+            }
+            DynTensor::F64(input) => {
+                svd_jvp_t::<f64>(input, &input_tangents[0], self.options.as_ref())
+            }
+            DynTensor::C32(input) => {
+                svd_jvp_t::<Complex32>(input, &input_tangents[0], self.options.as_ref())
+            }
+            DynTensor::C64(input) => {
+                svd_jvp_t::<Complex64>(input, &input_tangents[0], self.options.as_ref())
+            }
+        }
+        .map_err(into_ad_error)
+    }
+
+    fn vjp(
+        &self,
+        output_cotangents: &[Option<DynTensor>],
+        input_grad_mask: &[bool],
+    ) -> AdResult<Vec<Option<DynTensor>>> {
+        match &self.input {
+            DynTensor::F32(input) => svd_vjp_t::<f32>(
+                input,
+                output_cotangents,
+                input_grad_mask,
+                self.options.as_ref(),
+            ),
+            DynTensor::F64(input) => svd_vjp_t::<f64>(
+                input,
+                output_cotangents,
+                input_grad_mask,
+                self.options.as_ref(),
+            ),
+            DynTensor::C32(input) => svd_vjp_t::<Complex32>(
+                input,
+                output_cotangents,
+                input_grad_mask,
+                self.options.as_ref(),
+            ),
+            DynTensor::C64(input) => svd_vjp_t::<Complex64>(
+                input,
+                output_cotangents,
+                input_grad_mask,
+                self.options.as_ref(),
+            ),
+        }
+        .map_err(into_ad_error)
+    }
+}
+
+pub fn solve_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynValue> {
+    SolveOp.apply_one(&[a, b])
+}
+
+pub fn norm_dyn_value(input: &DynValue, kind: NormKind) -> AdResult<DynValue> {
+    NormOp::new(kind).apply_one(&[input])
+}
+
+pub fn det_dyn_value(input: &DynValue) -> AdResult<DynValue> {
+    DetOp.apply_one(&[input])
+}
+
+pub fn qr_dyn_value(input: &DynValue) -> AdResult<DynQrValues> {
+    let mut outputs = QrOp.apply(&[input])?;
+    if outputs.len() != 2 {
+        return Err(AutodiffError::InvalidArgument(format!(
+            "QrOp expected 2 outputs, got {}",
+            outputs.len()
+        )));
+    }
+    let r = outputs.pop().unwrap();
+    let q = outputs.pop().unwrap();
+    Ok(DynQrValues { q, r })
+}
+
+pub fn svd_dyn_value(input: &DynValue, options: Option<SvdOptions>) -> AdResult<DynSvdValues> {
+    let mut outputs = SvdOp::new(options).apply(&[input])?;
+    if outputs.len() != 3 {
+        return Err(AutodiffError::InvalidArgument(format!(
+            "SvdOp expected 3 outputs, got {}",
+            outputs.len()
+        )));
+    }
+    let vt = outputs.pop().unwrap();
+    let s = outputs.pop().unwrap();
+    let u = outputs.pop().unwrap();
+    Ok(DynSvdValues { u, s, vt })
+}
