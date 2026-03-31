@@ -10,6 +10,8 @@ pub fn jvp<F>(f: F, primals: &[Tensor], tangents: &[Option<Tensor>]) -> Result<J
 where
     F: FnOnce(&[Tensor]) -> Result<Vec<Tensor>>,
 {
-    let _ = (f, primals, tangents);
+    let outputs = f(primals)?;
+    let _ = tangents;
+    let _ = outputs;
     Err(Error::UnsupportedAdOp { op: "jvp" })
 }
