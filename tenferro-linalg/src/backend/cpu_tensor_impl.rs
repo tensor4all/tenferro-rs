@@ -190,10 +190,6 @@ where
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
-
-    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -201,6 +197,20 @@ where
         "solve_ex",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        let info_shape = if rhs.output_batch_dims.is_empty() {
+            vec![]
+        } else {
+            rhs.output_batch_dims.clone()
+        };
+        return Ok(SolveTensorExResult {
+            solution: b_contig,
+            info: tensor_from_data_on_space(vec![0i32; bc], &info_shape, a.logical_memory_space())?,
+        });
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -256,10 +266,6 @@ where
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
-
-    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -267,6 +273,12 @@ where
         "solve",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        return Ok(b_contig);
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -320,7 +332,7 @@ where
         "b",
     )?;
 
-    if n == 0 || bc == 0 {
+    if n == 0 || bc == 0 || rhs.nrhs == 0 {
         return Ok(rhs_contig);
     }
 
@@ -375,11 +387,6 @@ where
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
-
-    let a_contig =
-        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -387,6 +394,13 @@ where
         "solve_triangular",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        return Ok(b_contig);
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
+    let a_contig =
+        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;

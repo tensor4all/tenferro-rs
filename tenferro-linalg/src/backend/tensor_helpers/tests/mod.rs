@@ -87,6 +87,15 @@ fn validate_solve_rhs_shape_scalar_fails() {
 }
 
 #[test]
+fn validate_solve_rhs_shape_empty_matrix_rhs_is_allowed() {
+    let b = make(&[], &[2, 0]);
+    let layout = validate_solve_rhs_shape(&b, 2, &[], "solve").unwrap();
+    assert_eq!(layout.nrhs, 0);
+    assert_eq!(layout.output_dims, vec![2, 0]);
+    assert_eq!(layout.structural_rank, 2);
+}
+
+#[test]
 fn shared_broadcast_helpers_are_reexported_from_linalg_prims() {
     let shared_dims =
         tenferro_linalg_prims::backend::broadcast_batch_dims(&[2, 1], &[1, 3], "solve", "a", "b")

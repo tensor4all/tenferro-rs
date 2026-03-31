@@ -25,19 +25,22 @@ use super::*;
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let grad_a = matrix_exp_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn matrix_exp_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn matrix_exp_rrule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar
+        + tenferro_algebra::Conjugate
         + crate::prims_bridge::ScaleTensorByRealSameShape<C>
         + crate::ad_helpers::MatrixExpAbsTensor<C>,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>
-        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorResolveConjContextFor<T>,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
         tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T::Real>, Context = C>,
     C::Backend: 'static,
@@ -46,17 +49,15 @@ where
         .map_err(to_ad_err)?;
 
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
-    let mut perm: Vec<usize> = (0..tensor.ndim()).collect();
-    perm.swap(0, 1);
-    let a_t = tensor.permute(&perm).map_err(to_ad_err)?;
+    let a_h = matrix_adjoint_eager(ctx, tensor).map_err(to_ad_err)?;
     let zero = Tensor::<T>::zeros(
         &output_dims(&[n, n], batch_dims),
         tensor.logical_memory_space(),
         MemoryOrder::ColumnMajor,
     )
     .map_err(to_ad_err)?;
-    let top = Tensor::cat(&[&a_t, cotangent], 1).map_err(to_ad_err)?;
-    let bottom = Tensor::cat(&[&zero, &a_t], 1).map_err(to_ad_err)?;
+    let top = Tensor::cat(&[&a_h, cotangent], 1).map_err(to_ad_err)?;
+    let bottom = Tensor::cat(&[&zero, &a_h], 1).map_err(to_ad_err)?;
     let m = Tensor::cat(&[&top, &bottom], 0).map_err(to_ad_err)?;
     let exp_m = matrix_exp(ctx, &m).map_err(to_ad_err)?;
 

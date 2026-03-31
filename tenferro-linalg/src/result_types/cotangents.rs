@@ -74,9 +74,9 @@ pub struct LuCotangent<T: Scalar> {
 /// assert!(cotangent.values.is_none());
 /// ```
 #[derive(Debug)]
-pub struct EigenCotangent<T: Scalar> {
+pub struct EigenCotangent<T: Scalar, R: Scalar = T> {
     /// Cotangent for eigenvalues.
-    pub values: Option<Tensor<T>>,
+    pub values: Option<Tensor<R>>,
     /// Cotangent for eigenvectors.
     pub vectors: Option<Tensor<T>>,
 }
@@ -109,11 +109,16 @@ pub struct EigCotangent<R: LinalgScalar<Real = R> + num_traits::Float> {
 /// ```
 /// use tenferro_linalg::SlogdetCotangent;
 ///
-/// let cotangent = SlogdetCotangent::<f64> { logabsdet: None };
-/// assert!(cotangent.logabsdet.is_none());
+/// let cotangent = SlogdetCotangent::<f64> {
+///     sign: None,
+///     logabsdet: None,
+/// };
+/// assert!(cotangent.sign.is_none());
 /// ```
 #[derive(Debug)]
-pub struct SlogdetCotangent<T: Scalar> {
+pub struct SlogdetCotangent<T: Scalar, R: Scalar = T> {
+    /// Cotangent for `sign`.
+    pub sign: Option<Tensor<T>>,
     /// Cotangent for `logabsdet`.
-    pub logabsdet: Option<Tensor<T>>,
+    pub logabsdet: Option<Tensor<R>>,
 }

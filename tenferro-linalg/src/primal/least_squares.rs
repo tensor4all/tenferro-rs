@@ -66,6 +66,98 @@ where
     Ok(LstsqResult { x, residual })
 }
 
+/// Compute least-squares auxiliary metadata.
+///
+/// This returns the singular values used for numerical rank estimation together
+/// with a batch-shaped count tensor containing the effective rank.
+pub fn lstsq_aux<T: KernelLinalgScalar, C>(
+    ctx: &mut C,
+    a: &Tensor<T>,
+) -> Result<LstsqAuxResult<T::Real>>
+where
+    T: KernelLinalgScalar + tenferro_algebra::Conjugate,
+    T::Real: tenferro_tensor::KeepCountScalar + num_traits::Float,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
+    C::Backend: 'static,
+{
+    let singular_values = svdvals(ctx, a)?;
+    let (_, _, batch_dims) = validate_2d(a)?;
+    let rank = lstsq_rank_counts_tensor(
+        ctx,
+        &singular_values,
+        a.dims()[0].max(a.dims()[1]),
+        batch_dims,
+    )?;
+    Ok(LstsqAuxResult {
+        rank,
+        singular_values,
+    })
+}
+
+fn lstsq_rank_counts_tensor<R, C>(
+    ctx: &mut C,
+    singular_values: &Tensor<R>,
+    scale: usize,
+    batch_dims: &[usize],
+) -> Result<Tensor<R>>
+where
+    R: LinalgScalar<Real = R> + num_traits::Float + tenferro_tensor::KeepCountScalar,
+    C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>,
+{
+    let k = singular_values.dims().first().copied().unwrap_or(0);
+    if k == 0 {
+        return crate::prims_bridge::full_like_constant(
+            R::zero(),
+            batch_dims,
+            singular_values.logical_memory_space(),
+        );
+    }
+
+    let kept_axes: Vec<usize> = (1..singular_values.ndim()).collect();
+    let max_sigma = crate::prims_bridge::scalar_reduce_keep_axes(
+        ctx,
+        singular_values,
+        &kept_axes,
+        tenferro_prims::ScalarReductionOp::Max,
+    )?;
+    let scaled_eps = scalar_from::<R>(scale as f64)? * R::epsilon();
+    let scaled_eps_tensor = crate::prims_bridge::full_like_constant(
+        scaled_eps,
+        max_sigma.dims(),
+        max_sigma.logical_memory_space(),
+    )?;
+    let tol_by_batch = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &max_sigma,
+        &scaled_eps_tensor,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let tol = broadcast_lstsq_batch_control(&tol_by_batch, singular_values.dims())?;
+    let active = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        singular_values,
+        &tol,
+        tenferro_prims::ScalarBinaryOp::Greater,
+    )?;
+    crate::prims_bridge::scalar_sum_keep_axes(ctx, &active, &kept_axes)
+}
+
+fn broadcast_lstsq_batch_control<R: LinalgScalar>(
+    value_by_batch: &Tensor<R>,
+    singular_dims: &[usize],
+) -> Result<Tensor<R>> {
+    if singular_dims.len() <= 1 {
+        return value_by_batch.reshape(&[1])?.broadcast(singular_dims);
+    }
+
+    let mut reshape_dims = vec![1];
+    reshape_dims.extend_from_slice(&singular_dims[1..]);
+    value_by_batch
+        .reshape(&reshape_dims)?
+        .broadcast(singular_dims)
+}
+
 /// Compute the Cholesky decomposition of a Hermitian positive-definite matrix.
 ///
 /// # Examples

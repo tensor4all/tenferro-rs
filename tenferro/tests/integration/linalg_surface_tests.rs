@@ -131,14 +131,19 @@ fn tensor_additional_linalg_primitives_are_public() {
 }
 
 #[test]
-fn tensor_lstsq_lu_eig_and_eigen_are_public() {
+fn tensor_lstsq_lu_eig_and_eigh_are_public() {
     let _runtime = with_cpu_runtime();
     let a = Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 3.0], &[2, 2]).unwrap();
     let rhs = Tensor::from_slice(&[4.0_f64, 9.0], &[2]).unwrap();
 
     let lstsq = a.lstsq(&rhs).unwrap();
-    approx_eq(&lstsq.x.try_to_vec::<f64>().unwrap(), &[2.0, 3.0]);
-    approx_eq(&lstsq.residual.try_to_vec::<f64>().unwrap(), &[0.0, 0.0]);
+    approx_eq(&lstsq.solution.try_to_vec::<f64>().unwrap(), &[2.0, 3.0]);
+    approx_eq(&lstsq.residuals.try_to_vec::<f64>().unwrap(), &[0.0, 0.0]);
+    assert_eq!(lstsq.rank, vec![2]);
+    approx_eq(
+        &lstsq.singular_values.try_to_vec::<f64>().unwrap(),
+        &[3.0, 2.0],
+    );
 
     let lu = a.lu(LuPivot::Partial).unwrap();
     approx_eq(&lu.p.try_to_vec::<f64>().unwrap(), &[1.0, 0.0, 0.0, 1.0]);
@@ -160,10 +165,47 @@ fn tensor_lstsq_lu_eig_and_eigen_are_public() {
         ]
     );
 
-    let eigen = a.eigen().unwrap();
-    approx_eq(&eigen.values.try_to_vec::<f64>().unwrap(), &[2.0, 3.0]);
+    let eigh = a.eigh().unwrap();
+    approx_eq(&eigh.values.try_to_vec::<f64>().unwrap(), &[2.0, 3.0]);
     approx_eq(
-        &eigen.vectors.try_to_vec::<f64>().unwrap(),
+        &eigh.vectors.try_to_vec::<f64>().unwrap(),
         &[1.0, 0.0, 0.0, 1.0],
     );
+}
+
+#[test]
+fn complex_vector_and_matrix_norm_surface_are_public() {
+    let _runtime = with_cpu_runtime();
+
+    let vector = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+    let matrix = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let vector_norm = vector
+        .vector_norm(tenferro::VectorNormOrd::P(2.0), None, false)
+        .unwrap();
+    assert_eq!(vector_norm.dims(), &[] as &[usize]);
+    approx_eq(&vector_norm.try_to_vec::<f64>().unwrap(), &[5.0]);
+
+    let matrix_norm = matrix
+        .matrix_norm(tenferro::MatrixNormOrd::Fro, Some((0, 1)), false)
+        .unwrap();
+    assert_eq!(matrix_norm.dims(), &[] as &[usize]);
+    approx_eq(&matrix_norm.try_to_vec::<f64>().unwrap(), &[5.0]);
 }

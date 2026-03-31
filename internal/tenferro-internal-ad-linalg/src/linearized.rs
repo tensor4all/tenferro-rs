@@ -2,27 +2,28 @@ use chainrules_core::AutodiffError;
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_device::LogicalMemorySpace;
 use tenferro_internal_ad_core::{
     AdResult, CheckpointHint, DynValue, LinearizableOp, LinearizedOp, Schema, SlotSchema,
 };
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTensor};
 use tenferro_internal_runtime::contracts::{LinalgRuntimeValue, RealLinalgRuntimeValue};
 use tenferro_internal_runtime::dispatch::{
-    with_linalg_runtime, LuLinalgDispatchValue, NormLinalgDispatchValue,
-    RealMatrixExpLinalgDispatchValue, ScaledRealLinalgDispatchValue, SlogdetLinalgDispatchValue,
+    with_linalg_runtime, LuLinalgDispatchValue, MatrixExpLinalgDispatchValue,
+    NormLinalgDispatchValue, ScaledLinalgDispatchValue, SlogdetLinalgDispatchValue,
 };
 use tenferro_linalg::backend::LinalgCapabilityOp;
 use tenferro_linalg::{
     cholesky, cholesky_frule, cholesky_rrule, det, det_frule, det_rrule, eig, eig_frule, eig_rrule,
-    eigen, eigen_frule, eigen_rrule, inv, inv_frule, inv_rrule, lstsq, lstsq_frule, lstsq_rrule,
-    lu, lu_frule, lu_rrule, matrix_exp, matrix_exp_frule, matrix_exp_rrule, norm, norm_frule,
-    norm_rrule, pinv, pinv_frule, pinv_rrule, qr, qr_frule, qr_rrule, slogdet, slogdet_frule,
-    slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular, solve_triangular_frule,
-    solve_triangular_rrule, svd, svd_frule, svd_rrule, EigCotangent, EigenCotangent,
-    KernelLinalgScalar, LuCotangent, LuPivot, NormKind, QrCotangent, SlogdetCotangent,
-    SvdCotangent, SvdOptions,
+    eigen, eigen_frule, eigen_rrule, inv, inv_frule, inv_rrule, lstsq, lstsq_aux, lstsq_frule,
+    lstsq_rrule, lu, lu_frule, lu_rrule, matrix_exp, matrix_exp_frule, matrix_exp_rrule, norm,
+    norm_frule, norm_frule_complex, norm_rrule, norm_rrule_complex, pinv, pinv_frule, pinv_rrule,
+    qr, qr_frule, qr_rrule, slogdet, slogdet_frule, slogdet_rrule, solve, solve_frule, solve_rrule,
+    solve_triangular, solve_triangular_frule, solve_triangular_rrule, svd, svd_frule, svd_rrule,
+    EigCotangent, EigenCotangent, KernelLinalgScalar, LuCotangent, LuPivot, NormKind, QrCotangent,
+    SlogdetCotangent, SvdCotangent, SvdOptions,
 };
-use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as DenseTensor};
 
 use crate::{Error, Result};
 
@@ -87,8 +88,10 @@ pub struct DynQrValues {
 }
 
 pub struct DynLstsqValues {
-    pub x: DynValue,
-    pub residual: DynValue,
+    pub solution: DynValue,
+    pub residuals: DynValue,
+    pub rank: Vec<usize>,
+    pub singular_values: DynTensor,
 }
 
 pub struct DynLuValues {
@@ -403,6 +406,37 @@ where
     ])
 }
 
+fn lstsq_aux_t<T>(a: &StructuredTensor<T>) -> Result<(Vec<usize>, DynTensor)>
+where
+    T: RealLinalgRuntimeValue + DynTensorTyped + Conjugate + Copy,
+{
+    let dense_a = a.to_dense()?;
+    let aux = dispatch_linalg!(T, "lstsq_aux", LinalgCapabilityOp::Lstsq, |ctx| {
+        lstsq_aux(ctx, &dense_a).map_err(Error::from)
+    })?;
+    let rank = dense_rank_counts_to_vec(&aux.rank)?;
+    Ok((rank, dyn_from_dense(aux.singular_values)))
+}
+
+fn dense_rank_counts_to_vec<T>(rank_counts: &DenseTensor<T>) -> Result<Vec<usize>>
+where
+    T: KeepCountScalar + Copy,
+{
+    let host = rank_counts.to_memory_space_async(LogicalMemorySpace::MainMemory)?;
+    let contiguous = host.contiguous(MemoryOrder::ColumnMajor);
+    let slice = contiguous.buffer().as_slice().ok_or_else(|| {
+        invalid_argument("lstsq rank counts require host-accessible contiguous storage")
+    })?;
+    slice
+        .iter()
+        .map(|value| {
+            value
+                .to_usize()
+                .ok_or_else(|| invalid_argument("failed to convert lstsq rank count to usize"))
+        })
+        .collect()
+}
+
 fn lstsq_jvp_t<T>(
     a: &StructuredTensor<T>,
     b: &StructuredTensor<T>,
@@ -545,7 +579,7 @@ where
 
 fn inv_primal_t<T>(input: &StructuredTensor<T>) -> Result<DynTensor>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "inv_dyn_value", LinalgCapabilityOp::Inv, |ctx| {
@@ -559,7 +593,7 @@ fn inv_jvp_t<T>(
     tangent: &Option<DynTensor>,
 ) -> Result<Option<DynTensor>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -578,7 +612,7 @@ fn inv_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Conjugate + Copy,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -594,6 +628,7 @@ where
 fn slogdet_primal_t<T>(input: &StructuredTensor<T>) -> Result<Vec<DynTensor>>
 where
     T: SlogdetLinalgDispatchValue + DynTensorTyped + Copy,
+    T::Real: DynTensorTyped,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "slogdet_dyn_value", LinalgCapabilityOp::Slogdet, |ctx| {
@@ -611,6 +646,7 @@ fn slogdet_jvp_t<T>(
 ) -> Result<Vec<Option<DynTensor>>>
 where
     T: SlogdetLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+    T::Real: DynTensorTyped,
 {
     if tangent.is_none() {
         return Ok(vec![None, None]);
@@ -634,18 +670,20 @@ fn slogdet_vjp_t<T>(
 ) -> Result<Vec<Option<DynTensor>>>
 where
     T: SlogdetLinalgDispatchValue + DynTensorTyped + Copy,
+    T::Real: DynTensorTyped,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
     }
     let dense_input = input.to_dense()?;
     let cotangent = SlogdetCotangent {
-        logabsdet: optional_dense_dyn_tensor_typed::<T>(
+        sign: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[0], "slogdet_vjp sign")?,
+        logabsdet: optional_dense_dyn_tensor_typed::<T::Real>(
             &output_cotangents[1],
             "slogdet_vjp logabsdet",
         )?,
     };
-    if cotangent.logabsdet.is_none() {
+    if cotangent.sign.is_none() && cotangent.logabsdet.is_none() {
         return Ok(vec![None]);
     }
     let grad = dispatch_linalg!(T, "slogdet_vjp", LinalgCapabilityOp::Slogdet, |ctx| {
@@ -656,7 +694,7 @@ where
 
 fn cholesky_primal_t<T>(input: &StructuredTensor<T>) -> Result<DynTensor>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(
@@ -673,7 +711,7 @@ fn cholesky_jvp_t<T>(
     tangent: &Option<DynTensor>,
 ) -> Result<Option<DynTensor>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -693,7 +731,7 @@ fn cholesky_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Conjugate + Copy,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -781,7 +819,8 @@ where
 
 fn pinv_primal_t<T>(input: &StructuredTensor<T>, rcond: Option<f64>) -> Result<DynTensor>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
+    T::Real: KeepCountScalar,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "pinv_dyn_value", LinalgCapabilityOp::Pinv, |ctx| {
@@ -796,7 +835,8 @@ fn pinv_jvp_t<T>(
     rcond: Option<f64>,
 ) -> Result<Option<DynTensor>>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
+    T::Real: KeepCountScalar,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -816,7 +856,8 @@ fn pinv_vjp_t<T>(
     rcond: Option<f64>,
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
+    T::Real: KeepCountScalar,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -831,7 +872,8 @@ where
 
 fn matrix_exp_primal_t<T>(input: &StructuredTensor<T>) -> Result<DynTensor>
 where
-    T: RealMatrixExpLinalgDispatchValue + DynTensorTyped + Copy,
+    T: MatrixExpLinalgDispatchValue + DynTensorTyped + Copy,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(
@@ -848,7 +890,8 @@ fn matrix_exp_jvp_t<T>(
     tangent: &Option<DynTensor>,
 ) -> Result<Option<DynTensor>>
 where
-    T: RealMatrixExpLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+    T: MatrixExpLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -868,7 +911,8 @@ fn matrix_exp_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealMatrixExpLinalgDispatchValue + DynTensorTyped + Copy,
+    T: MatrixExpLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -966,7 +1010,8 @@ where
 
 fn eigen_primal_t<T>(input: &StructuredTensor<T>) -> Result<Vec<DynTensor>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Copy,
+    T::Real: DynTensorTyped,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "eigen_dyn_value", LinalgCapabilityOp::EigenSym, |ctx| {
@@ -983,7 +1028,8 @@ fn eigen_jvp_t<T>(
     tangent: &Option<DynTensor>,
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Scalar + Zero + num_traits::Float + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float + DynTensorTyped,
 {
     if tangent.is_none() {
         return Ok(vec![None, None]);
@@ -1006,14 +1052,18 @@ fn eigen_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + num_traits::Float + Copy,
+    T: LinalgRuntimeValue + DynTensorTyped + Conjugate + Copy,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float + DynTensorTyped,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
     }
     let dense_input = input.to_dense()?;
     let cotangent = EigenCotangent {
-        values: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[0], "eigen_vjp values")?,
+        values: optional_dense_dyn_tensor_typed::<T::Real>(
+            &output_cotangents[0],
+            "eigen_vjp values",
+        )?,
         vectors: optional_dense_dyn_tensor_typed::<T>(&output_cotangents[1], "eigen_vjp vectors")?,
     };
     if cotangent.values.is_none() && cotangent.vectors.is_none() {
@@ -1028,6 +1078,7 @@ where
 fn norm_primal_t<T>(input: &StructuredTensor<T>, kind: NormKind) -> Result<DynTensor>
 where
     T: NormLinalgDispatchValue + DynTensorTyped + Copy,
+    <T as tenferro_linalg::LinalgScalar>::Real: DynTensorTyped,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "norm_dyn_value", LinalgCapabilityOp::Norm, |ctx| {
@@ -1042,7 +1093,7 @@ fn norm_jvp_t<T>(
     kind: NormKind,
 ) -> Result<Option<DynTensor>>
 where
-    T: NormLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+    T: RealLinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Copy,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -1055,6 +1106,60 @@ where
     Ok(Some(dyn_from_dense(output_tangent)))
 }
 
+fn norm_jvp_c32_t(
+    input: &StructuredTensor<Complex32>,
+    tangent: &Option<DynTensor>,
+    kind: NormKind,
+) -> Result<Option<DynTensor>> {
+    if tangent.is_none() {
+        return Ok(None);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "norm_jvp tangent")?;
+    let (_, output_tangent) =
+        dispatch_linalg!(Complex32, "norm_jvp", LinalgCapabilityOp::Norm, |ctx| {
+            norm_frule_complex::<Complex32, f32, _>(ctx, &dense_input, &dense_tangent, kind)
+                .map_err(Error::from)
+        })?;
+    Ok(Some(dyn_from_dense(output_tangent)))
+}
+
+fn norm_jvp_c64_t(
+    input: &StructuredTensor<Complex64>,
+    tangent: &Option<DynTensor>,
+    kind: NormKind,
+) -> Result<Option<DynTensor>> {
+    if tangent.is_none() {
+        return Ok(None);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_tangent = dense_optional_or_zero(tangent, &dense_input, "norm_jvp tangent")?;
+    let (_, output_tangent) =
+        dispatch_linalg!(Complex64, "norm_jvp", LinalgCapabilityOp::Norm, |ctx| {
+            norm_frule_complex::<Complex64, f64, _>(ctx, &dense_input, &dense_tangent, kind)
+                .map_err(Error::from)
+        })?;
+    Ok(Some(dyn_from_dense(output_tangent)))
+}
+
+fn norm_vjp_c32_t(
+    input: &StructuredTensor<Complex32>,
+    cotangent: &DynTensor,
+    kind: NormKind,
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>> {
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_cotangent = dense_dyn_tensor_typed::<f32>(cotangent, "norm_vjp")?;
+    let grad = dispatch_linalg!(Complex32, "norm_vjp", LinalgCapabilityOp::Norm, |ctx| {
+        norm_rrule_complex::<Complex32, f32, _>(ctx, &dense_input, &dense_cotangent, kind)
+            .map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
 fn norm_vjp_t<T>(
     input: &StructuredTensor<T>,
     cotangent: &DynTensor,
@@ -1062,7 +1167,7 @@ fn norm_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: NormLinalgDispatchValue + DynTensorTyped + Copy,
+    T: RealLinalgRuntimeValue + DynTensorTyped + Copy,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -1075,9 +1180,27 @@ where
     Ok(vec![Some(dyn_from_dense(grad))])
 }
 
+fn norm_vjp_c64_t(
+    input: &StructuredTensor<Complex64>,
+    cotangent: &DynTensor,
+    kind: NormKind,
+    input_grad_mask: &[bool],
+) -> Result<Vec<Option<DynTensor>>> {
+    if !input_grad_mask[0] {
+        return Ok(vec![None]);
+    }
+    let dense_input = input.to_dense()?;
+    let dense_cotangent = dense_dyn_tensor_typed::<f64>(cotangent, "norm_vjp")?;
+    let grad = dispatch_linalg!(Complex64, "norm_vjp", LinalgCapabilityOp::Norm, |ctx| {
+        norm_rrule_complex::<Complex64, f64, _>(ctx, &dense_input, &dense_cotangent, kind)
+            .map_err(Error::from)
+    })?;
+    Ok(vec![Some(dyn_from_dense(grad))])
+}
+
 fn det_primal_t<T>(input: &StructuredTensor<T>) -> Result<DynTensor>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Copy,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "det_dyn_value", LinalgCapabilityOp::Det, |ctx| {
@@ -1091,7 +1214,7 @@ fn det_jvp_t<T>(
     tangent: &Option<DynTensor>,
 ) -> Result<Option<DynTensor>>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Copy,
 {
     if tangent.is_none() {
         return Ok(None);
@@ -1110,7 +1233,7 @@ fn det_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Copy,
+    T: ScaledLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);
@@ -1452,9 +1575,8 @@ impl LinearizableOp<DynTensor> for NormOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => norm_primal_t::<f32>(input, self.kind),
             DynTensor::F64(input) => norm_primal_t::<f64>(input, self.kind),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "norm AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => norm_primal_t::<Complex32>(input, self.kind),
+            DynTensor::C64(input) => norm_primal_t::<Complex64>(input, self.kind),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -1591,9 +1713,8 @@ impl LinearizedOp<DynTensor> for NormLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => norm_jvp_t::<f32>(input, &input_tangents[0], self.kind),
             DynTensor::F64(input) => norm_jvp_t::<f64>(input, &input_tangents[0], self.kind),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "norm AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => norm_jvp_c32_t(input, &input_tangents[0], self.kind),
+            DynTensor::C64(input) => norm_jvp_c64_t(input, &input_tangents[0], self.kind),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -1614,9 +1735,8 @@ impl LinearizedOp<DynTensor> for NormLinearized {
             DynTensor::F64(input) => {
                 norm_vjp_t::<f64>(input, cotangent, self.kind, input_grad_mask)
             }
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "norm AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => norm_vjp_c32_t(input, cotangent, self.kind, input_grad_mask),
+            DynTensor::C64(input) => norm_vjp_c64_t(input, cotangent, self.kind, input_grad_mask),
         }
         .map_err(into_ad_error)
     }
@@ -1629,9 +1749,8 @@ impl LinearizableOp<DynTensor> for InvOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => inv_primal_t::<f32>(input),
             DynTensor::F64(input) => inv_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "inv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => inv_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => inv_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -1665,9 +1784,8 @@ impl LinearizedOp<DynTensor> for InvLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => inv_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => inv_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "inv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => inv_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => inv_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -1684,9 +1802,8 @@ impl LinearizedOp<DynTensor> for InvLinearized {
         match &self.input {
             DynTensor::F32(input) => inv_vjp_t::<f32>(input, cotangent, input_grad_mask),
             DynTensor::F64(input) => inv_vjp_t::<f64>(input, cotangent, input_grad_mask),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "inv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => inv_vjp_t::<Complex32>(input, cotangent, input_grad_mask),
+            DynTensor::C64(input) => inv_vjp_t::<Complex64>(input, cotangent, input_grad_mask),
         }
         .map_err(into_ad_error)
     }
@@ -1699,9 +1816,8 @@ impl LinearizableOp<DynTensor> for SlogdetOp {
         match inputs[0] {
             DynTensor::F32(input) => slogdet_primal_t::<f32>(input),
             DynTensor::F64(input) => slogdet_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "slogdet AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => slogdet_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => slogdet_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)
     }
@@ -1734,9 +1850,8 @@ impl LinearizedOp<DynTensor> for SlogdetLinearized {
         match &self.input {
             DynTensor::F32(input) => slogdet_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => slogdet_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "slogdet AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => slogdet_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => slogdet_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)
     }
@@ -1753,9 +1868,12 @@ impl LinearizedOp<DynTensor> for SlogdetLinearized {
             DynTensor::F64(input) => {
                 slogdet_vjp_t::<f64>(input, output_cotangents, input_grad_mask)
             }
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "slogdet AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => {
+                slogdet_vjp_t::<Complex32>(input, output_cotangents, input_grad_mask)
+            }
+            DynTensor::C64(input) => {
+                slogdet_vjp_t::<Complex64>(input, output_cotangents, input_grad_mask)
+            }
         }
         .map_err(into_ad_error)
     }
@@ -1768,9 +1886,8 @@ impl LinearizableOp<DynTensor> for CholeskyOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => cholesky_primal_t::<f32>(input),
             DynTensor::F64(input) => cholesky_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "cholesky AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => cholesky_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => cholesky_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -1875,9 +1992,8 @@ impl LinearizedOp<DynTensor> for CholeskyLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => cholesky_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => cholesky_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "cholesky AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => cholesky_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => cholesky_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -1894,9 +2010,8 @@ impl LinearizedOp<DynTensor> for CholeskyLinearized {
         match &self.input {
             DynTensor::F32(input) => cholesky_vjp_t::<f32>(input, cotangent, input_grad_mask),
             DynTensor::F64(input) => cholesky_vjp_t::<f64>(input, cotangent, input_grad_mask),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "cholesky AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => cholesky_vjp_t::<Complex32>(input, cotangent, input_grad_mask),
+            DynTensor::C64(input) => cholesky_vjp_t::<Complex64>(input, cotangent, input_grad_mask),
         }
         .map_err(into_ad_error)
     }
@@ -1974,9 +2089,8 @@ impl LinearizableOp<DynTensor> for EigenOp {
         match inputs[0] {
             DynTensor::F32(input) => eigen_primal_t::<f32>(input),
             DynTensor::F64(input) => eigen_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "eigen AD currently supports real inputs only",
-            )),
+            DynTensor::C32(input) => eigen_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => eigen_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)
     }
@@ -2009,9 +2123,8 @@ impl LinearizedOp<DynTensor> for EigenLinearized {
         match &self.input {
             DynTensor::F32(input) => eigen_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => eigen_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "eigen AD currently supports real inputs only",
-            )),
+            DynTensor::C32(input) => eigen_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => eigen_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)
     }
@@ -2024,9 +2137,12 @@ impl LinearizedOp<DynTensor> for EigenLinearized {
         match &self.input {
             DynTensor::F32(input) => eigen_vjp_t::<f32>(input, output_cotangents, input_grad_mask),
             DynTensor::F64(input) => eigen_vjp_t::<f64>(input, output_cotangents, input_grad_mask),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "eigen AD currently supports real inputs only",
-            )),
+            DynTensor::C32(input) => {
+                eigen_vjp_t::<Complex32>(input, output_cotangents, input_grad_mask)
+            }
+            DynTensor::C64(input) => {
+                eigen_vjp_t::<Complex64>(input, output_cotangents, input_grad_mask)
+            }
         }
         .map_err(into_ad_error)
     }
@@ -2039,9 +2155,8 @@ impl LinearizableOp<DynTensor> for DetOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => det_primal_t::<f32>(input),
             DynTensor::F64(input) => det_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "det AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => det_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => det_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -2075,9 +2190,8 @@ impl LinearizedOp<DynTensor> for DetLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => det_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => det_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "det AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => det_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => det_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -2094,9 +2208,8 @@ impl LinearizedOp<DynTensor> for DetLinearized {
         match &self.input {
             DynTensor::F32(input) => det_vjp_t::<f32>(input, cotangent, input_grad_mask),
             DynTensor::F64(input) => det_vjp_t::<f64>(input, cotangent, input_grad_mask),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "det AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => det_vjp_t::<Complex32>(input, cotangent, input_grad_mask),
+            DynTensor::C64(input) => det_vjp_t::<Complex64>(input, cotangent, input_grad_mask),
         }
         .map_err(into_ad_error)
     }
@@ -2109,9 +2222,8 @@ impl LinearizableOp<DynTensor> for PInvOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => pinv_primal_t::<f32>(input, self.rcond),
             DynTensor::F64(input) => pinv_primal_t::<f64>(input, self.rcond),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "pinv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => pinv_primal_t::<Complex32>(input, self.rcond),
+            DynTensor::C64(input) => pinv_primal_t::<Complex64>(input, self.rcond),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -2146,9 +2258,8 @@ impl LinearizedOp<DynTensor> for PInvLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => pinv_jvp_t::<f32>(input, &input_tangents[0], self.rcond),
             DynTensor::F64(input) => pinv_jvp_t::<f64>(input, &input_tangents[0], self.rcond),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "pinv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => pinv_jvp_t::<Complex32>(input, &input_tangents[0], self.rcond),
+            DynTensor::C64(input) => pinv_jvp_t::<Complex64>(input, &input_tangents[0], self.rcond),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -2169,9 +2280,12 @@ impl LinearizedOp<DynTensor> for PInvLinearized {
             DynTensor::F64(input) => {
                 pinv_vjp_t::<f64>(input, cotangent, input_grad_mask, self.rcond)
             }
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "pinv AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => {
+                pinv_vjp_t::<Complex32>(input, cotangent, input_grad_mask, self.rcond)
+            }
+            DynTensor::C64(input) => {
+                pinv_vjp_t::<Complex64>(input, cotangent, input_grad_mask, self.rcond)
+            }
         }
         .map_err(into_ad_error)
     }
@@ -2184,9 +2298,8 @@ impl LinearizableOp<DynTensor> for MatrixExpOp {
         let output = match inputs[0] {
             DynTensor::F32(input) => matrix_exp_primal_t::<f32>(input),
             DynTensor::F64(input) => matrix_exp_primal_t::<f64>(input),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "matrix_exp AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => matrix_exp_primal_t::<Complex32>(input),
+            DynTensor::C64(input) => matrix_exp_primal_t::<Complex64>(input),
         }
         .map_err(into_ad_error)?;
         Ok(vec![output])
@@ -2220,9 +2333,8 @@ impl LinearizedOp<DynTensor> for MatrixExpLinearized {
         let tangent = match &self.input {
             DynTensor::F32(input) => matrix_exp_jvp_t::<f32>(input, &input_tangents[0]),
             DynTensor::F64(input) => matrix_exp_jvp_t::<f64>(input, &input_tangents[0]),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "matrix_exp AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => matrix_exp_jvp_t::<Complex32>(input, &input_tangents[0]),
+            DynTensor::C64(input) => matrix_exp_jvp_t::<Complex64>(input, &input_tangents[0]),
         }
         .map_err(into_ad_error)?;
         Ok(vec![tangent])
@@ -2239,9 +2351,12 @@ impl LinearizedOp<DynTensor> for MatrixExpLinearized {
         match &self.input {
             DynTensor::F32(input) => matrix_exp_vjp_t::<f32>(input, cotangent, input_grad_mask),
             DynTensor::F64(input) => matrix_exp_vjp_t::<f64>(input, cotangent, input_grad_mask),
-            DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
-                "matrix_exp AD currently supports real dtypes only",
-            )),
+            DynTensor::C32(input) => {
+                matrix_exp_vjp_t::<Complex32>(input, cotangent, input_grad_mask)
+            }
+            DynTensor::C64(input) => {
+                matrix_exp_vjp_t::<Complex64>(input, cotangent, input_grad_mask)
+            }
         }
         .map_err(into_ad_error)
     }
@@ -2416,9 +2531,22 @@ pub fn lstsq_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynLstsqValues> 
             outputs.len()
         )));
     }
-    let residual = outputs.pop().unwrap();
-    let x = outputs.pop().unwrap();
-    Ok(DynLstsqValues { x, residual })
+    let residuals = outputs.pop().unwrap();
+    let solution = outputs.pop().unwrap();
+    let (rank, singular_values) = match a.primal() {
+        DynTensor::F32(input) => lstsq_aux_t::<f32>(input),
+        DynTensor::F64(input) => lstsq_aux_t::<f64>(input),
+        DynTensor::C32(_) | DynTensor::C64(_) => Err(invalid_argument(
+            "lstsq AD currently supports real dtypes only",
+        )),
+    }
+    .map_err(into_ad_error)?;
+    Ok(DynLstsqValues {
+        solution,
+        residuals,
+        rank,
+        singular_values,
+    })
 }
 
 pub fn solve_triangular_dyn_value(a: &DynValue, b: &DynValue, upper: bool) -> AdResult<DynValue> {

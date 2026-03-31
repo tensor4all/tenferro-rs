@@ -13,7 +13,7 @@ pub mod jvp;
 
 pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub use core::dynamic::{
-    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    CholeskyExResult, EigResult, EighResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuPivot, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult,
     SvdResult, Tensor,
 };
@@ -30,7 +30,7 @@ pub use tenferro_internal_frontend_core::{
 pub use tenferro_internal_runtime::{
     set_default_runtime, with_default_runtime, with_runtime, DefaultRuntimeGuard, RuntimeContext,
 };
-pub use tenferro_linalg::{NormKind, SvdOptions};
+pub use tenferro_linalg::{MatrixNormOrd, NormKind, SvdOptions, VectorNormOrd};
 pub use tenferro_tensor::MemoryOrder;
 pub use tidu::{with_ad_policy, AdExecutionPolicy, CheckpointMode};
 

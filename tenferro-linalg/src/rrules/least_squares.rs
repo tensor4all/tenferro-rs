@@ -110,17 +110,17 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let grad_a = cholesky_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn cholesky_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn cholesky_rrule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + tenferro_algebra::Conjugate,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    // A = L L^T, dA = L^{-T} phi*(tril(L^T dL)) L^{-1}
+    // A = L L^H, dA = L^{-H} phi*(tril(L^H dL)) L^{-1}
     let l = cholesky(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
@@ -136,20 +136,20 @@ where
         let l_b = &l_data[b * n * n..(b + 1) * n * n];
         let dl_b = &dl_data[b * n * n..(b + 1) * n * n];
 
-        // S = tril(L^T dL)
-        let lt_dl = backend_mat_mul(ctx, &transpose(l_b, n, n), n, n, dl_b, n)?;
+        // S = tril(L^H dL)
+        let lt_dl = backend_mat_mul(ctx, &adjoint_transpose(l_b, n, n), n, n, dl_b, n)?;
         let s = tril(&lt_dl, n);
 
-        // Apply phi*: symmetrize S → (S + S^T) / 2
+        // Apply phi*: symmetrize S → (S + S^H - diag(S)) / 2
         let s_sym = phi_star(&s, n)?;
 
-        // Solve L^T x = S_sym → x = L^{-T} S_sym
-        let x = backend_solve_tri(ctx, &transpose(l_b, n, n), &s_sym, n, n, true)?;
+        // Solve L^H x = S_sym → x = L^{-H} S_sym
+        let x = backend_solve_tri(ctx, &adjoint_transpose(l_b, n, n), &s_sym, n, n, true)?;
 
-        // Solve x L = result → result = x L^{-1} → L^T result^T = x^T → result^T = L^{-T} x^T
-        let xt = transpose(&x, n, n);
-        let result_t = backend_solve_tri(ctx, &transpose(l_b, n, n), &xt, n, n, true)?;
-        let da_b = transpose(&result_t, n, n);
+        // Solve x L = result → result^H = L^{-H} x^H
+        let xh = adjoint_transpose(&x, n, n);
+        let result_h = backend_solve_tri(ctx, &adjoint_transpose(l_b, n, n), &xh, n, n, true)?;
+        let da_b = adjoint_transpose(&result_h, n, n);
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
     }

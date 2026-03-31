@@ -307,7 +307,7 @@ The API and internal architecture are strongly influenced by
   (`"ij,jk->ik"`) is compatible with `torch.einsum`, with N-ary contraction
   tree optimization.
 - **Linear algebra** — `tenferro-linalg` mirrors `torch.linalg` (SVD, QR, LU,
-  eigen, Cholesky, solve) with differentiable decompositions.
+  eig/eigh, Cholesky, solve) with differentiable decompositions.
 
 Key differences from PyTorch: column-major default layout with `(m, n, *)`
 batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
@@ -346,9 +346,9 @@ For a detailed feature-by-feature mapping, see
 | --- | --- | --- |
 | Reverse-mode frontend | Strong | `Tensor::with_requires_grad`, `Tensor::grad`, `Tensor::backward`, and top-level `grad` / `backward` helpers |
 | Custom op integration | Available | Downstream custom ops should implement `LinearizableOp` + `LinearizedOp` and supply `jvp` / `vjp` |
-| Public JVP/HVP frontend | Not exposed | This cut focuses on reverse-mode frontend APIs; there is no public HVP helper |
+| Public JVP frontend | Available | `tenferro::jvp(...)` returns primals plus optional output tangents; there is still no public HVP helper |
 | Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |
-| Complex/real matrices | Strong | Complex `einsum`, complex `solve_triangular`, and real-to-complex `eig` are covered |
+| Complex/real matrices | Strong | Public `Tensor` JVP covers complex `einsum`, `solve`, `solve_triangular`, `det`, `inv`, `slogdet`, `cholesky`, `pinv`, `matrix_exp`, `eigh`, and the current `vector_norm` / `matrix_norm` slice; see [`tenferro/README.md`](tenferro/README.md) for the current operation matrix |
 
 ## Design
 

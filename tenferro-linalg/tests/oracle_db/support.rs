@@ -3,11 +3,16 @@ use crate::db::CaseRecord;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReplayKind {
     SolveIdentity,
+    SolveTriangularIdentity,
     CholeskyIdentity,
     InvIdentity,
+    DetIdentity,
+    SlogdetIdentity,
     LuFactorIdentity,
     CondIdentity,
     MatrixPowerIdentity,
+    MatrixExpIdentity,
+    PinvIdentity,
     NumericalIdentity,
     QrIdentity,
     SvdUAbs,
@@ -32,6 +37,10 @@ pub enum RecordSupport {
 
 fn float64_only(dtype: &str) -> bool {
     dtype == "float64"
+}
+
+fn batch_a_replay_dtype(dtype: &str) -> bool {
+    matches!(dtype, "float64" | "complex64" | "complex128")
 }
 
 fn svd_replay_dtype(dtype: &str) -> bool {
@@ -60,16 +69,26 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             ReplayKind::SolveIdentity,
             "tenferro replay currently supports this family only for float64",
         ),
-        ("cholesky", "identity", "identity", "success")
-        | ("cholesky_ex", "identity", "identity", "success") => supported_if(
+        ("solve_triangular", "identity", "identity", "success") => supported_if(
             float64_only(&record.dtype),
-            ReplayKind::CholeskyIdentity,
+            ReplayKind::SolveTriangularIdentity,
             "tenferro replay currently supports this family only for float64",
         ),
-        ("inv_ex", "identity", "identity", "success") => supported_if(
-            float64_only(&record.dtype),
+        ("cholesky", "identity", "identity", "success")
+        | ("cholesky_ex", "identity", "identity", "success") => supported_if(
+            batch_a_replay_dtype(&record.dtype),
+            ReplayKind::CholeskyIdentity,
+            "tenferro replay currently supports this family only for float64/complex64/complex128",
+        ),
+        ("inv", "identity", "identity", "success") => supported_if(
+            batch_a_replay_dtype(&record.dtype),
             ReplayKind::InvIdentity,
-            "tenferro replay currently supports this family only for float64",
+            "tenferro replay currently supports this family only for float64/complex64/complex128",
+        ),
+        ("inv_ex", "identity", "identity", "success") => supported_if(
+            batch_a_replay_dtype(&record.dtype),
+            ReplayKind::InvIdentity,
+            "tenferro replay currently supports this family only for float64/complex64/complex128",
         ),
         ("lu_factor", "identity", "identity", "success")
         | ("lu_factor_ex", "identity", "identity", "success") => supported_if(
@@ -86,6 +105,11 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             float64_only(&record.dtype),
             ReplayKind::MatrixPowerIdentity,
             "tenferro replay currently supports this family only for float64",
+        ),
+        ("matrix_exp", "identity", "identity", "success") => supported_if(
+            batch_a_replay_dtype(&record.dtype),
+            ReplayKind::MatrixExpIdentity,
+            "tenferro replay currently supports this family only for float64/complex64/complex128",
         ),
         ("qr", "identity", "identity", "success") => supported_if(
             float64_only(&record.dtype),
@@ -113,9 +137,9 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             "tenferro replay currently supports SVD only for float32/float64/complex64/complex128",
         ),
         ("eigh", "values_vectors_abs", "eigh_values_vectors_abs", "success") => supported_if(
-            float64_only(&record.dtype),
+            svd_replay_dtype(&record.dtype),
             ReplayKind::EighValuesVectorsAbs,
-            "tenferro replay currently supports this family only for float64",
+            "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
         ),
         ("pinv_singular", "identity", "identity", "success") => supported_if(
             float64_only(&record.dtype),
@@ -138,12 +162,20 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             ReplayKind::NumericalIdentity,
             "tenferro replay currently supports this family only for float64",
         ),
-        ("det", "identity", "identity", "success")
-        | ("eigvals", "identity", "identity", "success")
+        ("det", "identity", "identity", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::DetIdentity,
+            "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
+        ),
+        ("slogdet", "identity", "identity", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::SlogdetIdentity,
+            "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
+        ),
+        ("eigvals", "identity", "identity", "success")
         | ("eigvalsh", "identity", "identity", "success")
         | ("matrix_norm", "identity", "identity", "success")
         | ("norm", "identity", "identity", "success")
-        | ("slogdet", "identity", "identity", "success")
         | ("svdvals", "identity", "identity", "success")
         | ("vector_norm", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this scalar-output oracle family yet",
@@ -151,14 +183,18 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         ("diagonal", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this tensor-construction oracle family yet",
         },
-        ("eig", "values_vectors_abs", "eig_values_vectors_abs", "success")
-        | ("inv", "identity", "identity", "success")
-        | ("pinv", "identity", "identity", "success") => RecordSupport::Unsupported {
-            reason: "tenferro replay does not implement this spectral/inverse family yet",
-        },
+        ("eig", "values_vectors_abs", "eig_values_vectors_abs", "success") => {
+            RecordSupport::Unsupported {
+                reason: "tenferro replay does not implement this spectral/inverse family yet",
+            }
+        }
+        ("pinv", "identity", "identity", "success") => supported_if(
+            batch_a_replay_dtype(&record.dtype),
+            ReplayKind::PinvIdentity,
+            "tenferro replay currently supports this family only for float64/complex64/complex128",
+        ),
         ("lstsq_grad_oriented", "identity", "identity", "success")
-        | ("lu", "identity", "identity", "success")
-        | ("solve_triangular", "identity", "identity", "success") => RecordSupport::Unsupported {
+        | ("lu", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this solver/decomposition family yet",
         },
         _ => RecordSupport::Unsupported {

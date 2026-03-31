@@ -397,6 +397,23 @@ fn oracle_db_marks_batch_a_oracles_supported_for_replay() {
 }
 
 #[test]
+fn oracle_db_marks_solve_triangular_oracles_supported_for_replay() {
+    let record = oracle_support_record(
+        "solve_triangular_f64_identity_001",
+        "solve_triangular",
+        "identity",
+        "identity",
+    );
+    assert!(
+        matches!(
+            support::classify_record(&record),
+            support::RecordSupport::Supported(_)
+        ),
+        "solve_triangular/identity/identity should be supported"
+    );
+}
+
+#[test]
 fn oracle_db_replay_against_tensor_ad_oracles() {
     let summary = replay::run_database_replay();
     let expected = expected_replay_counts();

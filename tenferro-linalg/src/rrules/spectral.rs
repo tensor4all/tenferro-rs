@@ -124,7 +124,7 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col).unwrap();
 /// let grad_a = pinv_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv_rrule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -161,8 +161,8 @@ where
         let ap_b = &ap_data[batch * n * m..(batch + 1) * n * m];
         let dap_b = &dap_data[batch * n * m..(batch + 1) * n * m];
 
-        let apt = transpose(ap_b, n, m); // m×n
-        let dapt = transpose(dap_b, n, m); // m×n
+        let apt = adjoint_transpose(ap_b, n, m); // m×n
+        let dapt = adjoint_transpose(dap_b, n, m); // m×n
 
         // Term 1: -(A+)^T dA+ (A+)^T = -apt * dap * apt^T
         // apt: m×n, dap: n×m, apt: m×n → m×n * n×m * m×n = m×n

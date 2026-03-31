@@ -9,6 +9,14 @@ fn approx_eq(lhs: &[f64], rhs: &[f64]) {
     }
 }
 
+fn complex_approx_eq(lhs: &[Complex64], rhs: &[Complex64]) {
+    assert_eq!(lhs.len(), rhs.len());
+    for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
+        let diff = (*lhs - *rhs).norm();
+        assert!(diff < 1.0e-12, "lhs={lhs:?}, rhs={rhs:?}, abs_diff={diff}");
+    }
+}
+
 fn with_cpu_runtime() -> tenferro::DefaultRuntimeGuard {
     set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)))
 }
@@ -404,13 +412,230 @@ fn solve_triangular_inv_slogdet_cholesky_pinv_and_matrix_exp_support_jvp() {
 }
 
 #[test]
-fn lstsq_lu_eig_and_eigen_support_jvp() {
+fn complex_inv_cholesky_pinv_and_matrix_exp_support_jvp() {
+    let _runtime = with_cpu_runtime();
+
+    let z1 = Complex64::new(1.0, 1.0);
+    let z2 = Complex64::new(2.0, -1.0);
+    let a_values = [z1, Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), z2];
+    let da_values = [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ];
+
+    let inv = jvp(
+        |inputs| inputs[0].inv().map(|out| vec![out]),
+        &[Tensor::from_slice(&a_values, &[2, 2]).unwrap()],
+        &[Some(Tensor::from_slice(&da_values, &[2, 2]).unwrap())],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &inv.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            Complex64::new(0.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+
+    let cholesky = jvp(
+        |inputs| inputs[0].cholesky().map(|out| vec![out]),
+        &[Tensor::from_slice(
+            &[
+                Complex64::new(4.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(9.0, 0.0),
+            ],
+            &[2, 2],
+        )
+        .unwrap()],
+        &[Some(
+            Tensor::from_slice(
+                &[
+                    Complex64::new(2.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                ],
+                &[2, 2],
+            )
+            .unwrap(),
+        )],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &cholesky.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            Complex64::new(0.5, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+
+    let pinv = jvp(
+        |inputs| inputs[0].pinv(None).map(|out| vec![out]),
+        &[Tensor::from_slice(&a_values, &[2, 2]).unwrap()],
+        &[Some(Tensor::from_slice(&da_values, &[2, 2]).unwrap())],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &pinv.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            Complex64::new(0.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+
+    let matrix_exp = jvp(
+        |inputs| inputs[0].matrix_exp().map(|out| vec![out]),
+        &[Tensor::from_slice(&a_values, &[2, 2]).unwrap()],
+        &[Some(Tensor::from_slice(&da_values, &[2, 2]).unwrap())],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &matrix_exp.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            z1.exp(),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+}
+
+#[test]
+fn complex_det_and_slogdet_support_jvp() {
+    let _runtime = with_cpu_runtime();
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let da = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let det_result = jvp(
+        |inputs| inputs[0].det().map(|out| vec![out]),
+        &[a],
+        &[Some(da)],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &det_result.outputs[0].try_to_vec::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, 1.0)],
+    );
+    complex_approx_eq(
+        &det_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(2.0, -1.0)],
+    );
+
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let da = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let slogdet_result = jvp(
+        |inputs| {
+            let result = inputs[0].slogdet()?;
+            Ok(vec![result.sign, result.logabsdet])
+        },
+        &[a],
+        &[Some(da)],
+    )
+    .unwrap();
+    complex_approx_eq(
+        &slogdet_result.outputs[0].try_to_vec::<Complex64>().unwrap(),
+        &[Complex64::new(3.0 / 10.0_f64.sqrt(), 1.0 / 10.0_f64.sqrt())],
+    );
+    approx_eq(
+        &slogdet_result.outputs[1].try_to_vec::<f64>().unwrap(),
+        &[0.5 * 10.0_f64.ln()],
+    );
+    complex_approx_eq(
+        &slogdet_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(
+            0.5 / 10.0_f64.sqrt(),
+            -1.5 / 10.0_f64.sqrt(),
+        )],
+    );
+    approx_eq(
+        &slogdet_result.output_tangents[1]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[0.5],
+    );
+}
+
+#[test]
+fn lstsq_lu_eig_and_eigh_support_jvp() {
     let _runtime = with_cpu_runtime();
 
     let lstsq = jvp(
         |inputs| {
             let out = inputs[0].lstsq(&inputs[1]).unwrap();
-            Ok(vec![out.x, out.residual])
+            Ok(vec![out.solution, out.residuals])
         },
         &[
             Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 3.0], &[2, 2]).unwrap(),
@@ -501,9 +726,9 @@ fn lstsq_lu_eig_and_eigen_support_jvp() {
         ]
     );
 
-    let eigen = jvp(
+    let eigh = jvp(
         |inputs| {
-            let out = inputs[0].eigen().unwrap();
+            let out = inputs[0].eigh().unwrap();
             Ok(vec![out.values, out.vectors])
         },
         &[Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 3.0], &[2, 2]).unwrap()],
@@ -513,7 +738,7 @@ fn lstsq_lu_eig_and_eigen_support_jvp() {
     )
     .unwrap();
     approx_eq(
-        &eigen.output_tangents[0]
+        &eigh.output_tangents[0]
             .as_ref()
             .unwrap()
             .try_to_vec::<f64>()
@@ -521,11 +746,159 @@ fn lstsq_lu_eig_and_eigen_support_jvp() {
         &[1.0, 0.0],
     );
     approx_eq(
-        &eigen.output_tangents[1]
+        &eigh.output_tangents[1]
             .as_ref()
             .unwrap()
             .try_to_vec::<f64>()
             .unwrap(),
         &[0.0, 0.0, 0.0, 0.0],
+    );
+}
+
+#[test]
+fn complex_eigh_supports_public_jvp() {
+    let _runtime = with_cpu_runtime();
+
+    let result = jvp(
+        |inputs| {
+            let out = inputs[0].eigh().unwrap();
+            Ok(vec![out.values, out.vectors])
+        },
+        &[Tensor::from_slice(
+            &[
+                Complex64::new(2.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(3.0, 0.0),
+            ],
+            &[2, 2],
+        )
+        .unwrap()],
+        &[Some(
+            Tensor::from_slice(
+                &[
+                    Complex64::new(1.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                ],
+                &[2, 2],
+            )
+            .unwrap(),
+        )],
+    )
+    .unwrap();
+
+    approx_eq(
+        &result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[1.0, 0.0],
+    );
+    assert_eq!(
+        result.output_tangents[1]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]
+    );
+}
+
+#[test]
+fn complex_vector_and_matrix_norm_support_public_jvp() {
+    let _runtime = with_cpu_runtime();
+
+    let vector = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+    let dvector = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+
+    let vector_result = jvp(
+        |inputs| {
+            inputs[0]
+                .vector_norm(tenferro::VectorNormOrd::P(2.0), None, false)
+                .map(|out| vec![out])
+        },
+        &[vector],
+        &[Some(dvector)],
+    )
+    .unwrap();
+    approx_eq(
+        &vector_result.outputs[0].try_to_vec::<f64>().unwrap(),
+        &[5.0],
+    );
+    approx_eq(
+        &vector_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[4.0 / 5.0],
+    );
+
+    let matrix = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let dmatrix = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let matrix_result = jvp(
+        |inputs| {
+            inputs[0]
+                .matrix_norm(tenferro::MatrixNormOrd::Fro, Some((0, 1)), false)
+                .map(|out| vec![out])
+        },
+        &[matrix],
+        &[Some(dmatrix)],
+    )
+    .unwrap();
+    approx_eq(
+        &matrix_result.outputs[0].try_to_vec::<f64>().unwrap(),
+        &[5.0],
+    );
+    approx_eq(
+        &matrix_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[4.0 / 5.0],
     );
 }

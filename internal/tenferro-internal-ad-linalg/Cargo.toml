@@ -17,6 +17,7 @@ tenferro-internal-error = { path = "../tenferro-internal-error" }
 tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
 tenferro-internal-runtime = { path = "../tenferro-internal-runtime" }
 tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
 tenferro-linalg = { path = "../../tenferro-linalg" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 chainrules-core.workspace = true

@@ -13,6 +13,7 @@ The sections below are tenferro-specific additions and overrides.
 
 Before implementation work, review `REPOSITORY_RULES.md`.
 Before creating a PR, review `REPOSITORY_RULES.md` again.
+Before touching AD rules, oracle replay, or linearized boundary code, review `REPOSITORY_RULES.md` first.
 
 ## Current Implementation Status
 

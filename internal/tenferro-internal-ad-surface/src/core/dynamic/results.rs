@@ -1,7 +1,6 @@
 use crate::Tensor;
 use tenferro_internal_ad_linalg::{
-    DynEigValues, DynEigenValues, DynLstsqValues, DynLuValues, DynQrValues, DynSlogdetValues,
-    DynSvdValues,
+    DynEigValues, DynEigenValues, DynLuValues, DynQrValues, DynSlogdetValues, DynSvdValues,
 };
 
 #[derive(Debug)]
@@ -12,8 +11,10 @@ pub struct QrResult {
 
 #[derive(Debug)]
 pub struct LstsqResult {
-    pub x: Tensor,
-    pub residual: Tensor,
+    pub solution: Tensor,
+    pub residuals: Tensor,
+    pub rank: Vec<usize>,
+    pub singular_values: Tensor,
 }
 
 #[derive(Debug)]
@@ -30,7 +31,7 @@ pub struct EigResult {
 }
 
 #[derive(Debug)]
-pub struct EigenResult {
+pub struct EighResult {
     pub values: Tensor,
     pub vectors: Tensor,
 }
@@ -57,15 +58,6 @@ impl From<DynQrValues> for QrResult {
     }
 }
 
-impl From<DynLstsqValues> for LstsqResult {
-    fn from(value: DynLstsqValues) -> Self {
-        Self {
-            x: Tensor::from_value(value.x),
-            residual: Tensor::from_value(value.residual),
-        }
-    }
-}
-
 impl From<DynLuValues> for LuResult {
     fn from(value: DynLuValues) -> Self {
         Self {
@@ -85,7 +77,7 @@ impl From<DynEigValues> for EigResult {
     }
 }
 
-impl From<DynEigenValues> for EigenResult {
+impl From<DynEigenValues> for EighResult {
     fn from(value: DynEigenValues) -> Self {
         Self {
             values: Tensor::from_value(value.values),

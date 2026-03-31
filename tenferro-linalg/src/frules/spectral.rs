@@ -121,7 +121,7 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv_frule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -158,8 +158,8 @@ where
         let ap_b = &ap_data[batch * n * m..(batch + 1) * n * m];
         let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
 
-        let dat = transpose(da_b, m, n); // n×m
-        let apt = transpose(ap_b, n, m); // m×n
+        let dat = adjoint_transpose(da_b, m, n); // n×m
+        let apt = adjoint_transpose(ap_b, n, m); // m×n
 
         // Term 1: -A+ dA A+ (n×m × m×n × n×m = n×m)
         let ap_da = backend_mat_mul(ctx, ap_b, n, m, da_b, n)?;

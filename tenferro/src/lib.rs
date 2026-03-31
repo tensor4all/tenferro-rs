@@ -36,10 +36,11 @@
 //! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
 //! [`Tensor::solve`], [`Tensor::solve_triangular`], [`Tensor::det`],
 //! [`Tensor::inv`], [`Tensor::slogdet`], [`Tensor::cholesky`],
-//! [`Tensor::lstsq`], [`Tensor::lu`], [`Tensor::norm`], [`Tensor::qr`],
-//! [`Tensor::svd`], [`Tensor::eig`], [`Tensor::eigen`], [`Tensor::pinv`], and
-//! [`Tensor::matrix_exp`] require an installed runtime via [`set_default_runtime`]
-//! or [`runtime::with_runtime`].
+//! [`Tensor::lstsq`], [`Tensor::lu`], [`Tensor::norm`],
+//! [`Tensor::vector_norm`], [`Tensor::matrix_norm`], [`Tensor::qr`],
+//! [`Tensor::svd`], [`Tensor::eig`], [`Tensor::eigh`], [`Tensor::pinv`],
+//! and [`Tensor::matrix_exp`] require an installed runtime via
+//! [`set_default_runtime`] or [`runtime::with_runtime`].
 
 mod core;
 pub mod error;
@@ -50,7 +51,7 @@ mod scalar_value;
 pub mod snapshot;
 
 pub use core::{
-    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    CholeskyExResult, EigResult, EighResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuPivot, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult,
     SvdResult, Tensor,
 };
@@ -61,7 +62,7 @@ pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 pub use tenferro_internal_ad_surface::{
     backward, grad, with_ad_policy, AdExecutionPolicy, BackwardOptions, CheckpointHint,
-    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, NormKind, Schema, SlotSchema,
-    SvdOptions, Value,
+    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, MatrixNormOrd, NormKind, Schema,
+    SlotSchema, SvdOptions, Value, VectorNormOrd,
 };
 pub use tenferro_tensor::MemoryOrder;

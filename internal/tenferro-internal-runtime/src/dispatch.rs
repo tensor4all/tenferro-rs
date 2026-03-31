@@ -85,35 +85,69 @@ impl<T> ScaledRealLinalgDispatchValue for T where
 {
 }
 
+pub trait ScaledLinalgDispatchValue:
+    crate::contracts::LinalgRuntimeValue
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
+impl<T> ScaledLinalgDispatchValue for T where
+    T: crate::contracts::LinalgRuntimeValue
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
 pub trait NormLinalgDispatchValue:
-    crate::contracts::RealLinalgRuntimeValue
+    crate::contracts::LinalgRuntimeValue
     + tenferro_linalg::NormPrimal<CpuContext>
     + tenferro_linalg::NormPrimal<CudaContext>
     + tenferro_linalg::NormPrimal<RocmContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
 {
 }
 
 impl<T> NormLinalgDispatchValue for T where
-    T: crate::contracts::RealLinalgRuntimeValue
+    T: crate::contracts::LinalgRuntimeValue
         + tenferro_linalg::NormPrimal<CpuContext>
         + tenferro_linalg::NormPrimal<CudaContext>
         + tenferro_linalg::NormPrimal<RocmContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
 {
 }
 
 pub trait SlogdetLinalgDispatchValue:
-    crate::contracts::RealLinalgRuntimeValue
+    crate::contracts::LinalgRuntimeValue
     + tenferro_linalg::SlogdetDispatch<CpuContext>
+    + tenferro_linalg::SlogdetFruleDispatch<CpuContext>
+    + tenferro_linalg::SlogdetRruleDispatch<CpuContext>
     + tenferro_linalg::SlogdetDispatch<CudaContext>
+    + tenferro_linalg::SlogdetFruleDispatch<CudaContext>
+    + tenferro_linalg::SlogdetRruleDispatch<CudaContext>
     + tenferro_linalg::SlogdetDispatch<RocmContext>
+    + tenferro_linalg::SlogdetFruleDispatch<RocmContext>
+    + tenferro_linalg::SlogdetRruleDispatch<RocmContext>
 {
 }
 
 impl<T> SlogdetLinalgDispatchValue for T where
-    T: crate::contracts::RealLinalgRuntimeValue
+    T: crate::contracts::LinalgRuntimeValue
         + tenferro_linalg::SlogdetDispatch<CpuContext>
+        + tenferro_linalg::SlogdetFruleDispatch<CpuContext>
+        + tenferro_linalg::SlogdetRruleDispatch<CpuContext>
         + tenferro_linalg::SlogdetDispatch<CudaContext>
+        + tenferro_linalg::SlogdetFruleDispatch<CudaContext>
+        + tenferro_linalg::SlogdetRruleDispatch<CudaContext>
         + tenferro_linalg::SlogdetDispatch<RocmContext>
+        + tenferro_linalg::SlogdetFruleDispatch<RocmContext>
+        + tenferro_linalg::SlogdetRruleDispatch<RocmContext>
 {
 }
 

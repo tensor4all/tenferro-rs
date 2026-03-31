@@ -21,7 +21,8 @@ The current public surface is intentionally narrow:
   - elementwise/reduction: `add`, `exp`, `sum`
   - tensor contraction: `einsum`
   - linalg: `solve`, `solve_triangular`, `det`, `inv`, `slogdet`, `cholesky`,
-    `lstsq`, `lu`, `norm`, `qr`, `svd`, `eig`, `eigen`, `pinv`, `matrix_exp`
+    `lstsq`, `lu`, `norm`, `vector_norm`, `matrix_norm`, `qr`, `svd`, `eig`,
+    `eigh`, `pinv`, `matrix_exp`
 - Runtime control:
   - `RuntimeContext`
   - `set_default_runtime`
@@ -49,19 +50,21 @@ promise higher-order forward-mode or HVP support.
 | einsum | `Tensor::einsum` | real + complex |
 | solve | `Tensor::solve` | real + complex |
 | solve_triangular | `Tensor::solve_triangular` | real + complex |
-| det | `Tensor::det` | real only |
-| inv | `Tensor::inv` | real only |
-| slogdet | `Tensor::slogdet` | real only |
-| cholesky | `Tensor::cholesky` | real only |
+| det | `Tensor::det` | real + complex |
+| inv | `Tensor::inv` | real + complex |
+| slogdet | `Tensor::slogdet` | real + complex |
+| cholesky | `Tensor::cholesky` | real + complex |
 | lstsq | `Tensor::lstsq` | real only |
 | lu | `Tensor::lu` | real + complex |
 | norm | `Tensor::norm` | real only |
+| vector_norm | `Tensor::vector_norm` | real + complex, current slice: rank-1 with `dim=None`, `keepdim=false`, `ord=P(2)` |
+| matrix_norm | `Tensor::matrix_norm` | real + complex, current slice: rank-2 with `dim=None` or `(0, 1)`, `keepdim=false`, `ord=Fro` |
 | qr | `Tensor::qr` | real + complex |
 | svd | `Tensor::svd` | real + complex |
 | eig | `Tensor::eig` | real input, complex outputs |
-| eigen | `Tensor::eigen` | real only |
-| pinv | `Tensor::pinv` | real only |
-| matrix_exp | `Tensor::matrix_exp` | real only |
+| eigh | `Tensor::eigh` | real + complex Hermitian input |
+| pinv | `Tensor::pinv` | real + complex |
+| matrix_exp | `Tensor::matrix_exp` | real + complex |
 
 At the current `Tensor` seam, all operations with internal first-order
 `frule/rrule` coverage are exposed on the public dynamic AD surface.
@@ -83,10 +86,12 @@ runtime:
 - `Tensor::lstsq`
 - `Tensor::lu`
 - `Tensor::norm`
+- `Tensor::vector_norm`
+- `Tensor::matrix_norm`
 - `Tensor::qr`
 - `Tensor::svd`
 - `Tensor::eig`
-- `Tensor::eigen`
+- `Tensor::eigh`
 - `Tensor::pinv`
 - `Tensor::matrix_exp`
 

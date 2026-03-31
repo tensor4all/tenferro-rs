@@ -117,6 +117,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                         replay_solve(record)
                     }
                 }
+                ReplayKind::SolveTriangularIdentity => replay_solve_triangular(record),
                 ReplayKind::CholeskyIdentity => replay_cholesky(record),
                 ReplayKind::InvIdentity => replay_inv(record),
                 ReplayKind::DetIdentity => replay_det(record),
@@ -434,6 +435,10 @@ fn decode_input_map_like_typed<T: OracleDbScalar>(
 fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String> {
     match (record.op.as_str(), record.family.as_str(), key) {
         ("solve", "identity", "value") => Ok(solve_rhs_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
+        ("solve_triangular", "identity", "value") => Ok(solve_rhs_core_rank(
             record.inputs.get("a").unwrap(),
             record.inputs.get("b").unwrap(),
         )),
@@ -2036,8 +2041,8 @@ fn replay_numerical_identity(record: &CaseRecord) -> Result<bool, String> {
 
 fn replay_value_key(record: &CaseRecord) -> Result<&'static str, String> {
     match record.op.as_str() {
-        "solve" | "cholesky" | "det" | "inv" | "lu_solve" | "cond" | "matrix_power"
-        | "matrix_exp" | "pinv" | "pinv_singular" => Ok("value"),
+        "solve" | "solve_triangular" | "cholesky" | "det" | "inv" | "lu_solve" | "cond"
+        | "matrix_power" | "matrix_exp" | "pinv" | "pinv_singular" => Ok("value"),
         "slogdet" => Ok("output_0"),
         "solve_ex" | "cholesky_ex" | "inv_ex" | "lu_factor" | "lu_factor_ex" => Ok("output_0"),
         _ => Err(format!("no replay value key for op {}", record.op)),
@@ -2057,6 +2062,120 @@ fn case_suffix_index(record: &CaseRecord) -> Result<usize, String> {
         return Err(format!("case ids must be 1-based: {}", record.case_id));
     }
     Ok(index)
+}
+
+fn required_bool_kwarg(record: &CaseRecord, key: &str) -> Result<bool, String> {
+    record
+        .op_kwargs
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| format!("op_kwargs.{key} for {} must be a bool", record.case_id))
+}
+
+fn solve_triangular_flags(record: &CaseRecord) -> Result<(bool, bool, bool), String> {
+    Ok((
+        required_bool_kwarg(record, "left")?,
+        required_bool_kwarg(record, "upper")?,
+        required_bool_kwarg(record, "unitriangular")?,
+    ))
+}
+
+fn tensor_with_unit_diagonal(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+    let dims = tensor.dims();
+    if dims.len() < 2 || dims[0] != dims[1] {
+        return Err(format!(
+            "unit-diagonal adjustment expects square matrix batches, got {:?}",
+            dims
+        ));
+    }
+    let n = dims[0];
+    let batch_count = crate::decode::batch_count(&dims[2..]);
+    let mut data = tensor_data_col_major(tensor);
+    for batch in 0..batch_count {
+        let base = batch * n * n;
+        for i in 0..n {
+            data[base + i + i * n] = 1.0;
+        }
+    }
+    Ok(crate::decode::tensor_from_col_major(data, dims))
+}
+
+fn tensor_with_zero_diagonal(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+    let dims = tensor.dims();
+    if dims.len() < 2 || dims[0] != dims[1] {
+        return Err(format!(
+            "diagonal masking expects square matrix batches, got {:?}",
+            dims
+        ));
+    }
+    let n = dims[0];
+    let batch_count = crate::decode::batch_count(&dims[2..]);
+    let mut data = tensor_data_col_major(tensor);
+    for batch in 0..batch_count {
+        let base = batch * n * n;
+        for i in 0..n {
+            data[base + i + i * n] = 0.0;
+        }
+    }
+    Ok(crate::decode::tensor_from_col_major(data, dims))
+}
+
+fn solve_triangular_runtime_inputs(
+    a: &Tensor<f64>,
+    da: &Tensor<f64>,
+    unitriangular: bool,
+) -> Result<(Tensor<f64>, Tensor<f64>), String> {
+    if unitriangular {
+        Ok((
+            tensor_with_unit_diagonal(a)?,
+            tensor_with_zero_diagonal(da)?,
+        ))
+    } else {
+        Ok((a.clone(), da.clone()))
+    }
+}
+
+fn solve_triangular_jvp_vjp(
+    a: &Tensor<f64>,
+    b: &Tensor<f64>,
+    da: &Tensor<f64>,
+    db: &Tensor<f64>,
+    cotangent: &Tensor<f64>,
+    left: bool,
+    upper: bool,
+    unitriangular: bool,
+) -> Result<(Tensor<f64>, Tensor<f64>, Tensor<f64>), String> {
+    let (a_eff, da_eff) = solve_triangular_runtime_inputs(a, da, unitriangular)?;
+    let mut ctx = CpuContext::new(1);
+
+    let (dx, mut grad_a, grad_b) = if left {
+        let (_x, dx) = solve_triangular_frule(&mut ctx, &a_eff, b, &da_eff, db, upper)
+            .map_err(|err| format!("solve_triangular_frule failed: {err}"))?;
+        let grad = solve_triangular_rrule(&mut ctx, &a_eff, b, cotangent, upper)
+            .map_err(|err| format!("solve_triangular_rrule failed: {err}"))?;
+        (dx, grad.a, grad.b)
+    } else {
+        let a_t = batched_transpose(&a_eff)?;
+        let b_t = batched_transpose(b)?;
+        let da_t = batched_transpose(&da_eff)?;
+        let db_t = batched_transpose(db)?;
+        let cot_t = batched_transpose(cotangent)?;
+        let (_x_t, dx_t) = solve_triangular_frule(&mut ctx, &a_t, &b_t, &da_t, &db_t, !upper)
+            .map_err(|err| format!("solve_triangular right-side frule failed: {err}"))?;
+        let grad_t = solve_triangular_rrule(&mut ctx, &a_t, &b_t, &cot_t, !upper)
+            .map_err(|err| format!("solve_triangular right-side rrule failed: {err}"))?;
+        (
+            batched_transpose(&dx_t)?,
+            batched_transpose(&grad_t.a)?,
+            batched_transpose(&grad_t.b)?,
+        )
+    };
+
+    if unitriangular {
+        grad_a = tensor_with_zero_diagonal(&grad_a)?;
+    }
+
+    Ok((dx, grad_a, grad_b))
 }
 
 fn replay_solve(record: &CaseRecord) -> Result<bool, String> {
@@ -2112,6 +2231,79 @@ fn replay_solve(record: &CaseRecord) -> Result<bool, String> {
             (String::from("b"), grad.b),
         ]))
     })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_solve_triangular(record: &CaseRecord) -> Result<bool, String> {
+    let inputs = decode_inputs(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like(record, &probe.direction)?;
+    let cotangent = decode_observable_map(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let (left, upper, unitriangular) = solve_triangular_flags(record)?;
+
+    let (dx, grad_a, grad_b) = solve_triangular_jvp_vjp(
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        direction.get("a").unwrap(),
+        direction.get("b").unwrap(),
+        cotangent.get("value").unwrap(),
+        left,
+        upper,
+        unitriangular,
+    )?;
+
+    let actual_jvp = BTreeMap::from([(String::from("value"), dx)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad_a), (String::from("b"), grad_b)]);
+    compare_tensor_maps(
+        "solve_triangular.jvp.fd",
+        &expected_jvp_fd,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps(
+        "solve_triangular.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps(
+        "solve_triangular.vjp",
+        &expected_vjp,
+        &actual_vjp,
+        rtol,
+        atol,
+    )?;
+
+    let hvp_checked = validate_hvp(
+        "solve_triangular",
+        record,
+        &inputs,
+        &direction,
+        probe,
+        |perturbed| {
+            let (_dx, grad_a, grad_b) = solve_triangular_jvp_vjp(
+                perturbed.get("a").unwrap(),
+                perturbed.get("b").unwrap(),
+                direction.get("a").unwrap(),
+                direction.get("b").unwrap(),
+                cotangent.get("value").unwrap(),
+                left,
+                upper,
+                unitriangular,
+            )?;
+            Ok(BTreeMap::from([
+                (String::from("a"), grad_a),
+                (String::from("b"), grad_b),
+            ]))
+        },
+    )?;
     check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
 }

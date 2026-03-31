@@ -2582,6 +2582,7 @@ fn slogdet_rrule_fd_through_logabsdet() {
     let rrule_fn = |x: &Tensor<f64>, co_log: &Tensor<f64>| {
         let mut b = CpuContext::new(1);
         let co = SlogdetCotangent {
+            sign: None,
             logabsdet: Some(co_log.clone()),
         };
         slogdet_rrule(&mut b, x, &co).unwrap()
@@ -4191,7 +4192,19 @@ fn solve_rhs_nrhs_zero() {
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // b with nrhs=0
     let b: Tensor<f64> = Tensor::from_vec(vec![], &[2, 0], &[1, 2], 0).unwrap();
-    assert!(solve(&mut ctx, &a, &b).is_err());
+    let x = solve(&mut ctx, &a, &b).unwrap();
+    assert_eq!(x.dims(), &[2, 0]);
+    assert!(x.is_empty());
+}
+
+#[test]
+fn solve_triangular_rhs_nrhs_zero() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let b: Tensor<f64> = Tensor::from_vec(vec![], &[2, 0], &[1, 2], 0).unwrap();
+    let x = solve_triangular(&mut ctx, &a, &b, true).unwrap();
+    assert_eq!(x.dims(), &[2, 0]);
+    assert!(x.is_empty());
 }
 
 #[test]
@@ -5637,6 +5650,7 @@ fn slogdet_rrule_execution() {
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let co_logabsdet = make_tensor(vec![1.0], &[]);
     let cotangent = SlogdetCotangent {
+        sign: None,
         logabsdet: Some(co_logabsdet),
     };
     let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
@@ -6154,11 +6168,36 @@ fn det_negative() {
 }
 
 #[test]
+fn det_frule_zero_by_zero_returns_zero_tangent() {
+    let mut ctx = CpuContext::new(1);
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+    let da: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+    let (value, tangent) = det_frule(&mut ctx, &a, &da).unwrap();
+    assert_eq!(value.dims(), &[] as &[usize]);
+    assert_eq!(tensor_data(&value), vec![1.0]);
+    assert_eq!(tangent.dims(), &[] as &[usize]);
+    assert_eq!(tensor_data(&tangent), vec![0.0]);
+}
+
+#[test]
+fn det_rrule_zero_by_zero_returns_empty_gradient() {
+    let mut ctx = CpuContext::new(1);
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+    let cotangent = make_tensor(vec![1.0], &[]);
+    let grad = det_rrule(&mut ctx, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[0, 0]);
+    assert!(tensor_data(&grad).is_empty());
+}
+
+#[test]
 fn slogdet_rrule_none_cotangent() {
     // Line 3608: slogdet_rrule with logabsdet=None -> skip inner block.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
-    let cotangent = SlogdetCotangent { logabsdet: None };
+    let cotangent = SlogdetCotangent {
+        sign: None,
+        logabsdet: None,
+    };
     let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
     // With None cotangent, gradient should be all zeros
     let gd = tensor_data(&grad);

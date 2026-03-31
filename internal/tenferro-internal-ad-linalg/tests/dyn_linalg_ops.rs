@@ -7,9 +7,10 @@ use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use tenferro_internal_ad_linalg::{
-    det_dyn_value, eig_dyn_value, eigen_dyn_value, lstsq_dyn_values, lu_dyn_value, norm_dyn_value,
-    qr_dyn_value, solve_dyn_values, svd_dyn_value, DetOp, EigOp, EigenOp, LstsqOp, LuOp, NormOp,
-    QrOp, SolveOp, SvdOp,
+    cholesky_dyn_value, det_dyn_value, eig_dyn_value, eigen_dyn_value, inv_dyn_value,
+    lstsq_dyn_values, lu_dyn_value, matrix_exp_dyn_value, norm_dyn_value, pinv_dyn_value,
+    qr_dyn_value, slogdet_dyn_value, solve_dyn_values, svd_dyn_value, CholeskyOp, DetOp, EigOp,
+    EigenOp, InvOp, LstsqOp, LuOp, MatrixExpOp, NormOp, PInvOp, QrOp, SlogdetOp, SolveOp, SvdOp,
 };
 
 fn dyn_f64(values: &[f64], dims: &[usize]) -> DynTensor {
@@ -21,28 +22,21 @@ fn dyn_scalar(value: f64) -> DynTensor {
     dyn_f64(&[value], &[])
 }
 
+fn dyn_c64(values: &[Complex64], dims: &[usize]) -> DynTensor {
+    let dense = Tensor::<Complex64>::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap();
+    DynTensor::C64(StructuredTensor::from(dense))
+}
+
 fn f64_values(tensor: &DynTensor) -> Vec<f64> {
     match tensor {
-        DynTensor::F64(value) => value
-            .to_dense()
-            .unwrap()
-            .buffer()
-            .as_slice()
-            .unwrap()
-            .to_vec(),
+        DynTensor::F64(value) => value.to_dense().unwrap().to_vec(),
         other => panic!("expected f64 dyn tensor, got {other:?}"),
     }
 }
 
 fn c64_values(tensor: &DynTensor) -> Vec<Complex64> {
     match tensor {
-        DynTensor::C64(value) => value
-            .to_dense()
-            .unwrap()
-            .buffer()
-            .as_slice()
-            .unwrap()
-            .to_vec(),
+        DynTensor::C64(value) => value.to_dense().unwrap().to_vec(),
         other => panic!("expected c64 dyn tensor, got {other:?}"),
     }
 }
@@ -61,6 +55,17 @@ fn assert_vec_close(lhs: &[f64], rhs: &[f64], tol: f64) {
         "left: {lhs:?}\nright: {rhs:?}\nmax_abs_diff: {}",
         max_abs_diff(lhs, rhs)
     );
+}
+
+fn assert_complex_vec_close(lhs: &[Complex64], rhs: &[Complex64], tol: f64) {
+    assert_eq!(lhs.len(), rhs.len());
+    for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
+        let diff = (*lhs - *rhs).norm();
+        assert!(
+            diff <= tol,
+            "left: {lhs:?}\nright: {rhs:?}\nabs_diff: {diff}"
+        );
+    }
 }
 
 fn assert_all_none(values: &[Option<DynTensor>]) {
@@ -253,8 +258,10 @@ fn dyn_linalg_ops_lstsq_and_lu_linearized_jvp_preserve_packaging_and_auxiliary_o
     let b = new_reverse_leaf(dyn_f64(&[4.0, 9.0], &[2]));
 
     let lstsq = lstsq_dyn_values(&a, &b).unwrap();
-    assert_eq!(lstsq.x.primal().dims(), &[2]);
-    assert_eq!(lstsq.residual.primal().dims(), &[2]);
+    assert_eq!(lstsq.solution.primal().dims(), &[2]);
+    assert_eq!(lstsq.residuals.primal().dims(), &[2]);
+    assert_eq!(lstsq.rank, vec![2]);
+    assert_eq!(f64_values(&lstsq.singular_values), vec![3.0, 2.0]);
 
     let lstsq_op = LstsqOp;
     let lstsq_outputs = lstsq_op.primal(&[a.primal(), b.primal()]).unwrap();
@@ -332,4 +339,330 @@ fn dyn_linalg_ops_eig_and_eigen_linearized_jvp_preserve_complex_and_real_packagi
     assert_eq!(eigen_jvp[0].as_ref().unwrap().dims(), &[2]);
     assert_eq!(eigen_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
     assert_eq!(f64_values(eigen_jvp[0].as_ref().unwrap()), vec![1.0, 0.0]);
+}
+
+#[test]
+fn dyn_linalg_ops_complex_eigen_linearized_jvp_and_vjp_support() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = new_reverse_leaf(dyn_c64(
+        &[
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+        &[2, 2],
+    ));
+
+    let eigen = eigen_dyn_value(&a).unwrap();
+    assert_eq!(eigen.values.primal().dims(), &[2]);
+    assert_eq!(eigen.vectors.primal().dims(), &[2, 2]);
+
+    let eigen_op = EigenOp;
+    let eigen_outputs = eigen_op.primal(&[a.primal()]).unwrap();
+    let eigen_linearized = eigen_op.linearize(&[a.primal()], &eigen_outputs).unwrap();
+    assert_all_none(&eigen_linearized.jvp(&[None]).unwrap());
+
+    let eigen_jvp = eigen_linearized
+        .jvp(&[Some(dyn_c64(
+            &[
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+            ],
+            &[2, 2],
+        ))])
+        .unwrap();
+    assert_eq!(eigen_jvp.len(), 2);
+    assert_eq!(eigen_jvp[0].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(eigen_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
+    assert_eq!(f64_values(eigen_jvp[0].as_ref().unwrap()), vec![1.0, 0.0]);
+
+    let cotangent_values = dyn_f64(&[1.0, 1.0], &[2]);
+    let grad = eigen
+        .values
+        .grad_wrt_with_seed(cotangent_values, &[&a])
+        .unwrap();
+    assert_eq!(
+        c64_values(grad[0].as_ref().unwrap()),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ]
+    );
+}
+
+#[test]
+fn dyn_linalg_ops_batch_a_complex_jvp_and_vjp_support() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let z1 = Complex64::new(1.0, 1.0);
+    let z2 = Complex64::new(2.0, -1.0);
+    let a = new_reverse_leaf(dyn_c64(
+        &[z1, Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0), z2],
+        &[2, 2],
+    ));
+    let da = dyn_c64(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let e11 = dyn_c64(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    );
+
+    let inv = inv_dyn_value(&a).unwrap();
+    let inv_op = InvOp;
+    let inv_outputs = inv_op.primal(&[a.primal()]).unwrap();
+    assert_eq!(inv.primal().dims(), &[2, 2]);
+    let inv_linearized = inv_op.linearize(&[a.primal()], &inv_outputs).unwrap();
+    let inv_jvp = inv_linearized.jvp(&[Some(da.clone())]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(inv_jvp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+    let inv_vjp = inv_linearized.vjp(&[Some(e11.clone())], &[true]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(inv_vjp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.0, -0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+
+    let hermitian = new_reverse_leaf(dyn_c64(
+        &[
+            Complex64::new(4.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(9.0, 0.0),
+        ],
+        &[2, 2],
+    ));
+    let dhermitian = dyn_c64(
+        &[
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    );
+    let cholesky = cholesky_dyn_value(&hermitian).unwrap();
+    assert_eq!(cholesky.primal().dims(), &[2, 2]);
+    let cholesky_op = CholeskyOp;
+    let cholesky_outputs = cholesky_op.primal(&[hermitian.primal()]).unwrap();
+    let cholesky_linearized = cholesky_op
+        .linearize(&[hermitian.primal()], &cholesky_outputs)
+        .unwrap();
+    let cholesky_jvp = cholesky_linearized
+        .jvp(&[Some(dhermitian.clone())])
+        .unwrap();
+    assert_complex_vec_close(
+        &c64_values(cholesky_jvp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.5, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+    let cholesky_vjp = cholesky_linearized
+        .vjp(&[Some(e11.clone())], &[true])
+        .unwrap();
+    assert_complex_vec_close(
+        &c64_values(cholesky_vjp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.25, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+
+    let pinv = pinv_dyn_value(&a, None).unwrap();
+    assert_eq!(pinv.primal().dims(), &[2, 2]);
+    let pinv_op = PInvOp::new(None);
+    let pinv_outputs = pinv_op.primal(&[a.primal()]).unwrap();
+    let pinv_linearized = pinv_op.linearize(&[a.primal()], &pinv_outputs).unwrap();
+    let pinv_jvp = pinv_linearized.jvp(&[Some(da.clone())]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(pinv_jvp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+    let pinv_vjp = pinv_linearized.vjp(&[Some(e11.clone())], &[true]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(pinv_vjp[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.0, -0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+
+    let matrix_exp = matrix_exp_dyn_value(&a).unwrap();
+    assert_eq!(matrix_exp.primal().dims(), &[2, 2]);
+    let matrix_exp_op = MatrixExpOp;
+    let matrix_exp_outputs = matrix_exp_op.primal(&[a.primal()]).unwrap();
+    let matrix_exp_linearized = matrix_exp_op
+        .linearize(&[a.primal()], &matrix_exp_outputs)
+        .unwrap();
+    let matrix_exp_jvp = matrix_exp_linearized.jvp(&[Some(da)]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(matrix_exp_jvp[0].as_ref().unwrap()),
+        &[
+            z1.exp(),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+    let matrix_exp_vjp = matrix_exp_linearized.vjp(&[Some(e11)], &[true]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(matrix_exp_vjp[0].as_ref().unwrap()),
+        &[
+            z1.conj().exp(),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        1.0e-12,
+    );
+}
+
+#[test]
+fn dyn_linalg_ops_complex_det_and_slogdet_jvp_and_vjp_support() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = new_reverse_leaf(dyn_c64(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+        &[2, 2],
+    ));
+    let da = dyn_c64(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    );
+
+    let det = det_dyn_value(&a).unwrap();
+    assert_complex_vec_close(
+        &c64_values(det.primal()),
+        &[Complex64::new(3.0, 1.0)],
+        1.0e-12,
+    );
+    let det_grad = det
+        .grad_wrt_with_seed(dyn_c64(&[Complex64::new(1.0, 0.0)], &[]), &[&a])
+        .unwrap();
+    assert_complex_vec_close(
+        &c64_values(det_grad[0].as_ref().unwrap()),
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, -1.0),
+        ],
+        1.0e-12,
+    );
+
+    let det_op = DetOp;
+    let det_outputs = det_op.primal(&[a.primal()]).unwrap();
+    let det_linearized = det_op.linearize(&[a.primal()], &det_outputs).unwrap();
+    assert_all_none(&det_linearized.jvp(&[None]).unwrap());
+    let det_jvp = det_linearized.jvp(&[Some(da.clone())]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(det_jvp[0].as_ref().unwrap()),
+        &[Complex64::new(2.0, -1.0)],
+        1.0e-12,
+    );
+
+    let slogdet = slogdet_dyn_value(&a).unwrap();
+    assert_complex_vec_close(
+        &c64_values(slogdet.sign.primal()),
+        &[Complex64::new(3.0 / 10.0_f64.sqrt(), 1.0 / 10.0_f64.sqrt())],
+        1.0e-12,
+    );
+    assert_vec_close(
+        &f64_values(slogdet.logabsdet.primal()),
+        &[0.5 * 10.0_f64.ln()],
+        1.0e-12,
+    );
+    let slogdet_grads = slogdet
+        .logabsdet
+        .grad_wrt_with_seed(dyn_scalar(1.0), &[&a])
+        .unwrap();
+    assert_complex_vec_close(
+        &c64_values(slogdet_grads[0].as_ref().unwrap()),
+        &[
+            Complex64::new(0.5, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.4, -0.2),
+        ],
+        1.0e-12,
+    );
+
+    let slogdet_op = SlogdetOp;
+    let slogdet_outputs = slogdet_op.primal(&[a.primal()]).unwrap();
+    let slogdet_linearized = slogdet_op
+        .linearize(&[a.primal()], &slogdet_outputs)
+        .unwrap();
+    let slogdet_none = slogdet_linearized.jvp(&[None]).unwrap();
+    assert!(slogdet_none.iter().all(Option::is_none));
+    let slogdet_jvp = slogdet_linearized.jvp(&[Some(da)]).unwrap();
+    assert_complex_vec_close(
+        &c64_values(slogdet_jvp[0].as_ref().unwrap()),
+        &[Complex64::new(
+            0.5 / 10.0_f64.sqrt(),
+            -1.5 / 10.0_f64.sqrt(),
+        )],
+        1.0e-12,
+    );
+    assert_vec_close(
+        &f64_values(slogdet_jvp[1].as_ref().unwrap()),
+        &[0.5],
+        1.0e-12,
+    );
 }

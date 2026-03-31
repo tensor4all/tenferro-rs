@@ -1,4 +1,6 @@
 use super::*;
+use num_traits::{Float, One};
+use tenferro_algebra::Conjugate;
 
 /// Forward-mode AD rule for LU (JVP / pushforward).
 ///
@@ -224,13 +226,14 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eigen_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn eigen_frule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(EigenResult<T>, EigenResult<T>)>
+) -> AdResult<(EigenResult<T, T::Real>, EigenResult<T, T::Real>)>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + Conjugate,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -242,9 +245,9 @@ where
     // Regularization for the F-matrix: prevents division by zero when two
     // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
     // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
-    let eta: T = {
-        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
-        let eps = T::epsilon();
+    let eta: T::Real = {
+        let raw: T::Real = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::Real::epsilon();
         if raw < eps {
             eps
         } else {
@@ -256,7 +259,7 @@ where
     let (e_data, _) = extract_data(&result.values)?;
     let (da_data, _) = extract_data(tangent)?;
 
-    let mut de_data = vec![T::zero(); n * bc];
+    let mut de_data = vec![T::Real::zero(); n * bc];
     let mut dv_data = vec![T::zero(); n * n * bc];
 
     for b in 0..bc {
@@ -264,30 +267,30 @@ where
         let e_b = &e_data[b * n..(b + 1) * n];
         let da_b = &da_data[b * n * n..(b + 1) * n * n];
 
-        // C = V^T dA V (n×n)
-        let vt_da = backend_mat_mul(ctx, &transpose(v_b, n, n), n, n, da_b, n)?;
-        let c = backend_mat_mul(ctx, &vt_da, n, n, v_b, n)?;
+        // C = V^H dA V (n×n)
+        let vh_da = backend_mat_mul(ctx, &adjoint_transpose(v_b, n, n), n, n, da_b, n)?;
+        let c = backend_mat_mul(ctx, &vh_da, n, n, v_b, n)?;
 
         // dE = diag(C)
         for i in 0..n {
-            de_data[b * n + i] = c[i + i * n];
+            de_data[b * n + i] = c[i + i * n].real_part();
         }
 
-        // dV = V F ⊙ C where F_ij = 1/(e_i - e_j) for i≠j, 0 diagonal
+        // dV = V * (F ⊙ (C - diag(dE))) where F_ij = 1/(e_j - e_i) for i≠j.
         let mut fc = vec![T::zero(); n * n];
         for i in 0..n {
             for j in 0..n {
                 if i != j {
                     let denom = e_b[j] - e_b[i];
-                    let f_ij = T::one()
+                    let f_ij = T::Real::one()
                         / (denom
                             + eta
-                                * if denom >= T::zero() {
-                                    T::one()
+                                * if denom >= T::Real::zero() {
+                                    T::Real::one()
                                 } else {
-                                    -T::one()
+                                    -T::Real::one()
                                 });
-                    fc[i + j * n] = f_ij * c[i + j * n];
+                    fc[i + j * n] = T::from_real(f_ij) * c[i + j * n];
                 }
             }
         }

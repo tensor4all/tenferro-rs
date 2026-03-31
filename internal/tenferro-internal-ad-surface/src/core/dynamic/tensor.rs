@@ -8,10 +8,10 @@ use tenferro_internal_ad_linalg::{
 use tenferro_internal_ad_ops::{add_dyn_values, einsum_dyn_values, exp_dyn_value, sum_dyn_value};
 use tenferro_internal_frontend_core::tensor_ops::tensor_element;
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, ScalarType, StructuredTensor};
-use tenferro_linalg::{LuPivot, NormKind, SvdOptions};
+use tenferro_linalg::{LuPivot, MatrixNormOrd, NormKind, SvdOptions, VectorNormOrd};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-use super::{EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult};
+use super::{EigResult, EighResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult};
 use crate::{jvp, Error, Result};
 
 pub struct Tensor {
@@ -154,9 +154,16 @@ impl Tensor {
     }
 
     pub fn lstsq(&self, rhs: &Self) -> Result<LstsqResult> {
-        let result: LstsqResult = lstsq_dyn_values(self.value(), rhs.value())?.into();
-        jvp::lstsq_tangents(self, rhs, &result.x, &result.residual)?;
-        Ok(result)
+        let result = lstsq_dyn_values(self.value(), rhs.value())?;
+        let solution = Self::from_value(result.solution);
+        let residuals = Self::from_value(result.residuals);
+        jvp::lstsq_tangents(self, rhs, &solution, &residuals)?;
+        Ok(LstsqResult {
+            solution,
+            residuals,
+            rank: result.rank,
+            singular_values: Tensor::from(result.singular_values),
+        })
     }
 
     pub fn solve_triangular(&self, rhs: &Self, upper: bool) -> Result<Self> {
@@ -205,6 +212,32 @@ impl Tensor {
         Ok(output)
     }
 
+    pub fn vector_norm(
+        &self,
+        ord: VectorNormOrd,
+        dim: Option<&[isize]>,
+        keepdim: bool,
+    ) -> Result<Self> {
+        validate_vector_norm_request(self.ndim(), dim, keepdim)?;
+        let kind = jvp::map_vector_norm_ord(ord)?;
+        let output = Self::from_value(norm_dyn_value(self.value(), kind)?);
+        jvp::vector_norm_tangent(self, &output, ord)?;
+        Ok(output)
+    }
+
+    pub fn matrix_norm(
+        &self,
+        ord: MatrixNormOrd,
+        dim: Option<(isize, isize)>,
+        keepdim: bool,
+    ) -> Result<Self> {
+        validate_matrix_norm_request(self.ndim(), dim, keepdim)?;
+        let kind = jvp::map_matrix_norm_ord(ord)?;
+        let output = Self::from_value(norm_dyn_value(self.value(), kind)?);
+        jvp::matrix_norm_tangent(self, &output, ord)?;
+        Ok(output)
+    }
+
     pub fn qr(&self) -> Result<QrResult> {
         crate::with_default_runtime(|_| Ok(()))?;
         let result: QrResult = qr_dyn_value(self.value())?.into();
@@ -224,8 +257,8 @@ impl Tensor {
         Ok(result)
     }
 
-    pub fn eigen(&self) -> Result<EigenResult> {
-        let result: EigenResult = eigen_dyn_value(self.value())?.into();
+    pub fn eigh(&self) -> Result<EighResult> {
+        let result: EighResult = eigen_dyn_value(self.value())?.into();
         jvp::eigen_tangents(self, &result.values, &result.vectors)?;
         Ok(result)
     }
@@ -311,4 +344,48 @@ impl From<DynTensor> for Tensor {
 
 fn invalid_argument(message: impl Into<String>) -> Error {
     AutodiffError::InvalidArgument(message.into()).into()
+}
+
+fn validate_vector_norm_request(ndim: usize, dim: Option<&[isize]>, keepdim: bool) -> Result<()> {
+    if keepdim {
+        return Err(invalid_argument(
+            "vector_norm currently supports keepdim=false only",
+        ));
+    }
+    if ndim != 1 {
+        return Err(invalid_argument(format!(
+            "vector_norm currently expects a rank-1 tensor, got ndim={ndim}",
+        )));
+    }
+    if dim.is_some() {
+        return Err(invalid_argument(
+            "vector_norm currently supports dim=None only",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_matrix_norm_request(
+    ndim: usize,
+    dim: Option<(isize, isize)>,
+    keepdim: bool,
+) -> Result<()> {
+    if keepdim {
+        return Err(invalid_argument(
+            "matrix_norm currently supports keepdim=false only",
+        ));
+    }
+    if ndim != 2 {
+        return Err(invalid_argument(format!(
+            "matrix_norm currently expects a rank-2 tensor, got ndim={ndim}",
+        )));
+    }
+    if let Some(dim) = dim {
+        if dim != (0, 1) && dim != (1, 0) {
+            return Err(invalid_argument(format!(
+                "matrix_norm currently supports dim=(0, 1) only, got {dim:?}",
+            )));
+        }
+    }
+    Ok(())
 }

@@ -194,6 +194,15 @@ pub struct LstsqResult<T: Scalar> {
     pub residual: Tensor<T>,
 }
 
+/// Auxiliary metadata for least-squares solves.
+#[derive(Debug)]
+pub struct LstsqAuxResult<R: Scalar> {
+    /// Numerical rank per batch item, stored as a batch-shaped real-valued count tensor.
+    pub rank: Tensor<R>,
+    /// Singular values used for the rank estimate.
+    pub singular_values: Tensor<R>,
+}
+
 /// Gradient result for `lstsq_rrule`: cotangents for both `A` and `b`.
 ///
 /// # Examples

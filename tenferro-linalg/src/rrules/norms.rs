@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::ComplexFloat;
 
 /// Reverse-mode AD rule for norm (VJP / pullback).
 ///
@@ -292,4 +293,87 @@ where
     let dims = output_dims(&[m, n], batch_dims);
     tensor_from_data(grad_a, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))
+}
+
+#[doc(hidden)]
+pub fn norm_rrule_complex<T, R, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+    cotangent: &Tensor<R>,
+    kind: NormKind,
+) -> AdResult<Tensor<T>>
+where
+    T: KernelLinalgScalar<Real = R>
+        + ComplexFloat<Real = R>
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
+    T: crate::NormPrimal<C>,
+    R: LinalgScalar<Real = R> + num_traits::Float,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>
+        + tenferro_prims::TensorComplexScaleContextFor<T>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<R>, Context = C>,
+    C::ComplexScaleBackend: tenferro_prims::TensorComplexScalePrims<T, Context = C>,
+    C::Backend: 'static,
+{
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_rrule_complex")
+        .map_err(to_ad_err)?;
+    ensure_complex_norm_ad_supported(kind)?;
+
+    validate_norm_cotangent(cotangent, expected_norm_output_dims(tensor)).map_err(to_ad_err)?;
+
+    let nrm = crate::norm(ctx, tensor, kind).map_err(to_ad_err)?;
+    let zero =
+        crate::prims_bridge::full_like_constant(R::zero(), nrm.dims(), nrm.logical_memory_space())
+            .map_err(to_ad_err)?;
+    let nonzero = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &nrm,
+        &zero,
+        tenferro_prims::ScalarBinaryOp::Greater,
+    )
+    .map_err(to_ad_err)?;
+    let quotient = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        cotangent,
+        &nrm,
+        tenferro_prims::ScalarBinaryOp::Div,
+    )
+    .map_err(to_ad_err)?;
+    let safe_scale = crate::prims_bridge::scalar_where_same_shape(ctx, &nonzero, &quotient, &zero)
+        .map_err(to_ad_err)?;
+    let expanded_scale =
+        broadcast_norm_control_to_input(&safe_scale, tensor.dims()).map_err(to_ad_err)?;
+    crate::prims_bridge::complex_scale_same_shape(ctx, tensor, &expanded_scale).map_err(to_ad_err)
+}
+
+fn ensure_complex_norm_ad_supported(kind: NormKind) -> AdResult<()> {
+    match kind {
+        NormKind::Fro => Ok(()),
+        NormKind::Lp(p) if p == 2.0 => Ok(()),
+        _ => Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "complex norm AD currently supports Fro and vector L2 only, got {kind:?}"
+        ))),
+    }
+}
+
+fn expected_norm_output_dims<T: LinalgScalar>(tensor: &Tensor<T>) -> &[usize] {
+    if tensor.ndim() <= 1 {
+        &[]
+    } else {
+        &tensor.dims()[2..]
+    }
+}
+
+fn broadcast_norm_control_to_input<R: LinalgScalar>(
+    value_by_batch: &Tensor<R>,
+    input_dims: &[usize],
+) -> Result<Tensor<R>> {
+    if input_dims.len() <= 1 {
+        return value_by_batch.reshape(&[1])?.broadcast(input_dims);
+    }
+
+    let mut reshape_dims = vec![1, 1];
+    reshape_dims.extend_from_slice(&input_dims[2..]);
+    value_by_batch.reshape(&reshape_dims)?.broadcast(input_dims)
 }

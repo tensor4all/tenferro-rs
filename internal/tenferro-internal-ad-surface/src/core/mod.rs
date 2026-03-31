@@ -4,7 +4,7 @@ pub use dynamic::DynTensor;
 #[doc(hidden)]
 pub use dynamic::DynTensorTyped;
 pub use dynamic::{
-    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    CholeskyExResult, EigResult, EighResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
     Tensor,
 };

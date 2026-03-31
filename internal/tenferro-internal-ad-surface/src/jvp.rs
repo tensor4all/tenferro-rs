@@ -8,7 +8,7 @@ use tenferro_internal_ad_linalg::{
 };
 use tenferro_internal_ad_ops::{AddOp, EinsumOp, ExpOp, SumOp};
 use tenferro_internal_frontend_core::DynTensor;
-use tenferro_linalg::{LuPivot, NormKind, SvdOptions};
+use tenferro_linalg::{LuPivot, MatrixNormOrd, NormKind, SvdOptions, VectorNormOrd};
 
 use crate::{Error, Result, Tensor};
 
@@ -302,6 +302,46 @@ pub(crate) fn norm_tangent(input: &Tensor, output: &Tensor, kind: NormKind) -> R
     let mut outputs = linearized.jvp(&[tangent_for(input)])?;
     record_tangent(output, outputs.pop().unwrap_or(None));
     Ok(())
+}
+
+pub(crate) fn vector_norm_tangent(
+    input: &Tensor,
+    output: &Tensor,
+    ord: VectorNormOrd,
+) -> Result<()> {
+    norm_tangent(input, output, map_vector_norm_ord(ord)?)
+}
+
+pub(crate) fn matrix_norm_tangent(
+    input: &Tensor,
+    output: &Tensor,
+    ord: MatrixNormOrd,
+) -> Result<()> {
+    norm_tangent(input, output, map_matrix_norm_ord(ord)?)
+}
+
+pub(crate) fn map_vector_norm_ord(ord: VectorNormOrd) -> Result<NormKind> {
+    match ord {
+        VectorNormOrd::P(1.0) => Ok(NormKind::L1),
+        VectorNormOrd::P(p) if p >= 1.0 => Ok(NormKind::Lp(p)),
+        VectorNormOrd::PosInf => Ok(NormKind::Inf),
+        VectorNormOrd::Zero | VectorNormOrd::NegInf | VectorNormOrd::P(_) => Err(invalid_argument(
+            format!("vector_norm order {ord:?} is not implemented yet"),
+        )),
+    }
+}
+
+pub(crate) fn map_matrix_norm_ord(ord: MatrixNormOrd) -> Result<NormKind> {
+    match ord {
+        MatrixNormOrd::Fro => Ok(NormKind::Fro),
+        MatrixNormOrd::Nuc => Ok(NormKind::Nuclear),
+        MatrixNormOrd::One => Ok(NormKind::L1),
+        MatrixNormOrd::Two => Ok(NormKind::Spectral),
+        MatrixNormOrd::PosInf => Ok(NormKind::Inf),
+        MatrixNormOrd::NegOne | MatrixNormOrd::NegTwo | MatrixNormOrd::NegInf => Err(
+            invalid_argument(format!("matrix_norm order {ord:?} is not implemented yet")),
+        ),
+    }
 }
 
 pub(crate) fn eig_tangents(input: &Tensor, values: &Tensor, vectors: &Tensor) -> Result<()> {

@@ -106,17 +106,17 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn cholesky_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn cholesky_frule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + tenferro_algebra::Conjugate,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    // dL = L phi(L^{-1} dA L^{-T})
+    // dL = L phi(L^{-1} dA L^{-H})
     let l = cholesky(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
@@ -134,9 +134,10 @@ where
 
         // L^{-1} dA: solve L x = dA
         let linv_da = backend_solve_tri(ctx, l_b, da_b, n, n, false)?;
-        // (L^{-1} dA) L^{-T}: solve (result) L^T = linv_da → L x^T = linv_da^T
-        let linv_da_linvt_t = backend_solve_tri(ctx, l_b, &transpose(&linv_da, n, n), n, n, false)?;
-        let inner = transpose(&linv_da_linvt_t, n, n);
+        // (L^{-1} dA) L^{-H}: solve L x = (L^{-1} dA)^H, then adjoint back
+        let linv_da_linvh_h =
+            backend_solve_tri(ctx, l_b, &adjoint_transpose(&linv_da, n, n), n, n, false)?;
+        let inner = adjoint_transpose(&linv_da_linvh_h, n, n);
 
         // phi(inner) = tril with diagonal halved
         let phi_inner = phi(&inner, n)?;
