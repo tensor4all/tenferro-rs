@@ -83,6 +83,30 @@ Important semantic change:
 
 This removes the current mismatch where tenferro stores a raw residual tensor but the oracle and PyTorch both treat residuals as a summarized output.
 
+Proposed public result sketch:
+
+```rust
+pub struct LstsqResult {
+    pub solution: Tensor,
+    pub residuals: Tensor,
+    pub rank: Tensor,
+    pub singular_values: Tensor,
+}
+```
+
+Proposed AD schema:
+
+```rust
+Schema {
+    slots: vec![
+        SlotSchema { differentiable: true,  auxiliary: false }, // solution
+        SlotSchema { differentiable: true,  auxiliary: false }, // residuals
+        SlotSchema { differentiable: false, auxiliary: true  }, // rank
+        SlotSchema { differentiable: false, auxiliary: true  }, // singular_values
+    ]
+}
+```
+
 ### 2. `norm`
 
 Split the current single public `norm(NormKind)` surface into:
@@ -105,6 +129,60 @@ Recommended public types:
 
 The existing `NormKind` should be removed rather than preserved as a legacy compatibility layer.
 
+Proposed public API sketch:
+
+```rust
+pub enum VectorNormOrd {
+    P(f64),
+    PosInf,
+    NegInf,
+    Zero,
+}
+
+pub enum MatrixNormOrd {
+    Fro,
+    Nuc,
+    One,
+    NegOne,
+    Two,
+    NegTwo,
+    PosInf,
+    NegInf,
+}
+
+pub enum NormSpec {
+    Vector {
+        ord: VectorNormOrd,
+        dim: Option<Vec<isize>>,
+        keepdim: bool,
+    },
+    Matrix {
+        ord: MatrixNormOrd,
+        dim: Option<(isize, isize)>,
+        keepdim: bool,
+    },
+    Default,
+}
+
+impl Tensor {
+    pub fn vector_norm(
+        &self,
+        ord: VectorNormOrd,
+        dim: Option<&[isize]>,
+        keepdim: bool,
+    ) -> Result<Tensor>;
+
+    pub fn matrix_norm(
+        &self,
+        ord: MatrixNormOrd,
+        dim: Option<(isize, isize)>,
+        keepdim: bool,
+    ) -> Result<Tensor>;
+
+    pub fn norm(&self, spec: NormSpec) -> Result<Tensor>;
+}
+```
+
 ### 3. `eig` and `eigh`
 
 Publicly split the APIs.
@@ -126,6 +204,107 @@ Public dtype/result rules:
 Internal helper sharing is allowed, but public contracts must remain split.
 
 For `eig`, real-input backward may still need a `handle_r_to_c`-style projection internally, just as PyTorch does.
+
+Proposed public result sketches:
+
+```rust
+pub struct EigResult {
+    pub eigenvalues: Tensor,   // always complex
+    pub eigenvectors: Tensor,  // always complex
+}
+
+pub struct EighResult {
+    pub eigenvalues: Tensor,   // always real
+    pub eigenvectors: Tensor,  // same dtype as input
+}
+
+impl Tensor {
+    pub fn eig(&self) -> Result<EigResult>;
+    pub fn eigh(&self) -> Result<EighResult>;
+}
+```
+
+The internal helper implementation may still share code, but the public result and cotangent contracts should remain separate.
+
+## Prims Composition
+
+These public changes do not imply CPU-only slice implementations. The intended implementation strategy remains:
+
+- heavy matrix operations through runtime-dispatched linalg backends
+- pointwise algebra through scalar-family prims
+- analytic unary/binary operations through analytic-family prims
+- complex-to-real bridges through complex-real-family prims
+
+### `vector_norm`
+
+Sketch:
+
+```rust
+u = abs(x)                         // ComplexRealPrims
+p = pow(u, ord)                    // AnalyticPrims
+s = reduce_sum(p, dim)             // ScalarPrims
+y = pow(s, 1 / ord)                // AnalyticPrims
+```
+
+JVP and VJP then compose:
+
+- `conj`
+- `real`
+- pointwise multiply/divide
+- reductions
+
+without introducing CPU-specialized loops into the AD rules.
+
+### `matrix_norm`
+
+Two cases:
+
+- `fro`: same pattern as `vector_norm`
+- `2/-2/nuc`: use `svd` plus scalar reductions on singular values
+
+### `eigh`
+
+Sketch:
+
+```rust
+(l, q) = eigh(a)                   // linalg backend
+p = q^H @ da @ q                   // matmul + adjoint
+dl = real(diag(p))
+dq = q @ offdiag(p / (l_j - l_i))
+```
+
+Backward similarly uses:
+
+- matmul
+- adjoint
+- diagonal extraction
+- scalar/broadcasted algebra
+
+### `eig`
+
+Sketch:
+
+```rust
+(l, v) = eig(a)
+p = solve(v, da @ v)               // V^{-1} dA V
+dl = diag(p)
+dv = ...
+```
+
+Backward may need a `handle_r_to_c`-style projection for real inputs, mirroring PyTorch.
+
+### `lstsq`
+
+Sketch:
+
+```rust
+pinv_a = pinv(a)
+dx = dpinv_a @ b + pinv_a @ db
+r  = a @ x - b
+dres = 2 * sum(real(conj(r) * dr), dim=-2)
+```
+
+This keeps `solution` and `residuals` as separate differentiable outputs while still using backend-generic kernels.
 
 ## Backend and Runtime Requirements
 
