@@ -9,6 +9,7 @@
 
 mod autograd_api;
 pub mod core;
+pub mod jvp;
 
 pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub use core::dynamic::{
@@ -16,6 +17,7 @@ pub use core::dynamic::{
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
     Tensor,
 };
+pub use jvp::{jvp, JvpResult};
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 pub use tenferro_internal_ad_core::{
     AdResult, AutodiffError, CheckpointHint, LinearizableOp, LinearizedOp, NodeId, Schema,

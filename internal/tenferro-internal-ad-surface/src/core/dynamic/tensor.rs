@@ -10,7 +10,7 @@ use tenferro_linalg::{NormKind, SvdOptions};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use super::{QrResult, SvdResult};
-use crate::{Error, Result};
+use crate::{jvp, Error, Result};
 
 pub struct Tensor {
     inner: tidu::Value<DynTensor>,
@@ -33,6 +33,10 @@ impl Tensor {
 
     pub(crate) fn primal(&self) -> &DynTensor {
         self.inner.primal()
+    }
+
+    pub(crate) fn forward_id(&self) -> usize {
+        jvp::forward_id(self)
     }
 
     pub fn from_slice<T>(data: &[T], dims: &[usize]) -> Result<Self>
@@ -114,15 +118,21 @@ impl Tensor {
     }
 
     pub fn add(&self, rhs: &Self) -> Result<Self> {
-        Ok(Self::from_value(add_dyn_values(self.value(), rhs.value())?))
+        let output = Self::from_value(add_dyn_values(self.value(), rhs.value())?);
+        jvp::add_tangent(self, rhs, &output)?;
+        Ok(output)
     }
 
     pub fn exp(&self) -> Result<Self> {
-        Ok(Self::from_value(exp_dyn_value(self.value())?))
+        let output = Self::from_value(exp_dyn_value(self.value())?);
+        jvp::exp_tangent(self, &output)?;
+        Ok(output)
     }
 
     pub fn sum(&self) -> Result<Self> {
-        Ok(Self::from_value(sum_dyn_value(self.value())?))
+        let output = Self::from_value(sum_dyn_value(self.value())?);
+        jvp::sum_tangent(self, &output)?;
+        Ok(output)
     }
 
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
@@ -149,7 +159,10 @@ impl Tensor {
     }
 
     pub fn qr(&self) -> Result<QrResult> {
-        Ok(qr_dyn_value(self.value())?.into())
+        crate::with_default_runtime(|_| Ok(()))?;
+        let result: QrResult = qr_dyn_value(self.value())?.into();
+        jvp::qr_tangents(self, &result.q, &result.r)?;
+        Ok(result)
     }
 
     pub fn svd(&self, options: Option<SvdOptions>) -> Result<SvdResult> {
