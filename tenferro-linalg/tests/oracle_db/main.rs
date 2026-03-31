@@ -414,6 +414,15 @@ fn oracle_db_marks_solve_triangular_oracles_supported_for_replay() {
 }
 
 #[test]
+fn oracle_db_marks_lu_oracles_supported_for_replay() {
+    let record = oracle_support_record("lu_f64_identity_001", "lu", "identity", "identity");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::LuIdentity)
+    ));
+}
+
+#[test]
 fn oracle_db_replay_against_tensor_ad_oracles() {
     let summary = replay::run_database_replay();
     let expected = expected_replay_counts();

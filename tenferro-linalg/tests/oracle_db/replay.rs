@@ -5,12 +5,13 @@ use num_traits::{Float, NumCast, ToPrimitive};
 use tenferro_algebra::Conjugate;
 use tenferro_linalg::{
     cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eigen, eigen_frule, eigen_rrule,
-    householder_product, inv_frule, inv_rrule, lu_rrule, matrix_exp_frule, matrix_exp_rrule,
-    norm_frule, norm_rrule, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule, slogdet_frule,
-    slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule, solve_triangular_rrule,
-    svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander, EigenCotangent, LuCotangent,
-    LuPivot, MatrixExpAbsTensor, NormKind, QrCotangent, ScaleTensorByRealSameShape,
-    SlogdetCotangent, SlogdetFruleDispatch, SlogdetRruleDispatch, SolveGrad, SvdCotangent,
+    householder_product, inv_frule, inv_rrule, lu_frule, lu_rrule, matrix_exp_frule,
+    matrix_exp_rrule, norm_frule, norm_rrule, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule,
+    slogdet_frule, slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule,
+    solve_triangular_rrule, svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander,
+    EigenCotangent, LiftPermutationMatrixTensor, LuCotangent, LuPivot, MatrixExpAbsTensor,
+    NormKind, QrCotangent, ScaleTensorByRealSameShape, SlogdetCotangent, SlogdetFruleDispatch,
+    SlogdetRruleDispatch, SolveGrad, SvdCotangent,
 };
 use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
@@ -123,6 +124,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                 ReplayKind::DetIdentity => replay_det(record),
                 ReplayKind::SlogdetIdentity => replay_slogdet(record),
                 ReplayKind::LuFactorIdentity => replay_lu_factor(record),
+                ReplayKind::LuIdentity => replay_lu(record),
                 ReplayKind::CondIdentity => replay_cond(record),
                 ReplayKind::MatrixPowerIdentity => replay_matrix_power(record),
                 ReplayKind::MatrixExpIdentity => replay_matrix_exp(record),
@@ -461,6 +463,7 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
         ("cond", "identity", "value") => Ok(0),
         ("slogdet", "identity", "output_0") | ("slogdet", "identity", "output_1") => Ok(0),
         ("qr", "identity", "output_0") | ("qr", "identity", "output_1") => Ok(2),
+        ("lu", "identity", "output_1") | ("lu", "identity", "output_2") => Ok(2),
         ("svd", "u_abs", "u") => Ok(2),
         ("svd", "s", "s") => Ok(1),
         ("svd", "vh_abs", "s") => Ok(1),
@@ -2445,8 +2448,103 @@ where
 fn replay_inv(record: &CaseRecord) -> Result<bool, String> {
     match record.dtype.as_str() {
         "float64" => replay_inv_t::<f64>(record),
+        "float32" => replay_inv_t::<f32>(record),
         "complex64" => replay_inv_t::<Complex32>(record),
         "complex128" => replay_inv_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_lu_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate + LiftPermutationMatrixTensor<CpuContext>,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+
+    let pivot = required_bool_kwarg(record, "pivot")?;
+    if !pivot {
+        return Err(format!(
+            "lu oracle replay currently expects pivot=true for {}",
+            record.case_id
+        ));
+    }
+
+    let cotangent = LuCotangent {
+        l: Some(
+            cotangent
+                .get("output_1")
+                .ok_or_else(|| format!("missing lu cotangent output_1 for {}", record.case_id))?
+                .clone(),
+        ),
+        u: Some(
+            cotangent
+                .get("output_2")
+                .ok_or_else(|| format!("missing lu cotangent output_2 for {}", record.case_id))?
+                .clone(),
+        ),
+    };
+
+    let mut ctx = CpuContext::new(1);
+    let (_result, dresult) = lu_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+        LuPivot::Partial,
+    )
+    .map_err(|err| format!("lu_frule failed: {err}"))?;
+    let grad = lu_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        &cotangent,
+        LuPivot::Partial,
+    )
+    .map_err(|err| format!("lu_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([
+        (String::from("output_1"), dresult.l),
+        (String::from("output_2"), dresult.u),
+    ]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("lu.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("lu.jvp.torch", &expected_jvp_torch, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("lu.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("lu", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let grad = lu_rrule(
+            &mut ctx,
+            perturbed.get("a").unwrap(),
+            &cotangent,
+            LuPivot::Partial,
+        )
+        .map_err(|err| format!("lu_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    check_adjoint_identity_typed(
+        record,
+        &decode_observable_map_typed::<T>(record, &probe.cotangent)?,
+        &actual_jvp,
+        &actual_vjp,
+        &direction,
+    )?;
+    Ok(hvp_checked)
+}
+
+fn replay_lu(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_lu_typed::<f32>(record),
+        "float64" => replay_lu_typed::<f64>(record),
+        "complex64" => replay_lu_typed::<Complex32>(record),
+        "complex128" => replay_lu_typed::<Complex64>(record),
         other => Err(format!(
             "unsupported replay dtype {other} for {}",
             record.case_id

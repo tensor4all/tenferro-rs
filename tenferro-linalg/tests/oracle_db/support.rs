@@ -9,6 +9,7 @@ pub enum ReplayKind {
     DetIdentity,
     SlogdetIdentity,
     LuFactorIdentity,
+    LuIdentity,
     CondIdentity,
     MatrixPowerIdentity,
     MatrixExpIdentity,
@@ -95,6 +96,11 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             float64_only(&record.dtype),
             ReplayKind::LuFactorIdentity,
             "tenferro replay currently supports this family only for float64",
+        ),
+        ("lu", "identity", "identity", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::LuIdentity,
+            "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
         ),
         ("cond", "identity", "identity", "success") => supported_if(
             float64_only(&record.dtype),
@@ -193,8 +199,7 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             ReplayKind::PinvIdentity,
             "tenferro replay currently supports this family only for float64/complex64/complex128",
         ),
-        ("lstsq_grad_oriented", "identity", "identity", "success")
-        | ("lu", "identity", "identity", "success") => RecordSupport::Unsupported {
+        ("lstsq_grad_oriented", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this solver/decomposition family yet",
         },
         _ => RecordSupport::Unsupported {
