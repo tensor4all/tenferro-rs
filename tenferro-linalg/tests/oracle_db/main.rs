@@ -220,6 +220,37 @@ fn oracle_db_parser_handles_current_schema() {
 }
 
 #[test]
+fn oracle_db_parser_preserves_op_args() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "norm_f64_identity_args_001",
+        "op": "norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [5],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0, 5.0]
+            }
+        },
+        "op_args": [null],
+        "op_kwargs": { "keepdim": true },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("norm oracle support record should parse");
+
+    assert_eq!(record.op_args.len(), 1);
+    assert!(record.op_args[0].is_null());
+}
+
+#[test]
 fn oracle_db_parser_rejects_half_present_hvp_payloads() {
     let record = json!({
         "case_id": "solve_f64_identity_hvp_half_present",
@@ -419,6 +450,97 @@ fn oracle_db_marks_lu_oracles_supported_for_replay() {
     assert!(matches!(
         support::classify_record(&record),
         support::RecordSupport::Supported(support::ReplayKind::LuIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_marks_supported_norm_subsets_for_replay() {
+    let vector_norm = db::parse_case_record_value(json!({
+        "case_id": "norm_c128_identity_001",
+        "op": "norm",
+        "dtype": "complex128",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "complex128",
+                "shape": [5],
+                "order": "row_major",
+                "data": [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0], [5.0, 0.0]]
+            }
+        },
+        "op_args": [null],
+        "op_kwargs": { "keepdim": true },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("vector norm support record should parse");
+    assert!(matches!(
+        support::classify_record(&vector_norm),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+
+    let matrix_norm = db::parse_case_record_value(json!({
+        "case_id": "matrix_norm_f64_identity_020",
+        "op": "matrix_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [2, 2],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0]
+            }
+        },
+        "op_args": [1, [-1, 0], false],
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("matrix norm support record should parse");
+    assert!(matches!(
+        support::classify_record(&matrix_norm),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_leaves_unsupported_vector_norm_family_rejected() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "vector_norm_f64_identity_001",
+        "op": "vector_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [2],
+                "order": "row_major",
+                "data": [1.0, 2.0]
+            }
+        },
+        "op_kwargs": { "ord": 2, "dim": 0, "keepdim": false },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("unsupported vector norm record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Unsupported { .. }
     ));
 }
 

@@ -6,12 +6,12 @@ use tenferro_algebra::Conjugate;
 use tenferro_linalg::{
     cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eigen, eigen_frule, eigen_rrule,
     householder_product, inv_frule, inv_rrule, lu_frule, lu_rrule, matrix_exp_frule,
-    matrix_exp_rrule, norm_frule, norm_rrule, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule,
-    slogdet_frule, slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule,
-    solve_triangular_rrule, svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander,
-    EigenCotangent, LiftPermutationMatrixTensor, LuCotangent, LuPivot, MatrixExpAbsTensor,
-    NormKind, QrCotangent, ScaleTensorByRealSameShape, SlogdetCotangent, SlogdetFruleDispatch,
-    SlogdetRruleDispatch, SolveGrad, SvdCotangent,
+    matrix_exp_rrule, norm_frule, norm_frule_complex, norm_rrule, norm_rrule_complex, pinv,
+    pinv_frule, pinv_rrule, qr_frule, qr_rrule, slogdet_frule, slogdet_rrule, solve, solve_frule,
+    solve_rrule, solve_triangular_frule, solve_triangular_rrule, svd, svd_frule, svd_rrule,
+    tensorinv, tensorsolve, vander, EigenCotangent, LiftPermutationMatrixTensor, LuCotangent,
+    LuPivot, MatrixExpAbsTensor, NormKind, QrCotangent, ScaleTensorByRealSameShape,
+    SlogdetCotangent, SlogdetFruleDispatch, SlogdetRruleDispatch, SolveGrad, SvdCotangent,
 };
 use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
@@ -31,7 +31,9 @@ use crate::hvp::{
     central_diff_tensor_maps, central_diff_tensor_maps_typed, perturb_input_map,
     perturb_input_map_typed,
 };
-use crate::support::{classify_record, ExpectedErrorKind, RecordSupport, ReplayKind};
+use crate::support::{
+    classify_record, replayable_norm_kind, ExpectedErrorKind, RecordSupport, ReplayKind,
+};
 
 #[derive(Debug)]
 pub struct ReplaySummary {
@@ -125,6 +127,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                 ReplayKind::SlogdetIdentity => replay_slogdet(record),
                 ReplayKind::LuFactorIdentity => replay_lu_factor(record),
                 ReplayKind::LuIdentity => replay_lu(record),
+                ReplayKind::NormIdentity => replay_norm(record),
                 ReplayKind::CondIdentity => replay_cond(record),
                 ReplayKind::MatrixPowerIdentity => replay_matrix_power(record),
                 ReplayKind::MatrixExpIdentity => replay_matrix_exp(record),
@@ -461,6 +464,7 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
         | ("pinv", "identity", "value") => Ok(2),
         ("det", "identity", "value") => Ok(0),
         ("cond", "identity", "value") => Ok(0),
+        ("norm", "identity", "value") | ("matrix_norm", "identity", "value") => Ok(0),
         ("slogdet", "identity", "output_0") | ("slogdet", "identity", "output_1") => Ok(0),
         ("qr", "identity", "output_0") | ("qr", "identity", "output_1") => Ok(2),
         ("lu", "identity", "output_1") | ("lu", "identity", "output_2") => Ok(2),
@@ -517,6 +521,34 @@ fn probe(record: &CaseRecord) -> Result<&ProbeRecord, String> {
         .ok_or_else(|| format!("missing probe for {}", record.case_id))
 }
 
+fn squeeze_scalar_tensor_typed<T: OracleDbScalar>(tensor: Tensor<T>) -> Result<Tensor<T>, String> {
+    if tensor.dims().is_empty() {
+        return Ok(tensor);
+    }
+    let numel = tensor.dims().iter().product::<usize>();
+    if numel != 1 {
+        return Err(format!(
+            "expected scalar-like tensor, got dims {:?}",
+            tensor.dims()
+        ));
+    }
+    tensor.reshape(&[]).map_err(|err| {
+        format!(
+            "failed to squeeze scalar-like tensor {:?}: {err}",
+            tensor.dims()
+        )
+    })
+}
+
+fn squeeze_scalar_map_typed<T: OracleDbScalar>(
+    encoded: BTreeMap<String, Tensor<T>>,
+) -> Result<BTreeMap<String, Tensor<T>>, String> {
+    encoded
+        .into_iter()
+        .map(|(name, tensor)| Ok((name, squeeze_scalar_tensor_typed(tensor)?)))
+        .collect()
+}
+
 fn check_adjoint_identity(
     record: &CaseRecord,
     cotangent: &BTreeMap<String, Tensor<f64>>,
@@ -543,6 +575,29 @@ fn check_adjoint_identity_typed<T: OracleDbScalar>(
     vjp: &BTreeMap<String, Tensor<T>>,
     direction: &BTreeMap<String, Tensor<T>>,
 ) -> Result<(), String> {
+    let (rtol, atol) = comparison(record)?;
+    let lhs = tensor_map_inner_product_typed(cotangent, jvp)?;
+    let rhs = tensor_map_inner_product_typed(vjp, direction)?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(())
+}
+
+fn check_mixed_adjoint_identity_typed<T, R>(
+    record: &CaseRecord,
+    cotangent: &BTreeMap<String, Tensor<R>>,
+    jvp: &BTreeMap<String, Tensor<R>>,
+    vjp: &BTreeMap<String, Tensor<T>>,
+    direction: &BTreeMap<String, Tensor<T>>,
+) -> Result<(), String>
+where
+    T: OracleDbScalar,
+    R: OracleDbScalar,
+{
     let (rtol, atol) = comparison(record)?;
     let lhs = tensor_map_inner_product_typed(cotangent, jvp)?;
     let rhs = tensor_map_inner_product_typed(vjp, direction)?;
@@ -2545,6 +2600,161 @@ fn replay_lu(record: &CaseRecord) -> Result<bool, String> {
         "float64" => replay_lu_typed::<f64>(record),
         "complex64" => replay_lu_typed::<Complex32>(record),
         "complex128" => replay_lu_typed::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_norm_real_t<T>(record: &CaseRecord, kind: NormKind) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar<Real = T> + num_traits::Float,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent =
+        squeeze_scalar_map_typed(decode_observable_map_typed::<T>(record, &probe.cotangent)?)?;
+    let expected_jvp_fd =
+        squeeze_scalar_map_typed(decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?)?;
+    let expected_jvp_torch = squeeze_scalar_map_typed(decode_observable_map_typed::<T>(
+        record,
+        &probe.pytorch_ref.jvp,
+    )?)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let cotangent_value = cotangent
+        .get("value")
+        .ok_or_else(|| format!("missing norm cotangent value for {}", record.case_id))?
+        .clone();
+
+    let mut ctx = CpuContext::new(1);
+    let (_result, dresult) = norm_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+        kind,
+    )
+    .map_err(|err| format!("norm_frule failed: {err}"))?;
+    let grad = norm_rrule(&mut ctx, inputs.get("a").unwrap(), &cotangent_value, kind)
+        .map_err(|err| format!("norm_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([(String::from("value"), dresult)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("norm.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "norm.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("norm.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked =
+        validate_hvp_typed("norm", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = norm_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                &cotangent_value,
+                kind,
+            )
+            .map_err(|err| format!("norm_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(String::from("a"), grad)]))
+        })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+macro_rules! impl_replay_norm_complex {
+    ($fn_name:ident, $complex_ty:ty, $real_ty:ty) => {
+        fn $fn_name(record: &CaseRecord, kind: NormKind) -> Result<bool, String> {
+            let inputs = decode_inputs_typed::<$complex_ty>(record)?;
+            let probe = probe(record)?;
+            let direction = decode_input_map_like_typed::<$complex_ty>(record, &probe.direction)?;
+            let cotangent = squeeze_scalar_map_typed(decode_observable_map_typed::<$real_ty>(
+                record,
+                &probe.cotangent,
+            )?)?;
+            let expected_jvp_fd = squeeze_scalar_map_typed(
+                decode_observable_map_typed::<$real_ty>(record, &probe.fd_ref.jvp)?,
+            )?;
+            let expected_jvp_torch = squeeze_scalar_map_typed(decode_observable_map_typed::<
+                $real_ty,
+            >(
+                record, &probe.pytorch_ref.jvp
+            )?)?;
+            let expected_vjp =
+                decode_input_map_like_typed::<$complex_ty>(record, &probe.pytorch_ref.vjp)?;
+            let (rtol, atol) = comparison(record)?;
+            let cotangent_value = cotangent
+                .get("value")
+                .ok_or_else(|| format!("missing norm cotangent value for {}", record.case_id))?
+                .clone();
+
+            let mut ctx = CpuContext::new(1);
+            let (_result, dresult) = norm_frule_complex(
+                &mut ctx,
+                inputs.get("a").unwrap(),
+                direction.get("a").unwrap(),
+                kind,
+            )
+            .map_err(|err| format!("norm_frule failed: {err}"))?;
+            let grad =
+                norm_rrule_complex(&mut ctx, inputs.get("a").unwrap(), &cotangent_value, kind)
+                    .map_err(|err| format!("norm_rrule failed: {err}"))?;
+
+            let actual_jvp = BTreeMap::from([(String::from("value"), dresult)]);
+            let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+            compare_tensor_maps_typed("norm.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+            compare_tensor_maps_typed(
+                "norm.jvp.torch",
+                &expected_jvp_torch,
+                &actual_jvp,
+                rtol,
+                atol,
+            )?;
+            compare_tensor_maps_typed("norm.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+            let hvp_checked =
+                validate_hvp_typed("norm", record, &inputs, &direction, probe, |perturbed| {
+                    let mut ctx = CpuContext::new(1);
+                    let grad = norm_rrule_complex(
+                        &mut ctx,
+                        perturbed.get("a").unwrap(),
+                        &cotangent_value,
+                        kind,
+                    )
+                    .map_err(|err| format!("norm_rrule failed during HVP replay: {err}"))?;
+                    Ok(BTreeMap::from([(String::from("a"), grad)]))
+                })?;
+            check_mixed_adjoint_identity_typed(
+                record,
+                &cotangent,
+                &actual_jvp,
+                &actual_vjp,
+                &direction,
+            )?;
+            Ok(hvp_checked)
+        }
+    };
+}
+
+impl_replay_norm_complex!(replay_norm_complex32, Complex32, f32);
+impl_replay_norm_complex!(replay_norm_complex64, Complex64, f64);
+
+fn replay_norm(record: &CaseRecord) -> Result<bool, String> {
+    let kind = replayable_norm_kind(record).ok_or_else(|| {
+        format!(
+            "norm replay requested for unsupported norm subset in {}",
+            record.case_id
+        )
+    })?;
+    match record.dtype.as_str() {
+        "float32" => replay_norm_real_t::<f32>(record, kind),
+        "float64" => replay_norm_real_t::<f64>(record, kind),
+        "complex64" => replay_norm_complex32(record, kind),
+        "complex128" => replay_norm_complex64(record, kind),
         other => Err(format!(
             "unsupported replay dtype {other} for {}",
             record.case_id

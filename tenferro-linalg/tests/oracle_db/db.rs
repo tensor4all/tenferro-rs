@@ -110,6 +110,8 @@ pub struct CaseRecord {
     pub expected_behavior: String,
     pub inputs: BTreeMap<String, DbTensor>,
     #[serde(default)]
+    pub op_args: Vec<Value>,
+    #[serde(default)]
     pub op_kwargs: BTreeMap<String, Value>,
     pub observable: Observable,
     pub comparison: Comparison,
