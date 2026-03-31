@@ -2,9 +2,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use tenferro_internal_ad_core::{LinearizableOp, LinearizedOp};
-use tenferro_internal_ad_linalg::QrOp;
-use tenferro_internal_ad_ops::{AddOp, ExpOp, SumOp};
+use tenferro_internal_ad_linalg::{
+    CholeskyOp, DetOp, EigOp, EigenOp, InvOp, LstsqOp, LuOp, MatrixExpOp, NormOp, PInvOp, QrOp,
+    SlogdetOp, SolveOp, SolveTriangularOp, SvdOp,
+};
+use tenferro_internal_ad_ops::{AddOp, EinsumOp, ExpOp, SumOp};
 use tenferro_internal_frontend_core::DynTensor;
+use tenferro_linalg::{LuPivot, NormKind, SvdOptions};
 
 use crate::{Error, Result, Tensor};
 
@@ -47,10 +51,6 @@ fn invalid_argument(message: impl Into<String>) -> Error {
     Error::InvalidTensorOperands {
         message: message.into(),
     }
-}
-
-fn unsupported_jvp(op: &'static str) -> Error {
-    Error::UnsupportedAdOp { op }
 }
 
 fn validate_compatibility(index: usize, primal: &Tensor, tangent: &Tensor) -> Result<()> {
@@ -159,12 +159,218 @@ pub(crate) fn qr_tangents(input: &Tensor, q: &Tensor, r: &Tensor) -> Result<()> 
     Ok(())
 }
 
-pub(crate) fn unsupported_if_active(op: &'static str) -> Result<()> {
-    if is_active() {
-        Err(unsupported_jvp(op))
-    } else {
-        Ok(())
+pub(crate) fn einsum_tangent(
+    subscripts: &str,
+    operands: &[&Tensor],
+    output: &Tensor,
+) -> Result<()> {
+    if !is_active() {
+        return Ok(());
     }
+    let primals = operands
+        .iter()
+        .map(|tensor| tensor.primal())
+        .collect::<Vec<_>>();
+    let linearized = EinsumOp::new(subscripts).linearize(&primals, &[output.primal().clone()])?;
+    let tangents = operands
+        .iter()
+        .map(|tensor| tangent_for(tensor))
+        .collect::<Vec<_>>();
+    let mut outputs = linearized.jvp(&tangents)?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn solve_tangent(lhs: &Tensor, rhs: &Tensor, output: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized =
+        SolveOp.linearize(&[lhs.primal(), rhs.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(lhs), tangent_for(rhs)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn lstsq_tangents(
+    lhs: &Tensor,
+    rhs: &Tensor,
+    x: &Tensor,
+    residual: &Tensor,
+) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = LstsqOp.linearize(
+        &[lhs.primal(), rhs.primal()],
+        &[x.primal().clone(), residual.primal().clone()],
+    )?;
+    let mut outputs = linearized
+        .jvp(&[tangent_for(lhs), tangent_for(rhs)])?
+        .into_iter();
+    record_tangent(x, outputs.next().unwrap_or(None));
+    record_tangent(residual, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn solve_triangular_tangent(
+    lhs: &Tensor,
+    rhs: &Tensor,
+    output: &Tensor,
+    upper: bool,
+) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = SolveTriangularOp::new(upper)
+        .linearize(&[lhs.primal(), rhs.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(lhs), tangent_for(rhs)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn det_tangent(input: &Tensor, output: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = DetOp.linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn inv_tangent(input: &Tensor, output: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = InvOp.linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn slogdet_tangents(input: &Tensor, sign: &Tensor, logabsdet: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = SlogdetOp.linearize(
+        &[input.primal()],
+        &[sign.primal().clone(), logabsdet.primal().clone()],
+    )?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?.into_iter();
+    record_tangent(sign, outputs.next().unwrap_or(None));
+    record_tangent(logabsdet, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn cholesky_tangent(input: &Tensor, output: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = CholeskyOp.linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn lu_tangents(
+    input: &Tensor,
+    p: &Tensor,
+    l: &Tensor,
+    u: &Tensor,
+    pivot: LuPivot,
+) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = LuOp::new(pivot).linearize(
+        &[input.primal()],
+        &[p.primal().clone(), l.primal().clone(), u.primal().clone()],
+    )?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?.into_iter();
+    record_tangent(p, outputs.next().unwrap_or(None));
+    record_tangent(l, outputs.next().unwrap_or(None));
+    record_tangent(u, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn norm_tangent(input: &Tensor, output: &Tensor, kind: NormKind) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = NormOp::new(kind).linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn eig_tangents(input: &Tensor, values: &Tensor, vectors: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = EigOp.linearize(
+        &[input.primal()],
+        &[values.primal().clone(), vectors.primal().clone()],
+    )?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?.into_iter();
+    record_tangent(values, outputs.next().unwrap_or(None));
+    record_tangent(vectors, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn eigen_tangents(input: &Tensor, values: &Tensor, vectors: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = EigenOp.linearize(
+        &[input.primal()],
+        &[values.primal().clone(), vectors.primal().clone()],
+    )?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?.into_iter();
+    record_tangent(values, outputs.next().unwrap_or(None));
+    record_tangent(vectors, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn svd_tangents(
+    input: &Tensor,
+    u: &Tensor,
+    s: &Tensor,
+    vt: &Tensor,
+    options: Option<SvdOptions>,
+) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = SvdOp::new(options).linearize(
+        &[input.primal()],
+        &[u.primal().clone(), s.primal().clone(), vt.primal().clone()],
+    )?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?.into_iter();
+    record_tangent(u, outputs.next().unwrap_or(None));
+    record_tangent(s, outputs.next().unwrap_or(None));
+    record_tangent(vt, outputs.next().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn pinv_tangent(input: &Tensor, output: &Tensor, rcond: Option<f64>) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = PInvOp::new(rcond).linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
+}
+
+pub(crate) fn matrix_exp_tangent(input: &Tensor, output: &Tensor) -> Result<()> {
+    if !is_active() {
+        return Ok(());
+    }
+    let linearized = MatrixExpOp.linearize(&[input.primal()], &[output.primal().clone()])?;
+    let mut outputs = linearized.jvp(&[tangent_for(input)])?;
+    record_tangent(output, outputs.pop().unwrap_or(None));
+    Ok(())
 }
 
 pub fn jvp<F>(f: F, primals: &[Tensor], tangents: &[Option<Tensor>]) -> Result<JvpResult>

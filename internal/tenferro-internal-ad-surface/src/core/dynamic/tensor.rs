@@ -1,15 +1,17 @@
 use chainrules_core::AutodiffError;
 use std::fmt;
 use tenferro_internal_ad_linalg::{
-    det_dyn_value, norm_dyn_value, qr_dyn_value, solve_dyn_values, svd_dyn_value,
+    cholesky_dyn_value, det_dyn_value, eig_dyn_value, eigen_dyn_value, inv_dyn_value,
+    lstsq_dyn_values, lu_dyn_value, matrix_exp_dyn_value, norm_dyn_value, pinv_dyn_value,
+    qr_dyn_value, slogdet_dyn_value, solve_dyn_values, solve_triangular_dyn_value, svd_dyn_value,
 };
 use tenferro_internal_ad_ops::{add_dyn_values, einsum_dyn_values, exp_dyn_value, sum_dyn_value};
 use tenferro_internal_frontend_core::tensor_ops::tensor_element;
 use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, ScalarType, StructuredTensor};
-use tenferro_linalg::{NormKind, SvdOptions};
+use tenferro_linalg::{LuPivot, NormKind, SvdOptions};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-use super::{QrResult, SvdResult};
+use super::{EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult};
 use crate::{jvp, Error, Result};
 
 pub struct Tensor {
@@ -136,30 +138,71 @@ impl Tensor {
     }
 
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
-        jvp::unsupported_if_active("einsum")?;
         let values = operands
             .iter()
             .map(|tensor| tensor.value())
             .collect::<Vec<_>>();
-        Ok(Self::from_value(einsum_dyn_values(subscripts, &values)?))
+        let output = Self::from_value(einsum_dyn_values(subscripts, &values)?);
+        jvp::einsum_tangent(subscripts, operands, &output)?;
+        Ok(output)
     }
 
     pub fn solve(&self, rhs: &Self) -> Result<Self> {
-        jvp::unsupported_if_active("solve")?;
-        Ok(Self::from_value(solve_dyn_values(
+        let output = Self::from_value(solve_dyn_values(self.value(), rhs.value())?);
+        jvp::solve_tangent(self, rhs, &output)?;
+        Ok(output)
+    }
+
+    pub fn lstsq(&self, rhs: &Self) -> Result<LstsqResult> {
+        let result: LstsqResult = lstsq_dyn_values(self.value(), rhs.value())?.into();
+        jvp::lstsq_tangents(self, rhs, &result.x, &result.residual)?;
+        Ok(result)
+    }
+
+    pub fn solve_triangular(&self, rhs: &Self, upper: bool) -> Result<Self> {
+        let output = Self::from_value(solve_triangular_dyn_value(
             self.value(),
             rhs.value(),
-        )?))
+            upper,
+        )?);
+        jvp::solve_triangular_tangent(self, rhs, &output, upper)?;
+        Ok(output)
     }
 
     pub fn det(&self) -> Result<Self> {
-        jvp::unsupported_if_active("det")?;
-        Ok(Self::from_value(det_dyn_value(self.value())?))
+        let output = Self::from_value(det_dyn_value(self.value())?);
+        jvp::det_tangent(self, &output)?;
+        Ok(output)
+    }
+
+    pub fn inv(&self) -> Result<Self> {
+        let output = Self::from_value(inv_dyn_value(self.value())?);
+        jvp::inv_tangent(self, &output)?;
+        Ok(output)
+    }
+
+    pub fn slogdet(&self) -> Result<SlogdetResult> {
+        let result: SlogdetResult = slogdet_dyn_value(self.value())?.into();
+        jvp::slogdet_tangents(self, &result.sign, &result.logabsdet)?;
+        Ok(result)
+    }
+
+    pub fn cholesky(&self) -> Result<Self> {
+        let output = Self::from_value(cholesky_dyn_value(self.value())?);
+        jvp::cholesky_tangent(self, &output)?;
+        Ok(output)
+    }
+
+    pub fn lu(&self, pivot: LuPivot) -> Result<LuResult> {
+        let result: LuResult = lu_dyn_value(self.value(), pivot)?.into();
+        jvp::lu_tangents(self, &result.p, &result.l, &result.u, pivot)?;
+        Ok(result)
     }
 
     pub fn norm(&self, kind: NormKind) -> Result<Self> {
-        jvp::unsupported_if_active("norm")?;
-        Ok(Self::from_value(norm_dyn_value(self.value(), kind)?))
+        let output = Self::from_value(norm_dyn_value(self.value(), kind)?);
+        jvp::norm_tangent(self, &output, kind)?;
+        Ok(output)
     }
 
     pub fn qr(&self) -> Result<QrResult> {
@@ -170,8 +213,33 @@ impl Tensor {
     }
 
     pub fn svd(&self, options: Option<SvdOptions>) -> Result<SvdResult> {
-        jvp::unsupported_if_active("svd")?;
-        Ok(svd_dyn_value(self.value(), options)?.into())
+        let result: SvdResult = svd_dyn_value(self.value(), options.clone())?.into();
+        jvp::svd_tangents(self, &result.u, &result.s, &result.vt, options)?;
+        Ok(result)
+    }
+
+    pub fn eig(&self) -> Result<EigResult> {
+        let result: EigResult = eig_dyn_value(self.value())?.into();
+        jvp::eig_tangents(self, &result.values, &result.vectors)?;
+        Ok(result)
+    }
+
+    pub fn eigen(&self) -> Result<EigenResult> {
+        let result: EigenResult = eigen_dyn_value(self.value())?.into();
+        jvp::eigen_tangents(self, &result.values, &result.vectors)?;
+        Ok(result)
+    }
+
+    pub fn pinv(&self, rcond: Option<f64>) -> Result<Self> {
+        let output = Self::from_value(pinv_dyn_value(self.value(), rcond)?);
+        jvp::pinv_tangent(self, &output, rcond)?;
+        Ok(output)
+    }
+
+    pub fn matrix_exp(&self) -> Result<Self> {
+        let output = Self::from_value(matrix_exp_dyn_value(self.value())?);
+        jvp::matrix_exp_tangent(self, &output)?;
+        Ok(output)
     }
 
     pub fn try_to_vec<T>(&self) -> Result<Vec<T>>
@@ -185,7 +253,8 @@ impl Tensor {
             ))
         })?;
         let dense = structured.to_dense()?;
-        let slice = dense
+        let contiguous = dense.contiguous(MemoryOrder::ColumnMajor);
+        let slice = contiguous
             .buffer()
             .as_slice()
             .ok_or_else(|| invalid_argument("try_to_vec requires host-accessible dense payload"))?;

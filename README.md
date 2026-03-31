@@ -217,6 +217,10 @@ fn main() {
 
 For more examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
 
+For the current `tenferro` dynamic AD surface, including which `Tensor`
+operations are wired into public `jvp(...)`, see
+[`tenferro/README.md`](./tenferro/README.md).
+
 ### Linear algebra quickstart
 
 Linalg is included in `tenferro-tensor-compute` by default (the `linalg` feature).

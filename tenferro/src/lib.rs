@@ -34,9 +34,12 @@
 //! support.
 //!
 //! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
-//! [`Tensor::solve`], [`Tensor::det`], [`Tensor::norm`], [`Tensor::qr`], and
-//! [`Tensor::svd`] require an installed runtime via [`set_default_runtime`] or
-//! [`runtime::with_runtime`].
+//! [`Tensor::solve`], [`Tensor::solve_triangular`], [`Tensor::det`],
+//! [`Tensor::inv`], [`Tensor::slogdet`], [`Tensor::cholesky`],
+//! [`Tensor::lstsq`], [`Tensor::lu`], [`Tensor::norm`], [`Tensor::qr`],
+//! [`Tensor::svd`], [`Tensor::eig`], [`Tensor::eigen`], [`Tensor::pinv`], and
+//! [`Tensor::matrix_exp`] require an installed runtime via [`set_default_runtime`]
+//! or [`runtime::with_runtime`].
 
 mod core;
 pub mod error;
@@ -48,8 +51,8 @@ pub mod snapshot;
 
 pub use core::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
-    LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor,
+    LuFactorResult, LuPivot, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult,
+    SvdResult, Tensor,
 };
 pub use error::{Error, Result};
 pub use jvp_api::{jvp, JvpResult};

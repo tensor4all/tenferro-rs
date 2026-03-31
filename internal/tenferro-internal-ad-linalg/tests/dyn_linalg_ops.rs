@@ -1,12 +1,14 @@
+use num_complex::Complex64;
 use tenferro_internal_ad_core::{new_reverse_leaf, LinearizableOp, LinearizedOp};
 use tenferro_internal_frontend_core::{DynTensor, StructuredTensor};
 use tenferro_internal_runtime::{set_default_runtime, RuntimeContext};
-use tenferro_linalg::NormKind;
+use tenferro_linalg::{LuPivot, NormKind};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use tenferro_internal_ad_linalg::{
-    det_dyn_value, norm_dyn_value, qr_dyn_value, solve_dyn_values, svd_dyn_value, DetOp, NormOp,
+    det_dyn_value, eig_dyn_value, eigen_dyn_value, lstsq_dyn_values, lu_dyn_value, norm_dyn_value,
+    qr_dyn_value, solve_dyn_values, svd_dyn_value, DetOp, EigOp, EigenOp, LstsqOp, LuOp, NormOp,
     QrOp, SolveOp, SvdOp,
 };
 
@@ -29,6 +31,19 @@ fn f64_values(tensor: &DynTensor) -> Vec<f64> {
             .unwrap()
             .to_vec(),
         other => panic!("expected f64 dyn tensor, got {other:?}"),
+    }
+}
+
+fn c64_values(tensor: &DynTensor) -> Vec<Complex64> {
+    match tensor {
+        DynTensor::C64(value) => value
+            .to_dense()
+            .unwrap()
+            .buffer()
+            .as_slice()
+            .unwrap()
+            .to_vec(),
+        other => panic!("expected c64 dyn tensor, got {other:?}"),
     }
 }
 
@@ -228,4 +243,93 @@ fn dyn_linalg_ops_svd_linearized_jvp_preserves_packaging_and_optional_tangent_be
             .collect::<Vec<_>>()
     };
     assert_vec_close(&reconstructed, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0e-4);
+}
+
+#[test]
+fn dyn_linalg_ops_lstsq_and_lu_linearized_jvp_preserve_packaging_and_auxiliary_outputs() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = new_reverse_leaf(dyn_f64(&[2.0, 0.0, 0.0, 3.0], &[2, 2]));
+    let b = new_reverse_leaf(dyn_f64(&[4.0, 9.0], &[2]));
+
+    let lstsq = lstsq_dyn_values(&a, &b).unwrap();
+    assert_eq!(lstsq.x.primal().dims(), &[2]);
+    assert_eq!(lstsq.residual.primal().dims(), &[2]);
+
+    let lstsq_op = LstsqOp;
+    let lstsq_outputs = lstsq_op.primal(&[a.primal(), b.primal()]).unwrap();
+    let lstsq_linearized = lstsq_op
+        .linearize(&[a.primal(), b.primal()], &lstsq_outputs)
+        .unwrap();
+    assert_all_none(&lstsq_linearized.jvp(&[None, None]).unwrap());
+
+    let lstsq_jvp = lstsq_linearized
+        .jvp(&[None, Some(dyn_f64(&[1.0, 1.0], &[2]))])
+        .unwrap();
+    assert_eq!(lstsq_jvp.len(), 2);
+    assert_eq!(lstsq_jvp[0].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(lstsq_jvp[1].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(f64_values(lstsq_jvp[1].as_ref().unwrap()), vec![0.0, 0.0]);
+
+    let lu = lu_dyn_value(&a, LuPivot::Partial).unwrap();
+    assert_eq!(lu.p.primal().dims(), &[2, 2]);
+    assert_eq!(lu.l.primal().dims(), &[2, 2]);
+    assert_eq!(lu.u.primal().dims(), &[2, 2]);
+
+    let lu_op = LuOp::new(LuPivot::Partial);
+    let lu_outputs = lu_op.primal(&[a.primal()]).unwrap();
+    let lu_linearized = lu_op.linearize(&[a.primal()], &lu_outputs).unwrap();
+    assert_all_none(&lu_linearized.jvp(&[None]).unwrap());
+
+    let lu_jvp = lu_linearized
+        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0], &[2, 2]))])
+        .unwrap();
+    assert_eq!(lu_jvp.len(), 3);
+    assert!(lu_jvp[0].is_none());
+    assert_eq!(lu_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
+    assert_eq!(lu_jvp[2].as_ref().unwrap().dims(), &[2, 2]);
+}
+
+#[test]
+fn dyn_linalg_ops_eig_and_eigen_linearized_jvp_preserve_complex_and_real_packaging() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = new_reverse_leaf(dyn_f64(&[2.0, 0.0, 0.0, 3.0], &[2, 2]));
+
+    let eig = eig_dyn_value(&a).unwrap();
+    assert_eq!(eig.values.primal().dims(), &[2]);
+    assert_eq!(eig.vectors.primal().dims(), &[2, 2]);
+
+    let eig_op = EigOp;
+    let eig_outputs = eig_op.primal(&[a.primal()]).unwrap();
+    let eig_linearized = eig_op.linearize(&[a.primal()], &eig_outputs).unwrap();
+    assert_all_none(&eig_linearized.jvp(&[None]).unwrap());
+
+    let eig_jvp = eig_linearized
+        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0], &[2, 2]))])
+        .unwrap();
+    assert_eq!(eig_jvp.len(), 2);
+    assert_eq!(eig_jvp[0].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(eig_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
+    assert_eq!(
+        c64_values(eig_jvp[0].as_ref().unwrap()),
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)]
+    );
+
+    let eigen = eigen_dyn_value(&a).unwrap();
+    assert_eq!(eigen.values.primal().dims(), &[2]);
+    assert_eq!(eigen.vectors.primal().dims(), &[2, 2]);
+
+    let eigen_op = EigenOp;
+    let eigen_outputs = eigen_op.primal(&[a.primal()]).unwrap();
+    let eigen_linearized = eigen_op.linearize(&[a.primal()], &eigen_outputs).unwrap();
+    assert_all_none(&eigen_linearized.jvp(&[None]).unwrap());
+
+    let eigen_jvp = eigen_linearized
+        .jvp(&[Some(dyn_f64(&[1.0, 0.0, 0.0, 0.0], &[2, 2]))])
+        .unwrap();
+    assert_eq!(eigen_jvp.len(), 2);
+    assert_eq!(eigen_jvp[0].as_ref().unwrap().dims(), &[2]);
+    assert_eq!(eigen_jvp[1].as_ref().unwrap().dims(), &[2, 2]);
+    assert_eq!(f64_values(eigen_jvp[0].as_ref().unwrap()), vec![1.0, 0.0]);
 }

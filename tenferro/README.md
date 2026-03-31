@@ -20,7 +20,8 @@ The current public surface is intentionally narrow:
 - Direct tensor methods:
   - elementwise/reduction: `add`, `exp`, `sum`
   - tensor contraction: `einsum`
-  - linalg: `solve`, `det`, `norm`, `qr`, `svd`
+  - linalg: `solve`, `solve_triangular`, `det`, `inv`, `slogdet`, `cholesky`,
+    `lstsq`, `lu`, `norm`, `qr`, `svd`, `eig`, `eigen`, `pinv`, `matrix_exp`
 - Runtime control:
   - `RuntimeContext`
   - `set_default_runtime`
@@ -36,6 +37,35 @@ wired tensor methods. It returns both the primal outputs and optional output
 tangents in `JvpResult`. It is not a public dual-builder API, and it does not
 promise higher-order forward-mode or HVP support.
 
+## Tensor AD coverage
+
+### Public `Tensor` methods wired into `jvp(...)`
+
+| Operation | Public `Tensor` entrypoint | JVP dtypes |
+|-----------|----------------------------|------------|
+| add | `Tensor::add` | real + complex |
+| exp | `Tensor::exp` | real + complex |
+| sum | `Tensor::sum` | real + complex |
+| einsum | `Tensor::einsum` | real + complex |
+| solve | `Tensor::solve` | real + complex |
+| solve_triangular | `Tensor::solve_triangular` | real + complex |
+| det | `Tensor::det` | real only |
+| inv | `Tensor::inv` | real only |
+| slogdet | `Tensor::slogdet` | real only |
+| cholesky | `Tensor::cholesky` | real only |
+| lstsq | `Tensor::lstsq` | real only |
+| lu | `Tensor::lu` | real + complex |
+| norm | `Tensor::norm` | real only |
+| qr | `Tensor::qr` | real + complex |
+| svd | `Tensor::svd` | real + complex |
+| eig | `Tensor::eig` | real input, complex outputs |
+| eigen | `Tensor::eigen` | real only |
+| pinv | `Tensor::pinv` | real only |
+| matrix_exp | `Tensor::matrix_exp` | real only |
+
+At the current `Tensor` seam, all operations with internal first-order
+`frule/rrule` coverage are exposed on the public dynamic AD surface.
+
 ## Runtime-backed operations
 
 `add`, `exp`, and `sum` work directly on the dynamic carrier.
@@ -45,10 +75,20 @@ runtime:
 
 - `Tensor::einsum`
 - `Tensor::solve`
+- `Tensor::solve_triangular`
 - `Tensor::det`
+- `Tensor::inv`
+- `Tensor::slogdet`
+- `Tensor::cholesky`
+- `Tensor::lstsq`
+- `Tensor::lu`
 - `Tensor::norm`
 - `Tensor::qr`
 - `Tensor::svd`
+- `Tensor::eig`
+- `Tensor::eigen`
+- `Tensor::pinv`
+- `Tensor::matrix_exp`
 
 Install a default runtime with `set_default_runtime(...)` or use
 `runtime::with_runtime(...)` for an explicit scoped call.

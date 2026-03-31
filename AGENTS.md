@@ -7,8 +7,12 @@ Before acting, read the vendored shared rules from `template-rs`:
 - `ai/vendor/template-rs/common-agent-rules.md`
 - `ai/vendor/template-rs/numerical-rust-rules.md`
 - `ai/vendor/template-rs/pr-workflow-rules.md`
+- `REPOSITORY_RULES.md`
 
 The sections below are tenferro-specific additions and overrides.
+
+Before implementation work, review `REPOSITORY_RULES.md`.
+Before creating a PR, review `REPOSITORY_RULES.md` again.
 
 ## Current Implementation Status
 

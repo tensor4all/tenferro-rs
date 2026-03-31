@@ -76,3 +76,23 @@ fn jvp_handles_qr_with_runtime() {
     assert_eq!(result.outputs[0].dims(), &[2, 2]);
     assert_eq!(result.outputs[1].dims(), &[2, 2]);
 }
+
+#[test]
+fn jvp_try_to_vec_materializes_logical_dense_views() {
+    let _runtime = with_cpu_runtime();
+    let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 2.0], &[2, 2]).unwrap();
+    let da = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 0.0], &[2, 2]).unwrap();
+
+    let result = jvp(
+        |inputs| inputs[0].matrix_exp().map(|out| vec![out]),
+        &[a],
+        &[Some(da)],
+    )
+    .unwrap();
+
+    let tangent = result.output_tangents[0].as_ref().unwrap();
+    approx_eq(
+        &tangent.try_to_vec::<f64>().unwrap(),
+        &[std::f64::consts::E, 0.0, 0.0, 0.0],
+    );
+}
