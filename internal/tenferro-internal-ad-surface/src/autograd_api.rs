@@ -1,392 +1,98 @@
-use std::collections::HashMap;
+use chainrules_core::Differentiable as _;
 
-use chainrules_core::Differentiable;
+use crate::{Error, Result, Tensor};
 
-use crate::core::{DynTensor, NodeId};
-use crate::{AdTensor, Error, Result, Tensor};
-
-/// Options for reverse-mode gradient accumulation.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::BackwardOptions;
-///
-/// let opts = BackwardOptions::default();
-/// assert!(!opts.retain_graph);
-/// assert!(!opts.create_graph);
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct BackwardOptions {
     pub retain_graph: bool,
-    pub create_graph: bool,
 }
 
-/// Options for functional reverse-mode gradient queries.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::GradOptions;
-///
-/// let opts = GradOptions::default();
-/// assert!(!opts.retain_graph);
-/// assert!(!opts.create_graph);
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct GradOptions {
     pub retain_graph: bool,
-    pub create_graph: bool,
 }
 
-fn reverse_tape(output: &Tensor) -> Option<tidu::Tape<crate::DynTensor>> {
-    match output {
-        Tensor::F32(value) => value.reverse_tape(),
-        Tensor::F64(value) => value.reverse_tape(),
-        Tensor::C32(value) => value.reverse_tape(),
-        Tensor::C64(value) => value.reverse_tape(),
-    }
+fn invalid_argument(message: impl Into<String>) -> Error {
+    chainrules_core::AutodiffError::InvalidArgument(message.into()).into()
 }
 
-fn default_seed(output: &Tensor) -> Result<Tensor> {
-    match output {
-        Tensor::F32(value) => Ok(Tensor::F32(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::F64(value) => Ok(Tensor::F64(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::C32(value) => Ok(Tensor::C32(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-        Tensor::C64(value) => Ok(Tensor::C64(crate::AdTensor::new_primal(
-            value.structured_primal().seed_cotangent(),
-        ))),
-    }
+fn default_seed(output: &Tensor) -> crate::DynTensor {
+    output.primal().seed_cotangent()
 }
 
-fn accumulate_optional_grad(slot: &mut Option<Tensor>, grad: Option<Tensor>) -> Result<()> {
+fn accumulate_optional_grad(slot: &mut Option<crate::DynTensor>, grad: Option<crate::DynTensor>) {
     match (slot.take(), grad) {
-        (None, None) => {
-            *slot = None;
-            Ok(())
-        }
-        (Some(existing), None) => {
-            *slot = Some(existing);
-            Ok(())
-        }
-        (None, Some(new_grad)) => {
-            *slot = Some(new_grad);
-            Ok(())
-        }
+        (None, None) => *slot = None,
+        (Some(existing), None) => *slot = Some(existing),
+        (None, Some(new_grad)) => *slot = Some(new_grad),
         (Some(existing), Some(new_grad)) => {
-            *slot = Some(existing.add(&new_grad)?);
-            Ok(())
+            *slot = Some(
+                <crate::DynTensor as chainrules_core::Differentiable>::accumulate_tangent(
+                    existing, &new_grad,
+                ),
+            );
         }
     }
 }
 
-/// Computes gradients of `outputs` with respect to the requested `inputs`.
-///
-/// This mirrors `torch.autograd.grad(...)` more closely than leaf-local
-/// `Tensor::grad()`.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::{grad, set_default_runtime, GradOptions, RuntimeContext, Tensor};
-/// use tenferro_prims::CpuContext;
-///
-/// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-/// let mut x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-/// let mut y = Tensor::from_slice(&[3.0_f64, 4.0], &[2]).unwrap();
-/// x.set_requires_grad(true).unwrap();
-/// y.set_requires_grad(true).unwrap();
-///
-/// let out = x.add(&y).unwrap().sum().unwrap();
-/// let grads = grad(&[&out], &[&x, &y], None, GradOptions::default()).unwrap();
-/// assert_eq!(grads.len(), 2);
-/// ```
 pub fn grad(
     outputs: &[&Tensor],
     inputs: &[&Tensor],
     grad_outputs: Option<&[Tensor]>,
     options: GradOptions,
 ) -> Result<Vec<Option<Tensor>>> {
-    if options.create_graph {
-        return Err(Error::UnsupportedAdOp {
-            op: "grad(create_graph)",
-        });
-    }
     if let Some(grad_outputs) = grad_outputs {
         if grad_outputs.len() != outputs.len() {
-            return Err(Error::InvalidAdTensor {
-                message: format!(
-                    "grad_outputs length mismatch: expected {}, found {}",
-                    outputs.len(),
-                    grad_outputs.len()
-                ),
-            });
+            return Err(invalid_argument(format!(
+                "grad_outputs length mismatch: expected {}, found {}",
+                outputs.len(),
+                grad_outputs.len()
+            )));
         }
     }
 
     let mut accum = vec![None; inputs.len()];
-    let mut shared_tape: Option<tidu::Tape<crate::DynTensor>> = None;
+    let wrt = inputs.iter().map(|input| input.value()).collect::<Vec<_>>();
 
     for (index, output) in outputs.iter().enumerate() {
-        let seed = match grad_outputs {
-            Some(grad_outputs) => &grad_outputs[index],
-            None => &default_seed(output)?,
-        };
-
-        if let Some(tape) = reverse_tape(output) {
-            if let Some(expected) = &shared_tape {
-                if !expected.same_tape(&tape) {
-                    return Err(Error::MixedReverseTape {
-                        expected: expected.id() as u64,
-                        found: tape.id() as u64,
-                    });
-                }
-            } else {
-                shared_tape = Some(tape);
-            }
-        }
-
-        let grads = output.pullback_wrt(seed, inputs)?;
-        for (slot, grad) in accum.iter_mut().zip(grads.into_iter()) {
-            accumulate_optional_grad(slot, grad)?;
+        let seed = grad_outputs
+            .map(|grads| grads[index].primal().clone())
+            .unwrap_or_else(|| default_seed(output));
+        let grads = output.value().grad_wrt_with_seed(seed, &wrt)?;
+        for (slot, grad) in accum.iter_mut().zip(grads) {
+            accumulate_optional_grad(slot, grad);
         }
     }
 
-    if !options.retain_graph {
-        if let Some(tape) = shared_tape {
-            tape.free_graph();
-        }
-    }
-
-    Ok(accum)
+    let _ = options.retain_graph;
+    Ok(accum
+        .into_iter()
+        .map(|grad| grad.map(Tensor::from))
+        .collect())
 }
 
-/// Accumulates gradients into the requested leaf `inputs`.
-///
-/// This is the eager reverse-mode entrypoint corresponding to
-/// `torch.autograd.backward(...)`.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::{backward, set_default_runtime, BackwardOptions, RuntimeContext, Tensor};
-/// use tenferro_prims::CpuContext;
-///
-/// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-/// let mut x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-/// x.set_requires_grad(true).unwrap();
-/// let out = x.exp().unwrap().sum().unwrap();
-/// backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
-/// assert!(x.grad().is_some());
-/// ```
 pub fn backward(
     outputs: &[&Tensor],
     grad_outputs: Option<&[Tensor]>,
-    inputs: &[&Tensor],
     options: BackwardOptions,
 ) -> Result<()> {
-    if options.create_graph {
-        return Err(Error::UnsupportedAdOp {
-            op: "backward(create_graph)",
-        });
-    }
-    let grads = grad(
-        outputs,
-        inputs,
-        grad_outputs,
-        GradOptions {
-            retain_graph: options.retain_graph,
-            create_graph: false,
-        },
-    )?;
-    for (input, grad) in inputs.iter().zip(grads.into_iter()) {
-        if let Some(grad) = grad {
-            input.accumulate_grad(&grad)?;
+    if let Some(grad_outputs) = grad_outputs {
+        if grad_outputs.len() != outputs.len() {
+            return Err(invalid_argument(format!(
+                "grad_outputs length mismatch: expected {}, found {}",
+                outputs.len(),
+                grad_outputs.len()
+            )));
         }
     }
+
+    for (index, output) in outputs.iter().enumerate() {
+        let seed = grad_outputs
+            .map(|grads| grads[index].primal().clone())
+            .unwrap_or_else(|| default_seed(output));
+        output.value().backward_with_seed(seed)?;
+    }
+
+    let _ = options.retain_graph;
     Ok(())
-}
-
-/// Options for HVP computation.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::HvpOptions;
-///
-/// let opts = HvpOptions::default();
-/// assert!(!opts.retain_graph);
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct HvpOptions {
-    /// If true, do not free the computation graph after HVP.
-    pub retain_graph: bool,
-}
-
-/// Result of a Hessian-vector product computation.
-///
-/// # Examples
-///
-/// ```ignore
-/// let result = hvp(&output, &[&x], &[&v], HvpOptions::default())?;
-/// let grad = result.gradients[0].as_ref();
-/// let hvp_val = result.hvps[0].as_ref();
-/// ```
-#[derive(Debug)]
-pub struct HvpResult {
-    /// Gradients of the output with respect to each input.
-    pub gradients: Vec<Option<Tensor>>,
-    /// Hessian-vector products for each input.
-    pub hvps: Vec<Option<Tensor>>,
-}
-
-fn dyn_primal_from_snapshot(snapshot: DynTensor) -> Tensor {
-    match snapshot {
-        DynTensor::F32(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::F64(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::C32(value) => Tensor::from(AdTensor::new_primal(value)),
-        DynTensor::C64(value) => Tensor::from(AdTensor::new_primal(value)),
-    }
-}
-
-fn reverse_handle(value: &Tensor) -> Option<(NodeId, tidu::Tape<DynTensor>)> {
-    match value {
-        Tensor::F32(value) => value.reverse_handle(),
-        Tensor::F64(value) => value.reverse_handle(),
-        Tensor::C32(value) => value.reverse_handle(),
-        Tensor::C64(value) => value.reverse_handle(),
-    }
-}
-
-fn as_tracked_dyn(output: &Tensor) -> Option<tidu::TrackedValue<DynTensor>> {
-    match output {
-        Tensor::F32(value) => value.as_tracked(),
-        Tensor::F64(value) => value.as_tracked(),
-        Tensor::C32(value) => value.as_tracked(),
-        Tensor::C64(value) => value.as_tracked(),
-    }
-}
-
-fn input_to_dyn_tensor(input: &Tensor) -> DynTensor {
-    match input {
-        Tensor::F32(value) => DynTensor::F32(value.structured_primal().clone()),
-        Tensor::F64(value) => DynTensor::F64(value.structured_primal().clone()),
-        Tensor::C32(value) => DynTensor::C32(value.structured_primal().clone()),
-        Tensor::C64(value) => DynTensor::C64(value.structured_primal().clone()),
-    }
-}
-
-/// Computes gradient and Hessian-vector product for a scalar output.
-///
-/// `output` must be a scalar (rank-0) `tenferro::Tensor` on a reverse-mode tape.
-/// `inputs` are the `tenferro::Tensor`s to differentiate with respect to.
-/// `v` provides the tangent direction for each input (same shapes as inputs).
-///
-/// Returns both gradients and HVPs for each input.
-///
-/// # Examples
-///
-/// ```ignore
-/// // f(x) = einsum("i,i->", &[&x, &x])  (= sum(x^2))
-/// // H = 2I, Hv = 2v
-/// let result = hvp(&output, &[&x], &[&v], HvpOptions::default())?;
-/// ```
-pub fn hvp(
-    output: &Tensor,
-    inputs: &[&Tensor],
-    v: &[&Tensor],
-    options: HvpOptions,
-) -> Result<HvpResult> {
-    let num_elements: usize = output.dims().iter().product::<usize>().max(1);
-    if !output.dims().is_empty() || num_elements != 1 {
-        return Err(Error::Autodiff(
-            chainrules_core::AutodiffError::NonScalarLoss { num_elements },
-        ));
-    }
-
-    if v.len() != inputs.len() {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "hvp: v length {} does not match inputs length {}",
-                v.len(),
-                inputs.len()
-            ),
-        });
-    }
-
-    for (i, (input, vi)) in inputs.iter().zip(v.iter()).enumerate() {
-        if input.dims() != vi.dims() {
-            return Err(Error::InvalidAdTensor {
-                message: format!(
-                    "hvp: shape mismatch at index {}: input dims {:?} vs v dims {:?}",
-                    i,
-                    input.dims(),
-                    vi.dims()
-                ),
-            });
-        }
-    }
-
-    let tape = reverse_tape(output).ok_or(Error::UnsupportedAdOp { op: "hvp" })?;
-
-    // Build leaf_tangents HashMap: NodeId -> DynTensor
-    let mut leaf_tangents: HashMap<NodeId, DynTensor> = HashMap::new();
-    for (input, vi) in inputs.iter().zip(v.iter()) {
-        if let Some((node, input_tape)) = reverse_handle(input) {
-            if !input_tape.same_tape(&tape) {
-                return Err(Error::MixedReverseTape {
-                    expected: tape.id() as u64,
-                    found: input_tape.id() as u64,
-                });
-            }
-            leaf_tangents.insert(node, input_to_dyn_tensor(vi));
-        }
-    }
-
-    let tracked = as_tracked_dyn(output).ok_or(Error::InvalidAdTensor {
-        message: "hvp requires reverse-mode output tensor".to_string(),
-    })?;
-
-    let tidu_result = tape.hvp(&tracked, &leaf_tangents).map_err(Error::from)?;
-
-    // Project results to requested inputs
-    let mut gradients = Vec::with_capacity(inputs.len());
-    let mut hvps = Vec::with_capacity(inputs.len());
-
-    for input in inputs {
-        match reverse_handle(input) {
-            Some((node, _)) => {
-                gradients.push(
-                    tidu_result
-                        .gradients
-                        .get(node)
-                        .cloned()
-                        .map(dyn_primal_from_snapshot),
-                );
-                hvps.push(
-                    tidu_result
-                        .hvp
-                        .get(node)
-                        .cloned()
-                        .map(dyn_primal_from_snapshot),
-                );
-            }
-            None => {
-                gradients.push(None);
-                hvps.push(None);
-            }
-        }
-    }
-
-    if !options.retain_graph {
-        tape.free_graph();
-    }
-
-    Ok(HvpResult { gradients, hvps })
 }

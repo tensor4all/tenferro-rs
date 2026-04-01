@@ -185,15 +185,12 @@ pub(crate) fn solve_ex<T>(
 ) -> Result<SolveTensorExResult<T>>
 where
     T: KernelLinalgScalar,
+    T::Real: num_traits::Float,
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
-
-    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -201,6 +198,20 @@ where
         "solve_ex",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        let info_shape = if rhs.output_batch_dims.is_empty() {
+            vec![]
+        } else {
+            rhs.output_batch_dims.clone()
+        };
+        return Ok(SolveTensorExResult {
+            solution: b_contig,
+            info: tensor_from_data_on_space(vec![0i32; bc], &info_shape, a.logical_memory_space())?,
+        });
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -256,10 +267,6 @@ where
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
-
-    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -267,6 +274,12 @@ where
         "solve",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        return Ok(b_contig);
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -320,7 +333,7 @@ where
         "b",
     )?;
 
-    if n == 0 || bc == 0 {
+    if n == 0 || bc == 0 || rhs.nrhs == 0 {
         return Ok(rhs_contig);
     }
 
@@ -375,11 +388,6 @@ where
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let nrhs = rhs.nrhs;
     let bc = batch_count(&rhs.output_batch_dims);
-    let a_batch_indexer =
-        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
-
-    let a_contig =
-        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -387,6 +395,13 @@ where
         "solve_triangular",
         "b",
     )?;
+    if n == 0 || bc == 0 || nrhs == 0 {
+        return Ok(b_contig);
+    }
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
+    let a_contig =
+        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -858,6 +873,25 @@ where
             &mut all_values[i * n..(i + 1) * n],
             &mut all_vectors[i * mat_size..(i + 1) * mat_size],
         );
+
+        for col in 0..n {
+            let mut norm_sq = <T::Real as num_traits::Zero>::zero();
+            for row in 0..n {
+                let value = all_vectors[i * mat_size + row + col * n];
+                let mag = <T::Complex as crate::LinalgScalar>::abs_real(&value);
+                norm_sq = norm_sq + mag * mag;
+            }
+            let norm = <T::Real as num_traits::Float>::sqrt(norm_sq);
+            if norm > <T::Real as num_traits::Zero>::zero() {
+                let scale = <T::Complex as crate::LinalgScalar>::from_real(
+                    <T::Real as num_traits::One>::one() / norm,
+                );
+                for row in 0..n {
+                    let index = i * mat_size + row + col * n;
+                    all_vectors[index] = all_vectors[index] * scale;
+                }
+            }
+        }
     }
 
     let mut val_shape = vec![n];

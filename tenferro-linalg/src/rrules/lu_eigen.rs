@@ -1,4 +1,6 @@
 use super::*;
+use num_traits::Float;
+use tenferro_algebra::Conjugate;
 
 /// Reverse-mode AD rule for LU (VJP / pullback).
 ///
@@ -243,17 +245,18 @@ where
 /// };
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn eigen_rrule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
-    cotangent: &EigenCotangent<T>,
+    cotangent: &EigenCotangent<T, T::Real>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + Conjugate,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    // Symmetric eigendecomposition: A = V diag(E) V^T
+    // Hermitian eigendecomposition: A = V diag(E) V^H
     let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
@@ -262,9 +265,9 @@ where
     // Regularization for the F-matrix: prevents division by zero when two
     // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
     // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
-    let eta: T = {
-        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
-        let eps = T::epsilon();
+    let eta: T::Real = {
+        let raw: T::Real = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::Real::epsilon();
         if raw < eps {
             eps
         } else {
@@ -281,51 +284,46 @@ where
         let v_b = &v_data[b * n * n..(b + 1) * n * n];
         let e_b = &e_data[b * n..(b + 1) * n];
 
-        // Build F-matrix (n×n): F_ij = 1/(e_j - e_i) for i≠j, 0 diagonal
-        let mut f_mat = vec![T::zero(); n * n];
+        // Build F-matrix (n×n): F_ij = (e_i - e_j)/((e_i - e_j)^2 + eta), 0 diagonal.
+        let mut f_mat = vec![T::Real::zero(); n * n];
         for i in 0..n {
             for j in 0..n {
                 if i != j {
-                    let denom = e_b[j] - e_b[i];
-                    f_mat[i + j * n] = T::one()
-                        / (denom
-                            + eta
-                                * if denom >= T::zero() {
-                                    T::one()
-                                } else {
-                                    -T::one()
-                                });
+                    let gap = e_b[i] - e_b[j];
+                    f_mat[i + j * n] = gap / (gap * gap + eta);
                 }
             }
         }
 
-        // Inner matrix D = diag(dE) + F ⊙ (V^T dV + (V^T dV)^T) / 2
+        // Inner matrix D = diag(dE) + 1/2 * (H + H^H),
+        // where H = F ⊙ (V^H dV).
         let mut d_mat = vec![T::zero(); n * n];
 
         if let Some(ref de) = cotangent.values {
             let (de_data, _) = extract_data(de)?;
             let de_b = &de_data[b * n..(b + 1) * n];
             for i in 0..n {
-                d_mat[i + i * n] = de_b[i];
+                d_mat[i + i * n] = T::from_real(de_b[i]);
             }
         }
 
         if let Some(ref dv) = cotangent.vectors {
             let (dv_data, _) = extract_data(dv)?;
             let dv_b = &dv_data[b * n * n..(b + 1) * n * n];
-            let vt_dv = backend_mat_mul(ctx, &transpose(v_b, n, n), n, n, dv_b, n)?;
-            let half: T = scalar_from(0.5).map_err(to_ad_err)?;
+            let dv_h_v = backend_mat_mul(ctx, &adjoint_transpose(dv_b, n, n), n, n, v_b, n)?;
+            let half: T::Real = scalar_from(0.5).map_err(to_ad_err)?;
             for i in 0..n {
                 for j in 0..n {
-                    let skew = half * (vt_dv[i + j * n] - vt_dv[j + i * n]);
-                    d_mat[i + j * n] = d_mat[i + j * n] + f_mat[i + j * n] * skew;
+                    let h_ij = T::from_real(f_mat[i + j * n]) * dv_h_v[i + j * n];
+                    let h_h_ij = (T::from_real(f_mat[j + i * n]) * dv_h_v[j + i * n]).conj();
+                    d_mat[i + j * n] = d_mat[i + j * n] + (h_ij + h_h_ij) * T::from_real(half);
                 }
             }
         }
 
-        // dA = V D V^T
+        // dA = V D V^H
         let vd = backend_mat_mul(ctx, v_b, n, n, &d_mat, n)?;
-        let da_b = backend_mat_mul(ctx, &vd, n, n, &transpose(v_b, n, n), n)?;
+        let da_b = backend_mat_mul(ctx, &vd, n, n, &adjoint_transpose(v_b, n, n), n)?;
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
     }

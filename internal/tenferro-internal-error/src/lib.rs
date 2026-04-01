@@ -30,7 +30,7 @@ use thiserror::Error;
 ///     if flag {
 ///         Ok(())
 ///     } else {
-///         Err(Error::InvalidAdTensor {
+///         Err(Error::InvalidTensorOperands {
 ///             message: "demo".into(),
 ///         })
 ///     }
@@ -53,13 +53,15 @@ pub enum Error {
     #[error(transparent)]
     Autodiff(#[from] chainrules_core::AutodiffError),
 
-    /// AD tensor operands are structurally invalid for the requested operation.
-    #[error("invalid AD tensor operands: {message}")]
-    InvalidAdTensor { message: String },
+    /// Tensor operands are structurally invalid for the requested operation.
+    #[error("invalid tensor operands: {message}")]
+    InvalidTensorOperands { message: String },
 
-    /// Reverse-mode operands belong to different tapes.
-    #[error("reverse-mode operands must share one tape: expected {expected}, found {found}")]
-    MixedReverseTape { expected: u64, found: u64 },
+    /// Reverse-mode operands belong to different value graphs.
+    #[error(
+        "reverse-mode operands must share one value graph: expected {expected}, found {found}"
+    )]
+    MixedReverseGraph { expected: u64, found: u64 },
 
     /// Operation is not available for the currently selected runtime.
     #[error("operation `{op}` is not supported on runtime `{runtime}`")]
@@ -85,7 +87,7 @@ pub enum Error {
 /// use tenferro_internal_error::{Error, Result};
 ///
 /// let ok: Result<i32> = Ok(1);
-/// let err: Result<i32> = Err(Error::InvalidAdTensor {
+/// let err: Result<i32> = Err(Error::InvalidTensorOperands {
 ///     message: "sample".into(),
 /// });
 ///

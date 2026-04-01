@@ -2,10 +2,9 @@ use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::{AdResult, Differentiable, DualValue};
 
 use crate::ad::delta::{prepare_reverse_context, DeltaContext, ReverseContext};
-use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
+use crate::api::{einsum_with_subscripts, einsum_with_subscripts_into};
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
@@ -47,50 +46,6 @@ where
     let base = einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &ops, None)?;
     apply_embed::<Alg, Backend>(ctx, &rctx.dctx, base)
 }
-
-/// Dual einsum (forward-mode JVP propagation).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tidu::DualValue;
-/// use tenferro_algebra::Standard;
-/// use tenferro_einsum::dual_einsum;
-/// use tenferro_prims::{CpuBackend, CpuContext};
-///
-/// let mut ctx = CpuContext::new(1);
-/// let a = DualValue::with_tangent(a_primal, a_tangent).unwrap();
-/// let b = DualValue::new(b_primal);
-/// let out = dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]).unwrap();
-/// let _ = out.tangent();
-/// ```
-pub fn dual_einsum<Alg, Backend>(
-    ctx: &mut BackendContext<Alg, Backend>,
-    subscripts: &str,
-    operands: &[&DualValue<Tensor<Alg::Scalar>>],
-) -> AdResult<DualValue<Tensor<Alg::Scalar>>>
-where
-    Alg: Semiring,
-    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg>,
-    Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
-    BackendContext<Alg, Backend>: TensorTempPoolContext,
-{
-    let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.primal()).collect();
-    let output = einsum::<Alg, Backend>(ctx, subscripts, &primals, None)
-        .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
-
-    let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
-        operands.iter().map(|op| op.tangent()).collect();
-    if tangents.iter().all(|t| t.is_none()) {
-        return Ok(DualValue::new(output));
-    }
-
-    let tangent = einsum_frule::<Alg, Backend>(ctx, subscripts, &primals, &tangents)
-        .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
-    DualValue::with_tangent(output, tangent)
-}
-
 /// Reverse-mode rule (rrule) for einsum without building a global tape.
 ///
 /// # Examples
@@ -243,102 +198,4 @@ where
             )
         }
     }
-}
-
-/// Local HVP rule for einsum without building a global tape.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_algebra::Standard;
-/// use tenferro_einsum::einsum_hvp;
-/// use tenferro_prims::{CpuBackend, CpuContext};
-///
-/// let mut ctx = CpuContext::new(1);
-/// let hvps = einsum_hvp::<Standard<f64>, CpuBackend>(
-///     &mut ctx,
-///     "ij,jk->ik",
-///     &[&a, &b],
-///     &[Some(&da), None],
-///     &dc,
-///     &ddc,
-/// ).unwrap();
-/// assert_eq!(hvps.len(), 2);
-/// ```
-pub fn einsum_hvp<Alg, Backend>(
-    ctx: &mut BackendContext<Alg, Backend>,
-    subscripts: &str,
-    primals: &[&Tensor<Alg::Scalar>],
-    tangents: &[Option<&Tensor<Alg::Scalar>>],
-    cotangent: &Tensor<Alg::Scalar>,
-    cotangent_tangent: &Tensor<Alg::Scalar>,
-) -> Result<Vec<(Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>>
-where
-    Alg: Semiring,
-    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg>,
-    BackendContext<Alg, Backend>: TensorTempPoolContext,
-{
-    let subs = Subscripts::parse(subscripts)?;
-    let n = primals.len();
-    let mut results = Vec::with_capacity(n);
-
-    let shapes: Vec<&[usize]> = primals.iter().map(|op| op.dims()).collect();
-    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
-
-    for k in 0..n {
-        let rctx = prepare_reverse_context::<Alg::Scalar>(&subs, primals, k, &size_dict)?;
-
-        let grad_k = eval_with_embed::<Alg, Backend>(ctx, &rctx, cotangent)?;
-
-        let mut hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
-            ctx,
-            &rctx.dctx.base_subs,
-            &rctx.assemble_rev_operands(cotangent_tangent),
-            None,
-        )?);
-
-        for (j, tangent_j_opt) in tangents.iter().enumerate().take(n) {
-            if j == k {
-                continue;
-            }
-            if let Some(tangent_j) = *tangent_j_opt {
-                let ops = rctx.assemble_rev_operands_with_sub(cotangent, j, k, tangent_j);
-                match &mut hvp_base {
-                    None => {
-                        hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
-                            ctx,
-                            &rctx.dctx.base_subs,
-                            &ops,
-                            None,
-                        )?);
-                    }
-                    Some(existing) => {
-                        let one = <Alg::Scalar as num_traits::One>::one();
-                        einsum_with_subscripts_into::<Alg, Backend>(
-                            ctx,
-                            &rctx.dctx.base_subs,
-                            &ops,
-                            one,
-                            one,
-                            existing,
-                            None,
-                        )?;
-                    }
-                }
-            }
-        }
-
-        let hvp_k = match hvp_base {
-            Some(t) => apply_embed::<Alg, Backend>(ctx, &rctx.dctx, t)?,
-            None => {
-                let space = primals[k].logical_memory_space();
-                Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)?
-            }
-        };
-
-        results.push((grad_k, hvp_k));
-    }
-
-    Ok(results)
 }

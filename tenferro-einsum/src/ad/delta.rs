@@ -129,36 +129,6 @@ impl<T> ReverseContext<T> {
         }
         ops
     }
-
-    /// Like `assemble_rev_operands`, but replaces the conjugated operand for
-    /// primal index `sub_j` with `tangent`.  `skip_k` is the primal index being
-    /// differentiated (already excluded from `conj_store`).
-    pub fn assemble_rev_operands_with_sub<'a>(
-        &'a self,
-        leading: &'a Tensor<T>,
-        sub_j: usize,
-        skip_k: usize,
-        tangent: &'a Tensor<T>,
-    ) -> Vec<&'a Tensor<T>> {
-        let n = self.conj_store.len() + 1;
-        let mut ops: Vec<&Tensor<T>> = vec![leading];
-        let mut ci = 0;
-        for i in 0..n {
-            if i == skip_k {
-                continue;
-            }
-            if i == sub_j {
-                ops.push(tangent);
-            } else {
-                ops.push(&self.conj_store[ci]);
-            }
-            ci += 1;
-        }
-        for dt in &self.dctx.delta_tensors {
-            ops.push(dt);
-        }
-        ops
-    }
 }
 
 /// Build a `ReverseContext` for differentiating with respect to operand `k`.

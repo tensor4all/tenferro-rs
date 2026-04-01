@@ -34,7 +34,10 @@ pub(crate) fn validate_lstsq_rhs<T: LinalgScalar>(
     m: usize,
     batch_dims: &[usize],
 ) -> Result<()> {
-    if b.ndim() != 1 + batch_dims.len() {
+    let rhs_core_rank = b.ndim().checked_sub(batch_dims.len()).ok_or_else(|| {
+        Error::InvalidArgument(format!("lstsq expects b shape (m, *), got {:?}", b.dims()))
+    })?;
+    if !matches!(rhs_core_rank, 1 | 2) {
         return Err(Error::InvalidArgument(format!(
             "lstsq expects b shape (m, *), got {:?}",
             b.dims()
@@ -46,11 +49,11 @@ pub(crate) fn validate_lstsq_rhs<T: LinalgScalar>(
             b.dims()[0]
         )));
     }
-    if &b.dims()[1..] != batch_dims {
+    if &b.dims()[rhs_core_rank..] != batch_dims {
         return Err(Error::InvalidArgument(format!(
             "lstsq batch dims mismatch: expected {:?}, got {:?}",
             batch_dims,
-            &b.dims()[1..]
+            &b.dims()[rhs_core_rank..]
         )));
     }
     Ok(())
@@ -103,6 +106,7 @@ pub(crate) fn matrix_only_norm_kind_ad_error(kind: NormKind) -> chainrules_core:
 }
 
 /// Validate Hermitian/symmetric structure for batched square matrices.
+#[cfg(test)]
 pub(crate) fn validate_hermitian_batches<T: LinalgScalar>(
     data: &[T],
     offset: usize,

@@ -146,7 +146,7 @@ pub(crate) fn phi<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     Ok(result)
 }
 
-/// phi* (adjoint of phi): `(X + X^T - diag(X)) / 2`.
+/// phi* (adjoint of phi): `(X + X^H - diag(X)) / 2`.
 pub(crate) fn phi_star<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     let half: T = scalar_from(0.5).map_err(to_ad_err)?;
     let mut result = vec![T::zero(); n * n];
@@ -155,7 +155,7 @@ pub(crate) fn phi_star<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>
             if i == j {
                 result[i + j * n] = half * data[i + j * n];
             } else {
-                result[i + j * n] = half * (data[i + j * n] + data[j + i * n]);
+                result[i + j * n] = half * (data[i + j * n] + data[j + i * n].conj());
             }
         }
     }

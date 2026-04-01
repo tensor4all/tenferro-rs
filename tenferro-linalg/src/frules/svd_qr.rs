@@ -1,5 +1,10 @@
 use super::*;
 
+type SvdFruleOutput<T> = (
+    SvdResult<T, <T as LinalgScalar>::Real>,
+    SvdResult<T, <T as LinalgScalar>::Real>,
+);
+
 // ============================================================================
 // AD functions: frule (forward-mode, stateless)
 // ============================================================================
@@ -29,7 +34,7 @@ pub fn svd_frule<T, C>(
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
-) -> AdResult<(SvdResult<T, T::Real>, SvdResult<T, T::Real>)>
+) -> AdResult<SvdFruleOutput<T>>
 where
     T: KernelLinalgScalar,
     T::Real: num_traits::Float,

@@ -35,8 +35,11 @@ pub fn eig_frule<
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
+        + backend::TensorLinalgContextFor<num_complex::Complex<T>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
-    C::Backend: 'static,
+    num_complex::Complex<T>: KernelLinalgScalar,
+    <C as backend::TensorLinalgContextFor<T>>::Backend: 'static,
+    <C as backend::TensorLinalgContextFor<num_complex::Complex<T>>>::Backend: 'static,
     T::Real: tenferro_tensor::KeepCountScalar,
 {
     // Forward pass
@@ -64,7 +67,7 @@ where
         let da_complex: Vec<Cx<T>> = da.iter().map(|&x| Cx::new(x, T::zero())).collect();
 
         // W = V^{-1} dA V = solve(V, dA_c @ V)
-        let da_v = complex_mat_mul_nn(&da_complex, v, n);
+        let da_v = complex_mat_mul_nn_backend(ctx, &da_complex, v, n)?;
         let w = complex_solve_nn(ctx, v, &da_v, n)?;
 
         // d_lambda = diag(W)
@@ -83,12 +86,26 @@ where
             }
         }
 
-        // dV = V * (F .* W)
+        // Raw eigenvector tangent dV_raw = V * (F .* W)
         let mut fw = vec![zero_c; n * n];
         for k in 0..n * n {
             fw[k] = f_mat[k] * w[k];
         }
-        let dv = complex_mat_mul_nn(v, &fw, n);
+        let dv_raw = complex_mat_mul_nn_backend(ctx, v, &fw, n)?;
+
+        // PyTorch and tenferro normalize eigenvectors to unit norm, so the raw
+        // tangent must be projected back to that gauge:
+        // dV = dV_raw - V * diag(Re(V^H dV_raw)).
+        let vh = complex_conj_transpose(v, n);
+        let vh_dv = complex_mat_mul_nn_backend(ctx, &vh, &dv_raw, n)?;
+        let mut dv = dv_raw;
+        for j in 0..n {
+            let correction = Cx::new(vh_dv[j + j * n].re, T::zero());
+            for i in 0..n {
+                let index = i + j * n;
+                dv[index] = dv[index] - v[index] * correction;
+            }
+        }
         dvec_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dv);
     }
 
@@ -121,7 +138,7 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv_frule<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -158,8 +175,8 @@ where
         let ap_b = &ap_data[batch * n * m..(batch + 1) * n * m];
         let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
 
-        let dat = transpose(da_b, m, n); // n×m
-        let apt = transpose(ap_b, n, m); // m×n
+        let dat = adjoint_transpose(da_b, m, n); // n×m
+        let apt = adjoint_transpose(ap_b, n, m); // m×n
 
         // Term 1: -A+ dA A+ (n×m × m×n × n×m = n×m)
         let ap_da = backend_mat_mul(ctx, ap_b, n, m, da_b, n)?;

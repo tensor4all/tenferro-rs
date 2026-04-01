@@ -5,14 +5,12 @@
 
 use tenferro_device::Error;
 use tenferro_ext_tropical::ad::{
-    extract_inner, promote_to_tropical, tracked_tropical_einsum, tropical_einsum_rrule,
-    TropicalScalar,
+    extract_inner, promote_to_tropical, tropical_einsum_rrule, TropicalScalar,
 };
 use tenferro_ext_tropical::{
     MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::Tape;
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 
@@ -371,88 +369,6 @@ fn maxmul_matmul_backward_product_rule() {
     assert!((db[1] - 1.6).abs() < eps); // dB[1,0]
     assert!((db[2] - 0.0).abs() < eps); // dB[0,1]
     assert!((db[3] - 1.6).abs() < eps); // dB[1,1]
-}
-
-// ============================================================================
-// Tape-based backward tests via tracked_tropical_einsum
-// ============================================================================
-
-#[test]
-fn tracked_maxplus_matmul_pullback() {
-    // Verify that tracked_tropical_einsum correctly records on the tape
-    // and pullback produces correct gradients.
-    //
-    // We compute C = tropical_matmul(A, B) then compute loss = C[0,0]
-    // by selecting a single element using standard einsum on a 1-element
-    // slice, or by building a dot-product with a selector vector.
-    //
-    // For simplicity, we'll use a 1x1 contraction to extract a scalar:
-    // Chain: tropical matmul -> standard dot with ones -> scalar loss
-    let tape = Tape::<Tensor<f64>>::new();
-
-    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-
-    let a = tape.leaf(a_data);
-    let b = tape.leaf(b_data);
-
-    // C = MaxPlus matmul(A, B)
-    let c =
-        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-            "ij,jk->ik",
-            &[&a, &b],
-        )
-        .unwrap();
-
-    // Verify the forward pass produced correct inner values
-    let c_data = c.value().buffer().as_slice().unwrap();
-    // C[0,0] = max(1+5, 3+6) = 9,  C[1,0] = max(2+5, 4+6) = 10
-    // C[0,1] = max(1+7, 3+8) = 11, C[1,1] = max(2+7, 4+8) = 12
-    assert_eq!(c_data[0], 9.0); // C[0,0]
-    assert_eq!(c_data[1], 10.0); // C[1,0]
-    assert_eq!(c_data[2], 11.0); // C[0,1]
-    assert_eq!(c_data[3], 12.0); // C[1,1]
-
-    // Compute loss = sum(C) using standard einsum with ones vector:
-    // loss = C . ones = einsum("ik,ik->", C, ones_2x2)
-    use std::sync::{Arc, Mutex};
-    use tenferro_device::LogicalMemorySpace;
-    use tenferro_einsum::tracked_einsum;
-
-    let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL).unwrap();
-    let ones_tracked = tidu::TrackedValue::new(ones);
-
-    let ctx = Arc::new(Mutex::new(ctx()));
-    let loss = tracked_einsum::<tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
-        ctx.clone(),
-        "ik,ik->",
-        &[&c, &ones_tracked],
-    )
-    .unwrap();
-
-    // loss = 9 + 10 + 11 + 12 = 42
-    assert_eq!(loss.value().buffer().as_slice().unwrap()[0], 42.0);
-
-    let grads = tape.pullback(&loss).unwrap();
-
-    // The loss cotangent is all ones for each element of C (dot product with ones).
-    // So the gradients through the tropical matmul are:
-    // All winners j=1, so same as the standalone test above.
-    let ga = grads.get(a.node_id().unwrap()).unwrap();
-    let gb = grads.get(b.node_id().unwrap()).unwrap();
-
-    let ga_data = ga.buffer().as_slice().unwrap();
-    let gb_data = gb.buffer().as_slice().unwrap();
-
-    assert_eq!(ga_data[0], 0.0); // dA[0,0]
-    assert_eq!(ga_data[1], 0.0); // dA[1,0]
-    assert_eq!(ga_data[2], 2.0); // dA[0,1]
-    assert_eq!(ga_data[3], 2.0); // dA[1,1]
-
-    assert_eq!(gb_data[0], 0.0); // dB[0,0]
-    assert_eq!(gb_data[1], 2.0); // dB[1,0]
-    assert_eq!(gb_data[2], 0.0); // dB[0,1]
-    assert_eq!(gb_data[3], 2.0); // dB[1,1]
 }
 
 // ============================================================================
@@ -816,49 +732,6 @@ fn rrule_rejects_cotangent_shape_mismatch() {
     );
 }
 
-#[test]
-fn tracked_accepts_single_operand() {
-    let tape = Tape::<Tensor<f64>>::new();
-    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
-    let a = tape.leaf(a_data);
-
-    let result = tracked_tropical_einsum::<
-        MaxPlus<f64>,
-        MaxPlusAlgebra<f64>,
-        tenferro_prims::CpuBackend,
-    >("i->", &[&a]);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn tracked_no_grad_returns_plain_tensor() {
-    // When operands don't require grad, tracked_tropical_einsum should
-    // return a TrackedValue without node_id (not on tape).
-    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-
-    // Non-tracked (no tape, no gradient)
-    let a = tidu::TrackedValue::new(a_data);
-    let b = tidu::TrackedValue::new(b_data);
-
-    let c =
-        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-            "ij,jk->ik",
-            &[&a, &b],
-        )
-        .unwrap();
-
-    // Result should not have a node ID (not recorded on tape)
-    assert!(c.node_id().is_none());
-
-    // But should have correct values
-    let c_data = c.value().buffer().as_slice().unwrap();
-    assert_eq!(c_data[0], 9.0); // max(1+5, 3+6) = 9
-    assert_eq!(c_data[1], 10.0); // max(2+5, 4+6) = 10
-    assert_eq!(c_data[2], 11.0); // max(1+7, 3+8) = 11
-    assert_eq!(c_data[3], 12.0); // max(2+7, 4+8) = 12
-}
-
 // ============================================================================
 // f32 backward test
 // ============================================================================
@@ -1073,33 +946,4 @@ fn maxplus_unary_col_max_backward() {
     assert_eq!(da[1], 1.0); // A[1,0]
     assert_eq!(da[2], 1.0); // A[0,1]
     assert_eq!(da[3], 0.0); // A[1,1]
-}
-
-#[test]
-fn tracked_maxplus_unary_full_contraction_pullback() {
-    let tape = Tape::<Tensor<f64>>::new();
-    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
-    //      [4, 2]]
-    let a_data = Tensor::<f64>::from_slice(&[1.0, 4.0, 5.0, 2.0], &[2, 2], COL).unwrap();
-    let a = tape.leaf(a_data);
-
-    // ij-> : max of all = 5
-    let c =
-        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-            "ij->",
-            &[&a],
-        )
-        .unwrap();
-
-    assert_eq!(c.value().buffer().as_slice().unwrap()[0], 5.0);
-
-    let grads = tape.pullback(&c).unwrap();
-    let ga = grads.get(a.node_id().unwrap()).unwrap();
-    let ga_data = ga.buffer().as_slice().unwrap();
-
-    // Winner is A[0,1] = 5.0, flat index 2
-    assert_eq!(ga_data[0], 0.0);
-    assert_eq!(ga_data[1], 0.0);
-    assert_eq!(ga_data[2], 1.0); // winner
-    assert_eq!(ga_data[3], 0.0);
 }

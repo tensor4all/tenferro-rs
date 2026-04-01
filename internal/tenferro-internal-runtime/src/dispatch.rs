@@ -85,35 +85,69 @@ impl<T> ScaledRealLinalgDispatchValue for T where
 {
 }
 
+pub trait ScaledLinalgDispatchValue:
+    crate::contracts::LinalgRuntimeValue
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
+impl<T> ScaledLinalgDispatchValue for T where
+    T: crate::contracts::LinalgRuntimeValue
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
 pub trait NormLinalgDispatchValue:
-    crate::contracts::RealLinalgRuntimeValue
+    crate::contracts::LinalgRuntimeValue
     + tenferro_linalg::NormPrimal<CpuContext>
     + tenferro_linalg::NormPrimal<CudaContext>
     + tenferro_linalg::NormPrimal<RocmContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
 {
 }
 
 impl<T> NormLinalgDispatchValue for T where
-    T: crate::contracts::RealLinalgRuntimeValue
+    T: crate::contracts::LinalgRuntimeValue
         + tenferro_linalg::NormPrimal<CpuContext>
         + tenferro_linalg::NormPrimal<CudaContext>
         + tenferro_linalg::NormPrimal<RocmContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
 {
 }
 
 pub trait SlogdetLinalgDispatchValue:
-    crate::contracts::RealLinalgRuntimeValue
+    crate::contracts::LinalgRuntimeValue
     + tenferro_linalg::SlogdetDispatch<CpuContext>
+    + tenferro_linalg::SlogdetFruleDispatch<CpuContext>
+    + tenferro_linalg::SlogdetRruleDispatch<CpuContext>
     + tenferro_linalg::SlogdetDispatch<CudaContext>
+    + tenferro_linalg::SlogdetFruleDispatch<CudaContext>
+    + tenferro_linalg::SlogdetRruleDispatch<CudaContext>
     + tenferro_linalg::SlogdetDispatch<RocmContext>
+    + tenferro_linalg::SlogdetFruleDispatch<RocmContext>
+    + tenferro_linalg::SlogdetRruleDispatch<RocmContext>
 {
 }
 
 impl<T> SlogdetLinalgDispatchValue for T where
-    T: crate::contracts::RealLinalgRuntimeValue
+    T: crate::contracts::LinalgRuntimeValue
         + tenferro_linalg::SlogdetDispatch<CpuContext>
+        + tenferro_linalg::SlogdetFruleDispatch<CpuContext>
+        + tenferro_linalg::SlogdetRruleDispatch<CpuContext>
         + tenferro_linalg::SlogdetDispatch<CudaContext>
+        + tenferro_linalg::SlogdetFruleDispatch<CudaContext>
+        + tenferro_linalg::SlogdetRruleDispatch<CudaContext>
         + tenferro_linalg::SlogdetDispatch<RocmContext>
+        + tenferro_linalg::SlogdetFruleDispatch<RocmContext>
+        + tenferro_linalg::SlogdetRruleDispatch<RocmContext>
 {
 }
 
@@ -278,40 +312,3 @@ pub fn with_linalg_runtime<T: LinalgRuntimeValue, R>(
         },
     )
 }
-
-macro_rules! runtime_slot_closure {
-    ($slot:ty, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
-        |$ctx| {
-            type $backend = <$slot as crate::dispatch::RuntimeSlot>::SemiringBackend;
-            let $runtime = <$slot as crate::dispatch::RuntimeSlot>::NAME;
-            $body
-        }
-    }};
-}
-
-pub(crate) use runtime_slot_closure;
-
-macro_rules! dispatch_einsum_runtime {
-    ($ty:ty, $op:expr, |$ctx:ident, $backend:ident| $body:expr) => {{
-        dispatch_einsum_runtime!($ty, $op, |$ctx, $backend, _runtime| $body)
-    }};
-    ($ty:ty, $op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
-        crate::dispatch::with_einsum_runtime::<$ty, _>(
-            $op,
-            crate::dispatch::runtime_slot_closure!(
-                crate::dispatch::CpuRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-            crate::dispatch::runtime_slot_closure!(
-                crate::dispatch::CudaRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-            crate::dispatch::runtime_slot_closure!(
-                crate::dispatch::RocmRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-        )
-    }};
-}
-
-pub(crate) use dispatch_einsum_runtime;

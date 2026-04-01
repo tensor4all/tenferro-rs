@@ -81,6 +81,13 @@ fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
 
     let rhs = Tensor::from_slice(&[1.0_f64, -2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     validate_lstsq_rhs(&rhs, 2, &[]).unwrap();
+    let rhs_matrix = Tensor::from_slice(
+        &[1.0_f64, -2.0, 3.0, 4.0],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    validate_lstsq_rhs(&rhs_matrix, 2, &[]).unwrap();
 
     let scalar_cotangent = Tensor::from_vec(vec![1.0_f64], &[], &[], 0).unwrap();
     validate_norm_cotangent(&scalar_cotangent, &[]).unwrap();
