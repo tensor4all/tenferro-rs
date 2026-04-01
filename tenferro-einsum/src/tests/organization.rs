@@ -46,6 +46,7 @@ fn einsum_is_grouped_by_syntax_planning_execution_api_and_math_rules() {
         "src/api/owned.rs",
         "src/api/into.rs",
         "src/ad/mod.rs",
+        "src/ad/delta.rs",
         "src/ad/rules.rs",
     ] {
         assert!(
@@ -83,6 +84,7 @@ fn split_einsum_modules_stay_under_size_guideline() {
         "src/api/owned.rs",
         "src/api/into.rs",
         "src/ad/mod.rs",
+        "src/ad/delta.rs",
         "src/ad/rules.rs",
     ] {
         let lines = line_count(relative);

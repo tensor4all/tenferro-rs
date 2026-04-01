@@ -2,6 +2,7 @@ mod analytic_phase1;
 mod backend_stubs;
 mod complex_real_phase1;
 mod complex_scale_phase1;
+mod complex_undefined_ops;
 mod coverage_protocols;
 mod indexing_phase1;
 mod metadata_bridge_phase1;

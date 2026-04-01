@@ -1,3 +1,4 @@
+mod delta;
 mod rules;
 
 pub(crate) use rules::einsum_frule_impl;
