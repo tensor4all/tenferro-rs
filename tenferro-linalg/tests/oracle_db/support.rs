@@ -152,6 +152,10 @@ pub fn replayable_norm_kind(record: &CaseRecord) -> Option<NormKind> {
     }
 }
 
+const NORM_UNSUPPORTED_REASON: &str = "tenferro replay currently supports only the whole-tensor torch.linalg.norm subset expressible by current NormKind AD rules; remaining dim-aware and unsupported ord/rank cases are not replayed yet";
+const VECTOR_NORM_UNSUPPORTED_REASON: &str = "tenferro replay currently supports only the rank-1 scalar-output vector_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=P(2)";
+const MATRIX_NORM_UNSUPPORTED_REASON: &str = "tenferro replay currently supports only the rank-2 scalar-output matrix_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=Fro";
+
 fn replayable_vector_ord(value: Option<&Value>) -> Option<NormKind> {
     match value {
         None | Some(Value::Null) => Some(NormKind::Lp(2.0)),
@@ -400,14 +404,30 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
             ReplayKind::SlogdetIdentity,
             "tenferro replay currently supports this family only for float32/float64/complex64/complex128",
         ),
-        ("norm", "identity", "identity", "success")
-        | ("matrix_norm", "identity", "identity", "success")
-        | ("vector_norm", "identity", "identity", "success") => {
+        ("norm", "identity", "identity", "success") => {
             if replayable_norm_kind(record).is_some() {
                 RecordSupport::Supported(ReplayKind::NormIdentity)
             } else {
                 RecordSupport::Unsupported {
-                    reason: "tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules",
+                    reason: NORM_UNSUPPORTED_REASON,
+                }
+            }
+        }
+        ("vector_norm", "identity", "identity", "success") => {
+            if replayable_norm_kind(record).is_some() {
+                RecordSupport::Supported(ReplayKind::NormIdentity)
+            } else {
+                RecordSupport::Unsupported {
+                    reason: VECTOR_NORM_UNSUPPORTED_REASON,
+                }
+            }
+        }
+        ("matrix_norm", "identity", "identity", "success") => {
+            if replayable_norm_kind(record).is_some() {
+                RecordSupport::Supported(ReplayKind::NormIdentity)
+            } else {
+                RecordSupport::Unsupported {
+                    reason: MATRIX_NORM_UNSUPPORTED_REASON,
                 }
             }
         }

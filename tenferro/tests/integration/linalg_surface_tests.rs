@@ -236,3 +236,36 @@ fn complex_vector_and_matrix_norm_surface_are_public() {
     assert_eq!(matrix_norm.dims(), &[] as &[usize]);
     approx_eq(&matrix_norm.try_to_vec::<f64>().unwrap(), &[5.0]);
 }
+
+#[test]
+fn complex_whole_tensor_norm_surface_is_public() {
+    let _runtime = with_cpu_runtime();
+
+    let vector = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+    let matrix = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let vector_norm = vector.norm(NormKind::Lp(2.0)).unwrap();
+    assert_eq!(vector_norm.dims(), &[] as &[usize]);
+    approx_eq(&vector_norm.try_to_vec::<f64>().unwrap(), &[5.0]);
+
+    let matrix_norm = matrix.norm(NormKind::Fro).unwrap();
+    assert_eq!(matrix_norm.dims(), &[] as &[usize]);
+    approx_eq(&matrix_norm.try_to_vec::<f64>().unwrap(), &[5.0]);
+}

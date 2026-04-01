@@ -133,7 +133,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | lu_factor | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_factor_ex | identity | identity | 60 | tenferro replay currently supports this family only for float64 |
 | lu_solve | identity | identity | 924 | tenferro replay currently supports this family only for float64 |
-| matrix_norm | identity | identity | 208 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
+| matrix_norm | identity | identity | 208 | tenferro replay currently supports only the rank-2 scalar-output matrix_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=Fro |
 | matrix_power | identity | identity | 54 | tenferro replay currently supports this family only for float64 |
 | max_binary | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
 | maximum | identity | identity | 18 | tenferro replay does not implement this oracle family yet |
@@ -167,7 +167,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | nn_functional_softsign | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_tanhshrink | identity | identity | 12 | tenferro replay does not implement this oracle family yet |
 | nn_functional_threshold | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
-| norm | identity | identity | 200 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
+| norm | identity | identity | 200 | tenferro replay currently supports only the whole-tensor torch.linalg.norm subset expressible by current NormKind AD rules; remaining dim-aware and unsupported ord/rank cases are not replayed yet |
 | pinv | identity | identity | 24 | tenferro replay currently supports this family only for float64/complex64/complex128 |
 | pinv_hermitian | identity | identity | 24 | tenferro replay currently supports this family only for float64 |
 | pinv_singular | identity | identity | 144 | tenferro replay currently supports this family only for float64 |
@@ -226,5 +226,5 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | var | identity | identity | 56 | tenferro replay does not implement this oracle family yet |
 | var_unbiased | identity | identity | 8 | tenferro replay does not implement this oracle family yet |
 | vecdot | identity | identity | 132 | tenferro replay currently supports this family only for float64 |
-| vector_norm | identity | identity | 672 | tenferro replay currently supports only the scalar-output norm/vector_norm subset covered by current whole-tensor NormKind AD rules |
+| vector_norm | identity | identity | 672 | tenferro replay currently supports only the rank-1 scalar-output vector_norm slice accepted by the current NormKind adapter; complex inputs are further restricted to ord=P(2) |
 | xlogy | identity | identity | 18 | tenferro replay does not implement this oracle family yet |

@@ -901,3 +901,90 @@ fn complex_vector_and_matrix_norm_support_public_jvp() {
         &[4.0 / 5.0],
     );
 }
+
+#[test]
+fn complex_whole_tensor_norm_supports_public_jvp() {
+    let _runtime = with_cpu_runtime();
+
+    let vector = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+    let dvector = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap();
+
+    let vector_result = jvp(
+        |inputs| {
+            inputs[0]
+                .norm(tenferro::NormKind::Lp(2.0))
+                .map(|out| vec![out])
+        },
+        &[vector],
+        &[Some(dvector)],
+    )
+    .unwrap();
+    approx_eq(
+        &vector_result.outputs[0].try_to_vec::<f64>().unwrap(),
+        &[5.0],
+    );
+    approx_eq(
+        &vector_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[4.0 / 5.0],
+    );
+
+    let matrix = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let dmatrix = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+
+    let matrix_result = jvp(
+        |inputs| inputs[0].norm(tenferro::NormKind::Fro).map(|out| vec![out]),
+        &[matrix],
+        &[Some(dmatrix)],
+    )
+    .unwrap();
+    approx_eq(
+        &matrix_result.outputs[0].try_to_vec::<f64>().unwrap(),
+        &[5.0],
+    );
+    approx_eq(
+        &matrix_result.output_tangents[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<f64>()
+            .unwrap(),
+        &[4.0 / 5.0],
+    );
+}

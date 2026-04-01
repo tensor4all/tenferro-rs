@@ -284,3 +284,64 @@ fn complex_vector_and_matrix_norm_support_backward() {
         ],
     );
 }
+
+#[test]
+fn complex_whole_tensor_norm_supports_backward() {
+    let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let vector = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[3],
+    )
+    .unwrap()
+    .with_requires_grad(true);
+    let vector_norm = vector.norm(tenferro::NormKind::Lp(2.0)).unwrap();
+    assert_eq!(vector_norm.dims(), &[] as &[usize]);
+    assert_eq!(vector_norm.try_to_vec::<f64>().unwrap(), vec![5.0]);
+    let vector_grads = grad(&[&vector_norm], &[&vector], None, GradOptions::default()).unwrap();
+    complex_approx_eq(
+        &vector_grads[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            Complex64::new(3.0 / 5.0, 4.0 / 5.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+
+    let matrix = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap()
+    .with_requires_grad(true);
+    let matrix_norm = matrix.norm(tenferro::NormKind::Fro).unwrap();
+    assert_eq!(matrix_norm.dims(), &[] as &[usize]);
+    assert_eq!(matrix_norm.try_to_vec::<f64>().unwrap(), vec![5.0]);
+    let matrix_grads = grad(&[&matrix_norm], &[&matrix], None, GradOptions::default()).unwrap();
+    complex_approx_eq(
+        &matrix_grads[0]
+            .as_ref()
+            .unwrap()
+            .try_to_vec::<Complex64>()
+            .unwrap(),
+        &[
+            Complex64::new(3.0 / 5.0, 4.0 / 5.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+}

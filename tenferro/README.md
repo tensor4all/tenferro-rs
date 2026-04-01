@@ -56,7 +56,7 @@ promise higher-order forward-mode or HVP support.
 | cholesky | `Tensor::cholesky` | real + complex |
 | lstsq | `Tensor::lstsq` | real only |
 | lu | `Tensor::lu` | real + complex |
-| norm | `Tensor::norm` | real only |
+| norm | `Tensor::norm` | real + complex, current slice: whole-tensor `NormKind`; complex inputs currently support `Fro` and rank-1 `Lp(2)` |
 | vector_norm | `Tensor::vector_norm` | real + complex, current slice: rank-1 with `dim=None`, `keepdim=false`, `ord=P(2)` |
 | matrix_norm | `Tensor::matrix_norm` | real + complex, current slice: rank-2 with `dim=None` or `(0, 1)`, `keepdim=false`, `ord=Fro` |
 | qr | `Tensor::qr` | real + complex |
