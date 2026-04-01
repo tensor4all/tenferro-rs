@@ -257,3 +257,54 @@ where
     tensor_from_data(grad_a, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tenferro_prims::CpuContext;
+    use tenferro_tensor::MemoryOrder;
+
+    fn tensor_data<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
+        let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+        let offset = contiguous.offset() as usize;
+        let len = contiguous.dims().iter().product::<usize>().max(1);
+        contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+    }
+
+    #[test]
+    fn lstsq_rrule_returns_zero_grads_when_both_cotangents_are_none() {
+        let mut ctx = CpuContext::new(1);
+        let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+        let b = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        let grad = lstsq_rrule(&mut ctx, &a, &b, None, None).unwrap();
+        assert_eq!(tensor_data(&grad.a), vec![0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(tensor_data(&grad.b), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn lstsq_rrule_accepts_residual_summary_cotangent_for_multi_rhs() {
+        let mut ctx = CpuContext::new(1);
+        let a = Tensor::from_slice(
+            &[2.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b = Tensor::from_slice(
+            &[1.0_f64, 3.0, 2.0, 0.0, 1.0, 4.0],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let dresiduals =
+            Tensor::from_slice(&[0.5_f64, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        let grad = lstsq_rrule(&mut ctx, &a, &b, None, Some(&dresiduals)).unwrap();
+        assert_eq!(grad.a.dims(), &[3, 2]);
+        assert_eq!(grad.b.dims(), &[3, 2]);
+        assert!(tensor_data(&grad.a).iter().any(|value| value.abs() > 0.0));
+        assert!(tensor_data(&grad.b).iter().any(|value| value.abs() > 0.0));
+    }
+}

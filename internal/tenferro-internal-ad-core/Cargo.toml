@@ -14,3 +14,6 @@ doctest = false
 chainrules-core.workspace = true
 tidu.workspace = true
 tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
+
+[dev-dependencies]
+tenferro-tensor = { path = "../../tenferro-tensor" }

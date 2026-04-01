@@ -85,3 +85,59 @@ where
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tenferro_internal_runtime::{set_default_runtime, RuntimeContext};
+    use tenferro_prims::CpuContext;
+    use tenferro_tensor::MemoryOrder;
+
+    fn dense_f64(values: &[f64], dims: &[usize]) -> Tensor<f64> {
+        Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    #[test]
+    fn einsum_frule_rejects_tangent_arity_mismatch() {
+        let x = dense_f64(&[1.0, 2.0], &[2]);
+        let y = dense_f64(&[3.0, 4.0], &[2]);
+
+        let err = einsum_frule("i,i->", &[&x, &y], &[Some(&x)]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("einsum_frule requires tangents.len() == primals.len()"));
+    }
+
+    #[test]
+    fn einsum_helpers_run_with_cpu_runtime() {
+        let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+        let x = dense_f64(&[1.0, 2.0], &[2]);
+        let y = dense_f64(&[3.0, 5.0], &[2]);
+        let dx = dense_f64(&[0.5, -1.0], &[2]);
+        let cotangent = dense_f64(&[2.0], &[]);
+
+        let primal = einsum_primal("i,i->", &[&x, &y]).unwrap();
+        let tangent = einsum_frule("i,i->", &[&x, &y], &[Some(&dx), None]).unwrap();
+        let grads = einsum_rrule("i,i->", &[&x, &y], &cotangent).unwrap();
+
+        assert_eq!(primal.buffer().as_slice().unwrap(), &[13.0]);
+        assert_eq!(tangent.buffer().as_slice().unwrap(), &[-3.5]);
+        assert_eq!(grads[0].buffer().as_slice().unwrap(), &[6.0, 10.0]);
+        assert_eq!(grads[1].buffer().as_slice().unwrap(), &[2.0, 4.0]);
+    }
+
+    #[test]
+    fn solve_triangular_rrule_requires_runtime_and_preserves_shapes() {
+        let a = dense_f64(&[2.0, 0.0, 1.0, 3.0], &[2, 2]);
+        let b = dense_f64(&[4.0, 9.0], &[2]);
+        let cotangent = dense_f64(&[1.0, 2.0], &[2]);
+
+        let err = solve_triangular_rrule(&a, &b, &cotangent, false).unwrap_err();
+        assert!(matches!(err, Error::RuntimeNotConfigured));
+
+        let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+        let grad = solve_triangular_rrule(&a, &b, &cotangent, false).unwrap();
+        assert_eq!(grad.a.dims(), &[2, 2]);
+        assert_eq!(grad.b.dims(), &[2]);
+    }
+}

@@ -68,11 +68,17 @@
     "tenferro-tensor/src/tensor/structural.rs": 64,
     "tenferro-tensor/src/structured_tensor/conversion.rs": 75,
     "internal/tenferro-internal-ad-core/src/registry.rs": 78,
+    "internal/tenferro-internal-ad-linalg/src/linearized.rs": 69,
+    "internal/tenferro-internal-ad-ops/src/linearized.rs": 76,
+    "internal/tenferro-internal-ad-ops/src/math.rs": 45,
     "internal/tenferro-internal-ad-ops/src/ops/einsum/dense_rule.rs": 50,
     "internal/tenferro-internal-ad-surface/src/autograd_api.rs": 70,
     "internal/tenferro-internal-ad-surface/src/core/dynamic/dyn_ad_tensor/eager_linalg/extra_tensorized.rs": 79,
+    "internal/tenferro-internal-frontend-core/src/autodiff.rs": 48,
+    "internal/tenferro-internal-frontend-core/src/structured_einsum.rs": 23,
     "internal/tenferro-internal-ad-surface/src/ops/linalg/primal/factorizations.rs": 75,
     "internal/tenferro-internal-ad-surface/src/ops/linalg/primal/solve.rs": 78,
-    "internal/tenferro-internal-runtime/src/dispatch.rs": 65
+    "internal/tenferro-internal-runtime/src/dispatch.rs": 65,
+    "extension/tenferro-ext-tropical/src/ad/convert.rs": 65
   }
 }
