@@ -10,7 +10,8 @@ use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, StructuredTenso
 use tenferro_internal_runtime::contracts::{LinalgRuntimeValue, RealLinalgRuntimeValue};
 use tenferro_internal_runtime::dispatch::{
     with_linalg_runtime, LuLinalgDispatchValue, MatrixExpLinalgDispatchValue,
-    NormLinalgDispatchValue, ScaledLinalgDispatchValue, SlogdetLinalgDispatchValue,
+    NormLinalgDispatchValue, ScaledLinalgDispatchValue, ScaledRealLinalgDispatchValue,
+    SlogdetLinalgDispatchValue,
 };
 use tenferro_linalg::backend::{CudaLinalgScalar, LinalgCapabilityOp};
 use tenferro_linalg::{
@@ -401,8 +402,8 @@ where
         lstsq(ctx, &dense_a, &dense_b).map_err(Error::from)
     })?;
     Ok(vec![
-        dyn_from_dense(output.x),
-        dyn_from_dense(output.residual),
+        dyn_from_dense(output.solution),
+        dyn_from_dense(output.residuals),
     ])
 }
 
@@ -443,7 +444,7 @@ fn lstsq_jvp_t<T>(
     tangents: &[Option<DynTensor>],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
+    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Scalar + Zero + Conjugate + Copy,
 {
     if tangents.iter().all(Option::is_none) {
         return Ok(vec![None, None]);
@@ -456,8 +457,8 @@ where
         lstsq_frule(ctx, &dense_a, &dense_b, &tangent_a, &tangent_b).map_err(Error::from)
     })?;
     Ok(vec![
-        Some(dyn_from_dense(tangent.x)),
-        Some(dyn_from_dense(tangent.residual)),
+        Some(dyn_from_dense(tangent.solution)),
+        Some(dyn_from_dense(tangent.residuals)),
     ])
 }
 
@@ -468,28 +469,33 @@ fn lstsq_vjp_t<T>(
     input_grad_mask: &[bool],
 ) -> Result<Vec<Option<DynTensor>>>
 where
-    T: RealLinalgRuntimeValue + DynTensorTyped + Conjugate + Copy,
+    T: ScaledRealLinalgDispatchValue + DynTensorTyped + Conjugate + Copy,
 {
     if !input_grad_mask.iter().any(|needed| *needed) {
         return Ok(vec![None, None]);
     }
-    if output_cotangents
-        .get(1)
-        .and_then(|value| value.as_ref())
-        .is_some()
-    {
-        return Err(invalid_argument(
-            "lstsq residual cotangent is unsupported; residual is an auxiliary output",
-        ));
-    }
-    let Some(cotangent_x) = output_cotangents[0].as_ref() else {
+    let cotangent_solution = output_cotangents[0]
+        .as_ref()
+        .map(|cotangent| dense_dyn_tensor_typed::<T>(cotangent, "lstsq_vjp solution"))
+        .transpose()?;
+    let cotangent_residuals = output_cotangents[1]
+        .as_ref()
+        .map(|cotangent| dense_dyn_tensor_typed::<T>(cotangent, "lstsq_vjp residuals"))
+        .transpose()?;
+    if cotangent_solution.is_none() && cotangent_residuals.is_none() {
         return Ok(vec![None, None]);
-    };
+    }
     let dense_a = a.to_dense()?;
     let dense_b = b.to_dense()?;
-    let dense_cotangent_x = dense_dyn_tensor_typed::<T>(cotangent_x, "lstsq_vjp x")?;
     let grad = dispatch_linalg!(T, "lstsq_vjp", LinalgCapabilityOp::Lstsq, |ctx| {
-        lstsq_rrule(ctx, &dense_a, &dense_b, &dense_cotangent_x).map_err(Error::from)
+        lstsq_rrule(
+            ctx,
+            &dense_a,
+            &dense_b,
+            cotangent_solution.as_ref(),
+            cotangent_residuals.as_ref(),
+        )
+        .map_err(Error::from)
     })?;
     Ok(vec![
         input_grad_mask[0].then(|| dyn_from_dense(grad.a)),

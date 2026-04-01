@@ -259,7 +259,7 @@ fn dyn_linalg_ops_lstsq_and_lu_linearized_jvp_preserve_packaging_and_auxiliary_o
 
     let lstsq = lstsq_dyn_values(&a, &b).unwrap();
     assert_eq!(lstsq.solution.primal().dims(), &[2]);
-    assert_eq!(lstsq.residuals.primal().dims(), &[2]);
+    assert_eq!(lstsq.residuals.primal().dims(), &[0]);
     assert_eq!(lstsq.rank, vec![2]);
     assert_eq!(f64_values(&lstsq.singular_values), vec![3.0, 2.0]);
 
@@ -275,8 +275,8 @@ fn dyn_linalg_ops_lstsq_and_lu_linearized_jvp_preserve_packaging_and_auxiliary_o
         .unwrap();
     assert_eq!(lstsq_jvp.len(), 2);
     assert_eq!(lstsq_jvp[0].as_ref().unwrap().dims(), &[2]);
-    assert_eq!(lstsq_jvp[1].as_ref().unwrap().dims(), &[2]);
-    assert_eq!(f64_values(lstsq_jvp[1].as_ref().unwrap()), vec![0.0, 0.0]);
+    assert_eq!(lstsq_jvp[1].as_ref().unwrap().dims(), &[0]);
+    assert!(f64_values(lstsq_jvp[1].as_ref().unwrap()).is_empty());
 
     let lu = lu_dyn_value(&a, LuPivot::Partial).unwrap();
     assert_eq!(lu.p.primal().dims(), &[2, 2]);

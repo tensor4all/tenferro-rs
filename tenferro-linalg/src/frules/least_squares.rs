@@ -29,7 +29,10 @@ fn rhs_output_dims(core_rows: usize, nrhs: usize, batch_dims: &[usize]) -> Vec<u
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn lstsq_frule<
-    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_algebra::Conjugate,
+    T: KernelLinalgScalar<Real = T>
+        + num_traits::Float
+        + tenferro_algebra::Conjugate
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C,
 >(
     ctx: &mut C,
@@ -37,68 +40,98 @@ pub fn lstsq_frule<
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
     tangent_b: &Tensor<T>,
-) -> AdResult<(LstsqResult<T>, LstsqResult<T>)>
+) -> AdResult<(LstsqResult<T, T::Real>, LstsqResult<T, T::Real>)>
 where
     T: KernelLinalgScalar,
+    T::Real: LinalgScalar<Real = T::Real> + num_traits::Float + tenferro_tensor::KeepCountScalar,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
-        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq_frule")
         .map_err(to_ad_err)?;
 
-    // dx = A^+ (db - dA x), where A^+ = (A^T A)^{-1} A^T
+    // dx = dA^+ * b + A^+ * db
+    // d residual_summaries = 2 * sum(real((A x - b) * conj(dA x - db))), per RHS
     let result = lstsq(ctx, a, b)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let (pinv_a, dpinv_a) = pinv_frule(ctx, a, tangent_a, None)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
 
-    let (a_data, _) = extract_data(a)?;
-    let (x_data, _) = extract_data(&result.x)?;
+    let (x_data, _) = extract_data(&result.solution)?;
     let (da_data, _) = extract_data(tangent_a)?;
+    let (ap_data, _) = extract_data(&pinv_a)?;
+    let (dap_data, _) = extract_data(&dpinv_a)?;
+    let (b_data, _) = extract_data(b)?;
     let (db_data, _) = extract_data(tangent_b)?;
     let nrhs = if b.ndim() == 1 + batch_dims.len() {
         1
     } else {
         b.dims()[1]
     };
+    let rhs_is_vector = nrhs == 1 && b.ndim() == 1 + batch_dims.len();
+    let aux = lstsq_aux(ctx, a)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let summarize_residuals = m > n
+        && crate::primal::lstsq_has_full_rank(&aux.rank, n)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let two = scalar_from::<T::Real>(2.0)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
 
     let mut dx_data = vec![T::zero(); n * nrhs * bc];
-    let mut dres_data = vec![T::zero(); m * nrhs * bc];
+    let mut dresidual_data = vec![T::Real::zero(); bc * nrhs];
+    let (a_data, _) = extract_data(a)?;
 
     for batch in 0..bc {
-        let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
         let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
+        let ap_b = &ap_data[batch * n * m..(batch + 1) * n * m];
+        let dap_b = &dap_data[batch * n * m..(batch + 1) * n * m];
+        let b_b = &b_data[batch * m * nrhs..(batch + 1) * m * nrhs];
         let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
         let db_b = &db_data[batch * m * nrhs..(batch + 1) * m * nrhs];
 
-        // dA x (m×nrhs)
-        let da_x = backend_mat_mul(ctx, da_b, m, n, x_b, nrhs)?;
-        // db - dA x
-        let rhs: Vec<T> = db_b.iter().zip(da_x.iter()).map(|(&a, &b)| a - b).collect();
-
-        // A^+ rhs = (A^T A)^{-1} A^T rhs
-        let at_rhs = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, &rhs, nrhs)?;
-        let ata = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, a_b, n)?;
-        let dx_b_vec = backend_solve(ctx, &ata, &at_rhs, n, nrhs)?;
+        let dpinv_b = backend_mat_mul(ctx, dap_b, n, m, b_b, nrhs)?;
+        let pinv_db = backend_mat_mul(ctx, ap_b, n, m, db_b, nrhs)?;
+        let dx_b_vec = add_vec(&dpinv_b, &pinv_db);
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
 
-        // d(residual) = db - dA x - A dx
-        let a_dx = backend_mat_mul(ctx, a_b, m, n, &dx_b_vec, nrhs)?;
-        for i in 0..m * nrhs {
-            dres_data[batch * m * nrhs + i] = rhs[i] - a_dx[i];
+        if summarize_residuals {
+            let ax = backend_mat_mul(ctx, a_b, m, n, x_b, nrhs)?;
+            let da_x = backend_mat_mul(ctx, da_b, m, n, x_b, nrhs)?;
+            for col in 0..nrhs {
+                let mut acc = T::Real::zero();
+                for row in 0..m {
+                    let idx = row + col * m;
+                    let residual = ax[idx] - b_b[idx];
+                    let dresidual = da_x[idx] - db_b[idx];
+                    acc = acc + residual * dresidual;
+                }
+                dresidual_data[batch * nrhs + col] = two * acc;
+            }
         }
     }
 
     let x_dims = rhs_output_dims(n, nrhs, batch_dims);
-    let res_dims = rhs_output_dims(m, nrhs, batch_dims);
+    let dx = tensor_from_data(dx_data, &x_dims)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let dresiduals = if summarize_residuals {
+        let dims = crate::primal::residual_summary_output_dims(batch_dims, nrhs, rhs_is_vector);
+        tensor_from_data(dresidual_data, &dims)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?
+    } else {
+        crate::primal::empty_residual_summary::<T::Real>(a.logical_memory_space())
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?
+    };
     let dresult = LstsqResult {
-        x: tensor_from_data(dx_data, &x_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
-        residual: tensor_from_data(dres_data, &res_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        solution: dx,
+        residuals: dresiduals,
     };
     Ok((result, dresult))
 }

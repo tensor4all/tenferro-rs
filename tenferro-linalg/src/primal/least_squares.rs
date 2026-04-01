@@ -1,4 +1,62 @@
 use super::*;
+use tenferro_tensor::MemoryOrder;
+
+pub(crate) fn residual_summary_output_dims(
+    batch_dims: &[usize],
+    nrhs: usize,
+    rhs_is_vector: bool,
+) -> Vec<usize> {
+    if rhs_is_vector {
+        batch_dims.to_vec()
+    } else {
+        output_dims(&[nrhs], batch_dims)
+    }
+}
+
+pub(crate) fn empty_residual_summary<T: LinalgScalar>(
+    memory: tenferro_device::LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    Tensor::<T>::zeros(&[0], memory, MemoryOrder::ColumnMajor)
+}
+
+pub(crate) fn full_rank_residual_summaries<T: KernelLinalgScalar>(
+    residual_matrix: &Tensor<T>,
+    m: usize,
+    nrhs: usize,
+    batch_dims: &[usize],
+    rhs_is_vector: bool,
+) -> Result<Tensor<T::Real>>
+where
+    T::Real: LinalgScalar<Real = T::Real> + num_traits::Float,
+{
+    let bc = batch_count(batch_dims);
+    let (residual_data, _) =
+        extract_data(residual_matrix).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+    let mut summary = vec![T::Real::zero(); bc * nrhs];
+    for batch in 0..bc {
+        for col in 0..nrhs {
+            let mut acc = T::Real::zero();
+            for row in 0..m {
+                let value = residual_data[batch * m * nrhs + row + col * m].abs_real();
+                acc = acc + value * value;
+            }
+            summary[batch * nrhs + col] = acc;
+        }
+    }
+    let dims = residual_summary_output_dims(batch_dims, nrhs, rhs_is_vector);
+    tensor_from_data(summary, &dims)
+}
+
+pub(crate) fn lstsq_has_full_rank<
+    T: LinalgScalar<Real = T> + num_traits::Float + tenferro_tensor::KeepCountScalar,
+>(
+    rank: &Tensor<T>,
+    expected_rank: usize,
+) -> Result<bool> {
+    let (rank_data, _) = extract_data(rank).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+    let expected_rank = scalar_from::<T>(expected_rank as f64)?;
+    Ok(rank_data.iter().all(|value| *value == expected_rank))
+}
 
 /// Solve the least squares problem: `x = argmin ||Ax - b||²`.
 ///
@@ -14,18 +72,20 @@ use super::*;
 /// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 1.0, 1.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], col).unwrap();
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
-/// assert_eq!(result.x.dims(), &[2]);
+/// assert_eq!(result.solution.dims(), &[2]);
 /// ```
 pub fn lstsq<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
-) -> Result<LstsqResult<T>>
+) -> Result<LstsqResult<T, T::Real>>
 where
     T: KernelLinalgScalar + tenferro_algebra::Conjugate,
+    T::Real: LinalgScalar<Real = T::Real> + num_traits::Float + tenferro_tensor::KeepCountScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
-        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq")?;
@@ -71,19 +131,23 @@ where
     };
     let projected_rhs =
         crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &q_input, &qtb, m, k, nrhs)?;
-    let projected_rhs = if rhs_is_vector {
-        projected_rhs.squeeze_dim(1)?
-    } else {
-        projected_rhs
-    };
-    let residual = crate::prims_bridge::scalar_binary_same_shape(
+    let residual_matrix = crate::prims_bridge::scalar_binary_same_shape(
         ctx,
-        &b_input,
         &projected_rhs,
+        &rhs_matrix,
         tenferro_prims::ScalarBinaryOp::Sub,
     )?;
+    let aux = lstsq_aux(ctx, a)?;
+    let residuals = if m > n && lstsq_has_full_rank(&aux.rank, n)? {
+        full_rank_residual_summaries(&residual_matrix, m, nrhs, batch_dims, rhs_is_vector)?
+    } else {
+        empty_residual_summary::<T::Real>(a.logical_memory_space())?
+    };
 
-    Ok(LstsqResult { x, residual })
+    Ok(LstsqResult {
+        solution: x,
+        residuals,
+    })
 }
 
 /// Compute least-squares auxiliary metadata.

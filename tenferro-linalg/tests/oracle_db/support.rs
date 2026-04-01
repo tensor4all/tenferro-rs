@@ -130,13 +130,7 @@ fn replayable_lstsq_subset(record: &CaseRecord) -> bool {
     {
         return false;
     }
-    let Some(probe) = record.probes.first() else {
-        return false;
-    };
-    let Some(output_1) = probe.pytorch_ref.jvp.get("output_1") else {
-        return false;
-    };
-    output_1.shape.iter().product::<usize>() == 0
+    !record.probes.is_empty()
 }
 
 pub fn replayable_norm_kind(record: &CaseRecord) -> Option<NormKind> {
@@ -440,7 +434,7 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
                 RecordSupport::Supported(ReplayKind::LstsqIdentity)
             } else {
                 RecordSupport::Unsupported {
-                    reason: "tenferro replay currently supports only the real-valued m>=n least-squares subset with empty residual summaries",
+                    reason: "tenferro replay currently supports only the real-valued m>=n least-squares subset excluding unsupported driver-specific oracle cases",
                 }
             }
         }

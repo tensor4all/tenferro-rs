@@ -655,14 +655,13 @@ fn lstsq_lu_eig_and_eigh_support_jvp() {
             .unwrap(),
         &[0.5, 1.0 / 3.0],
     );
-    approx_eq(
-        &lstsq.output_tangents[1]
-            .as_ref()
-            .unwrap()
-            .try_to_vec::<f64>()
-            .unwrap(),
-        &[0.0, 0.0],
-    );
+    assert_eq!(lstsq.output_tangents[1].as_ref().unwrap().dims(), &[0]);
+    assert!(lstsq.output_tangents[1]
+        .as_ref()
+        .unwrap()
+        .try_to_vec::<f64>()
+        .unwrap()
+        .is_empty());
 
     let lu = jvp(
         |inputs| {

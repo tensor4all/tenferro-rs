@@ -569,7 +569,7 @@ fn oracle_db_marks_supported_lstsq_subset_for_replay() {
         support::RecordSupport::Supported(support::ReplayKind::LstsqIdentity)
     ));
 
-    let unsupported = db::parse_case_record_value(json!({
+    let overdetermined = db::parse_case_record_value(json!({
         "case_id": "lstsq_grad_oriented_f64_identity_overdetermined",
         "op": "lstsq_grad_oriented",
         "dtype": "float64",
@@ -617,10 +617,10 @@ fn oracle_db_marks_supported_lstsq_subset_for_replay() {
             }
         }]
     }))
-    .expect("unsupported lstsq record should parse");
+    .expect("overdetermined lstsq record should parse");
     assert!(matches!(
-        support::classify_record(&unsupported),
-        support::RecordSupport::Unsupported { .. }
+        support::classify_record(&overdetermined),
+        support::RecordSupport::Supported(support::ReplayKind::LstsqIdentity)
     ));
 }
 

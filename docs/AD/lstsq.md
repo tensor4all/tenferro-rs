@@ -1,128 +1,75 @@
-# Least Squares Reverse-Mode Rule (`lstsq_rrule`)
+# Least Squares AD Notes (`lstsq`)
 
-## Forward
+## Public contract
 
-$$
-x = \arg\min_x \|Ax - b\|_2^2, \quad A \in \mathbb{C}^{M \times N},\ b \in \mathbb{C}^M,\ M \geq N
-$$
+`lstsq(a, b)` returns
 
-The solution satisfies the normal equations $A^\dagger A x = A^\dagger b$.
-Via thin QR ($A = QR$): $x = R^{-1} Q^\dagger b$.
+- `solution = pinv(a) @ b`
+- `residuals = ||a @ solution - b||_F^2` per right-hand side when `m > n` and the solve is full-rank
+- `residuals = []` otherwise
 
-## Reverse rule
+The auxiliary metadata `rank` and `singular_values` are not differentiated.
 
-**Given:** cotangent $\bar{x} \in \mathbb{C}^N$ of a real scalar loss $\ell$.
+## First-order source of truth
 
-**Compute:** $\bar{A} \in \mathbb{C}^{M \times N}$ and $\bar{b} \in \mathbb{C}^M$.
+The first-order rules are expressed in terms of the pseudoinverse:
 
-### Step 1: QR decompose $A$
+### JVP for the solution
 
-$$
-A = QR
-$$
-
-where $Q \in \mathbb{C}^{M \times N}$ ($Q^\dagger Q = I_N$) and $R \in \mathbb{C}^{N \times N}$ (upper triangular).
-
-### Step 2: Solve two triangular systems
+For `x = pinv(A) b`,
 
 $$
-y = R^{-\dagger} \bar{x}, \qquad z = R^{-1} y
+dx = d(pinv(A))\, b + pinv(A)\, db
 $$
 
-Note that $z = (R^\dagger R)^{-1} \bar{x} = (A^\dagger A)^{-1} \bar{x}$.
+In the implementation, `d(pinv(A))` is provided by `pinv_frule`.
 
-### Step 3: Compute cotangents
+### JVP for the residual summaries
 
-$$
-\bar{b} = Q y
-$$
+Let
 
 $$
-\bar{A} = r \, z^\dagger - \bar{b} \, x^\dagger
+r = A x - b, \qquad dr = dA\,x - db
 $$
 
-where $r = b - Ax$ is the residual.
-
-### Complete formulas
+Then, for each right-hand side,
 
 $$
-\bar{b} = Q R^{-\dagger} \bar{x}
+d\,\mathrm{residuals} = 2 \sum \mathrm{Re}(r \odot \overline{dr})
 $$
 
-$$
-\bar{A} = (b - Ax)(R^{-1} R^{-\dagger} \bar{x})^\dagger - (Q R^{-\dagger} \bar{x}) x^\dagger
-$$
-
-### Derivation
-
-The optimality condition is $A^\dagger(Ax - b) = 0$, i.e. $A^\dagger r = 0$ where $r = b - Ax$.
-
-Differentiating the normal equations $A^\dagger A x = A^\dagger b$:
+For the current real-valued `lstsq` AD path, this reduces to
 
 $$
-dA^\dagger A x + A^\dagger dA \, x + A^\dagger A \, dx = dA^\dagger b + A^\dagger db
+d\,\mathrm{residuals} = 2 \sum r \odot dr
 $$
 
-Rearranging:
+### VJP for the solution
+
+Let `gx` be the cotangent of `solution`. Since `x = pinv(A) b`,
+
+- the cotangent for `pinv(A)` is `gx @ b^H`
+- the cotangent for `b` from this path is `pinv(A)^H @ gx`
+- the cotangent for `A` from this path is given by `pinv_rrule`
+
+This is the path used by the implementation.
+
+### VJP for the residual summaries
+
+Let `gr` be the cotangent of the summary residual outputs, broadcast per RHS. Then
 
 $$
-A^\dagger A \, dx = A^\dagger db + dA^\dagger r - A^\dagger dA \, x
+\bar{A}_{res} = 2 (gr \odot r)\, x^H
 $$
 
 $$
-dx = (A^\dagger A)^{-1}(A^\dagger db + dA^\dagger r - A^\dagger dA \, x)
+\bar{b}_{res} = -2 (gr \odot r)
 $$
 
-For the pullback, let $z = (A^\dagger A)^{-1} \bar{x}$:
+The full VJP is the sum of the solution-path and residual-summary-path contributions.
 
-$$
-\delta\ell = \langle \bar{x}, dx \rangle = \langle z, A^\dagger db + dA^\dagger r - A^\dagger dA \, x \rangle
-$$
+## Verification policy
 
-$$
-= \langle Az, db \rangle + \langle r z^\dagger, dA \rangle - \langle Az \, x^\dagger, dA \rangle
-$$
-
-Reading off the cotangents:
-
-$$
-\bar{b} = Az = A (A^\dagger A)^{-1} \bar{x} = Q R R^{-1} R^{-\dagger} \bar{x} = Q R^{-\dagger} \bar{x} = Qy
-$$
-
-$$
-\bar{A} = r z^\dagger - \bar{b} x^\dagger
-$$
-
-## Implementation notes
-
-- Compute QR once and reuse for both triangular solves.
-- Never form $(A^\dagger A)^{-1}$ explicitly; always use triangular solves.
-- The residual $r = b - Ax$ may already be available from the forward pass.
-
-## Verification
-
-### Forward check
-
-$$
-\|Ax - b\|_2 \text{ is minimized}, \quad A^\dagger(Ax - b) \approx 0
-$$
-
-### Gradient check (backward)
-
-Scalar test function (from BackwardsLinalg.jl):
-
-$$
-f(A, b) = x^\dagger \mathrm{op} \, x, \quad x = A \backslash b
-$$
-
-where $\mathrm{op}$ is a random Hermitian matrix independent of $A$ and $b$.
-
-Two separate gradient checks:
-- **$\bar{A}$:** fix $b$, perturb $A$
-- **$\bar{b}$:** fix $A$, perturb $b$
-
-## References
-
-1. BackwardsLinalg.jl (GiggleLiu), `src/lstsq.jl`.
-2. M. B. Giles, "An extended collection of matrix derivative results
-   for forward and reverse mode automatic differentiation," 2008.
+- `frule/rrule` are the semantic source of truth
+- oracle replay must exist before the rule is considered mainline
+- `LinearizedOp::jvp/vjp` is expected to be a thin adapter over these rules

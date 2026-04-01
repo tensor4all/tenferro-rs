@@ -138,7 +138,8 @@ fn tensor_lstsq_lu_eig_and_eigh_are_public() {
 
     let lstsq = a.lstsq(&rhs).unwrap();
     approx_eq(&lstsq.solution.try_to_vec::<f64>().unwrap(), &[2.0, 3.0]);
-    approx_eq(&lstsq.residuals.try_to_vec::<f64>().unwrap(), &[0.0, 0.0]);
+    assert_eq!(lstsq.residuals.dims(), &[0]);
+    assert!(lstsq.residuals.try_to_vec::<f64>().unwrap().is_empty());
     assert_eq!(lstsq.rank, vec![2]);
     approx_eq(
         &lstsq.singular_values.try_to_vec::<f64>().unwrap(),
@@ -170,6 +171,32 @@ fn tensor_lstsq_lu_eig_and_eigh_are_public() {
     approx_eq(
         &eigh.vectors.try_to_vec::<f64>().unwrap(),
         &[1.0, 0.0, 0.0, 1.0],
+    );
+}
+
+#[test]
+fn tensor_lstsq_reports_squared_residual_summaries_for_full_rank_overdetermined_systems() {
+    let _runtime = with_cpu_runtime();
+    let a = Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ],
+        &[4, 3],
+    )
+    .unwrap();
+    let b = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0], &[4, 2]).unwrap();
+
+    let lstsq = a.lstsq(&b).unwrap();
+
+    assert_eq!(lstsq.solution.dims(), &[3, 2]);
+    approx_eq(
+        &lstsq.solution.try_to_vec::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 10.0, 20.0, 30.0],
+    );
+    assert_eq!(lstsq.residuals.dims(), &[2]);
+    approx_eq(
+        &lstsq.residuals.try_to_vec::<f64>().unwrap(),
+        &[16.0, 1600.0],
     );
 }
 

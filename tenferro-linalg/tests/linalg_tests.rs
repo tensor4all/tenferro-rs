@@ -2620,15 +2620,15 @@ fn lstsq_rrule_fd_systematic() {
 
     let mut ctx = CpuContext::new(1);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
-    let x_size: usize = result.x.dims().iter().product();
+    let x_size: usize = result.solution.dims().iter().product();
 
     // Deterministic cotangent for x
     let co_data: Vec<f64> = (0..x_size)
         .map(|i| ((i * 7 + 3) % 11) as f64 / 5.0 - 1.0)
         .collect();
-    let cotangent_x = make_tensor(co_data.clone(), result.x.dims());
+    let cotangent_x = make_tensor(co_data.clone(), result.solution.dims());
 
-    let grad = lstsq_rrule(&mut ctx, &a, &b, &cotangent_x).unwrap();
+    let grad = lstsq_rrule(&mut ctx, &a, &b, Some(&cotangent_x), None).unwrap();
     let analytic_a = tensor_data(&grad.a);
 
     // FD gradient w.r.t. A
@@ -2644,12 +2644,12 @@ fn lstsq_rrule_fd_systematic() {
         let xp = tensor_data(
             &lstsq(&mut CpuContext::new(1), &make_tensor(plus, &[m, n]), &b)
                 .unwrap()
-                .x,
+                .solution,
         );
         let xm = tensor_data(
             &lstsq(&mut CpuContext::new(1), &make_tensor(minus, &[m, n]), &b)
                 .unwrap()
-                .x,
+                .solution,
         );
         for k in 0..x_size {
             fd_grad_a[idx] += co_data[k] * (xp[k] - xm[k]) / (2.0 * eps);
@@ -3205,9 +3205,9 @@ fn lstsq_frule_fd_through_x_vary_a() {
     // Analytic
     let mut ctx = CpuContext::new(1);
     let (_, dresult) = lstsq_frule(&mut ctx, &a, &b, &tangent_a, &tangent_b).unwrap();
-    let analytic = tensor_data(&dresult.x);
+    let analytic = tensor_data(&dresult.solution);
 
-    // FD: (lstsq(A + eps*dA, b).x - lstsq(A - eps*dA, b).x) / (2*eps)
+    // FD: (lstsq(A + eps*dA, b).solution - lstsq(A - eps*dA, b).solution) / (2*eps)
     let plus: Vec<f64> = a_data
         .iter()
         .zip(&tangent_a_data)
@@ -3221,12 +3221,12 @@ fn lstsq_frule_fd_through_x_vary_a() {
     let xp = tensor_data(
         &lstsq(&mut CpuContext::new(1), &make_tensor(plus, &[m, n]), &b)
             .unwrap()
-            .x,
+            .solution,
     );
     let xm = tensor_data(
         &lstsq(&mut CpuContext::new(1), &make_tensor(minus, &[m, n]), &b)
             .unwrap()
-            .x,
+            .solution,
     );
     let fd: Vec<f64> = xp
         .iter()
@@ -3808,7 +3808,7 @@ fn lstsq_complex64() {
     );
     let b = make_complex_tensor(vec![c(2.0, 1.0), c(3.0, -1.0), c(0.0, 0.0)], &[3]);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
-    let x = complex_tensor_data(&result.x);
+    let x = complex_tensor_data(&result.solution);
     // A = [[1,0],[0,1],[0,0]], b = [2+i, 3-i, 0] => x = [2+i, 3-i]
     assert!(
         (x[0] - c(2.0, 1.0)).norm() < 1e-8,
@@ -4128,7 +4128,7 @@ fn lstsq_overdetermined() {
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
-    let x = tensor_data(&result.x);
+    let x = tensor_data(&result.solution);
     assert_eq!(x.len(), 2);
     assert!((x[0] - 3.0).abs() < 1e-10, "lstsq x[0] = {}", x[0]);
     assert!((x[1] - 7.0).abs() < 1e-10, "lstsq x[1] = {}", x[1]);
@@ -4428,11 +4428,11 @@ fn lstsq_rrule_basic() {
     let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
     let fwd = |x: &Tensor<f64>| {
         let mut bk = CpuContext::new(1);
-        lstsq(&mut bk, x, &b).unwrap().x
+        lstsq(&mut bk, x, &b).unwrap().solution
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
         let mut bk = CpuContext::new(1);
-        lstsq_rrule(&mut bk, x, &b, co).unwrap().a
+        lstsq_rrule(&mut bk, x, &b, Some(co), None).unwrap().a
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-2);
 }
@@ -4660,7 +4660,7 @@ fn lstsq_batched() {
     );
     let b = make_tensor(vec![2.0, 3.0, 0.0, 4.0, 5.0, 0.0], &[3, 2]);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
-    let x = tensor_data(&result.x);
+    let x = tensor_data(&result.solution);
     assert_eq!(x.len(), 4); // 2 * 2 (n=2, batch=2)
 }
 
@@ -5327,9 +5327,9 @@ fn lstsq_frule_basic() {
     let da = make_tensor(vec![0.1; 8], &[4, 2]);
     let db = make_tensor(vec![0.1; 4], &[4]);
     let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
-    assert_eq!(result.x.dims(), &[2]);
-    assert_eq!(dresult.x.dims(), &[2]);
-    let dxd = tensor_data(&dresult.x);
+    assert_eq!(result.solution.dims(), &[2]);
+    assert_eq!(dresult.solution.dims(), &[2]);
+    let dxd = tensor_data(&dresult.solution);
     for &val in &dxd {
         assert!(val.is_finite(), "lstsq_frule dx not finite: {val}");
     }
@@ -5790,10 +5790,10 @@ fn lstsq_rrule_full_execution() {
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
     let co = make_tensor(
-        vec![1.0; result.x.dims().iter().product::<usize>()],
-        result.x.dims(),
+        vec![1.0; result.solution.dims().iter().product::<usize>()],
+        result.solution.dims(),
     );
-    let grad = lstsq_rrule(&mut ctx, &a, &b, &co).unwrap();
+    let grad = lstsq_rrule(&mut ctx, &a, &b, Some(&co), None).unwrap();
     assert_eq!(grad.a.dims(), &[3, 2]);
     assert_eq!(grad.b.dims(), &[3]);
     let ga = tensor_data(&grad.a);
@@ -6508,7 +6508,7 @@ fn lstsq_rrule_rejects_cotangent_shape_mismatch() {
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let bad_dx = make_tensor(vec![1.0, 1.0, 1.0], &[3]);
-    assert!(lstsq_rrule(&mut ctx, &a, &b, &bad_dx).is_err());
+    assert!(lstsq_rrule(&mut ctx, &a, &b, Some(&bad_dx), None).is_err());
 }
 
 #[test]
@@ -6516,7 +6516,7 @@ fn lstsq_rrule_cuda_context_reports_missing_linalg_capability() {
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let dx = make_tensor(vec![1.0, 1.0], &[2]);
-    let msg = with_cuda_ctx(|ctx| match lstsq_rrule(ctx, &a, &b, &dx) {
+    let msg = with_cuda_ctx(|ctx| match lstsq_rrule(ctx, &a, &b, Some(&dx), None) {
         Ok(_) => panic!("expected capability error"),
         Err(err) => format!("{err}"),
     })

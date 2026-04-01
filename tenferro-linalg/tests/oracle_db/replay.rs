@@ -2385,20 +2385,14 @@ fn replay_solve_triangular(record: &CaseRecord) -> Result<bool, String> {
     Ok(hvp_checked)
 }
 
-fn empty_observable_tensor_typed<T: OracleDbScalar>(
-    expected: &Tensor<T>,
-) -> Result<Tensor<T>, String> {
-    Tensor::<T>::zeros(
-        expected.dims(),
-        tenferro_device::LogicalMemorySpace::MainMemory,
-        tenferro_tensor::MemoryOrder::ColumnMajor,
-    )
-    .map_err(|err| format!("failed to materialize empty observable tensor: {err}"))
-}
-
 fn replay_lstsq_typed<T>(record: &CaseRecord) -> Result<bool, String>
 where
-    T: OracleDbScalar + KernelLinalgScalar<Real = T> + num_traits::Float + Conjugate,
+    T: OracleDbScalar
+        + KernelLinalgScalar<Real = T>
+        + num_traits::Float
+        + Conjugate
+        + tenferro_tensor::KeepCountScalar
+        + tenferro_linalg::ScaleTensorByRealSameShape<tenferro_prims::CpuContext>,
 {
     let inputs = decode_inputs_typed::<T>(record)?;
     let probe = probe(record)?;
@@ -2408,10 +2402,6 @@ where
     let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
     let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
-
-    let empty_expected = expected_jvp_torch
-        .get("output_1")
-        .ok_or_else(|| format!("missing output_1 for {}", record.case_id))?;
 
     let mut ctx = CpuContext::new(1);
     let (_value, dvalue) = lstsq_frule(
@@ -2426,18 +2416,14 @@ where
         &mut ctx,
         inputs.get("a").unwrap(),
         inputs.get("b").unwrap(),
-        cotangent
-            .get("output_0")
-            .ok_or_else(|| format!("missing output_0 cotangent for {}", record.case_id))?,
+        cotangent.get("output_0"),
+        cotangent.get("output_1"),
     )
     .map_err(|err| format!("lstsq_rrule failed: {err}"))?;
 
     let actual_jvp = BTreeMap::from([
-        (String::from("output_0"), dvalue.x),
-        (
-            String::from("output_1"),
-            empty_observable_tensor_typed(empty_expected)?,
-        ),
+        (String::from("output_0"), dvalue.solution),
+        (String::from("output_1"), dvalue.residuals),
     ]);
     let actual_vjp = BTreeMap::from([(String::from("a"), grad.a), (String::from("b"), grad.b)]);
     compare_tensor_maps_typed("lstsq.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
@@ -2450,10 +2436,8 @@ where
     )?;
     compare_tensor_maps_typed("lstsq.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
 
-    let cotangent_output_0 = cotangent
-        .get("output_0")
-        .ok_or_else(|| format!("missing output_0 cotangent for {}", record.case_id))?
-        .clone();
+    let cotangent_output_0 = cotangent.get("output_0").cloned();
+    let cotangent_output_1 = cotangent.get("output_1").cloned();
     let hvp_checked =
         validate_hvp_typed("lstsq", record, &inputs, &direction, probe, |perturbed| {
             let mut ctx = CpuContext::new(1);
@@ -2461,7 +2445,8 @@ where
                 &mut ctx,
                 perturbed.get("a").unwrap(),
                 perturbed.get("b").unwrap(),
-                &cotangent_output_0,
+                cotangent_output_0.as_ref(),
+                cotangent_output_1.as_ref(),
             )
             .map_err(|err| format!("lstsq_rrule failed during HVP replay: {err}"))?;
             Ok(BTreeMap::from([
