@@ -49,7 +49,10 @@ where
         .map_err(to_ad_err)?;
 
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
-    let a_h = matrix_adjoint_eager(ctx, tensor).map_err(to_ad_err)?;
+    let mut perm = vec![1, 0];
+    perm.extend(2..tensor.ndim());
+    let a_h_view = tensor.conj().permute(&perm).map_err(to_ad_err)?;
+    let a_h = crate::prims_bridge::resolve_conj(ctx, &a_h_view);
     let zero = Tensor::<T>::zeros(
         &output_dims(&[n, n], batch_dims),
         tensor.logical_memory_space(),

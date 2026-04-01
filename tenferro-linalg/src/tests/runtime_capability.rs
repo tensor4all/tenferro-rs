@@ -1008,8 +1008,8 @@ fn complex_norm_branch_uses_complex_real_bridge_and_avoids_host_slicing() {
 
 #[test]
 fn triangular_ad_rules_use_tensor_ops_triu_tril_instead_of_method_calls() {
-    let rrule = repo_file("src/rrules/linear_systems.rs");
-    let frule = repo_file("src/frules/linear_systems.rs");
+    let rrule = family_contents("src/rrules/linear_systems.rs", "src/rrules/linear_systems");
+    let frule = family_contents("src/frules/linear_systems.rs", "src/frules/linear_systems");
 
     for (name, contents) in [
         ("rrules/linear_systems.rs", &rrule),
@@ -1028,6 +1028,22 @@ fn triangular_ad_rules_use_tensor_ops_triu_tril_instead_of_method_calls() {
             "{name} should route triangular projections through tenferro_prims::tensor_ops"
         );
     }
+}
+
+fn family_contents(root_file: &str, split_dir: &str) -> String {
+    let mut contents = repo_file(root_file);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut entries = std::fs::read_dir(root.join(split_dir))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        if entry.file_type().unwrap().is_file() {
+            contents.push_str(&std::fs::read_to_string(entry.path()).unwrap());
+        }
+    }
+    contents
 }
 
 #[test]
