@@ -39,8 +39,11 @@ pub fn eig_rrule<
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
+        + backend::TensorLinalgContextFor<num_complex::Complex<T>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
-    C::Backend: 'static,
+    num_complex::Complex<T>: KernelLinalgScalar,
+    <C as backend::TensorLinalgContextFor<T>>::Backend: 'static,
+    <C as backend::TensorLinalgContextFor<num_complex::Complex<T>>>::Backend: 'static,
     T::Real: tenferro_tensor::KeepCountScalar,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
@@ -60,12 +63,12 @@ where
         let lambda = &val_data[b * n..(b + 1) * n];
         let v = &vec_data[b * n * n..(b + 1) * n * n];
 
-        // Compute F matrix: F[i,j] = 1/(lambda_j - lambda_i) for i != j, 0 on diagonal
+        // Compute F matrix: F[i,j] = 1/conj(lambda_j - lambda_i) for i != j, 0 on diagonal
         let mut f_mat = vec![zero_c; n * n];
         for i in 0..n {
             for j in 0..n {
                 if i != j {
-                    let diff = lambda[j] - lambda[i];
+                    let diff = (lambda[j] - lambda[i]).conj();
                     f_mat[i + j * n] = one_c / diff;
                 }
             }
@@ -80,7 +83,16 @@ where
         if let Some(ref dv_bar) = cotangent.vectors {
             let dv_bar_data = extract_data_scalar(dv_bar)?;
             let dv_bar_b = &dv_bar_data[b * n * n..(b + 1) * n * n];
-            let vh_dv = complex_mat_mul_nn(&vh, dv_bar_b, n);
+            let vh_dv = complex_mat_mul_nn_backend(ctx, &vh, dv_bar_b, n)?;
+            let mut dv_adj = dv_bar_b.to_vec();
+            for j in 0..n {
+                let correction = Cx::new(vh_dv[j + j * n].re, T::zero());
+                for i in 0..n {
+                    let index = i + j * n;
+                    dv_adj[index] = dv_adj[index] - v[index] * correction;
+                }
+            }
+            let vh_dv = complex_mat_mul_nn_backend(ctx, &vh, &dv_adj, n)?;
             for k in 0..n * n {
                 m_bar[k] = f_mat[k] * vh_dv[k];
             }
@@ -94,7 +106,7 @@ where
         }
 
         // d_bar_A = V^{-H} M_bar V^H = solve(V^H, M_bar @ V^H)
-        let m_vh = complex_mat_mul_nn(&m_bar, &vh, n);
+        let m_vh = complex_mat_mul_nn_backend(ctx, &m_bar, &vh, n)?;
         let da_complex = complex_solve_nn(ctx, &vh, &m_vh, n)?;
 
         // Take real part (since input A was real)

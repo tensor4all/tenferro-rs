@@ -12,7 +12,7 @@ use tenferro_internal_runtime::dispatch::{
     with_linalg_runtime, LuLinalgDispatchValue, MatrixExpLinalgDispatchValue,
     NormLinalgDispatchValue, ScaledLinalgDispatchValue, SlogdetLinalgDispatchValue,
 };
-use tenferro_linalg::backend::LinalgCapabilityOp;
+use tenferro_linalg::backend::{CudaLinalgScalar, LinalgCapabilityOp};
 use tenferro_linalg::{
     cholesky, cholesky_frule, cholesky_rrule, det, det_frule, det_rrule, eig, eig_frule, eig_rrule,
     eigen, eigen_frule, eigen_rrule, inv, inv_frule, inv_rrule, lstsq, lstsq_aux, lstsq_frule,
@@ -932,7 +932,10 @@ where
         + num_traits::Float
         + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
         + Copy,
-    num_complex::Complex<T>: DynTensorTyped + Copy,
+    num_complex::Complex<T>: DynTensorTyped
+        + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
+        + CudaLinalgScalar
+        + Copy,
 {
     let dense_input = input.to_dense()?;
     let output = dispatch_linalg!(T, "eig_dyn_value", LinalgCapabilityOp::Eig, |ctx| {
@@ -956,7 +959,10 @@ where
         + num_traits::Float
         + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
         + Copy,
-    num_complex::Complex<T>: DynTensorTyped + Copy,
+    num_complex::Complex<T>: DynTensorTyped
+        + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
+        + CudaLinalgScalar
+        + Copy,
 {
     if tangent.is_none() {
         return Ok(vec![None, None]);
@@ -983,7 +989,10 @@ where
         + num_traits::Float
         + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
         + Copy,
-    num_complex::Complex<T>: DynTensorTyped + Copy,
+    num_complex::Complex<T>: DynTensorTyped
+        + KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>>
+        + CudaLinalgScalar
+        + Copy,
 {
     if !input_grad_mask[0] {
         return Ok(vec![None]);

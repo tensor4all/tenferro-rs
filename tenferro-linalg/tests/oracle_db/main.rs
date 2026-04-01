@@ -687,6 +687,43 @@ fn oracle_db_leaves_unsupported_vector_norm_subset_rejected() {
 }
 
 #[test]
+fn oracle_db_marks_supported_eig_subset_for_replay() {
+    let record = oracle_support_record(
+        "eig_f64_values_vectors_abs_001",
+        "eig",
+        "values_vectors_abs",
+        "eig_values_vectors_abs",
+    );
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::EigValuesVectorsAbs)
+    ));
+}
+
+#[test]
+fn oracle_db_leaves_complex_eig_subset_rejected_for_now() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "eig_c64_values_vectors_abs_001",
+        "op": "eig",
+        "dtype": "complex64",
+        "family": "values_vectors_abs",
+        "expected_behavior": "success",
+        "inputs": {},
+        "observable": { "kind": "eig_values_vectors_abs" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("complex eig support record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Unsupported { .. }
+    ));
+}
+
+#[test]
 fn oracle_db_replay_against_tensor_ad_oracles() {
     let summary = replay::run_database_replay();
     let expected = expected_replay_counts();

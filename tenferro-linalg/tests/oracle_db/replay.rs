@@ -4,15 +4,15 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{Float, NumCast, ToPrimitive};
 use tenferro_algebra::Conjugate;
 use tenferro_linalg::{
-    cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eigen, eigen_frule, eigen_rrule,
-    householder_product, inv_frule, inv_rrule, lstsq_frule, lstsq_rrule, lu_frule, lu_rrule,
-    matrix_exp_frule, matrix_exp_rrule, norm_frule, norm_frule_complex, norm_rrule,
-    norm_rrule_complex, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule, slogdet_frule,
-    slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule, solve_triangular_rrule,
-    svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander, EigenCotangent,
-    LiftPermutationMatrixTensor, LuCotangent, LuPivot, MatrixExpAbsTensor, NormKind, QrCotangent,
-    ScaleTensorByRealSameShape, SlogdetCotangent, SlogdetFruleDispatch, SlogdetRruleDispatch,
-    SolveGrad, SvdCotangent,
+    cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eig, eig_frule, eig_rrule, eigen,
+    eigen_frule, eigen_rrule, householder_product, inv_frule, inv_rrule, lstsq_frule, lstsq_rrule,
+    lu_frule, lu_rrule, matrix_exp_frule, matrix_exp_rrule, norm_frule, norm_frule_complex,
+    norm_rrule, norm_rrule_complex, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule,
+    slogdet_frule, slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule,
+    solve_triangular_rrule, svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander,
+    EigCotangent, EigenCotangent, LiftPermutationMatrixTensor, LuCotangent, LuPivot,
+    MatrixExpAbsTensor, NormKind, QrCotangent, ScaleTensorByRealSameShape, SlogdetCotangent,
+    SlogdetFruleDispatch, SlogdetRruleDispatch, SolveGrad, SvdCotangent,
 };
 use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
@@ -141,6 +141,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                 | ReplayKind::SvdVhAbs
                 | ReplayKind::SvdUvhProduct => replay_svd(record),
                 ReplayKind::EighValuesVectorsAbs => replay_eigen(record),
+                ReplayKind::EigValuesVectorsAbs => replay_eig(record),
                 ReplayKind::PinvSingularIdentity => replay_pinv_singular(record),
             }?;
             Ok(ReplayOutcome::Validated { hvp_checked })
@@ -492,6 +493,8 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
         ("svd", "uvh_product", "uvh") => Ok(2),
         ("eigh", "values_vectors_abs", "values") => Ok(1),
         ("eigh", "values_vectors_abs", "vectors") => Ok(2),
+        ("eig", "values_vectors_abs", "values") => Ok(1),
+        ("eig", "values_vectors_abs", "vectors") => Ok(2),
         ("pinv_singular", "identity", "value") => Ok(2),
         _ => Err(format!(
             "unsupported observable tensor key {key} for {}/{}",
@@ -4709,6 +4712,123 @@ where
     }
 }
 
+fn match_eig_value_permutations<R>(
+    actual: &Tensor<num_complex::Complex<R>>,
+    expected: &Tensor<num_complex::Complex<R>>,
+) -> Result<Vec<Vec<usize>>, String>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    if actual.dims() != expected.dims() {
+        return Err(format!(
+            "eig value permutation requires matching dims, got {:?} vs {:?}",
+            actual.dims(),
+            expected.dims()
+        ));
+    }
+    let dims = actual.dims();
+    let n = dims[0];
+    let bc = crate::decode::batch_count(&dims[1..]);
+    let actual_data = tensor_data_col_major(actual);
+    let expected_data = tensor_data_col_major(expected);
+    let mut permutations = Vec::with_capacity(bc);
+
+    for batch in 0..bc {
+        let actual_batch = &actual_data[batch * n..(batch + 1) * n];
+        let expected_batch = &expected_data[batch * n..(batch + 1) * n];
+        let mut used = vec![false; n];
+        let mut permutation = vec![0usize; n];
+        for (actual_index, actual_value) in actual_batch.iter().enumerate() {
+            let mut best: Option<(usize, f64)> = None;
+            for (expected_index, expected_value) in expected_batch.iter().enumerate() {
+                if used[expected_index] {
+                    continue;
+                }
+                let score = (*actual_value - *expected_value)
+                    .norm_sqr()
+                    .to_f64()
+                    .ok_or_else(|| {
+                        format!("failed to score eig value permutation for batch {batch}")
+                    })?;
+                match best {
+                    Some((_, best_score)) if score >= best_score => {}
+                    _ => best = Some((expected_index, score)),
+                }
+            }
+            let Some((expected_index, _)) = best else {
+                return Err(format!(
+                    "failed to match eig value permutation for batch {batch}"
+                ));
+            };
+            used[expected_index] = true;
+            permutation[actual_index] = expected_index;
+        }
+        permutations.push(permutation);
+    }
+
+    Ok(permutations)
+}
+
+fn permute_eig_value_tensor<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+    permutations: &[Vec<usize>],
+) -> Result<Tensor<T>, String> {
+    let dims = tensor.dims();
+    let n = dims[0];
+    let bc = crate::decode::batch_count(&dims[1..]);
+    if permutations.len() != bc {
+        return Err(format!(
+            "eig value permutation batch mismatch: {} vs {}",
+            permutations.len(),
+            bc
+        ));
+    }
+    let input = tensor_data_col_major(tensor);
+    let mut output = vec![T::zero(); input.len()];
+    for (batch, permutation) in permutations.iter().enumerate() {
+        for actual_index in 0..n {
+            output[batch * n + actual_index] = input[batch * n + permutation[actual_index]];
+        }
+    }
+    Ok(tensor_from_col_major(output, dims))
+}
+
+fn permute_eig_vector_columns<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+    permutations: &[Vec<usize>],
+) -> Result<Tensor<T>, String> {
+    let dims = tensor.dims();
+    let n = dims[0];
+    if dims.get(1).copied() != Some(n) {
+        return Err(format!(
+            "eig vector permutation expects square core dims, got {:?}",
+            dims
+        ));
+    }
+    let bc = crate::decode::batch_count(&dims[2..]);
+    if permutations.len() != bc {
+        return Err(format!(
+            "eig vector permutation batch mismatch: {} vs {}",
+            permutations.len(),
+            bc
+        ));
+    }
+    let input = tensor_data_col_major(tensor);
+    let mut output = vec![T::zero(); input.len()];
+    for (batch, permutation) in permutations.iter().enumerate() {
+        let batch_offset = batch * n * n;
+        for actual_col in 0..n {
+            let expected_col = permutation[actual_col];
+            for row in 0..n {
+                output[batch_offset + row + actual_col * n] =
+                    input[batch_offset + row + expected_col * n];
+            }
+        }
+    }
+    Ok(tensor_from_col_major(output, dims))
+}
+
 fn replay_eigen_typed<T>(record: &CaseRecord) -> Result<bool, String>
 where
     T: OracleDbScalar + KernelLinalgScalar + Conjugate,
@@ -4773,6 +4893,158 @@ fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {
         "complex64" => replay_eigen_typed::<Complex32>(record),
         "complex128" => replay_eigen_typed::<Complex64>(record),
         other => Err(format!("unsupported eigen replay dtype {other}")),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EigObservable<R>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    values: Tensor<num_complex::Complex<R>>,
+    vectors_abs: Tensor<R>,
+}
+
+impl<R> EigObservable<R>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    fn decode(record: &CaseRecord, encoded: &BTreeMap<String, DbTensor>) -> Result<Self, String> {
+        Ok(Self {
+            values: decode_tensor_with_core_rank(
+                encoded.get("values").ok_or_else(|| {
+                    format!("missing eig observable values for {}", record.case_id)
+                })?,
+                1,
+            )?,
+            vectors_abs: decode_tensor_with_core_rank(
+                encoded.get("vectors").ok_or_else(|| {
+                    format!("missing eig observable vectors for {}", record.case_id)
+                })?,
+                2,
+            )?,
+        })
+    }
+
+    fn from_jvp(
+        primal_vectors: &Tensor<num_complex::Complex<R>>,
+        dvalues: &Tensor<num_complex::Complex<R>>,
+        dvectors: &Tensor<num_complex::Complex<R>>,
+    ) -> Self {
+        Self {
+            values: dvalues.clone(),
+            vectors_abs: elementwise_abs_jvp(primal_vectors, dvectors),
+        }
+    }
+
+    fn to_cotangent(&self, primal_vectors: &Tensor<num_complex::Complex<R>>) -> EigCotangent<R> {
+        EigCotangent {
+            values: Some(self.values.clone()),
+            vectors: Some(elementwise_abs_vjp(primal_vectors, &self.vectors_abs)),
+        }
+    }
+
+    fn compare(&self, label: &str, actual: &Self, rtol: f64, atol: f64) -> Result<(), String> {
+        compare_tensors_typed::<num_complex::Complex<R>>(
+            &format!("{label}.values"),
+            &self.values,
+            &actual.values,
+            rtol,
+            atol,
+        )?;
+        compare_tensors_typed::<R>(
+            &format!("{label}.vectors"),
+            &self.vectors_abs,
+            &actual.vectors_abs,
+            rtol,
+            atol,
+        )
+    }
+
+    fn real_inner_product(&self, other: &Self) -> Result<f64, String> {
+        Ok(
+            tensor_real_inner_product_typed(&self.values, &other.values)?
+                + tensor_real_inner_product_typed(&self.vectors_abs, &other.vectors_abs)?,
+        )
+    }
+
+    fn permuted(&self, permutations: &[Vec<usize>]) -> Result<Self, String> {
+        Ok(Self {
+            values: permute_eig_value_tensor(&self.values, permutations)?,
+            vectors_abs: permute_eig_vector_columns(&self.vectors_abs, permutations)?,
+        })
+    }
+}
+
+fn replay_eig_typed<R>(record: &CaseRecord) -> Result<bool, String>
+where
+    R: OracleDbScalar
+        + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>>
+        + Float
+        + KeepCountScalar,
+    num_complex::Complex<R>: OracleDbScalar
+        + tenferro_linalg_prims::LinalgScalar<Real = R>
+        + tenferro_linalg_prims::KernelLinalgScalar,
+{
+    let inputs = decode_inputs_typed::<R>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<R>(record, &probe.direction)?;
+    let cotangent = EigObservable::<R>::decode(record, &probe.cotangent)?;
+    let expected_jvp_fd = EigObservable::<R>::decode(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = EigObservable::<R>::decode(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<R>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let a = inputs.get("a").unwrap();
+    let da = direction.get("a").unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let (result, dresult) =
+        eig_frule(&mut ctx, a, da).map_err(|err| format!("eig_frule failed: {err}"))?;
+    let actual_jvp =
+        EigObservable::<R>::from_jvp(&result.vectors, &dresult.values, &dresult.vectors);
+    let permutations =
+        match_eig_value_permutations(&actual_jvp.values, &expected_jvp_torch.values)?;
+    let cotangent = cotangent.permuted(&permutations)?;
+    let expected_jvp_fd = expected_jvp_fd.permuted(&permutations)?;
+    let expected_jvp_torch = expected_jvp_torch.permuted(&permutations)?;
+    let grad = eig_rrule(&mut ctx, a, &cotangent.to_cotangent(&result.vectors))
+        .map_err(|err| format!("eig_rrule failed: {err}"))?;
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    expected_jvp_fd.compare("eig.jvp.fd", &actual_jvp, rtol, atol)?;
+    expected_jvp_torch.compare("eig.jvp.torch", &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("eig.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("eig", record, &inputs, &direction, probe, |perturbed| {
+        let perturbed_a = perturbed.get("a").unwrap();
+        let mut ctx = CpuContext::new(1);
+        let primal = eig(&mut ctx, perturbed_a)
+            .map_err(|err| format!("eig failed during HVP replay: {err}"))?;
+        let grad = eig_rrule(
+            &mut ctx,
+            perturbed_a,
+            &cotangent.to_cotangent(&primal.vectors),
+        )
+        .map_err(|err| format!("eig_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    let lhs: f64 = cotangent.real_inner_product(&actual_jvp)?;
+    let rhs: f64 =
+        tensor_real_inner_product_typed(actual_vjp.get("a").unwrap(), direction.get("a").unwrap())?;
+    let allowed: f64 = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(hvp_checked)
+}
+
+fn replay_eig(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_eig_typed::<f32>(record),
+        "float64" => replay_eig_typed::<f64>(record),
+        other => Err(format!("unsupported eig replay dtype {other}")),
     }
 }
 

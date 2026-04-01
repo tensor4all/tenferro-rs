@@ -26,6 +26,7 @@ pub enum ReplayKind {
     SvdVhAbs,
     SvdUvhProduct,
     EighValuesVectorsAbs,
+    EigValuesVectorsAbs,
     PinvSingularIdentity,
 }
 
@@ -51,6 +52,10 @@ fn batch_a_replay_dtype(dtype: &str) -> bool {
 
 fn svd_replay_dtype(dtype: &str) -> bool {
     matches!(dtype, "float32" | "float64" | "complex64" | "complex128")
+}
+
+fn eig_replay_dtype(dtype: &str) -> bool {
+    matches!(dtype, "float32" | "float64")
 }
 
 fn is_complex_dtype(dtype: &str) -> bool {
@@ -420,11 +425,11 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         ("diagonal", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this tensor-construction oracle family yet",
         },
-        ("eig", "values_vectors_abs", "eig_values_vectors_abs", "success") => {
-            RecordSupport::Unsupported {
-                reason: "tenferro replay does not implement this spectral/inverse family yet",
-            }
-        }
+        ("eig", "values_vectors_abs", "eig_values_vectors_abs", "success") => supported_if(
+            eig_replay_dtype(&record.dtype),
+            ReplayKind::EigValuesVectorsAbs,
+            "tenferro replay currently supports this family only for float32/float64",
+        ),
         ("pinv", "identity", "identity", "success") => supported_if(
             batch_a_replay_dtype(&record.dtype),
             ReplayKind::PinvIdentity,

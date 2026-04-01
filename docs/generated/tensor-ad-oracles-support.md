@@ -5,10 +5,10 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 ## Summary
 
 - Total published records: 9572
-- Supported success records: 2627
-- Supported success records with HVP payloads: 1867
+- Supported success records: 2643
+- Supported success records with HVP payloads: 1875
 - Expected error records: 2
-- Unsupported success records: 6943
+- Unsupported success records: 6927
 
 ## Supported
 
@@ -19,6 +19,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | cond | identity | identity | 3 |
 | cross | identity | identity | 3 |
 | det | identity | identity | 36 |
+| eig | values_vectors_abs | eig_values_vectors_abs | 16 |
 | eigh | values_vectors_abs | eigh_values_vectors_abs | 32 |
 | householder_product | identity | identity | 8 |
 | inv | identity | identity | 24 |
@@ -98,7 +99,7 @@ This file is generated from the vendored `third_party/tensor-ad-oracles` subtree
 | digamma | identity | identity | 6 | tenferro replay does not implement this oracle family yet |
 | div_no_rounding_mode | identity | identity | 36 | tenferro replay does not implement this oracle family yet |
 | double | identity | identity | 20 | tenferro replay does not implement this oracle family yet |
-| eig | values_vectors_abs | eig_values_vectors_abs | 32 | tenferro replay does not implement this spectral/inverse family yet |
+| eig | values_vectors_abs | eig_values_vectors_abs | 16 | tenferro replay currently supports this family only for float32/float64 |
 | eigvals | identity | identity | 32 | tenferro replay does not implement this scalar-output oracle family yet |
 | eigvalsh | identity | identity | 32 | tenferro replay does not implement this scalar-output oracle family yet |
 | erf | identity | identity | 2 | tenferro replay does not implement this oracle family yet |
