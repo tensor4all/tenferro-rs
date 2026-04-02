@@ -259,31 +259,57 @@ impl Tensor {
     /// let z = x.cross(&y)?;
     /// ```
     pub fn cross(&self, rhs: &Self) -> Result<Self> {
-        if let (Some(lhs), Some(rhs)) = (self.as_f32(), rhs.as_f32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
-                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-            });
+        match (self.as_dyn_ad_ref(), rhs.as_dyn_ad_ref()) {
+            (DynAdTensorRef::F32(_), DynAdTensorRef::F32(_)) => {
+                let lhs = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching F32".into(),
+                })?;
+                let rhs_typed = rhs.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching F32".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "cross", |a, b| {
+                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+                })
+            }
+            (DynAdTensorRef::F64(_), DynAdTensorRef::F64(_)) => {
+                let lhs = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching F64".into(),
+                })?;
+                let rhs_typed = rhs.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching F64".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "cross", |a, b| {
+                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+                })
+            }
+            (DynAdTensorRef::C32(_), DynAdTensorRef::C32(_)) => {
+                let lhs = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching C32".into(),
+                })?;
+                let rhs_typed = rhs.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching C32".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "cross", |a, b| {
+                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+                })
+            }
+            (DynAdTensorRef::C64(_), DynAdTensorRef::C64(_)) => {
+                let lhs = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching C64".into(),
+                })?;
+                let rhs_typed = rhs.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "cross: internal type mismatch after matching C64".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "cross", |a, b| {
+                    Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
+                })
+            }
+            (lhs, rhs) => Err(same_dtype_error(
+                "cross",
+                lhs.scalar_type(),
+                rhs.scalar_type(),
+            )),
         }
-        if let (Some(lhs), Some(rhs)) = (self.as_f64(), rhs.as_f64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
-                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c32(), rhs.as_c32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
-                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c64(), rhs.as_c64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "cross", |a, b| {
-                Ok(Self::from_tensor(crate::ops::cross(a, b).run()?))
-            });
-        }
-        Err(same_dtype_error(
-            "cross",
-            self.scalar_type(),
-            rhs.scalar_type(),
-        ))
     }
 
     /// Forms the orthogonal/unitary matrix from Householder reflectors and `tau`.
@@ -294,38 +320,72 @@ impl Tensor {
     /// let q = reflectors.householder_product(&tau)?;
     /// ```
     pub fn householder_product(&self, tau: &Self) -> Result<Self> {
-        if let (Some(lhs), Some(rhs)) = (self.as_f32(), tau.as_f32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
-                Ok(Self::from_tensor(
-                    crate::ops::householder_product(a, b).run()?,
-                ))
-            });
+        match (self.as_dyn_ad_ref(), tau.as_dyn_ad_ref()) {
+            (DynAdTensorRef::F32(_), DynAdTensorRef::F32(_)) => {
+                let lhs = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching F32"
+                        .into(),
+                })?;
+                let rhs_typed = tau.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching F32"
+                        .into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "householder_product", |a, b| {
+                    Ok(Self::from_tensor(
+                        crate::ops::householder_product(a, b).run()?,
+                    ))
+                })
+            }
+            (DynAdTensorRef::F64(_), DynAdTensorRef::F64(_)) => {
+                let lhs = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching F64"
+                        .into(),
+                })?;
+                let rhs_typed = tau.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching F64"
+                        .into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "householder_product", |a, b| {
+                    Ok(Self::from_tensor(
+                        crate::ops::householder_product(a, b).run()?,
+                    ))
+                })
+            }
+            (DynAdTensorRef::C32(_), DynAdTensorRef::C32(_)) => {
+                let lhs = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching C32"
+                        .into(),
+                })?;
+                let rhs_typed = tau.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching C32"
+                        .into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "householder_product", |a, b| {
+                    Ok(Self::from_tensor(
+                        crate::ops::householder_product(a, b).run()?,
+                    ))
+                })
+            }
+            (DynAdTensorRef::C64(_), DynAdTensorRef::C64(_)) => {
+                let lhs = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching C64"
+                        .into(),
+                })?;
+                let rhs_typed = tau.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "householder_product: internal type mismatch after matching C64"
+                        .into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "householder_product", |a, b| {
+                    Ok(Self::from_tensor(
+                        crate::ops::householder_product(a, b).run()?,
+                    ))
+                })
+            }
+            (lhs, rhs) => Err(same_dtype_error(
+                "householder_product",
+                lhs.scalar_type(),
+                rhs.scalar_type(),
+            )),
         }
-        if let (Some(lhs), Some(rhs)) = (self.as_f64(), tau.as_f64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
-                Ok(Self::from_tensor(
-                    crate::ops::householder_product(a, b).run()?,
-                ))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c32(), tau.as_c32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
-                Ok(Self::from_tensor(
-                    crate::ops::householder_product(a, b).run()?,
-                ))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c64(), tau.as_c64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "householder_product", |a, b| {
-                Ok(Self::from_tensor(
-                    crate::ops::householder_product(a, b).run()?,
-                ))
-            });
-        }
-        Err(same_dtype_error(
-            "householder_product",
-            self.scalar_type(),
-            tau.scalar_type(),
-        ))
     }
 }

@@ -147,46 +147,72 @@ impl Tensor {
     /// let x = a.tensorsolve_with_dims(&b, &[3, 2])?;
     /// ```
     pub fn tensorsolve_with_dims(&self, rhs: &Self, dims: &[usize]) -> Result<Self> {
-        if let (Some(lhs), Some(rhs)) = (self.as_f32(), rhs.as_f32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
-                let mut builder = crate::ops::tensorsolve(a, b);
-                if !dims.is_empty() {
-                    builder = builder.dims(dims);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
+        match (self.as_dyn_ad_ref(), rhs.as_dyn_ad_ref()) {
+            (DynAdTensorRef::F32(_), DynAdTensorRef::F32(_)) => {
+                let lhs = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching F32".into(),
+                })?;
+                let rhs_typed = rhs.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching F32".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "tensorsolve", |a, b| {
+                    let mut builder = crate::ops::tensorsolve(a, b);
+                    if !dims.is_empty() {
+                        builder = builder.dims(dims);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                })
+            }
+            (DynAdTensorRef::F64(_), DynAdTensorRef::F64(_)) => {
+                let lhs = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching F64".into(),
+                })?;
+                let rhs_typed = rhs.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching F64".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "tensorsolve", |a, b| {
+                    let mut builder = crate::ops::tensorsolve(a, b);
+                    if !dims.is_empty() {
+                        builder = builder.dims(dims);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                })
+            }
+            (DynAdTensorRef::C32(_), DynAdTensorRef::C32(_)) => {
+                let lhs = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching C32".into(),
+                })?;
+                let rhs_typed = rhs.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching C32".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "tensorsolve", |a, b| {
+                    let mut builder = crate::ops::tensorsolve(a, b);
+                    if !dims.is_empty() {
+                        builder = builder.dims(dims);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                })
+            }
+            (DynAdTensorRef::C64(_), DynAdTensorRef::C64(_)) => {
+                let lhs = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching C64".into(),
+                })?;
+                let rhs_typed = rhs.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorsolve: internal type mismatch after matching C64".into(),
+                })?;
+                with_dense_primal_pair_typed(lhs, rhs_typed, "tensorsolve", |a, b| {
+                    let mut builder = crate::ops::tensorsolve(a, b);
+                    if !dims.is_empty() {
+                        builder = builder.dims(dims);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                })
+            }
+            (lhs, rhs) => Err(same_dtype_error(
+                "tensorsolve",
+                lhs.scalar_type(),
+                rhs.scalar_type(),
+            )),
         }
-        if let (Some(lhs), Some(rhs)) = (self.as_f64(), rhs.as_f64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
-                let mut builder = crate::ops::tensorsolve(a, b);
-                if !dims.is_empty() {
-                    builder = builder.dims(dims);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c32(), rhs.as_c32()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
-                let mut builder = crate::ops::tensorsolve(a, b);
-                if !dims.is_empty() {
-                    builder = builder.dims(dims);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        if let (Some(lhs), Some(rhs)) = (self.as_c64(), rhs.as_c64()) {
-            return with_dense_primal_pair_typed(lhs, rhs, "tensorsolve", |a, b| {
-                let mut builder = crate::ops::tensorsolve(a, b);
-                if !dims.is_empty() {
-                    builder = builder.dims(dims);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        Err(same_dtype_error(
-            "tensorsolve",
-            self.scalar_type(),
-            rhs.scalar_type(),
-        ))
     }
 }
