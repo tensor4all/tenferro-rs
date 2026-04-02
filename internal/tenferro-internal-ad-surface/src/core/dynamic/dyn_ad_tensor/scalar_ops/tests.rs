@@ -1,4 +1,5 @@
 use super::*;
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 fn vector_f64(values: &[f64]) -> DenseTensor<f64> {
     DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()

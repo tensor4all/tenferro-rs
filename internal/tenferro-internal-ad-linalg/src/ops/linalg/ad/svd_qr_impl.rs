@@ -497,6 +497,13 @@ pub struct SvdAdBuilder<'a, T: Scalar> {
     options: Option<&'a SvdOptions>,
 }
 
+impl<'a, T: Scalar> SvdAdBuilder<'a, T> {
+    pub fn options(mut self, options: &'a SvdOptions) -> Self {
+        self.options = Some(options);
+        self
+    }
+}
+
 impl<'a, T> SvdAdBuilder<'a, T>
 where
     T: LinalgRuntimeValue,
