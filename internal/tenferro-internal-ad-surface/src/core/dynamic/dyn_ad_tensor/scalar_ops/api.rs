@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 
 use super::*;
+use crate::structured::StructuredTensor;
 
 impl Tensor {
     /// Scalar multiply with AD preservation for scalar and tensor inputs.

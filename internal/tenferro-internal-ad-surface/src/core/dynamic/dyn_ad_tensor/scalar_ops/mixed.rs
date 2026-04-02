@@ -8,7 +8,6 @@ use super::super::super::tensor_ops::{
     tensor_element, tensor_map_binary_typed, tensor_map_unary_typed, unflatten_index_column_major,
 };
 use crate::core::{AdTensorSnapshot, DynTensorTyped};
-use crate::structured::StructuredTensor;
 use crate::{DynTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(

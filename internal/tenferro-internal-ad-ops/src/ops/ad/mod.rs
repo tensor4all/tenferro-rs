@@ -20,7 +20,6 @@
 //! ```
 
 use tenferro_algebra::Scalar;
-pub(crate) use tenferro_einsum as tf_einsum;
 use tenferro_internal_ad_core::{AdTensor, DynAdTensor, DynAdTensorRef};
 use tidu::Value;
 

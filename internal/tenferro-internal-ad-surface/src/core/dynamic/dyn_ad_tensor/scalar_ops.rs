@@ -1,18 +1,12 @@
 mod mixed;
 
-use chainrules::{self, ScalarAd};
-use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Scalar;
 use tenferro_internal_ad_core::{AdTensor, DynAdTensor, DynAdTensorRef};
-use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use super::super::tensor_ops::tensor_max_abs_diff_typed;
 use super::basics::ensure_common_reverse_tape_impl;
 use super::merge::merge_add_ad_tensors;
 use super::promotion::{promote_many_to_common, promote_pair_to_common};
 use super::Tensor;
-use crate::core::DynTensorTyped;
-use crate::structured::StructuredTensor;
 use crate::{DynTensor, Error, Result};
 
 use mixed::{div_ad_tensor_typed, scale_ad_tensor_typed};

@@ -13,11 +13,9 @@ mod runtime;
 mod structured;
 mod tape;
 
-pub(crate) use core::{DynTensor, DynTensorTyped, NodeId};
+pub(crate) use core::DynTensor;
 pub use tenferro_internal_ad_core::AdMode;
 pub use tenferro_internal_error::{Error, Result};
-
-pub(crate) use tenferro_internal_frontend_core::StructuredTensor;
 
 pub mod ad {
     pub use crate::ops::ad::{
