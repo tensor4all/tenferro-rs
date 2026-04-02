@@ -230,16 +230,6 @@ impl<'a, T: TypedTensorBorrowTyped> TypedTensorRef<'a, T> {
     pub fn tape(&self) -> Option<Tape<DynTensor>> {
         self.inner.0.tape()
     }
-
-    pub(crate) fn reverse_edge_value(
-        &self,
-    ) -> Option<std::sync::Arc<tidu::Value<StructuredTensor<T>>>> {
-        T::reverse_edge_value_from_dyn_ad(&self.inner.0)
-    }
-
-    pub(crate) fn as_tracked(&self) -> Option<TrackedValue<DynTensor>> {
-        self.inner.0.as_tracked()
-    }
 }
 
 impl Tensor {

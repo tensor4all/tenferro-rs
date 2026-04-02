@@ -103,6 +103,7 @@ pub(crate) fn matrix_only_norm_kind_ad_error(kind: NormKind) -> chainrules_core:
 }
 
 /// Validate Hermitian/symmetric structure for batched square matrices.
+#[cfg(test)]
 pub(crate) fn validate_hermitian_batches<T: LinalgScalar>(
     data: &[T],
     offset: usize,
