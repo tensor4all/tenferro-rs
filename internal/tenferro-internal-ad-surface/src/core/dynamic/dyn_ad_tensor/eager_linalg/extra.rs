@@ -186,35 +186,48 @@ impl Tensor {
     /// let squared = x.matrix_power(2)?;
     /// ```
     pub fn matrix_power(&self, exponent: i64) -> Result<Self> {
-        if let Some(value) = self.as_f32() {
-            return with_dense_primal_typed(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            });
+        match self.as_dyn_ad_ref() {
+            DynAdTensorRef::F32(_) => with_dense_primal_typed(
+                self.as_f32()
+                    .expect("type confirmed by preceding match on F32"),
+                "matrix_power",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::F64(_) => with_dense_primal_typed(
+                self.as_f64()
+                    .expect("type confirmed by preceding match on F64"),
+                "matrix_power",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::C32(_) => with_dense_primal_typed(
+                self.as_c32()
+                    .expect("type confirmed by preceding match on C32"),
+                "matrix_power",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::C64(_) => with_dense_primal_typed(
+                self.as_c64()
+                    .expect("type confirmed by preceding match on C64"),
+                "matrix_power",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::matrix_power(dense).exponent(exponent).run()?,
+                    ))
+                },
+            ),
         }
-        if let Some(value) = self.as_f64() {
-            return with_dense_primal_typed(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            });
-        }
-        if let Some(value) = self.as_c32() {
-            return with_dense_primal_typed(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            });
-        }
-        if let Some(value) = self.as_c64() {
-            return with_dense_primal_typed(value, "matrix_power", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::matrix_power(dense).exponent(exponent).run()?,
-                ))
-            });
-        }
-        Err(crate::Error::UnsupportedAdOp { op: "matrix_power" })
     }
 
     /// Computes the matrix condition number with the default spectral norm.

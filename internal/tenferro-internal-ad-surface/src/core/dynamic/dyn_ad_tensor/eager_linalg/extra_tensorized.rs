@@ -1,5 +1,6 @@
 use super::{same_dtype_error, Tensor};
 use crate::Result;
+use tenferro_internal_ad_core::DynAdTensorRef;
 
 use super::extra::{with_dense_primal_pair_typed, with_dense_primal_typed};
 
@@ -23,43 +24,56 @@ impl Tensor {
     /// let v = x.vander_with(Some(4), true)?;
     /// ```
     pub fn vander_with(&self, columns: Option<usize>, increasing: bool) -> Result<Self> {
-        if let Some(value) = self.as_f32() {
-            return with_dense_primal_typed(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
+        match self.as_dyn_ad_ref() {
+            DynAdTensorRef::F32(_) => with_dense_primal_typed(
+                self.as_f32()
+                    .expect("type confirmed by preceding match on F32"),
+                "vander",
+                |dense| {
+                    let mut builder = crate::ops::vander(dense).increasing(increasing);
+                    if let Some(columns) = columns {
+                        builder = builder.columns(columns);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                },
+            ),
+            DynAdTensorRef::F64(_) => with_dense_primal_typed(
+                self.as_f64()
+                    .expect("type confirmed by preceding match on F64"),
+                "vander",
+                |dense| {
+                    let mut builder = crate::ops::vander(dense).increasing(increasing);
+                    if let Some(columns) = columns {
+                        builder = builder.columns(columns);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                },
+            ),
+            DynAdTensorRef::C32(_) => with_dense_primal_typed(
+                self.as_c32()
+                    .expect("type confirmed by preceding match on C32"),
+                "vander",
+                |dense| {
+                    let mut builder = crate::ops::vander(dense).increasing(increasing);
+                    if let Some(columns) = columns {
+                        builder = builder.columns(columns);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                },
+            ),
+            DynAdTensorRef::C64(_) => with_dense_primal_typed(
+                self.as_c64()
+                    .expect("type confirmed by preceding match on C64"),
+                "vander",
+                |dense| {
+                    let mut builder = crate::ops::vander(dense).increasing(increasing);
+                    if let Some(columns) = columns {
+                        builder = builder.columns(columns);
+                    }
+                    Ok(Self::from_tensor(builder.run()?))
+                },
+            ),
         }
-        if let Some(value) = self.as_f64() {
-            return with_dense_primal_typed(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        if let Some(value) = self.as_c32() {
-            return with_dense_primal_typed(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        if let Some(value) = self.as_c64() {
-            return with_dense_primal_typed(value, "vander", |dense| {
-                let mut builder = crate::ops::vander(dense).increasing(increasing);
-                if let Some(columns) = columns {
-                    builder = builder.columns(columns);
-                }
-                Ok(Self::from_tensor(builder.run()?))
-            });
-        }
-        Err(crate::Error::UnsupportedAdOp { op: "vander_with" })
     }
 
     /// Inverts a tensorized linear map by splitting the first `ind` axes to the left.
@@ -70,35 +84,48 @@ impl Tensor {
     /// let inv = x.tensorinv(2)?;
     /// ```
     pub fn tensorinv(&self, ind: usize) -> Result<Self> {
-        if let Some(value) = self.as_f32() {
-            return with_dense_primal_typed(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            });
+        match self.as_dyn_ad_ref() {
+            DynAdTensorRef::F32(_) => with_dense_primal_typed(
+                self.as_f32()
+                    .expect("type confirmed by preceding match on F32"),
+                "tensorinv",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::tensorinv(dense).ind(ind).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::F64(_) => with_dense_primal_typed(
+                self.as_f64()
+                    .expect("type confirmed by preceding match on F64"),
+                "tensorinv",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::tensorinv(dense).ind(ind).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::C32(_) => with_dense_primal_typed(
+                self.as_c32()
+                    .expect("type confirmed by preceding match on C32"),
+                "tensorinv",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::tensorinv(dense).ind(ind).run()?,
+                    ))
+                },
+            ),
+            DynAdTensorRef::C64(_) => with_dense_primal_typed(
+                self.as_c64()
+                    .expect("type confirmed by preceding match on C64"),
+                "tensorinv",
+                |dense| {
+                    Ok(Self::from_tensor(
+                        crate::ops::tensorinv(dense).ind(ind).run()?,
+                    ))
+                },
+            ),
         }
-        if let Some(value) = self.as_f64() {
-            return with_dense_primal_typed(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            });
-        }
-        if let Some(value) = self.as_c32() {
-            return with_dense_primal_typed(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            });
-        }
-        if let Some(value) = self.as_c64() {
-            return with_dense_primal_typed(value, "tensorinv", |dense| {
-                Ok(Self::from_tensor(
-                    crate::ops::tensorinv(dense).ind(ind).run()?,
-                ))
-            });
-        }
-        Err(crate::Error::UnsupportedAdOp { op: "tensorinv" })
     }
 
     /// Solves a tensorized linear system using the default axis ordering.
