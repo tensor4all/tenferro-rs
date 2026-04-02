@@ -7,14 +7,11 @@ use tenferro_internal_ad_core::AdTensor;
 use tenferro_linalg::SolveGrad;
 use tenferro_tensor::Tensor;
 
-use crate::core::DynTensorTyped;
-use crate::core::NodeId;
+use crate::core::{DynTensorTyped, NodeId};
 use crate::runtime::contracts::{EinsumRuntimeValue, LinalgRuntimeValue};
 use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 use crate::structured::StructuredTensor;
-use crate::tape;
-use crate::DynTensor;
-use crate::{Error, Result};
+use crate::{tape, DynTensor, Error, Result};
 use tidu::expert::Tape;
 
 /// Reverse pullback from a reverse-mode output tensor.

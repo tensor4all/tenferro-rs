@@ -1,10 +1,8 @@
+use std::convert::TryFrom;
+use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    convert::TryFrom,
-    f64::consts::TAU,
-    sync::{Mutex, OnceLock},
-};
 
 use rand_core::Rng;
 

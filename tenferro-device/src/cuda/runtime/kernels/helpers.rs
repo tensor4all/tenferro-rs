@@ -1,16 +1,13 @@
-use std::{
-    any::TypeId,
-    collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::any::TypeId;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
-use cudarc::{
-    driver::{CudaFunction, CudaStream},
-    nvrtc::{compile_ptx, Ptx},
-};
+use cudarc::driver::{CudaFunction, CudaStream};
+use cudarc::nvrtc::{compile_ptx, Ptx};
 use num_complex::{Complex32, Complex64};
 
-use super::super::{shared::ContiguousOrder, state::CudaRuntime};
+use super::super::shared::ContiguousOrder;
+use super::super::state::CudaRuntime;
 use crate::{Error, Result};
 
 pub(crate) fn cuda_error(operation: &str, err: impl std::fmt::Debug) -> Error {

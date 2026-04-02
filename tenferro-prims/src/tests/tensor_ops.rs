@@ -1,8 +1,7 @@
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::tensor_ops;
-use crate::CpuContext;
+use crate::{tensor_ops, CpuContext};
 
 fn make_ctx() -> CpuContext {
     CpuContext::new(1)

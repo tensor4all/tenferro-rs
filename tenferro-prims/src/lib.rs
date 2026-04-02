@@ -234,9 +234,7 @@ pub use gpu_stubs::CudaContext;
 pub use gpu_stubs::CudaPlan;
 
 // ROCm stubs are always from gpu_stubs (no real ROCm backend yet)
-pub use gpu_stubs::RocmBackend;
-pub use gpu_stubs::RocmContext;
-pub use gpu_stubs::RocmPlan;
+pub use gpu_stubs::{RocmBackend, RocmContext, RocmPlan};
 
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};

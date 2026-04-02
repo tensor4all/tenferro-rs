@@ -3,10 +3,8 @@ use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{
-    cuda::runtime::{CudaRuntime, RealBinaryOp, RealUnaryOp},
-    Error, LogicalMemorySpace, Result,
-};
+use tenferro_device::cuda::runtime::{CudaRuntime, RealBinaryOp, RealUnaryOp};
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
 use crate::{

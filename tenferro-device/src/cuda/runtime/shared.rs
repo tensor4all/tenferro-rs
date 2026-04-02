@@ -1,4 +1,5 @@
-use super::{kernels::*, state::CudaBuffer};
+use super::kernels::*;
+use super::state::CudaBuffer;
 use crate::{Error, Result};
 
 /// Destination layout for materialized contiguous buffers.

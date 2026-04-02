@@ -83,8 +83,7 @@ pub(super) fn canonicalize_col_major_operands_owned<T: Scalar + Conjugate>(
 
 #[cfg(test)]
 mod tests {
-    use tenferro_tensor::MemoryOrder;
-    use tenferro_tensor::Tensor;
+    use tenferro_tensor::{MemoryOrder, Tensor};
 
     use super::{canonicalize_col_major_operands_borrowed, CanonicalOperand};
 

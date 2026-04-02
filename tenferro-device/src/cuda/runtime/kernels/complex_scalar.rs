@@ -1,12 +1,11 @@
 use std::sync::{Arc, OnceLock};
 
-use cudarc::{
-    driver::{CudaFunction, CudaStream, DeviceRepr},
-    nvrtc::Ptx,
-};
+use cudarc::driver::{CudaFunction, CudaStream, DeviceRepr};
+use cudarc::nvrtc::Ptx;
 use num_complex::{Complex32, Complex64};
 
-use super::super::{shared::*, state::CudaRuntime};
+use super::super::shared::*;
+use super::super::state::CudaRuntime;
 use super::helpers::{compile_ptx_once, load_kernel_from_ptx};
 use crate::Result;
 

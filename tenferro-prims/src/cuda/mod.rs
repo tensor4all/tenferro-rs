@@ -29,7 +29,8 @@ use std::sync::Arc;
 #[cfg(unix)]
 use libloading::os::unix::{Library as UnixLibrary, RTLD_GLOBAL, RTLD_NOW};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{cuda::runtime as device_cuda, Error, Result};
+use tenferro_device::cuda::runtime as device_cuda;
+use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cpu::TempPool;

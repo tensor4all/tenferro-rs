@@ -1,8 +1,7 @@
 use crate::core::AdMode;
 use crate::runtime::dispatch::{unsupported_runtime_capability, with_runtime};
 use crate::structured::StructuredTensor;
-use crate::AdTensor;
-use crate::Result;
+use crate::{AdTensor, Result};
 use num_complex::Complex64;
 use tenferro_internal_ad_core::DynAdTensor;
 use tenferro_prims::CpuContext;

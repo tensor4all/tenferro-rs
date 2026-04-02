@@ -2,10 +2,8 @@ mod organization;
 mod row_major_strides_tests;
 
 use std::os::raw::c_void;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use tenferro_tensor::{MemoryOrder, Tensor};
 

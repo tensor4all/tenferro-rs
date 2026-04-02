@@ -1,4 +1,5 @@
-use super::{accessors::TypedTensorBorrowTyped, Tensor, TypedTensorRef};
+use super::accessors::TypedTensorBorrowTyped;
+use super::{Tensor, TypedTensorRef};
 use crate::ops::ad;
 use crate::{AdMode, Error, Result, ScalarType};
 use tenferro_algebra::Scalar;

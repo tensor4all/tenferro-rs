@@ -1,2 +1,3 @@
-pub use tenferro_internal_frontend_core::StructuredTensor;
-pub use tenferro_internal_frontend_core::{einsum_with_subscripts_in_ctx, reverse_subscripts};
+pub use tenferro_internal_frontend_core::{
+    einsum_with_subscripts_in_ctx, reverse_subscripts, StructuredTensor,
+};

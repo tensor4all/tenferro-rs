@@ -15,8 +15,7 @@ use crate::structured::{
     accumulate_structured_tangent, compress_dense_to_layout_in_ctx, einsum_with_subscripts_in_ctx,
     reverse_subscripts, to_dense_in_ctx, StructuredTensor,
 };
-use crate::tape;
-use crate::{Error, Result};
+use crate::{tape, Error, Result};
 
 #[path = "ad/mod.rs"]
 #[doc(hidden)]

@@ -9,8 +9,7 @@ use crate::{
     SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
 };
 
-use super::context::CpuBackend;
-use super::context::CpuContext;
+use super::context::{CpuBackend, CpuContext};
 use super::execution::execute_semiring_plan;
 use super::plan::{build_contract_gemm_spec, compute_paired_components, CpuPlan};
 

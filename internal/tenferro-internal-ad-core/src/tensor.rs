@@ -207,13 +207,15 @@ impl<T: Scalar> AdTensor<T> {
             tangent.clone().map(T::into_dyn),
         );
         let attachment = LegacyReverseAttachment {
-            node: tracked
-                .node_id()
-                .expect("reverse placeholder carries a node"),
+            node: tracked.node_id().ok_or_else(|| Error::InvalidAdTensor {
+                message: "reverse placeholder must carry a node".to_string(),
+            })?,
             tape: tracked
                 .tape()
                 .cloned()
-                .expect("reverse placeholder carries a tape"),
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "reverse placeholder must carry a tape".to_string(),
+                })?,
         };
         Ok(Self(TensorAdState::Reverse {
             primal,
@@ -263,11 +265,14 @@ impl<T: Scalar> AdTensor<T> {
                             None => tape.leaf(T::into_dyn(primal.clone())),
                         };
                         guard.legacy_attachment = Some(LegacyReverseAttachment {
-                            node: tracked.node_id().expect("reverse leaf carries a node"),
-                            tape: tracked
-                                .tape()
-                                .cloned()
-                                .expect("reverse leaf carries a tape"),
+                            node: tracked.node_id().ok_or_else(|| Error::InvalidAdTensor {
+                                message: "reverse leaf must carry a node".to_string(),
+                            })?,
+                            tape: tracked.tape().cloned().ok_or_else(|| {
+                                Error::InvalidAdTensor {
+                                    message: "reverse leaf must carry a tape".to_string(),
+                                }
+                            })?,
                         });
                         Ok(())
                     }
@@ -374,7 +379,11 @@ impl<T: Scalar> AdTensor<T> {
                         })?;
                 Ok(AdTensorSnapshot::Reverse {
                     primal: primal.clone(),
-                    node: public_node_id(Some(attachment.node)).expect("public node id"),
+                    node: public_node_id(Some(attachment.node)).ok_or_else(|| {
+                        Error::InvalidAdTensor {
+                            message: "reverse snapshot requires a valid node id".to_string(),
+                        }
+                    })?,
                     tape: attachment.tape,
                     tangent: tangent.clone(),
                 })

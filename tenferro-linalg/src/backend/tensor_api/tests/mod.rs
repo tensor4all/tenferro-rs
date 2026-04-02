@@ -6,8 +6,7 @@ use tenferro_linalg_prims::{
     LuTensorResult as PrimLuTensorResult, QrTensorResult as PrimQrTensorResult,
     SvdTensorResult as PrimSvdTensorResult, TensorLinalgPrims,
 };
-use tenferro_tensor::MemoryOrder;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 #[test]
 fn tensor_result_structs_clone_and_preserve_shapes() {

@@ -5,7 +5,8 @@ use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{infra::plan_cache::PlanCache, TensorTempPoolContext};
+use crate::infra::plan_cache::PlanCache;
+use crate::TensorTempPoolContext;
 
 #[cfg(feature = "gemm-blas")]
 use super::scratch::{ScratchBuf, ScratchPool};

@@ -1,8 +1,10 @@
-use std::{ffi::c_void, mem::MaybeUninit};
+use std::ffi::c_void;
+use std::mem::MaybeUninit;
 
 use cudarc::runtime::result as cuda_result;
 
-use super::{kernels::*, state::CudaRuntime};
+use super::kernels::*;
+use super::state::CudaRuntime;
 use crate::{Error, Result};
 
 impl CudaRuntime {

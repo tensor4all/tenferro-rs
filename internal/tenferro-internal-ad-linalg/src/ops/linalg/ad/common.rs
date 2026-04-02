@@ -225,6 +225,4 @@ macro_rules! run_binary_tensor_ad {
     }};
 }
 
-pub(crate) use dispatch_linalg_ad_runtime;
-pub(crate) use run_binary_tensor_ad;
-pub(crate) use run_unary_tensor_ad;
+pub(crate) use {dispatch_linalg_ad_runtime, run_binary_tensor_ad, run_unary_tensor_ad};

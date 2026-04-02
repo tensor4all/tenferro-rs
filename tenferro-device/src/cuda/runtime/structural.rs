@@ -1,6 +1,8 @@
 use cudarc::driver::{CudaStream, LaunchConfig, PushKernelArg};
 
-use super::{kernels::*, shared::*, state::CudaRuntime};
+use super::kernels::*;
+use super::shared::*;
+use super::state::CudaRuntime;
 use crate::{Error, Result};
 
 impl CudaRuntime {

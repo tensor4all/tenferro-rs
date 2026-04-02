@@ -1,7 +1,7 @@
 use crate::structured::StructuredTensor;
 use tenferro_device::Error as DeviceError;
+use tenferro_tensor::structured_tensor::{canonicalize_axis_classes, validate_layout};
 use tenferro_tensor::{
-    structured_tensor::{canonicalize_axis_classes, validate_layout},
     MemoryOrder, StructuredTensor as InnerStructuredTensor, Tensor as DenseTensor,
 };
 

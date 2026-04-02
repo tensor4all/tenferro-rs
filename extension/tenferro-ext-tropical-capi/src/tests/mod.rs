@@ -1,7 +1,8 @@
 mod organization;
 
-use tenferro_capi::tfe_tensor_f64_release;
-use tenferro_capi::{tfe_status_t, TfeTensorF64, TFE_INTERNAL_ERROR, TFE_SUCCESS};
+use tenferro_capi::{
+    tfe_status_t, tfe_tensor_f64_release, TfeTensorF64, TFE_INTERNAL_ERROR, TFE_SUCCESS,
+};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;

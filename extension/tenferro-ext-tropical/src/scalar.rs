@@ -11,8 +11,7 @@
 //!
 //! All arithmetic operations are fully implemented.
 
-use std::fmt;
-use std::ops;
+use std::{fmt, ops};
 
 use tenferro_algebra::Conjugate;
 

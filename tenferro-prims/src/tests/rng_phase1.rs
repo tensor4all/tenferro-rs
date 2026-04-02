@@ -2,12 +2,11 @@ use tenferro_algebra::Standard;
 use tenferro_device::{Generator, LogicalMemorySpace};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{CpuBackend, CpuContext, RngPrimsDescriptor, TensorRngPrims};
+use crate::{CpuBackend, CpuContext, RngPrimsDescriptor, RocmBackend, RocmContext, TensorRngPrims};
 #[cfg(not(feature = "cuda"))]
 use crate::{CudaBackend, CudaContext};
 #[cfg(feature = "cuda")]
 use crate::{CudaBackend, CudaContext};
-use crate::{RocmBackend, RocmContext};
 
 fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len());

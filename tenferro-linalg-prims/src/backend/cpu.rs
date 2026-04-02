@@ -29,7 +29,8 @@ type SelectedCpuSliceBackend = super::cpu_lapack::LapackBackend;
 mod private {
     use num_complex::{Complex32, Complex64};
 
-    use super::{super::LinalgBackend, SelectedCpuSliceBackend};
+    use super::super::LinalgBackend;
+    use super::SelectedCpuSliceBackend;
     use crate::{KernelLinalgScalar, LapackEigScalar};
     use tenferro_device::Result;
 

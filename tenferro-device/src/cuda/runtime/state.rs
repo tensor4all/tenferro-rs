@@ -1,6 +1,9 @@
-use std::{ffi::c_void, marker::PhantomData, sync::Arc};
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
-use cudarc::{driver::CudaContext, runtime::result as cuda_result};
+use cudarc::driver::CudaContext;
+use cudarc::runtime::result as cuda_result;
 
 use super::kernels::{cuda_error, runtime_cache};
 use crate::{Error, Result};

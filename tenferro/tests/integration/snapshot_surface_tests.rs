@@ -1,6 +1,5 @@
 use super::support::{diag_f64, vector_f64};
-use num_complex::Complex32;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro::{forward_ad, set_default_runtime, snapshot, RuntimeContext, ScalarValue, Tensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};

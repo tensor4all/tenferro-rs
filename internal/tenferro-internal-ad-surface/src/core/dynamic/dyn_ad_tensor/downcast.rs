@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 
-use super::{accessors::TypedTensorScalarTag, Tensor, TypedTensorRef};
+use super::accessors::TypedTensorScalarTag;
+use super::{Tensor, TypedTensorRef};
 use crate::{Error, Result};
 
 /// Sealed helper trait for generic scalar-type dispatch on [`Tensor`].

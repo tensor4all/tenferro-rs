@@ -1,6 +1,5 @@
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use sha2::{Digest, Sha256};
 use tenferro_device::{Error, Result};

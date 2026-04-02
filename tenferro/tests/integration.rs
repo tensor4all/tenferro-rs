@@ -26,12 +26,9 @@ mod runtime {
 mod structured {
     pub use tenferro_internal_frontend_core::{
         accumulate_tangent, compress_dense_to_layout_in_ctx, einsum_with_subscripts_in_ctx,
-        reverse_subscripts, to_dense_in_ctx, AxisClassPlanError, OperandAxisClasses,
-        StructuredTensor,
-    };
-    pub use tenferro_internal_frontend_core::{
         first_duplicate_pair, normalize_payload_for_roots, plan_axis_classes_for_subscripts,
-        unique_ids_first_appearance, usize_vec_to_u32,
+        reverse_subscripts, to_dense_in_ctx, unique_ids_first_appearance, usize_vec_to_u32,
+        AxisClassPlanError, OperandAxisClasses, StructuredTensor,
     };
     pub use tenferro_tensor::structured_tensor::canonicalize_axis_classes;
 

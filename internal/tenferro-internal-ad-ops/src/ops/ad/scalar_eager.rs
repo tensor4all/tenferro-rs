@@ -316,11 +316,15 @@ where
 
     let lhs_value: &Value<StructuredTensor<T>> = match lhs_edge.as_ref() {
         Some(value) => value.as_ref(),
-        None => lhs_plain.as_ref().expect("lhs plain value"),
+        None => lhs_plain.as_ref().ok_or_else(|| Error::InvalidAdTensor {
+            message: "lhs has no edge or plain value for reverse eager add".to_string(),
+        })?,
     };
     let rhs_value: &Value<StructuredTensor<T>> = match rhs_edge.as_ref() {
         Some(value) => value.as_ref(),
-        None => rhs_plain.as_ref().expect("rhs plain value"),
+        None => rhs_plain.as_ref().ok_or_else(|| Error::InvalidAdTensor {
+            message: "rhs has no edge or plain value for reverse eager add".to_string(),
+        })?,
     };
 
     let output = EdgeAddOp::<T>(PhantomData)

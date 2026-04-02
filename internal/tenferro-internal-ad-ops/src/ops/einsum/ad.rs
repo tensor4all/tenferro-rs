@@ -185,10 +185,13 @@ where
         .iter()
         .zip(&plain_inputs)
         .map(|(edge, plain)| match edge.as_ref() {
-            Some(value) => value.as_ref(),
-            None => plain.as_ref().expect("plain einsum operand"),
+            Some(value) => Ok(value.as_ref()),
+            None => plain.as_ref().ok_or_else(|| crate::Error::InvalidAdTensor {
+                message: "einsum operand has no edge or plain value for reverse eager path"
+                    .to_string(),
+            }),
         })
-        .collect();
+        .collect::<std::result::Result<_, crate::Error>>()?;
 
     let output = op.apply_one(&values).map_err(Error::from)?;
     wrap_reverse_edge_output(output)

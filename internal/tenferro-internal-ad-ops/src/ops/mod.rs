@@ -7,8 +7,7 @@ use crate::core::NodeId;
 use crate::runtime::contracts::*;
 use crate::runtime::dispatch::*;
 use crate::structured::{einsum_with_subscripts_in_ctx, reverse_subscripts, StructuredTensor};
-use crate::tape;
-use crate::{Error, Result};
+use crate::{tape, Error, Result};
 
 pub mod ad;
 pub mod einsum;

@@ -1,4 +1,5 @@
-use std::{any::TypeId, sync::Arc};
+use std::any::TypeId;
+use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
@@ -9,7 +10,8 @@ use tenferro_device::cuda::runtime::{
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
-use crate::{layout::compute_contiguous_strides, DataBuffer, MemoryOrder, Tensor};
+use crate::layout::compute_contiguous_strides;
+use crate::{DataBuffer, MemoryOrder, Tensor};
 
 fn gpu_runtime(space: LogicalMemorySpace) -> Result<Arc<device_cuda::CudaRuntime>> {
     let LogicalMemorySpace::GpuMemory { device_id } = space else {

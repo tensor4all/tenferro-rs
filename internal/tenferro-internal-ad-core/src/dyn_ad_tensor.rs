@@ -6,8 +6,7 @@ use tenferro_internal_frontend_core::{
     DynTensor, DynTensorTyped, ScalarType, ScalarValue, StructuredTensor,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tidu::expert::Tape;
-use tidu::expert::TrackedValue;
+use tidu::expert::{Tape, TrackedValue};
 
 use crate::{AdMode, AdTensor, NodeId};
 

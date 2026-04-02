@@ -4,7 +4,8 @@
 //! nodes following tenferro's contraction tree, so the public Burn surface
 //! matches the forward N-ary einsum contract.
 
-use burn::backend::autodiff::checkpoint::{base::Checkpointer, strategy::CheckpointStrategy};
+use burn::backend::autodiff::checkpoint::base::Checkpointer;
+use burn::backend::autodiff::checkpoint::strategy::CheckpointStrategy;
 use burn::backend::autodiff::grads::Gradients;
 use burn::backend::autodiff::ops::{Backward, Ops, OpsKind};
 use burn::backend::Autodiff;

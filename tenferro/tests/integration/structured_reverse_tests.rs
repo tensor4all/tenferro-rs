@@ -1,7 +1,6 @@
 use super::support::{grad_wrt, reverse_rank0_f64_like, vector_c64, vector_f64};
 use num_complex::Complex64;
-use tenferro::{set_default_runtime, RuntimeContext};
-use tenferro::{Error, Tensor};
+use tenferro::{set_default_runtime, Error, RuntimeContext, Tensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 

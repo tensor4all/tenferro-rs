@@ -4,10 +4,10 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64, ComplexFloat};
 use num_traits::{NumCast, One, Zero};
 use tenferro_algebra::{Scalar, Standard};
-use tenferro_device::{
-    cuda::runtime::{ComplexRealUnaryOp as RuntimeComplexRealUnaryOp, CudaRuntime},
-    Error, LogicalMemorySpace, Result,
+use tenferro_device::cuda::runtime::{
+    ComplexRealUnaryOp as RuntimeComplexRealUnaryOp, CudaRuntime,
 };
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::cuda::CudaContext;

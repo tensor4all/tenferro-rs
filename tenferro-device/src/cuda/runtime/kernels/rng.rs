@@ -1,9 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
-use cudarc::{
-    driver::{CudaFunction, CudaStream},
-    nvrtc::Ptx,
-};
+use cudarc::driver::{CudaFunction, CudaStream};
+use cudarc::nvrtc::Ptx;
 
 use super::super::state::CudaRuntime;
 use super::helpers::{compile_ptx_once, load_kernel_from_ptx};

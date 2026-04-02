@@ -1,7 +1,8 @@
 use tenferro_internal_ad_core::{AdTensor, DynAdTensorRef};
 use tidu::expert::Tape;
 
-use super::{accessors::TypedTensorBorrowTyped, Tensor};
+use super::accessors::TypedTensorBorrowTyped;
+use super::Tensor;
 use crate::core::{DynTensor, NodeId};
 use crate::ops::ad::normalize_cotangent_payload;
 use crate::{Error, Result};

@@ -4,10 +4,8 @@ mod organization;
 use crate::SemiringBinaryOp;
 use num_complex::Complex64;
 use tenferro_algebra::Standard;
-use tenferro_device::LogicalMemorySpace;
-use tenferro_device::Result;
-use tenferro_tensor::MemoryOrder;
-use tenferro_tensor::Tensor;
+use tenferro_device::{LogicalMemorySpace, Result};
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
 use crate::{

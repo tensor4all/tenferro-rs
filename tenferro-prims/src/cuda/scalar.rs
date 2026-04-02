@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{
-    cuda::runtime::{CudaRuntime, RealBinaryOp, RealReductionOp, RealTernaryOp, RealUnaryOp},
-    Error, LogicalMemorySpace, Result,
+use tenferro_device::cuda::runtime::{
+    CudaRuntime, RealBinaryOp, RealReductionOp, RealTernaryOp, RealUnaryOp,
 };
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::{CUTENSOR_OP_ADD, CUTENSOR_OP_IDENTITY, CUTENSOR_OP_MUL};
@@ -17,17 +17,15 @@ use crate::{
     TensorScalarPrims,
 };
 
-use super::{
-    custom::{ComplexBinaryKernelOp, ComplexUnaryKernelOp},
-    family_common::scale_standard_alpha,
-    planning::{check_status, plan_elementwise_trinary, plan_reduction, TrinaryPlanSpec},
-    pointwise_ops::{
-        execute_binary_trinary, execute_custom_complex_binary, execute_custom_complex_unary,
-    },
-    runtime::{allocate_workspace, null_stream, tensor_device_ptr_with_offset},
-    scalar_type::{scalar_compute_descriptor, scalar_data_type},
-    CudaContext,
+use super::custom::{ComplexBinaryKernelOp, ComplexUnaryKernelOp};
+use super::family_common::scale_standard_alpha;
+use super::planning::{check_status, plan_elementwise_trinary, plan_reduction, TrinaryPlanSpec};
+use super::pointwise_ops::{
+    execute_binary_trinary, execute_custom_complex_binary, execute_custom_complex_unary,
 };
+use super::runtime::{allocate_workspace, null_stream, tensor_device_ptr_with_offset};
+use super::scalar_type::{scalar_compute_descriptor, scalar_data_type};
+use super::CudaContext;
 
 /// CUDA execution plan for the scalar protocol family.
 ///
