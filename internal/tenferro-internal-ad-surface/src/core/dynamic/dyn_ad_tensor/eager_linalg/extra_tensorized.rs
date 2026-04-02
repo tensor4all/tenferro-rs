@@ -1,5 +1,5 @@
 use super::{same_dtype_error, Tensor};
-use crate::Result;
+use crate::{Error, Result};
 use tenferro_internal_ad_core::DynAdTensorRef;
 
 use super::extra::{with_dense_primal_pair_typed, with_dense_primal_typed};
@@ -25,54 +25,54 @@ impl Tensor {
     /// ```
     pub fn vander_with(&self, columns: Option<usize>, increasing: bool) -> Result<Self> {
         match self.as_dyn_ad_ref() {
-            DynAdTensorRef::F32(_) => with_dense_primal_typed(
-                self.as_f32()
-                    .expect("type confirmed by preceding match on F32"),
-                "vander",
-                |dense| {
+            DynAdTensorRef::F32(_) => {
+                let value = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "vander_with: internal type mismatch after matching F32".into(),
+                })?;
+                with_dense_primal_typed(value, "vander", |dense| {
                     let mut builder = crate::ops::vander(dense).increasing(increasing);
                     if let Some(columns) = columns {
                         builder = builder.columns(columns);
                     }
                     Ok(Self::from_tensor(builder.run()?))
-                },
-            ),
-            DynAdTensorRef::F64(_) => with_dense_primal_typed(
-                self.as_f64()
-                    .expect("type confirmed by preceding match on F64"),
-                "vander",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::F64(_) => {
+                let value = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "vander_with: internal type mismatch after matching F64".into(),
+                })?;
+                with_dense_primal_typed(value, "vander", |dense| {
                     let mut builder = crate::ops::vander(dense).increasing(increasing);
                     if let Some(columns) = columns {
                         builder = builder.columns(columns);
                     }
                     Ok(Self::from_tensor(builder.run()?))
-                },
-            ),
-            DynAdTensorRef::C32(_) => with_dense_primal_typed(
-                self.as_c32()
-                    .expect("type confirmed by preceding match on C32"),
-                "vander",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C32(_) => {
+                let value = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "vander_with: internal type mismatch after matching C32".into(),
+                })?;
+                with_dense_primal_typed(value, "vander", |dense| {
                     let mut builder = crate::ops::vander(dense).increasing(increasing);
                     if let Some(columns) = columns {
                         builder = builder.columns(columns);
                     }
                     Ok(Self::from_tensor(builder.run()?))
-                },
-            ),
-            DynAdTensorRef::C64(_) => with_dense_primal_typed(
-                self.as_c64()
-                    .expect("type confirmed by preceding match on C64"),
-                "vander",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C64(_) => {
+                let value = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "vander_with: internal type mismatch after matching C64".into(),
+                })?;
+                with_dense_primal_typed(value, "vander", |dense| {
                     let mut builder = crate::ops::vander(dense).increasing(increasing);
                     if let Some(columns) = columns {
                         builder = builder.columns(columns);
                     }
                     Ok(Self::from_tensor(builder.run()?))
-                },
-            ),
+                })
+            }
         }
     }
 
@@ -85,46 +85,46 @@ impl Tensor {
     /// ```
     pub fn tensorinv(&self, ind: usize) -> Result<Self> {
         match self.as_dyn_ad_ref() {
-            DynAdTensorRef::F32(_) => with_dense_primal_typed(
-                self.as_f32()
-                    .expect("type confirmed by preceding match on F32"),
-                "tensorinv",
-                |dense| {
+            DynAdTensorRef::F32(_) => {
+                let value = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorinv: internal type mismatch after matching F32".into(),
+                })?;
+                with_dense_primal_typed(value, "tensorinv", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::tensorinv(dense).ind(ind).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::F64(_) => with_dense_primal_typed(
-                self.as_f64()
-                    .expect("type confirmed by preceding match on F64"),
-                "tensorinv",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::F64(_) => {
+                let value = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorinv: internal type mismatch after matching F64".into(),
+                })?;
+                with_dense_primal_typed(value, "tensorinv", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::tensorinv(dense).ind(ind).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::C32(_) => with_dense_primal_typed(
-                self.as_c32()
-                    .expect("type confirmed by preceding match on C32"),
-                "tensorinv",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C32(_) => {
+                let value = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorinv: internal type mismatch after matching C32".into(),
+                })?;
+                with_dense_primal_typed(value, "tensorinv", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::tensorinv(dense).ind(ind).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::C64(_) => with_dense_primal_typed(
-                self.as_c64()
-                    .expect("type confirmed by preceding match on C64"),
-                "tensorinv",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C64(_) => {
+                let value = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensorinv: internal type mismatch after matching C64".into(),
+                })?;
+                with_dense_primal_typed(value, "tensorinv", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::tensorinv(dense).ind(ind).run()?,
                     ))
-                },
-            ),
+                })
+            }
         }
     }
 

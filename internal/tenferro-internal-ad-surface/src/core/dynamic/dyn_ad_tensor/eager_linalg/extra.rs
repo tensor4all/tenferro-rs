@@ -4,7 +4,7 @@ use super::{
     SolveExResult, Tensor,
 };
 use crate::ops::ad;
-use crate::{DynTensorTyped, Result, TypedTensorRef};
+use crate::{DynTensorTyped, Error, Result, TypedTensorRef};
 use tenferro_algebra::Scalar;
 use tenferro_internal_ad_core::DynAdTensorRef;
 use tenferro_internal_ad_linalg::results::{
@@ -187,46 +187,46 @@ impl Tensor {
     /// ```
     pub fn matrix_power(&self, exponent: i64) -> Result<Self> {
         match self.as_dyn_ad_ref() {
-            DynAdTensorRef::F32(_) => with_dense_primal_typed(
-                self.as_f32()
-                    .expect("type confirmed by preceding match on F32"),
-                "matrix_power",
-                |dense| {
+            DynAdTensorRef::F32(_) => {
+                let value = self.as_f32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "matrix_power: internal type mismatch after matching F32".into(),
+                })?;
+                with_dense_primal_typed(value, "matrix_power", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::matrix_power(dense).exponent(exponent).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::F64(_) => with_dense_primal_typed(
-                self.as_f64()
-                    .expect("type confirmed by preceding match on F64"),
-                "matrix_power",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::F64(_) => {
+                let value = self.as_f64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "matrix_power: internal type mismatch after matching F64".into(),
+                })?;
+                with_dense_primal_typed(value, "matrix_power", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::matrix_power(dense).exponent(exponent).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::C32(_) => with_dense_primal_typed(
-                self.as_c32()
-                    .expect("type confirmed by preceding match on C32"),
-                "matrix_power",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C32(_) => {
+                let value = self.as_c32().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "matrix_power: internal type mismatch after matching C32".into(),
+                })?;
+                with_dense_primal_typed(value, "matrix_power", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::matrix_power(dense).exponent(exponent).run()?,
                     ))
-                },
-            ),
-            DynAdTensorRef::C64(_) => with_dense_primal_typed(
-                self.as_c64()
-                    .expect("type confirmed by preceding match on C64"),
-                "matrix_power",
-                |dense| {
+                })
+            }
+            DynAdTensorRef::C64(_) => {
+                let value = self.as_c64().ok_or_else(|| Error::InvalidAdTensor {
+                    message: "matrix_power: internal type mismatch after matching C64".into(),
+                })?;
+                with_dense_primal_typed(value, "matrix_power", |dense| {
                     Ok(Self::from_tensor(
                         crate::ops::matrix_power(dense).exponent(exponent).run()?,
                     ))
-                },
-            ),
+                })
+            }
         }
     }
 
