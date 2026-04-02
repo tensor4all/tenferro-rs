@@ -59,7 +59,7 @@ impl Tensor {
                 Ok(Self::from_tensor(builder.run()?))
             });
         }
-        unreachable!("Tensor::vander_with should have one of the supported scalar dtypes")
+        Err(crate::Error::UnsupportedAdOp { op: "vander_with" })
     }
 
     /// Inverts a tensorized linear map by splitting the first `ind` axes to the left.
@@ -98,7 +98,7 @@ impl Tensor {
                 ))
             });
         }
-        unreachable!("Tensor::tensorinv should have one of the supported scalar dtypes")
+        Err(crate::Error::UnsupportedAdOp { op: "tensorinv" })
     }
 
     /// Solves a tensorized linear system using the default axis ordering.

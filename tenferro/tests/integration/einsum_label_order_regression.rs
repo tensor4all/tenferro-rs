@@ -100,7 +100,7 @@ fn einsum_matches_equivalent_rhs_axis_reordering_with_lazy_conjugation() {
         Complex64::new(0.3, -0.9),
     ]);
 
-    let rhs_conj = rhs.conj();
+    let rhs_conj = rhs.conj().unwrap();
     let direct = Tensor::einsum("ab,ca->bc", &[&lhs, &rhs_conj]).unwrap();
     let rhs_reordered = rhs_conj.permute(&[1, 0]).unwrap();
     let normalized = Tensor::einsum("ab,ac->bc", &[&lhs, &rhs_reordered]).unwrap();
@@ -131,9 +131,9 @@ fn chained_einsum_matches_equivalent_rhs_axis_reordering_with_lazy_conjugation()
         Complex64::new(0.3, -0.9),
     ]);
 
-    let a0_conj = a0.conj();
+    let a0_conj = a0.conj().unwrap();
     let env = Tensor::einsum("sa,sc->ac", &[&a0_conj, &b0]).unwrap();
-    let a1_conj = a1.conj();
+    let a1_conj = a1.conj().unwrap();
     let direct = Tensor::einsum("ab,ca->bc", &[&env, &a1_conj]).unwrap();
     let rhs_reordered = a1_conj.permute(&[1, 0]).unwrap();
     let normalized = Tensor::einsum("ab,ac->bc", &[&env, &rhs_reordered]).unwrap();
@@ -216,7 +216,7 @@ fn einsum_ab_ca_to_bc_with_lazy_conjugated_rhs_matches_manual_reference() {
         ],
         &[4, 2],
     );
-    let rhs = rhs_base.conj();
+    let rhs = rhs_base.conj().unwrap();
 
     let out = Tensor::einsum("ab,ca->bc", &[&lhs, &rhs]).unwrap();
 
@@ -310,7 +310,7 @@ fn einsum_ab_ba_to_scalar_with_lazy_conjugated_rhs_matches_manual_reference() {
         ],
         &[3, 2],
     );
-    let rhs = rhs_base.conj();
+    let rhs = rhs_base.conj().unwrap();
 
     let out = Tensor::einsum("ab,ba->", &[&lhs, &rhs]).unwrap();
     let lhs_vals = row_major_values(&lhs);

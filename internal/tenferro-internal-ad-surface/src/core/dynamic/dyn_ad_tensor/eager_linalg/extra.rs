@@ -214,7 +214,7 @@ impl Tensor {
                 ))
             });
         }
-        unreachable!("Tensor::matrix_power should have one of the supported scalar dtypes")
+        Err(crate::Error::UnsupportedAdOp { op: "matrix_power" })
     }
 
     /// Computes the matrix condition number with the default spectral norm.

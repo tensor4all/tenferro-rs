@@ -381,8 +381,16 @@ where
     let mut outputs = EdgeQrOp::<T>(PhantomData)
         .apply(&[input.as_ref()])
         .map_err(Error::from)?;
-    let r = edge_output_to_ad(outputs.pop().expect("qr output r"))?;
-    let q = edge_output_to_ad(outputs.pop().expect("qr output q"))?;
+    let r = edge_output_to_ad(
+        outputs
+            .pop()
+            .ok_or_else(|| ad_invalid_argument("qr output r missing"))?,
+    )?;
+    let q = edge_output_to_ad(
+        outputs
+            .pop()
+            .ok_or_else(|| ad_invalid_argument("qr output q missing"))?,
+    )?;
     Ok(DynQrResult {
         q: q.into(),
         r: r.into(),
@@ -404,9 +412,21 @@ where
         _marker: PhantomData,
     };
     let mut outputs = op.apply(&[input.as_ref()]).map_err(Error::from)?;
-    let vt = edge_output_to_ad(outputs.pop().expect("svd output vt"))?;
-    let s = edge_output_to_ad(outputs.pop().expect("svd output s"))?;
-    let u = edge_output_to_ad(outputs.pop().expect("svd output u"))?;
+    let vt = edge_output_to_ad(
+        outputs
+            .pop()
+            .ok_or_else(|| ad_invalid_argument("svd output vt missing"))?,
+    )?;
+    let s = edge_output_to_ad(
+        outputs
+            .pop()
+            .ok_or_else(|| ad_invalid_argument("svd output s missing"))?,
+    )?;
+    let u = edge_output_to_ad(
+        outputs
+            .pop()
+            .ok_or_else(|| ad_invalid_argument("svd output u missing"))?,
+    )?;
     Ok(TypedSvdResult {
         u: T::into_dyn_ad(u),
         s: T::into_dyn_ad(s),
@@ -489,7 +509,6 @@ where
     /// ```ignore
     /// let _builder = builder.options(&options);
     /// ```
-    #[allow(dead_code)]
     pub fn options(mut self, options: &'a SvdOptions) -> Self {
         self.options = Some(options);
         self

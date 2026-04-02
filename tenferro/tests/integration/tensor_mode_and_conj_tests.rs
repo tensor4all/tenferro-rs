@@ -22,7 +22,7 @@ fn conj_is_identity_for_real_tensors() {
         DenseTensor::<f64>::from_slice(&[1.0, -2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     );
 
-    let y = x.conj();
+    let y = x.conj().unwrap();
     assert_eq!(y.scalar_type(), x.scalar_type());
     assert_eq!(y.dims(), x.dims());
     assert_eq!(
@@ -41,7 +41,7 @@ fn conj_conjugates_complex_payload_and_preserves_mode() {
         )
         .unwrap(),
     );
-    let y = x.conj();
+    let y = x.conj().unwrap();
 
     assert_eq!(y.mode(), AdMode::Primal);
     assert_eq!(
@@ -49,7 +49,7 @@ fn conj_conjugates_complex_payload_and_preserves_mode() {
         ScalarValue::C64(Complex64::new(1.0, -2.0))
     );
 
-    let z = y.conj();
+    let z = y.conj().unwrap();
     assert_eq!(
         z.try_scalar_value().unwrap(),
         ScalarValue::C64(Complex64::new(1.0, 2.0))

@@ -130,21 +130,15 @@ impl Tensor {
     /// use tenferro::{ScalarValue, Tensor};
     ///
     /// let x = Tensor::from_slice(&[Complex64::new(1.0, 2.0)], &[]).unwrap();
-    /// let y = x.conj();
+    /// let y = x.conj()?;
     /// assert_eq!(y.try_scalar_value().unwrap(), ScalarValue::C64(Complex64::new(1.0, -2.0)));
     /// ```
-    pub fn conj(&self) -> Self {
+    pub fn conj(&self) -> Result<Self> {
         match_dyn_ad_tensor_ref!(self, {
-            F32(v) => Self::from(v.clone()),
-            F64(v) => Self::from(v.clone()),
-            C32(v) => match conj_ad_tensor_typed(v) {
-                Ok(value) => Self::from(value),
-                Err(err) => panic!("Tensor::conj should preserve valid AD invariants: {err}"),
-            },
-            C64(v) => match conj_ad_tensor_typed(v) {
-                Ok(value) => Self::from(value),
-                Err(err) => panic!("Tensor::conj should preserve valid AD invariants: {err}"),
-            },
+            F32(v) => Ok(Self::from(v.clone())),
+            F64(v) => Ok(Self::from(v.clone())),
+            C32(v) => Ok(Self::from(conj_ad_tensor_typed(v)?)),
+            C64(v) => Ok(Self::from(conj_ad_tensor_typed(v)?)),
         })
     }
 
