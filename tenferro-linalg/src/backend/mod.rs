@@ -52,21 +52,26 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 #[cfg(feature = "linalg-lapack")]
 pub(crate) mod blas_lapack_backend;
 #[cfg(feature = "linalg-faer")]
+#[allow(dead_code)]
 pub(crate) mod faer_backend;
 
 // Tensor-level API and types
+#[allow(dead_code)]
 pub(crate) mod cpu_tensor_impl;
 pub mod tensor_api;
 pub mod tensor_context;
 pub(crate) mod tensor_helpers;
 
 // Device backends
+#[allow(dead_code)]
 pub(crate) mod cpu;
 #[cfg(feature = "linalg-faer")]
 pub(crate) mod cpu_faer;
 #[cfg(feature = "linalg-lapack")]
 pub(crate) mod cpu_lapack;
+#[allow(dead_code)]
 pub(crate) mod cuda;
+#[allow(dead_code)]
 pub(crate) mod hip;
 
 // ============================================================================
