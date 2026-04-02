@@ -14,6 +14,8 @@ use super::Tensor;
 #[derive(Clone, Copy)]
 pub struct TypedTensorRef<'a, T: Scalar> {
     inner: &'a Tensor,
+    primal: &'a DenseTensor<T>,
+    structured_primal: &'a StructuredTensor<T>,
     marker: PhantomData<&'a T>,
 }
 
@@ -163,8 +165,12 @@ impl TypedTensorBorrowTyped for Complex64 {
 
 impl<'a, T: TypedTensorBorrowTyped> TypedTensorRef<'a, T> {
     pub(crate) fn new(inner: &'a Tensor) -> Option<Self> {
-        T::structured_primal_from_dyn_ad(&inner.0).map(|_| Self {
+        let primal = T::primal_from_dyn_ad(&inner.0)?;
+        let structured_primal = T::structured_primal_from_dyn_ad(&inner.0)?;
+        Some(Self {
             inner,
+            primal,
+            structured_primal,
             marker: PhantomData,
         })
     }
@@ -178,13 +184,11 @@ impl<'a, T: TypedTensorBorrowTyped> TypedTensorRef<'a, T> {
     }
 
     pub fn primal(&self) -> &'a DenseTensor<T> {
-        T::primal_from_dyn_ad(&self.inner.0)
-            .expect("TypedTensorRef must be constructed from a matching runtime dtype")
+        self.primal
     }
 
     pub fn structured_primal(&self) -> &'a StructuredTensor<T> {
-        T::structured_primal_from_dyn_ad(&self.inner.0)
-            .expect("TypedTensorRef must be constructed from a matching runtime dtype")
+        self.structured_primal
     }
 
     pub fn tangent(&self) -> Option<&'a DenseTensor<T>> {
