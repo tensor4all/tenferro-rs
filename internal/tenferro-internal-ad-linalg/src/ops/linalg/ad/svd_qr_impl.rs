@@ -503,17 +503,6 @@ where
     T: DynAdTensorTyped,
     T::Real: DynTensorTyped + DynAdTensorTyped + tenferro_tensor::KeepCountScalar,
 {
-    /// Sets optional SVD options.
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let _builder = builder.options(&options);
-    /// ```
-    pub fn options(mut self, options: &'a SvdOptions) -> Self {
-        self.options = Some(options);
-        self
-    }
-
     /// Executes AD SVD.
     /// # Examples
     ///
