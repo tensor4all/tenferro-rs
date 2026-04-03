@@ -1152,6 +1152,42 @@ fn tril_triu_rank1_return_result() {
     assert_eq!(upper.unwrap().dims(), &[3]);
 }
 
+#[test]
+fn tril_triu_with_large_strides_returns_ok() {
+    let data = vec![1.0f64; 200];
+    let t = Tensor::<f64>::from_vec(data, &[4, 4], &[10, 1], 0).unwrap();
+    let lower = t.tril(0).unwrap();
+    assert_eq!(lower.dims(), &[4, 4]);
+    let lower_data = lower.buffer().as_slice().unwrap();
+    assert_eq!(lower_data[0], 1.0);
+    assert_eq!(lower_data[4], 0.0);
+
+    let upper = t.triu(0).unwrap();
+    assert_eq!(upper.dims(), &[4, 4]);
+    let upper_data = upper.buffer().as_slice().unwrap();
+    assert_eq!(upper_data[0], 1.0);
+}
+
+#[test]
+fn narrow_with_large_stride_offset_overflow_returns_error() {
+    let data = vec![0.0f64; 100];
+    let t = Tensor::<f64>::from_vec(data, &[3, 3], &[1, 3], 0).unwrap();
+    let result = t.narrow(0, usize::MAX, 1);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument for narrow offset overflow with large stride"
+    );
+}
+
+#[test]
+fn narrow_large_start_within_bounds_succeeds() {
+    let data = vec![0.0f64; 100];
+    let t = Tensor::<f64>::from_vec(data, &[10, 10], &[1, 10], 0).unwrap();
+    let result = t.narrow(1, 8, 2);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().dims(), &[10, 2]);
+}
+
 // ============================================================================
 // Strided copy bounds checking tests (issue #461)
 // ============================================================================
