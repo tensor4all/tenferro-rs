@@ -204,6 +204,7 @@ where
 /// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
 /// let cotangent = SlogdetCotangent {
+///     sign: None,
 ///     logabsdet: Some(Tensor::ones(&[], mem, col).unwrap()),
 /// };
 /// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
