@@ -79,7 +79,7 @@ where
             tensor.ndim()
         )));
     }
-    Ok(tensor.triu(diagonal))
+    tensor.triu(diagonal)
 }
 
 /// Extract the lower triangular part of a matrix (or batch of matrices).
@@ -124,7 +124,7 @@ where
             tensor.ndim()
         )));
     }
-    Ok(tensor.tril(diagonal))
+    tensor.tril(diagonal)
 }
 
 /// Concatenate tensors along an existing dimension.

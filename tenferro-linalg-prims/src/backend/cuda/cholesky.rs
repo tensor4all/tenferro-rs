@@ -62,7 +62,7 @@ where
     let bc = batch_count(batch_dims);
     let l = prepare_matrix_operand(ctx, a, MatrixOperandTransposeType::None)?;
     if n == 0 || bc == 0 {
-        return Ok(l.tril(0));
+        return l.tril(0);
     }
 
     let runtime = load_runtime(ctx)?;
@@ -129,7 +129,7 @@ where
         }
     }
 
-    Ok(l.tril(0))
+    l.tril(0)
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -245,7 +245,7 @@ where
         }
     }
 
-    l = l.tril(0);
+    l = l.tril(0)?;
     Ok(CholeskyTensorExResult {
         l,
         info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,

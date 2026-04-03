@@ -4,7 +4,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
-use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
+use tenferro_device::{checked_batch_count, unflatten_col_major_index_into, Error, Result};
 
 use super::{Tensor, TensorParts};
 use crate::layout::{compute_contiguous_strides, copy_strided, is_contiguous_in_order};
@@ -273,10 +273,10 @@ impl<T: Scalar> Tensor<T> {
         slice.to_vec()
     }
 
-    fn triangular_part(&self, diagonal: isize, half: TriangularHalf) -> Tensor<T> {
+    fn triangular_part(&self, diagonal: isize, half: TriangularHalf) -> Result<Tensor<T>> {
         self.wait();
         if self.ndim() <= 1 {
-            return self.contiguous(MemoryOrder::ColumnMajor);
+            return Ok(self.contiguous(MemoryOrder::ColumnMajor));
         }
 
         #[cfg(feature = "cuda")]
@@ -289,7 +289,7 @@ impl<T: Scalar> Tensor<T> {
                 diagonal,
                 matches!(half, TriangularHalf::Lower),
             )
-            .unwrap_or_else(|err| panic!("triangular_part: GPU materialization failed: {err}"));
+            .map_err(|err| Error::Backend(err.to_string()));
         }
 
         let m = self.dims[0];
@@ -297,7 +297,7 @@ impl<T: Scalar> Tensor<T> {
         let out_strides = compute_contiguous_strides(&self.dims, MemoryOrder::ColumnMajor);
         let mut data = vec![T::zero(); self.len()];
         if data.is_empty() {
-            return self.materialized_from_vec(data, MemoryOrder::ColumnMajor);
+            return Ok(self.materialized_from_vec(data, MemoryOrder::ColumnMajor));
         }
 
         let src = self.cpu_backed_slice_or_panic(match half {
@@ -305,38 +305,41 @@ impl<T: Scalar> Tensor<T> {
             TriangularHalf::Upper => "triu",
         });
         let batch_dims = &self.dims[2..];
-        let n_batch = checked_batch_count(batch_dims).unwrap_or_else(|err| {
-            panic!(
+        let n_batch = checked_batch_count(batch_dims).map_err(|err| {
+            Error::InvalidArgument(format!(
                 "triangular_part: invalid batch dims {:?}: {err}",
                 batch_dims
-            )
-        });
+            ))
+        })?;
         let mut batch_index = vec![0usize; batch_dims.len()];
 
         for batch in 0..n_batch {
             if !batch_dims.is_empty() {
-                unflatten_col_major_index_into(batch, batch_dims, &mut batch_index)
-                    .unwrap_or_else(|err| {
-                        panic!(
+                unflatten_col_major_index_into(batch, batch_dims, &mut batch_index).map_err(
+                    |err| {
+                        Error::InvalidArgument(format!(
                             "triangular_part: failed to unflatten batch index {batch} for dims {:?}: {err}",
                             batch_dims
-                        )
-                    });
+                        ))
+                    },
+                )?;
             }
-            let src_batch_off = checked_batch_offset(&batch_index, &self.strides, 2)
-                .unwrap_or_else(|| {
-                    panic!(
+            let src_batch_off = checked_batch_offset(&batch_index, &self.strides, 2).ok_or_else(
+                || {
+                    Error::InvalidArgument(format!(
                         "triangular_part: source batch offset overflow with batch_index {:?}, strides {:?}",
                         batch_index, self.strides
-                    )
-                });
-            let dst_batch_off = checked_batch_offset(&batch_index, &out_strides, 2)
-                .unwrap_or_else(|| {
-                    panic!(
+                    ))
+                },
+            )?;
+            let dst_batch_off = checked_batch_offset(&batch_index, &out_strides, 2).ok_or_else(
+                || {
+                    Error::InvalidArgument(format!(
                         "triangular_part: destination batch offset overflow with batch_index {:?}, strides {:?}",
                         batch_index, out_strides
-                    )
-                });
+                    ))
+                },
+            )?;
 
             for j in 0..n {
                 for i in 0..m {
@@ -354,12 +357,12 @@ impl<T: Scalar> Tensor<T> {
                         .and_then(|off| {
                             checked_pos(off, i as isize, self.strides[0], j as isize, self.strides[1])
                         })
-                        .unwrap_or_else(|| {
-                            panic!(
+                        .ok_or_else(|| {
+                            Error::InvalidArgument(format!(
                                 "triangular_part: source position overflow at ({}, {}) with offset {}, batch_off {}, strides {:?}",
                                 i, j, self.offset, src_batch_off, self.strides
-                            )
-                        });
+                            ))
+                        })?;
                     let dst_pos = checked_pos(
                         dst_batch_off,
                         i as isize,
@@ -367,18 +370,18 @@ impl<T: Scalar> Tensor<T> {
                         j as isize,
                         out_strides[1],
                     )
-                    .unwrap_or_else(|| {
-                        panic!(
+                    .ok_or_else(|| {
+                        Error::InvalidArgument(format!(
                             "triangular_part: destination position overflow at ({}, {}) with batch_off {}, strides {:?}",
                             i, j, dst_batch_off, out_strides
-                        )
-                    });
+                        ))
+                    })?;
                     data[dst_pos] = src[src_pos];
                 }
             }
         }
 
-        Tensor::from_parts(TensorParts {
+        Ok(Tensor::from_parts(TensorParts {
             buffer: DataBuffer::from_vec(data),
             dims: self.dims.clone(),
             strides: std::sync::Arc::from(out_strides),
@@ -388,7 +391,7 @@ impl<T: Scalar> Tensor<T> {
             event: None,
             conjugated: self.conjugated,
             fw_grad: None,
-        })
+        }))
     }
 
     /// Extract the lower triangular part of a matrix.
@@ -397,10 +400,10 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// ```ignore
     /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
-    /// let lower = a.tril(0);
+    /// let lower = a.tril(0).unwrap();
     /// assert_eq!(lower.dims(), &[3, 3]);
     /// ```
-    pub fn tril(&self, diagonal: isize) -> Tensor<T> {
+    pub fn tril(&self, diagonal: isize) -> Result<Tensor<T>> {
         self.triangular_part(diagonal, TriangularHalf::Lower)
     }
 
@@ -410,10 +413,10 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// ```ignore
     /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
-    /// let upper = a.triu(0);
+    /// let upper = a.triu(0).unwrap();
     /// assert_eq!(upper.dims(), &[3, 3]);
     /// ```
-    pub fn triu(&self, diagonal: isize) -> Tensor<T> {
+    pub fn triu(&self, diagonal: isize) -> Result<Tensor<T>> {
         self.triangular_part(diagonal, TriangularHalf::Upper)
     }
 }

@@ -234,7 +234,7 @@ where
         check_info("qr/orgqr", host_info[0])?;
     }
 
-    let r_src = a_work.narrow(0, 0, k)?.triu(0);
+    let r_src = a_work.narrow(0, 0, k)?.triu(0)?;
     copy_batched_column_major(ctx, &r_src, &mut r)?;
 
     Ok(QrTensorResult { q, r })

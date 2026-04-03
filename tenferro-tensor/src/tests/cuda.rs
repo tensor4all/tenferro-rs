@@ -298,13 +298,14 @@ fn gpu_tril_matches_cpu_for_batched_view_when_cuda_is_available() {
     let data: Vec<f64> = (1..=24).map(|value| value as f64).collect();
     let base = Tensor::<f64>::from_slice(&data, &[2, 3, 4], MemoryOrder::ColumnMajor).unwrap();
     let view = base.permute(&[1, 0, 2]).unwrap();
-    let expected = view.tril(-1);
+    let expected = view.tril(-1).unwrap();
 
     let gpu = view
         .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
         .unwrap();
     let got = gpu
         .tril(-1)
+        .unwrap()
         .to_memory_space_async(LogicalMemorySpace::MainMemory)
         .unwrap();
 
@@ -324,13 +325,14 @@ fn gpu_triu_matches_cpu_for_complex_batched_view_when_cuda_is_available() {
     let base =
         Tensor::<Complex64>::from_slice(&data, &[3, 3, 2], MemoryOrder::ColumnMajor).unwrap();
     let view = base.permute(&[1, 0, 2]).unwrap();
-    let expected = view.triu(1);
+    let expected = view.triu(1).unwrap();
 
     let gpu = view
         .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
         .unwrap();
     let got = gpu
         .triu(1)
+        .unwrap()
         .to_memory_space_async(LogicalMemorySpace::MainMemory)
         .unwrap();
 

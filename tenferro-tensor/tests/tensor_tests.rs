@@ -756,7 +756,7 @@ fn into_contiguous_copies_when_needed() {
 #[test]
 fn tril_3x3() {
     let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
-    let lower = t.tril(0);
+    let lower = t.tril(0).unwrap();
     assert_eq!(lower.dims(), &[3, 3]);
     let data = lower.buffer().as_slice().unwrap();
     // Col-major: col 0 = [1,1,1], col 1 = [0,1,1], col 2 = [0,0,1]
@@ -766,7 +766,7 @@ fn tril_3x3() {
 #[test]
 fn triu_3x3() {
     let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
-    let upper = t.triu(0);
+    let upper = t.triu(0).unwrap();
     assert_eq!(upper.dims(), &[3, 3]);
     let data = upper.buffer().as_slice().unwrap();
     // Col-major: col 0 = [1,0,0], col 1 = [1,1,0], col 2 = [1,1,1]
@@ -776,7 +776,7 @@ fn triu_3x3() {
 #[test]
 fn tril_with_diagonal_offset() {
     let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
-    let lower = t.tril(1);
+    let lower = t.tril(1).unwrap();
     let data = lower.buffer().as_slice().unwrap();
     // tril(1): keep where j - i <= 1
     // Col 0: all kept [1,1,1]; Col 1: row 0,1,2 where j=1: 1-0=1<=1, 1-1=0<=1, 1-2=-1<=1 → all kept [1,1,1]
@@ -787,7 +787,7 @@ fn tril_with_diagonal_offset() {
 #[test]
 fn triu_with_negative_diagonal() {
     let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
-    let upper = t.triu(-1);
+    let upper = t.triu(-1).unwrap();
     let data = upper.buffer().as_slice().unwrap();
     // triu(-1): keep where j - i >= -1
     // Col 0: 0-0=0>=-1, 0-1=-1>=-1, 0-2=-2<-1 → [1,1,0]
@@ -799,8 +799,8 @@ fn triu_with_negative_diagonal() {
 #[test]
 fn tril_triu_complementary() {
     let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
-    let lower = t.tril(0);
-    let upper = t.triu(1);
+    let lower = t.tril(0).unwrap();
+    let upper = t.triu(1).unwrap();
     // tril(0) + triu(1) should reconstruct the original
     let l_data = lower.buffer().as_slice().unwrap();
     let u_data = upper.buffer().as_slice().unwrap();
@@ -812,7 +812,7 @@ fn tril_triu_complementary() {
 #[test]
 fn tril_rank1_returns_vector_unchanged() {
     let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
-    let lower = t.tril(0);
+    let lower = t.tril(0).unwrap();
     assert_eq!(lower.dims(), &[3]);
     assert_eq!(lower.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0]);
 }
@@ -820,7 +820,7 @@ fn tril_rank1_returns_vector_unchanged() {
 #[test]
 fn triu_rank1_returns_vector_unchanged() {
     let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
-    let upper = t.triu(0);
+    let upper = t.triu(0).unwrap();
     assert_eq!(upper.dims(), &[3]);
     assert_eq!(upper.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0]);
 }
@@ -1084,20 +1084,20 @@ fn eye_small_sizes_work() {
 #[test]
 fn tril_triu_normal_sizes_work() {
     let t = Tensor::<f64>::ones(&[5, 5], MEM, COL).unwrap();
-    let lower = t.tril(0);
+    let lower = t.tril(0).unwrap();
     assert_eq!(lower.dims(), &[5, 5]);
 
-    let upper = t.triu(0);
+    let upper = t.triu(0).unwrap();
     assert_eq!(upper.dims(), &[5, 5]);
 }
 
 #[test]
 fn tril_triu_batched_works() {
     let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL).unwrap();
-    let lower = t.tril(0);
+    let lower = t.tril(0).unwrap();
     assert_eq!(lower.dims(), &[3, 3, 2]);
 
-    let upper = t.triu(0);
+    let upper = t.triu(0).unwrap();
     assert_eq!(upper.dims(), &[3, 3, 2]);
 }
 
@@ -1160,7 +1160,7 @@ fn contiguous_copy_3d_tensor() {
 #[test]
 fn contiguous_copy_batched_tril() {
     let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL).unwrap();
-    let lower = t.tril(0);
+    let lower = t.tril(0).unwrap();
     let c = lower.contiguous(COL);
     assert_eq!(c.dims(), &[3, 3, 2]);
     assert!(c.is_contiguous());
