@@ -10,8 +10,6 @@
 mod core;
 pub(crate) mod ops;
 mod runtime;
-mod structured;
-mod tape;
 
 pub(crate) use core::DynTensor;
 pub use tenferro_internal_ad_core::AdMode;

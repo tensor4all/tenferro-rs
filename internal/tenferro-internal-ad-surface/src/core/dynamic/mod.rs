@@ -1,5 +1,5 @@
-mod dyn_ad_tensor;
-mod tensor_ops;
+mod results;
+mod tensor;
 
 pub use dyn_ad_tensor::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
@@ -7,6 +7,4 @@ pub use dyn_ad_tensor::{
     TensorScalarDowncast, TypedTensorRef,
 };
 pub use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, ScalarType};
-
-#[cfg(test)]
-mod tests;
+pub use tensor::Tensor;

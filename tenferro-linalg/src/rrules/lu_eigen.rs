@@ -1,4 +1,6 @@
 use super::*;
+use num_traits::Float;
+use tenferro_algebra::Conjugate;
 
 /// Reverse-mode AD rule for LU (VJP / pullback).
 ///
@@ -23,7 +25,7 @@ use super::*;
 /// };
 /// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lu_rrule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
@@ -33,10 +35,11 @@ where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorMetadataContextFor
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
-    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
-        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<
+        tenferro_algebra::Standard<T::Real>,
+    >>::ScalarBackend: tenferro_prims::TensorMetadataCastPrims<T::Real, Context = C>,
     T: crate::primal::LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
@@ -94,105 +97,100 @@ where
             .map(|data| &data[b * k * n..(b + 1) * k * n]);
 
         let batch_grad = if m == n {
-            let l_t = transpose(l_b, k, k);
+            let l_h = adjoint_transpose(l_b, k, k);
             let mut inner = vec![T::zero(); k * k];
 
             if let Some(dl_b) = dl_b {
-                let lt_dl = backend_mat_mul(ctx, &l_t, k, k, dl_b, k)?;
+                let lt_dl = backend_mat_mul(ctx, &l_h, k, k, dl_b, k)?;
                 inner = add_vec(&inner, &tril_strict(&lt_dl, k));
             }
             if let Some(du_b) = du_b {
-                let du_ut = backend_mat_mul(ctx, du_b, k, k, &transpose(u_b, k, k), k)?;
+                let du_ut = backend_mat_mul(ctx, du_b, k, k, &adjoint_transpose(u_b, k, k), k)?;
                 inner = add_vec(&inner, &triu(&du_ut, k));
             }
 
-            let right_t = backend_solve_tri(ctx, u_b, &transpose(&inner, k, k), k, k, true)?;
-            let right = transpose(&right_t, k, k);
-            backend_solve_tri(ctx, &l_t, &right, k, k, true)?
+            let left = backend_solve_tri(ctx, &l_h, &inner, k, k, true)?;
+            let grad_h = backend_solve_tri(ctx, u_b, &adjoint_transpose(&left, k, k), k, k, true)?;
+            adjoint_transpose(&grad_h, k, k)
         } else if m < n {
-            let l_t = transpose(l_b, k, k);
-            let u1: Vec<T> = {
-                let mut out = vec![T::zero(); k * k];
-                for j in 0..k {
-                    for i in 0..k {
-                        out[i + j * k] = u_b[i + j * k];
-                    }
-                }
-                out
-            };
-
-            let mut core = vec![T::zero(); k * k];
+            let l_h = adjoint_transpose(l_b, k, k);
+            let u1 = u_b[..k * k].to_vec();
+            let u2 = u_b[k * k..].to_vec();
+            let mut lower_source = vec![T::zero(); k * k];
             if let Some(dl_b) = dl_b {
-                let lt_dl = backend_mat_mul(ctx, &l_t, k, k, dl_b, k)?;
-                core = add_vec(&core, &lt_dl);
+                let lt_dl = backend_mat_mul(ctx, &l_h, k, k, dl_b, k)?;
+                lower_source = add_vec(&lower_source, &lt_dl);
             }
-            if let Some(du_b) = du_b {
-                let mut du_triu = vec![T::zero(); k * n];
-                for j in 0..n {
-                    for i in 0..k {
-                        if i <= j {
-                            du_triu[i + j * k] = du_b[i + j * k];
-                        }
-                    }
-                }
-                let du_term = backend_mat_mul(ctx, &du_triu, k, n, &transpose(u_b, k, n), k)?;
-                core = sub_vec(&core, &du_term);
+            if let Some(du_b) = du_b.filter(|_| n > k) {
+                let du2 = &du_b[k * k..];
+                let du2_u2h =
+                    backend_mat_mul(ctx, du2, k, n - k, &adjoint_transpose(&u2, k, n - k), k)?;
+                lower_source = sub_vec(&lower_source, &du2_u2h);
             }
 
-            let lower = tril_strict(&core, k);
-            let lower_t = backend_solve_tri(ctx, &u1, &transpose(&lower, k, k), k, k, true)?;
-            let leading = transpose(&lower_t, k, k);
+            let mut inner = tril_strict(&lower_source, k);
+            if let Some(du_b) = du_b {
+                let du1 = &du_b[..k * k];
+                let du1_u1h = backend_mat_mul(ctx, du1, k, k, &adjoint_transpose(&u1, k, k), k)?;
+                inner = add_vec(&inner, &triu(&du1_u1h, k));
+            }
+
+            let leading_h = backend_solve_tri(
+                ctx,
+                u1.as_slice(),
+                &adjoint_transpose(&inner, k, k),
+                k,
+                k,
+                true,
+            )?;
+            let leading = adjoint_transpose(&leading_h, k, k);
 
             let mut pre_left = vec![T::zero(); k * n];
+            pre_left[..k * k].copy_from_slice(&leading);
+            if let Some(du_b) = du_b.filter(|_| n > k) {
+                pre_left[k * k..].copy_from_slice(&du_b[k * k..]);
+            }
+
+            backend_solve_tri(ctx, &l_h, &pre_left, k, n, true)?
+        } else {
+            let mut l1 = vec![T::zero(); k * k];
+            let mut l2 = vec![T::zero(); (m - k) * k];
             for j in 0..k {
                 for i in 0..k {
-                    pre_left[i + j * k] = leading[i + j * k];
+                    l1[i + j * k] = l_b[i + j * m];
+                }
+                for i in k..m {
+                    l2[(i - k) + j * (m - k)] = l_b[i + j * m];
                 }
             }
-            if let Some(du_b) = du_b {
-                for j in 0..k {
-                    for i in 0..=j {
-                        pre_left[i + j * k] = pre_left[i + j * k] + du_b[i + j * k];
-                    }
-                }
-                for j in k..n {
-                    for i in 0..k {
-                        pre_left[i + j * k] = du_b[i + j * k];
-                    }
-                }
-            }
+            let l1_h = adjoint_transpose(&l1, k, k);
 
-            backend_solve_tri(ctx, &l_t, &pre_left, k, n, true)?
-        } else {
-            let l1: Vec<T> = {
-                let mut out = vec![T::zero(); k * k];
-                for j in 0..k {
-                    for i in 0..k {
-                        out[i + j * k] = l_b[i + j * m];
-                    }
-                }
-                out
-            };
-            let l1_t = transpose(&l1, k, k);
-
-            let mut core = vec![T::zero(); k * k];
-            if let Some(du_b) = du_b {
-                let du_term = backend_mat_mul(ctx, du_b, k, k, &transpose(u_b, k, k), k)?;
-                core = add_vec(&core, &du_term);
-            }
+            let mut inner = vec![T::zero(); k * k];
             if let Some(dl_b) = dl_b {
-                let mut dl_tril = vec![T::zero(); m * k];
+                let mut dl1 = vec![T::zero(); k * k];
+                let mut dl2 = vec![T::zero(); (m - k) * k];
                 for j in 0..k {
-                    for i in (j + 1)..m {
-                        dl_tril[i + j * m] = dl_b[i + j * m];
+                    for i in 0..k {
+                        dl1[i + j * k] = dl_b[i + j * m];
+                    }
+                    for i in k..m {
+                        dl2[(i - k) + j * (m - k)] = dl_b[i + j * m];
                     }
                 }
-                let lt_dl = backend_mat_mul(ctx, &transpose(l_b, m, k), k, m, &dl_tril, k)?;
-                core = sub_vec(&core, &lt_dl);
+                let l1h_dl1 = backend_mat_mul(ctx, &l1_h, k, k, &dl1, k)?;
+                inner = add_vec(&inner, &tril_strict(&l1h_dl1, k));
+                if m > k {
+                    let l2h_dl2 =
+                        backend_mat_mul(ctx, &adjoint_transpose(&l2, m - k, k), k, m - k, &dl2, k)?;
+                    inner = sub_vec(&inner, &triu(&l2h_dl2, k));
+                }
+            }
+            if let Some(du_b) = du_b {
+                let du_term = backend_mat_mul(ctx, du_b, k, k, &adjoint_transpose(u_b, k, k), k)?;
+                inner = add_vec(&inner, &triu(&du_term, k));
             }
 
-            let upper = triu(&core, k);
-            let leading = backend_solve_tri(ctx, &l1_t, &upper, k, k, true)?;
+            let leading = backend_solve_tri(ctx, &l1_h, &inner, k, k, true)?;
 
             let mut pre_right = vec![T::zero(); m * k];
             for j in 0..k {
@@ -202,18 +200,15 @@ where
             }
             if let Some(dl_b) = dl_b {
                 for j in 0..k {
-                    for i in (j + 1)..k {
-                        pre_right[i + j * m] = pre_right[i + j * m] + dl_b[i + j * m];
-                    }
                     for i in k..m {
                         pre_right[i + j * m] = dl_b[i + j * m];
                     }
                 }
             }
 
-            let batch_grad_t =
-                backend_solve_tri(ctx, u_b, &transpose(&pre_right, m, k), k, m, true)?;
-            transpose(&batch_grad_t, k, m)
+            let batch_grad_h =
+                backend_solve_tri(ctx, u_b, &adjoint_transpose(&pre_right, m, k), k, m, true)?;
+            adjoint_transpose(&batch_grad_h, k, m)
         };
 
         let out = &mut grad_a[b * m * n..(b + 1) * m * n];
@@ -250,17 +245,18 @@ where
 /// };
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn eigen_rrule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
-    cotangent: &EigenCotangent<T>,
+    cotangent: &EigenCotangent<T, T::Real>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + Conjugate,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    // Symmetric eigendecomposition: A = V diag(E) V^T
+    // Hermitian eigendecomposition: A = V diag(E) V^H
     let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
@@ -269,9 +265,9 @@ where
     // Regularization for the F-matrix: prevents division by zero when two
     // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
     // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
-    let eta: T = {
-        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
-        let eps = T::epsilon();
+    let eta: T::Real = {
+        let raw: T::Real = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::Real::epsilon();
         if raw < eps {
             eps
         } else {
@@ -288,51 +284,46 @@ where
         let v_b = &v_data[b * n * n..(b + 1) * n * n];
         let e_b = &e_data[b * n..(b + 1) * n];
 
-        // Build F-matrix (n×n): F_ij = 1/(e_j - e_i) for i≠j, 0 diagonal
-        let mut f_mat = vec![T::zero(); n * n];
+        // Build F-matrix (n×n): F_ij = (e_i - e_j)/((e_i - e_j)^2 + eta), 0 diagonal.
+        let mut f_mat = vec![T::Real::zero(); n * n];
         for i in 0..n {
             for j in 0..n {
                 if i != j {
-                    let denom = e_b[j] - e_b[i];
-                    f_mat[i + j * n] = T::one()
-                        / (denom
-                            + eta
-                                * if denom >= T::zero() {
-                                    T::one()
-                                } else {
-                                    -T::one()
-                                });
+                    let gap = e_b[i] - e_b[j];
+                    f_mat[i + j * n] = gap / (gap * gap + eta);
                 }
             }
         }
 
-        // Inner matrix D = diag(dE) + F ⊙ (V^T dV + (V^T dV)^T) / 2
+        // Inner matrix D = diag(dE) + 1/2 * (H + H^H),
+        // where H = F ⊙ (V^H dV).
         let mut d_mat = vec![T::zero(); n * n];
 
         if let Some(ref de) = cotangent.values {
             let (de_data, _) = extract_data(de)?;
             let de_b = &de_data[b * n..(b + 1) * n];
             for i in 0..n {
-                d_mat[i + i * n] = de_b[i];
+                d_mat[i + i * n] = T::from_real(de_b[i]);
             }
         }
 
         if let Some(ref dv) = cotangent.vectors {
             let (dv_data, _) = extract_data(dv)?;
             let dv_b = &dv_data[b * n * n..(b + 1) * n * n];
-            let vt_dv = backend_mat_mul(ctx, &transpose(v_b, n, n), n, n, dv_b, n)?;
-            let half: T = scalar_from(0.5).map_err(to_ad_err)?;
+            let dv_h_v = backend_mat_mul(ctx, &adjoint_transpose(dv_b, n, n), n, n, v_b, n)?;
+            let half: T::Real = scalar_from(0.5).map_err(to_ad_err)?;
             for i in 0..n {
                 for j in 0..n {
-                    let skew = half * (vt_dv[i + j * n] - vt_dv[j + i * n]);
-                    d_mat[i + j * n] = d_mat[i + j * n] + f_mat[i + j * n] * skew;
+                    let h_ij = T::from_real(f_mat[i + j * n]) * dv_h_v[i + j * n];
+                    let h_h_ij = (T::from_real(f_mat[j + i * n]) * dv_h_v[j + i * n]).conj();
+                    d_mat[i + j * n] = d_mat[i + j * n] + (h_ij + h_h_ij) * T::from_real(half);
                 }
             }
         }
 
-        // dA = V D V^T
+        // dA = V D V^H
         let vd = backend_mat_mul(ctx, v_b, n, n, &d_mat, n)?;
-        let da_b = backend_mat_mul(ctx, &vd, n, n, &transpose(v_b, n, n), n)?;
+        let da_b = backend_mat_mul(ctx, &vd, n, n, &adjoint_transpose(v_b, n, n), n)?;
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
     }

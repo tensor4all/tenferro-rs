@@ -5,8 +5,7 @@
 
 use tenferro_device::Error;
 use tenferro_ext_tropical::ad::{
-    extract_inner, promote_to_tropical, tracked_tropical_einsum, tropical_einsum_rrule,
-    TropicalScalar,
+    extract_inner, promote_to_tropical, tropical_einsum_rrule, TropicalScalar,
 };
 use tenferro_ext_tropical::{
     MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
@@ -1073,33 +1072,4 @@ fn maxplus_unary_col_max_backward() {
     assert_eq!(da[1], 1.0); // A[1,0]
     assert_eq!(da[2], 1.0); // A[0,1]
     assert_eq!(da[3], 0.0); // A[1,1]
-}
-
-#[test]
-fn tracked_maxplus_unary_full_contraction_pullback() {
-    let tape = Tape::<Tensor<f64>>::new();
-    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
-    //      [4, 2]]
-    let a_data = Tensor::<f64>::from_slice(&[1.0, 4.0, 5.0, 2.0], &[2, 2], COL).unwrap();
-    let a = tape.leaf(a_data);
-
-    // ij-> : max of all = 5
-    let c =
-        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-            "ij->",
-            &[&a],
-        )
-        .unwrap();
-
-    assert_eq!(c.value().buffer().as_slice().unwrap()[0], 5.0);
-
-    let grads = tape.pullback(&c).unwrap();
-    let ga = grads.get(a.node_id().unwrap()).unwrap();
-    let ga_data = ga.buffer().as_slice().unwrap();
-
-    // Winner is A[0,1] = 5.0, flat index 2
-    assert_eq!(ga_data[0], 0.0);
-    assert_eq!(ga_data[1], 0.0);
-    assert_eq!(ga_data[2], 1.0); // winner
-    assert_eq!(ga_data[3], 0.0);
 }

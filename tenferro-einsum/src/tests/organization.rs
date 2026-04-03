@@ -11,7 +11,7 @@ fn line_count(path: &str) -> usize {
 
 // Do not delete or weaken this test: it protects the feature-first einsum layout that keeps a single operation readable end-to-end.
 #[test]
-fn einsum_is_grouped_by_syntax_planning_execution_api_and_ad() {
+fn einsum_is_grouped_by_syntax_planning_execution_api_and_math_rules() {
     assert!(
         !repo_path("src/api.rs").exists(),
         "api.rs should be replaced by a focused module directory"
@@ -46,8 +46,7 @@ fn einsum_is_grouped_by_syntax_planning_execution_api_and_ad() {
         "src/api/owned.rs",
         "src/api/into.rs",
         "src/ad/mod.rs",
-        "src/ad/reverse_rule.rs",
-        "src/ad/tracked.rs",
+        "src/ad/delta.rs",
         "src/ad/rules.rs",
     ] {
         assert!(
@@ -85,8 +84,7 @@ fn split_einsum_modules_stay_under_size_guideline() {
         "src/api/owned.rs",
         "src/api/into.rs",
         "src/ad/mod.rs",
-        "src/ad/reverse_rule.rs",
-        "src/ad/tracked.rs",
+        "src/ad/delta.rs",
         "src/ad/rules.rs",
     ] {
         let lines = line_count(relative);
@@ -115,4 +113,33 @@ fn dispatch_cleanup_guards_against_unwraps_and_usize_flop_math() {
         contents.contains("checked_mul") || contents.contains("saturating_mul"),
         "dispatch profiling should use checked or saturating multiply for GEMM FLOPS"
     );
+}
+
+#[test]
+fn einsum_ad_surface_forbids_legacy_tidu_types_and_hvp() {
+    for relative in ["src/ad/mod.rs", "src/ad/rules.rs", "src/lib.rs"] {
+        let contents = fs::read_to_string(repo_path(relative)).unwrap();
+        for forbidden in [
+            "TrackedValue",
+            "DualValue",
+            "ReverseRule",
+            "NodeId",
+            "Tape",
+            "tracked_einsum",
+            "dual_einsum",
+            "einsum_hvp",
+        ] {
+            assert!(
+                !contents.contains(forbidden),
+                "{relative} should not reference legacy AD surface `{forbidden}`"
+            );
+        }
+    }
+
+    for removed in ["src/ad/reverse_rule.rs", "src/ad/tracked.rs"] {
+        assert!(
+            !repo_path(removed).exists(),
+            "{removed} should be deleted in the linearize-first cut"
+        );
+    }
 }

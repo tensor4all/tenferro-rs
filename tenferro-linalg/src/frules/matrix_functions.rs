@@ -26,7 +26,7 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn matrix_exp_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn matrix_exp_frule<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -39,6 +39,7 @@ where
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>
         + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
         tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T::Real>, Context = C>,
     C::Backend: 'static,

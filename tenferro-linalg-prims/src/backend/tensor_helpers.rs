@@ -249,11 +249,6 @@ pub fn validate_solve_rhs_shape<T: LinalgScalar>(
                 dims[0]
             )));
         }
-        if dims[1] == 0 {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} requires b dim[1] (nrhs) > 0"
-            )));
-        }
         let output_batch_dims = broadcast_batch_dims(batch_dims, &dims[2..], op_name, "a", "b")?;
         let rhs_batch_indexer =
             BroadcastBatchIndexer::new(&dims[2..], &output_batch_dims, op_name, "b")?;

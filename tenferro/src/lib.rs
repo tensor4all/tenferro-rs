@@ -2,43 +2,53 @@
 
 //! `tenferro`: AD-aware tensor interface layer on top of `tenferro-rs`.
 //!
+//! The public surface includes reverse-mode helpers plus a narrow JVP
+//! transform, [`jvp`], which returns [`JvpResult`] with primal outputs and
+//! optional output tangents for the currently wired operations.
+//!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro::Tensor;
+//! use tenferro::{jvp, Tensor};
 //!
-//! let payload = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-//! let x = Tensor::diag(&payload).unwrap();
-//! assert_eq!(x.dims(), &[2, 2]);
-//! assert!(x.is_diag());
+//! let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+//! let primals = [x];
+//! let tangents = [Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2]).unwrap())];
+//!
+//! let result = jvp(
+//!     |inputs| Ok(vec![inputs[0].add(&inputs[0]).unwrap().exp().unwrap().sum().unwrap()]),
+//!     &primals,
+//!     &tangents,
+//! )
+//! .unwrap();
+//!
+//! assert_eq!(result.outputs.len(), 1);
+//! assert_eq!(result.output_tangents.len(), 1);
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
-//! The primary public frontend is [`Tensor`], with rank-0 tensor scalar
-//! semantics and direct tensor methods.
+//! The primary public frontend is [`Tensor`], backed by `tidu`'s
+//! `Value<DynTensor>` carrier. Custom downstream operations should use
+//! [`LinearizableOp`] and [`LinearizedOp`] directly; `jvp` is not a public
+//! dual-builder API and does not imply higher-order forward-mode or HVP
+//! support.
 //!
-//! Module map:
-//!
-//! - `core` defines the internal typed AD values plus dynamic wrappers.
-//! - [`runtime`] owns default-runtime selection and runtime dispatch.
-//! - `tape` owns reverse-mode pullback storage.
-//! - `ops` is operation-first: `einsum`, `scalar`, `reduction`, and
-//!   `linalg/*` each keep primal and AD wiring together.
-//! - structured layouts remain available through frontend methods such as
-//!   [`Tensor::diag`], [`Tensor::diag_embed`], and
-//!   [`Tensor::with_axis_classes`].
+//! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
+//! [`Tensor::solve`], [`Tensor::solve_triangular`], [`Tensor::det`],
+//! [`Tensor::inv`], [`Tensor::slogdet`], [`Tensor::cholesky`],
+//! [`Tensor::lstsq`], [`Tensor::lu`], [`Tensor::norm`],
+//! [`Tensor::vector_norm`], [`Tensor::matrix_norm`], [`Tensor::qr`],
+//! [`Tensor::svd`], [`Tensor::eig`], [`Tensor::eigh`], [`Tensor::pinv`],
+//! and [`Tensor::matrix_exp`] require an installed runtime via
+//! [`set_default_runtime`] or [`runtime::with_runtime`].
 
 mod core;
 pub mod error;
-#[cfg(test)]
-mod ops;
+#[path = "jvp.rs"]
+mod jvp_api;
 pub mod runtime;
 mod scalar_value;
 pub mod snapshot;
-#[cfg(test)]
-mod structured;
-#[cfg(test)]
-mod tape;
 
 pub mod forward_ad {
     pub use tenferro_internal_ad_surface::forward_ad::*;
@@ -49,15 +59,18 @@ pub(crate) use core::DynTensor;
 #[cfg(test)]
 pub(crate) use core::DynTensorTyped;
 pub use core::{
-    AdMode, CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
-    LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor, TensorScalarDowncast, TypedTensorRef,
+    AdMode, CholeskyExResult, EigResult, EigenResult, EighResult, InvExResult, LstsqResult,
+    LuFactorExResult, LuFactorResult, LuPivot, LuResult, QrResult, ScalarType, SlogdetResult,
+    SolveExResult, SvdResult, Tensor, TensorScalarDowncast, TypedTensorRef,
 };
 pub use error::{Error, Result};
+pub use jvp_api::{jvp, JvpResult};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 pub use tenferro_internal_ad_surface::{
-    backward, grad, hvp, BackwardOptions, GradOptions, HvpOptions, HvpResult,
+    backward, grad, with_ad_policy, AdExecutionPolicy, BackwardOptions, CheckpointHint,
+    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, MatrixNormOrd, NormKind, Schema,
+    SlotSchema, SvdOptions, Value, VectorNormOrd,
 };
 pub use tenferro_tensor::MemoryOrder;

@@ -108,9 +108,9 @@ fn execute_sort_along_axis<T: Scalar + PartialOrd>(
     for post in 0..post_size {
         for pre in 0..pre_size {
             // Extract axis slice from column-major data
-            for a in 0..axis_size {
+            for (a, slot) in slice_buf.iter_mut().enumerate().take(axis_size) {
                 let flat = pre + a * pre_size + post * pre_size * axis_size;
-                slice_buf[a] = src_data[flat];
+                *slot = src_data[flat];
             }
 
             let (sorted_vals, sorted_idx) = sort_slice(&slice_buf, descending, stable);
@@ -183,9 +183,9 @@ fn execute_topk<T: Scalar + PartialOrd>(
     for post in 0..post_size {
         for pre in 0..pre_size {
             // Extract axis slice
-            for a in 0..axis_size {
+            for (a, slot) in slice_buf.iter_mut().enumerate().take(axis_size) {
                 let flat = pre + a * pre_size + post * pre_size * axis_size;
-                slice_buf[a] = src_data[flat];
+                *slot = src_data[flat];
             }
 
             // Sort descending if largest, ascending if smallest

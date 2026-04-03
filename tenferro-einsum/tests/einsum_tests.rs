@@ -4,16 +4,12 @@
 //! Core numeric tests are parameterized across f32, f64, and Complex64 via the
 //! `typed_einsum_tests!` macro at the bottom of this file.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex};
-
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{
-    dual_einsum, einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_path,
+    einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_path,
     einsum_with_path_into, einsum_with_plan, einsum_with_plan_owned, einsum_with_subscripts,
-    einsum_with_subscripts_into, einsum_with_subscripts_owned, tracked_einsum, ContractionTree,
-    Subscripts,
+    einsum_with_subscripts_into, einsum_with_subscripts_owned, ContractionTree, Subscripts,
 };
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -22,14 +18,6 @@ const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 const MEM: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
 
 type S = Standard<f64>;
-
-fn poison_mutex<T>(mutex: &Arc<Mutex<T>>) {
-    let mutex = Arc::clone(mutex);
-    let _ = catch_unwind(AssertUnwindSafe(move || {
-        let _guard = mutex.lock().unwrap();
-        panic!("poison backend mutex");
-    }));
-}
 
 /// Helper: read a scalar (0-d) tensor value.
 fn scalar_val(t: &Tensor<f64>) -> f64 {
@@ -2626,7 +2614,6 @@ fn einsum_hvp_matches_manual_matmul_rule() {
     assert_tensors_close(&hvps[1].0, &expected_grad_b, "hvp grad_b");
     assert_tensors_close(&hvps[1].1, &expected_hvp_b, "hvp hvp_b");
 }
-
 // ============================================================================
 // einsum: input+output repeated labels (pipeline decomposition)
 // ============================================================================
@@ -3082,61 +3069,6 @@ fn einsum_into_parenthesized() {
     }
 }
 
-#[test]
-fn dual_einsum_parenthesized() {
-    use tidu::DualValue;
-    // dual_einsum with parenthesized subscripts must produce same tangent as flat
-    let mut ctx = CpuContext::new(1);
-
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
-
-    let a_dual = DualValue::with_tangent(a.clone(), da.clone()).unwrap();
-    let b_dual = DualValue::new(b.clone());
-    let c_dual = DualValue::new(c.clone());
-
-    let nested_result =
-        dual_einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a_dual, &b_dual, &c_dual])
-            .unwrap();
-
-    let a_dual2 = DualValue::with_tangent(a, da).unwrap();
-    let b_dual2 = DualValue::new(b);
-    let c_dual2 = DualValue::new(c);
-
-    let flat_result =
-        dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a_dual2, &b_dual2, &c_dual2])
-            .unwrap();
-
-    // Primals must match
-    assert_tensors_close(nested_result.primal(), flat_result.primal(), "dual primal");
-
-    // Tangents must match
-    assert_tensors_close(
-        nested_result.tangent().unwrap(),
-        flat_result.tangent().unwrap(),
-        "dual tangent",
-    );
-}
-
-#[test]
-fn dual_einsum_without_tangents_returns_primal_only() {
-    use tidu::DualValue;
-
-    let mut ctx = CpuContext::new(1);
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let a_dual = DualValue::new(a.clone());
-    let b_dual = DualValue::new(b.clone());
-
-    let result = dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
-    let expected = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
-
-    assert_tensors_close(result.primal(), &expected, "dual no tangent primal");
-    assert!(result.tangent().is_none());
-}
-
 // ============================================================================
 // Binary trace-like patterns (repeated labels in a single operand)
 // ============================================================================
@@ -3285,16 +3217,10 @@ fn einsum_rrule_trace_with_nonunit_cotangent() {
 
 #[test]
 fn einsum_frule_trace_propagates_tangent() {
-    use tidu::DualValue;
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let da = Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[2, 2], COL).unwrap();
-    let dual_a = DualValue::with_tangent(a, da).unwrap();
-    let out = dual_einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&dual_a]).unwrap();
-    // primal: trace = 1 + 4 = 5
-    let primal = out.primal().buffer().as_slice().unwrap()[0];
-    assert!((primal - 5.0).abs() < 1e-12);
-    // tangent: d(trace)/dA . dA = trace(dA) = 0.1 + 0.4 = 0.5
-    let tangent = out.tangent().unwrap().buffer().as_slice().unwrap()[0];
+    let tangent = einsum_frule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &[Some(&da)]).unwrap();
+    let tangent = tangent.buffer().as_slice().unwrap()[0];
     assert!((tangent - 0.5).abs() < 1e-12);
 }

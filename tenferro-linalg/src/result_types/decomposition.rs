@@ -184,14 +184,23 @@ pub struct SolveGrad<T: Scalar> {
 ///     .unwrap();
 /// let b = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
-/// assert_eq!(result.x.dims(), &[2]);
+/// assert_eq!(result.solution.dims(), &[2]);
 /// ```
 #[derive(Debug)]
-pub struct LstsqResult<T: Scalar> {
+pub struct LstsqResult<S: Scalar, R: Scalar> {
     /// Least-squares solution.
-    pub x: Tensor<T>,
-    /// Residual tensor `b - Ax`.
-    pub residual: Tensor<T>,
+    pub solution: Tensor<S>,
+    /// Squared residual summaries `||AX - B||_F^2` per right-hand side, or an empty tensor.
+    pub residuals: Tensor<R>,
+}
+
+/// Auxiliary metadata for least-squares solves.
+#[derive(Debug)]
+pub struct LstsqAuxResult<R: Scalar> {
+    /// Numerical rank per batch item, stored as a batch-shaped real-valued count tensor.
+    pub rank: Tensor<R>,
+    /// Singular values used for the rank estimate.
+    pub singular_values: Tensor<R>,
 }
 
 /// Gradient result for `lstsq_rrule`: cotangents for both `A` and `b`.

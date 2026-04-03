@@ -79,6 +79,47 @@ pub(crate) fn tril_strict<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
     result
 }
 
+/// Extract the lower-triangular part used by complex QR JVPs.
+///
+/// For real inputs this matches `tril_strict`. For complex inputs the diagonal
+/// keeps only the imaginary-axis component.
+pub(crate) fn tril_im<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
+    let mut result = vec![T::zero(); n * n];
+    for j in 0..n {
+        for i in (j + 1)..n {
+            result[i + j * n] = data[i + j * n];
+        }
+        result[j + j * n] = imag_axis_component(data[j + j * n])?;
+    }
+    Ok(result)
+}
+
+/// Invert `tril_im` onto the skew-Hermitian gauge space used by complex QR JVPs.
+pub(crate) fn tril_im_inv<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
+    let mut result = vec![T::zero(); n * n];
+    for j in 0..n {
+        for i in (j + 1)..n {
+            let value = data[i + j * n];
+            result[i + j * n] = value;
+            result[j + i * n] = -value.conj();
+        }
+        result[j + j * n] = imag_axis_component(data[j + j * n])?;
+    }
+    Ok(result)
+}
+
+/// Adjoint helper for the wide complex QR VJP.
+pub(crate) fn tril_im_inv_adj_skew<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
+    let mut result = vec![T::zero(); n * n];
+    for j in 0..n {
+        for i in (j + 1)..n {
+            result[i + j * n] = data[i + j * n] - data[j + i * n].conj();
+        }
+        result[j + j * n] = imag_axis_component(data[j + j * n])?;
+    }
+    Ok(result)
+}
+
 /// Hermitianize from the lower triangle.
 pub(crate) fn copyltu<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
     let mut result = vec![T::zero(); n * n];
@@ -86,9 +127,9 @@ pub(crate) fn copyltu<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
         for i in 0..n {
             if i > j {
                 result[i + j * n] = data[i + j * n];
-                result[j + i * n] = data[i + j * n];
+                result[j + i * n] = data[i + j * n].conj();
             } else if i == j {
-                result[i + j * n] = data[i + j * n];
+                result[i + j * n] = T::from_real(data[i + j * n].real_part());
             }
         }
     }
@@ -105,7 +146,7 @@ pub(crate) fn phi<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     Ok(result)
 }
 
-/// phi* (adjoint of phi): `(X + X^T - diag(X)) / 2`.
+/// phi* (adjoint of phi): `(X + X^H - diag(X)) / 2`.
 pub(crate) fn phi_star<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     let half: T = scalar_from(0.5).map_err(to_ad_err)?;
     let mut result = vec![T::zero(); n * n];
@@ -114,7 +155,7 @@ pub(crate) fn phi_star<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>
             if i == j {
                 result[i + j * n] = half * data[i + j * n];
             } else {
-                result[i + j * n] = half * (data[i + j * n] + data[j + i * n]);
+                result[i + j * n] = half * (data[i + j * n] + data[j + i * n].conj());
             }
         }
     }

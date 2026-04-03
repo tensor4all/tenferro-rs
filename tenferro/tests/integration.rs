@@ -115,41 +115,13 @@ mod ops_ad_unit_port;
 mod ops_unit_port;
 #[path = "integration/projection_reverse_tests.rs"]
 mod projection_reverse_tests;
+#[path = "integration/autograd_surface_tests.rs"]
+mod autograd_surface_tests;
+#[path = "integration/linalg_surface_tests.rs"]
+mod linalg_surface_tests;
+#[path = "integration/migration_organization.rs"]
+mod migration_organization;
+#[path = "integration/public_jvp.rs"]
+mod public_jvp;
 #[path = "integration/public_surface_tests.rs"]
 mod public_surface_tests;
-#[path = "integration/rank0_ad_tensor_tests.rs"]
-mod rank0_ad_tensor_tests;
-#[path = "integration/runtime_reexport_contract_tests.rs"]
-mod runtime_reexport_contract_tests;
-#[path = "integration/snapshot_surface_tests.rs"]
-mod snapshot_surface_tests;
-#[path = "integration/structured_autodiff_unit_port.rs"]
-mod structured_autodiff_unit_port;
-#[path = "integration/structured_einsum_unit_port.rs"]
-mod structured_einsum_unit_port;
-#[path = "integration/structured_layout_unit_port.rs"]
-mod structured_layout_unit_port;
-#[path = "integration/structured_layout_validation_tests.rs"]
-mod structured_layout_validation_tests;
-#[path = "integration/structured_linalg_fallback_tests.rs"]
-mod structured_linalg_fallback_tests;
-#[path = "integration/structured_meta_unit_port.rs"]
-mod structured_meta_unit_port;
-#[path = "integration/structured_reverse_tests.rs"]
-mod structured_reverse_tests;
-#[path = "integration/structured_tensor_root_tests.rs"]
-mod structured_tensor_root_tests;
-#[path = "integration/tensor_mode_and_conj_tests.rs"]
-mod tensor_mode_and_conj_tests;
-#[path = "integration/tensor_permute_tests.rs"]
-mod tensor_permute_tests;
-#[path = "integration/tensor_placement_surface_tests.rs"]
-mod tensor_placement_surface_tests;
-#[path = "integration/tensor_shape_surface_tests.rs"]
-mod tensor_shape_surface_tests;
-#[path = "integration/tensor_ui_contract_tests.rs"]
-mod tensor_ui_contract_tests;
-#[path = "integration/thread_safety_tests.rs"]
-mod thread_safety_tests;
-#[path = "integration/workspace_taxonomy_contract_tests.rs"]
-mod workspace_taxonomy_contract_tests;

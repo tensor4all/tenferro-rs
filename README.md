@@ -16,7 +16,7 @@ C / C++ / Fortran / Python / Julia
        tenferro-rs
   ┌─────────────────────────────┐
   │  einsum over any algebra *  │
-  │  full AD  (VJP / JVP / HVP) │
+  │  reverse AD  (VJP)          │
   │  extended precision (xprec) │
   └─────────────────────────────┘
             │
@@ -35,7 +35,7 @@ extended precision. The same einsum engine and AD machinery work across all of t
 ### Key strengths
 
 - **Callable from C, C++, Fortran, Python, and Julia** via a stable C FFI — drop it into existing HPC codebases without rewriting anything.
-- **AD-compatible across language boundaries** — reverse-mode (VJP), forward-mode (JVP), and Hessian-vector products (HVP) are exposed through the C API so Python and Julia AD systems can interoperate.
+- **AD-compatible across language boundaries** — reverse-mode (VJP) is exposed through the C API so Python and Julia AD systems can interoperate with the current frontend.
 - **Algebra-parameterized** — einsum, linalg, and AD rules are generic over the algebra, not hardwired to floating-point arithmetic.
 - **Extended precision** — planned support for double-double and higher-precision types for numerically demanding simulations.
 - **ML bridge** — designed to interoperate with [burn](https://github.com/tracel-ai/burn) for hybrid neural network + tensor network models.
@@ -56,7 +56,7 @@ A general-purpose tensor computation library in Rust with CPU support today and 
   (`TensorSemiringCore`, `TensorSemiringFastPath`, `TensorScalarPrims`,
   `TensorAnalyticPrims`)
 - High-level einsum with N-ary contraction tree optimization
-- Automatic differentiation (VJP/JVP)
+- Reverse-mode automatic differentiation
 - C FFI for Julia/Python integration
 
 Extension crates (tropical semiring, burn bridge, ndarray interop) live under `extension/`.
@@ -85,12 +85,12 @@ The workspace now uses three naming buckets:
 |-------|----------|
 | **`tenferro-tensor-compute`** | You want typed `Tensor<T>` with einsum and linalg — **start here** |
 | `tenferro-dynamic-compute` | You want runtime-selected dtypes without automatic differentiation |
-| `tenferro` | You need automatic differentiation (VJP/JVP) |
+| `tenferro` | You need reverse-mode automatic differentiation |
 | `tenferro-tensor` | You only need the data type, no computation (library authors) |
 
 - **Typed path** (`tenferro-tensor-compute`): `Tensor<T>` with a fixed scalar type at compile time. Best when you know the scalar type and do not need automatic gradient tracking.
 - **Dynamic primal path** (`tenferro-dynamic-compute`): dynamic scalar type without automatic differentiation. Best when you need runtime dtype selection but no tape/gradient state.
-- **Dynamic AD path** (`tenferro`): dynamic scalar type with automatic differentiation (VJP/JVP). Best when you need gradients.
+- **Dynamic AD path** (`tenferro`): dynamic scalar type with reverse-mode automatic differentiation. Best when you need gradients.
 
 The quickstart below uses the typed path; `tenferro-dynamic-compute` is the non-AD dynamic alternative, and the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
 
@@ -110,15 +110,15 @@ Current implementation homes:
 - `tenferro-internal-frontend-core`: shared dynamic tensor substrate and
   structured-layout helpers used by both `tenferro-dynamic-compute` and
   `tenferro`
-- `tenferro-internal-ad-core`: `AdTensor<T>`, homogeneous tape glue, and the
-  shared AD operation helpers that used to live in `tenferro/src/ops/common.rs`
-- `tenferro-internal-ad-surface`: the dynamic AD tensor surface, eager AD
-  entrypoints (`grad`, `backward`, `forward_ad`), and the builder-style linalg
-  wrappers used behind `tenferro`
-- `tenferro-internal-ad-linalg`: typed linalg AD builders, eager helpers, and
-  result types used behind `tenferro`
-- `tenferro-internal-ad-ops`: typed scalar, reduction, and einsum AD builders,
-  eager helpers, and pullback helpers used behind `tenferro`
+- `tenferro-internal-ad-core`: shared `DynTensor`/`Value` interop and AD
+  support code used by the public tensor facade
+- `tenferro-internal-ad-surface`: the dynamic `Tensor` facade, `grad` /
+  `backward` entrypoints, checkpoint policy plumbing, and runtime-dispatched
+  linalg wrappers used behind `tenferro`
+- `tenferro-internal-ad-linalg`: `LinearizableOp` / `LinearizedOp`
+  implementations for linalg operations and their result wrappers
+- `tenferro-internal-ad-ops`: `LinearizableOp` / `LinearizedOp`
+  implementations for scalar, reduction, and einsum operations
 
 ## Quickstart
 
@@ -197,7 +197,7 @@ fn main() {
 
     // 2. Create tensors and enable gradient tracking.
     let mut x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3]).unwrap();
-    x.set_requires_grad(true).unwrap();
+    x = x.with_requires_grad(true);
 
     // 3. Forward pass: loss = sum(exp(x))
     let loss = x.exp().unwrap().sum().unwrap();
@@ -216,6 +216,10 @@ fn main() {
 ```
 
 For more examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
+
+For the current `tenferro` dynamic AD surface, including which `Tensor`
+operations are wired into public `jvp(...)`, see
+[`tenferro/README.md`](./tenferro/README.md).
 
 ### Linear algebra quickstart
 
@@ -294,17 +298,16 @@ The API and internal architecture are strongly influenced by
 - **Plan-based execution** — The primitive family traits keep a
   describe-plan-execute contract that follows the cuTENSOR / BLAS pattern used
   by PyTorch's GPU backend.
-- **Automatic differentiation** — Tape-based reverse mode (VJP) and
-  dual-number forward mode (JVP) follow PyTorch's autograd and `torch.func`
-  design, factored into standalone `chainrules-core` / `chainrules` crates
-  (inspired by Julia's
-  [ChainRulesCore.jl](https://github.com/JuliaDiff/ChainRulesCore.jl)).
+- **Automatic differentiation** — The public `Tensor` facade is backed by
+  `tidu::Value<DynTensor>`. Reverse-mode frontend helpers are exposed as
+  `grad` / `backward`, while downstream custom ops integrate through
+  `LinearizableOp` / `LinearizedOp` and implement `jvp` / `vjp` explicitly.
 - **Einsum** — Ported from Julia's
   [OMEinsum.jl](https://github.com/under-Peter/OMEinsum.jl); string notation
   (`"ij,jk->ik"`) is compatible with `torch.einsum`, with N-ary contraction
   tree optimization.
 - **Linear algebra** — `tenferro-linalg` mirrors `torch.linalg` (SVD, QR, LU,
-  eigen, Cholesky, solve) with differentiable decompositions.
+  eig/eigh, Cholesky, solve) with differentiable decompositions.
 
 Key differences from PyTorch: column-major default layout with `(m, n, *)`
 batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
@@ -346,7 +349,7 @@ For a detailed feature-by-feature mapping, see
 | Multi-input HVP | Partial | Explicitly exposed for `einsum` |
 | Higher-order derivatives (non-HVP) | Partial | Low-level `tidu::expert::Tape<Tensor<T>>` flows are available, but the `tenferro` frontend validation depth is still limited |
 | Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |
-| Complex/real matrices | Strong | Complex `einsum`, complex `solve_triangular`, and real-to-complex `eig` are covered |
+| Complex/real matrices | Strong | Public `Tensor` JVP covers complex `einsum`, `solve`, `solve_triangular`, `det`, `inv`, `slogdet`, `cholesky`, `pinv`, `matrix_exp`, `eigh`, and the current `vector_norm` / `matrix_norm` slice; see [`tenferro/README.md`](tenferro/README.md) for the current operation matrix |
 
 ## Design
 
@@ -398,8 +401,8 @@ The shared docs deploy workflow publishes the same `target/docs-site` tree to Gi
 
 `tenferro-linalg` continuously replays the vendored
 `third_party/tensor-ad-oracles` database during workspace tests. Supported
-families are validated against the published first-order references and, where
-available, scalarized HVP payloads. Published families that tenferro does not
+families are validated against the published first-order references. Published
+families that tenferro does not
 yet replay are tracked explicitly in:
 
 - [`docs/generated/tensor-ad-oracles-support.md`](docs/generated/tensor-ad-oracles-support.md)

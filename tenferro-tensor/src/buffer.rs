@@ -338,7 +338,7 @@ impl<T> DataBuffer<T> {
         match &*self.inner {
             BufferInner::Owned(v) => {
                 let ptr = v.as_ptr() as *const U;
-                if new_len != 0 && (ptr as usize) % align != 0 {
+                if new_len != 0 && !(ptr as usize).is_multiple_of(align) {
                     return Err(Error::InvalidArgument(format!(
                         "buffer reinterpretation would violate alignment {}",
                         align
@@ -349,7 +349,7 @@ impl<T> DataBuffer<T> {
             }
             BufferInner::External { ptr, .. } => {
                 let ptr = *ptr as *const U;
-                if new_len != 0 && (ptr as usize) % align != 0 {
+                if new_len != 0 && !(ptr as usize).is_multiple_of(align) {
                     return Err(Error::InvalidArgument(format!(
                         "external buffer reinterpretation would violate alignment {}",
                         align
@@ -362,7 +362,7 @@ impl<T> DataBuffer<T> {
                 device_ptr, space, ..
             } => {
                 let ptr = *device_ptr as *mut U;
-                if new_len != 0 && (ptr as usize) % align != 0 {
+                if new_len != 0 && !(ptr as usize).is_multiple_of(align) {
                     return Err(Error::InvalidArgument(format!(
                         "gpu buffer reinterpretation would violate alignment {}",
                         align

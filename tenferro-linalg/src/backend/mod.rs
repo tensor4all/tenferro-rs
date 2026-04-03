@@ -87,8 +87,10 @@ pub use tensor_context::TensorLinalgContextFor;
 
 // CPU backend (public)
 #[cfg(feature = "linalg-lapack")]
-pub use blas_lapack_backend::BlasLapackBackend;
+pub use tenferro_linalg_prims::backend::BlasLapackBackend;
 pub use tenferro_linalg_prims::backend::CpuTensorLinalgBackend;
+#[cfg(feature = "linalg-faer")]
+pub use tenferro_linalg_prims::backend::FaerBackend;
 
 // GPU backend stubs (public)
 pub(crate) use tenferro_linalg_prims::backend::col_major_strides;

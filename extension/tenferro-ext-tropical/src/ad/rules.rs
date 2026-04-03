@@ -4,8 +4,6 @@ use tenferro_einsum::Subscripts;
 use tenferro_prims::TensorSemiringCore;
 use tenferro_tensor::Tensor;
 
-use crate::argmax::ArgmaxTracker;
-
 use super::backward::tropical_backward;
 use super::common::contracted_modes;
 use super::forward::{tropical_forward_tangent, tropical_forward_with_argmax};
@@ -144,15 +142,6 @@ where
         output.dims(),
     )
 }
-
-pub(crate) fn tracked_forward<T: TropicalScalar>(
-    operands: &[&Tensor<T>],
-    subs: &Subscripts,
-    contracted: &[u32],
-) -> Result<(Tensor<T>, ArgmaxTracker)> {
-    tropical_forward_with_argmax(operands, subs, contracted)
-}
-
 fn validate_operand_count(count: usize, api_name: &str) -> Result<()> {
     if count == 0 || count > 2 {
         return Err(Error::InvalidArgument(format!(

@@ -1,25 +1,23 @@
 //! Internal implementation crate. Not a stable public API.
 //!
-//! # Examples
-//!
-//! ```text
-//! // This crate is wired through tenferro surface crates and is not intended
-//! // to be consumed directly.
-//! ```
+//! `tenferro` now treats `tidu::Value<DynTensor>` as the only source of truth
+//! for reverse-mode metadata. This crate provides the thin dynamic tensor
+//! façade and surface-level `grad`/`backward` helpers built on top of that
+//! carrier.
 
 #![allow(clippy::multiple_bound_locations)]
 
 mod autograd_api;
 pub mod core;
-pub mod forward_ad;
-mod ops;
+pub mod jvp;
 
-pub use autograd_api::{backward, grad, hvp, BackwardOptions, GradOptions, HvpOptions, HvpResult};
+pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub use core::dynamic::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
     Tensor, TensorScalarDowncast, TypedTensorRef,
 };
+pub use jvp::{jvp, JvpResult};
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 pub use tenferro_internal_ad_core::AdMode;
 pub use tenferro_internal_error::{Error, Result};
@@ -29,7 +27,9 @@ pub use tenferro_internal_frontend_core::{
 pub use tenferro_internal_runtime::{
     set_default_runtime, with_default_runtime, with_runtime, DefaultRuntimeGuard, RuntimeContext,
 };
+pub use tenferro_linalg::{MatrixNormOrd, NormKind, SvdOptions, VectorNormOrd};
 pub use tenferro_tensor::MemoryOrder;
+pub use tidu::{with_ad_policy, AdExecutionPolicy, CheckpointMode};
 
 pub mod snapshot {
     pub use tenferro_internal_frontend_core::snapshot::*;

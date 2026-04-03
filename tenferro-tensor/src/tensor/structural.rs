@@ -272,12 +272,12 @@ impl<T: Scalar> Tensor<T> {
             if dst_pos + 1 == out_len {
                 continue;
             }
-            for axis_index in 0..self.ndim() {
-                index[axis_index] += 1;
-                if index[axis_index] < self.dims[axis_index] {
+            for (axis_index, coord) in index.iter_mut().enumerate().take(self.ndim()) {
+                *coord += 1;
+                if *coord < self.dims[axis_index] {
                     break;
                 }
-                index[axis_index] = 0;
+                *coord = 0;
             }
         }
 
@@ -347,7 +347,7 @@ impl<T: Scalar> Tensor<T> {
 
         let out_len = out.len();
         let mut index = vec![0usize; output_dims.len()];
-        for dst_pos in 0..out_len {
+        for (dst_pos, dst) in out.iter_mut().enumerate().take(out_len) {
             let src_tensor = if index[0] > index[1] { lower } else { upper };
             let src_slice = if index[0] > index[1] {
                 lower_src
@@ -381,7 +381,7 @@ impl<T: Scalar> Tensor<T> {
                         src_tensor.offset()
                     ))
                 })?;
-            out[dst_pos] = src_slice[src_pos];
+            *dst = src_slice[src_pos];
 
             if dst_pos + 1 == out_len {
                 continue;

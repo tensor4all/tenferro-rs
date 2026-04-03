@@ -12,13 +12,8 @@ doctest = false
 
 [dependencies]
 chainrules-core.workspace = true
-num-complex.workspace = true
 tidu.workspace = true
-tenferro-internal-error = { path = "../tenferro-internal-error" }
 tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
-tenferro-internal-runtime = { path = "../tenferro-internal-runtime" }
-tenferro-algebra = { path = "../../tenferro-algebra" }
-tenferro-device = { path = "../../tenferro-device" }
-tenferro-einsum = { path = "../../tenferro-einsum" }
-tenferro-prims = { path = "../../tenferro-prims" }
+
+[dev-dependencies]
 tenferro-tensor = { path = "../../tenferro-tensor" }

@@ -159,17 +159,6 @@ pub fn batch_count(batch_dims: &[usize]) -> usize {
     }
 }
 
-pub fn elementwise_sign_mul(primal: &Tensor<f64>, cotangent: &Tensor<f64>) -> Tensor<f64> {
-    let primal_data = tensor_data_col_major(primal);
-    let cotangent_data = tensor_data_col_major(cotangent);
-    let data: Vec<f64> = primal_data
-        .iter()
-        .zip(cotangent_data.iter())
-        .map(|(x, co)| if *x == 0.0 { 0.0 } else { x.signum() * co })
-        .collect();
-    tensor_from_col_major(data, primal.dims())
-}
-
 pub fn elementwise_abs_jvp<T: OracleDbScalar>(
     primal: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -340,6 +329,29 @@ pub fn inner_product(left: &Tensor<f64>, right: &Tensor<f64>) -> f64 {
         .sum()
 }
 
+pub fn inner_product_typed<T: OracleDbScalar>(
+    left: &Tensor<T>,
+    right: &Tensor<T>,
+) -> Result<f64, String> {
+    if left.dims() != right.dims() {
+        return Err(format!(
+            "typed inner product shape mismatch: left {:?}, right {:?}",
+            left.dims(),
+            right.dims()
+        ));
+    }
+    let left_data = tensor_data_col_major(left);
+    let right_data = tensor_data_col_major(right);
+    let mut acc = 0.0f64;
+    for (lhs, rhs) in left_data.iter().zip(right_data.iter()) {
+        acc += ((*lhs).conj() * *rhs)
+            .real_part()
+            .to_f64()
+            .ok_or_else(|| "failed to convert typed inner product to f64".to_string())?;
+    }
+    Ok(acc)
+}
+
 pub fn compare_tensors(
     label: &str,
     expected: &Tensor<f64>,
@@ -430,6 +442,33 @@ pub fn compare_tensor_maps(
     Ok(())
 }
 
+pub fn compare_tensor_maps_typed<T: OracleDbScalar>(
+    label: &str,
+    expected: &BTreeMap<String, Tensor<T>>,
+    actual: &BTreeMap<String, Tensor<T>>,
+    rtol: f64,
+    atol: f64,
+) -> Result<(), String> {
+    if expected.keys().collect::<Vec<_>>() != actual.keys().collect::<Vec<_>>() {
+        return Err(format!(
+            "{label}: key mismatch expected {:?} got {:?}",
+            expected.keys().collect::<Vec<_>>(),
+            actual.keys().collect::<Vec<_>>()
+        ));
+    }
+    for (name, expected_tensor) in expected {
+        let actual_tensor = actual.get(name).unwrap();
+        compare_tensors_typed(
+            &format!("{label}.{name}"),
+            expected_tensor,
+            actual_tensor,
+            rtol,
+            atol,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn tensor_map_inner_product(
     left: &BTreeMap<String, Tensor<f64>>,
     right: &BTreeMap<String, Tensor<f64>>,
@@ -441,4 +480,18 @@ pub fn tensor_map_inner_product(
         .iter()
         .map(|(name, tensor)| inner_product(tensor, right.get(name).unwrap()))
         .sum())
+}
+
+pub fn tensor_map_inner_product_typed<T: OracleDbScalar>(
+    left: &BTreeMap<String, Tensor<T>>,
+    right: &BTreeMap<String, Tensor<T>>,
+) -> Result<f64, String> {
+    if left.keys().collect::<Vec<_>>() != right.keys().collect::<Vec<_>>() {
+        return Err("tensor-map inner product key mismatch".to_string());
+    }
+    let mut acc = 0.0f64;
+    for (name, tensor) in left {
+        acc += inner_product_typed(tensor, right.get(name).unwrap())?;
+    }
+    Ok(acc)
 }

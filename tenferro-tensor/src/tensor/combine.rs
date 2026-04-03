@@ -11,7 +11,7 @@ use tenferro_device::cuda::runtime::{
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
-use super::Tensor;
+use super::{Tensor, TensorParts};
 use crate::layout::compute_contiguous_strides;
 #[cfg(feature = "cuda")]
 use crate::DataBuffer;
@@ -292,17 +292,17 @@ impl<T: Scalar> Tensor<T> {
             cat_offset += tensor.dims[dim];
         }
 
-        Ok(Tensor::from_parts(
-            crate::DataBuffer::from_vec(result_data),
-            Arc::from(result_dims),
-            Arc::from(result_strides),
-            0,
-            memory_space,
-            None,
-            None,
-            false,
-            None,
-        ))
+        Ok(Tensor::from_parts(TensorParts {
+            buffer: crate::DataBuffer::from_vec(result_data),
+            dims: Arc::from(result_dims),
+            strides: Arc::from(result_strides),
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        }))
     }
 }
 

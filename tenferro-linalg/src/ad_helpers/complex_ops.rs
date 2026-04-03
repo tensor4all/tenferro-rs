@@ -3,23 +3,20 @@ use super::*;
 /// Complex type alias parameterized by real scalar.
 pub(crate) type Cx<R> = num_complex::Complex<R>;
 
-/// Complex matrix multiply: `C = A * B`.
-pub(crate) fn complex_mat_mul_nn<R>(a: &[Cx<R>], b: &[Cx<R>], n: usize) -> Vec<Cx<R>>
+/// Complex matrix multiply via the linalg backend.
+pub(crate) fn complex_mat_mul_nn_backend<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
+    a: &[Cx<T>],
+    b: &[Cx<T>],
+    n: usize,
+) -> AdResult<Vec<Cx<T>>>
 where
-    R: num_traits::Float + num_traits::NumCast,
+    T: KernelLinalgScalar,
+    Cx<T>: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<Cx<T>>,
+    <C as backend::TensorLinalgContextFor<Cx<T>>>::Backend: 'static,
 {
-    let zero = Cx::new(R::zero(), R::zero());
-    let mut c = vec![zero; n * n];
-    for j in 0..n {
-        for i in 0..n {
-            let mut sum = zero;
-            for k in 0..n {
-                sum = sum + a[i + k * n] * b[k + j * n];
-            }
-            c[i + j * n] = sum;
-        }
-    }
-    c
+    crate::prims_bridge::batched_gemm_with_semiring_context(ctx, a, n, n, b, n).map_err(to_ad_err)
 }
 
 /// Conjugate transpose of a complex column-major matrix.
@@ -46,35 +43,16 @@ pub(crate) fn complex_solve_nn<T: KernelLinalgScalar<Real = T> + num_traits::Flo
 ) -> AdResult<Vec<Cx<T>>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
-    C::Backend: 'static,
+    Cx<T>: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<Cx<T>>,
+    <C as backend::TensorLinalgContextFor<Cx<T>>>::Backend: 'static,
 {
-    let nn = 2 * n;
-    let mut a_real = vec![T::zero(); nn * nn];
-    let mut b_real = vec![T::zero(); nn * n];
-
-    for j in 0..n {
-        for i in 0..n {
-            let aij = a[i + j * n];
-            a_real[i + j * nn] = aij.re;
-            a_real[i + (j + n) * nn] = T::zero() - aij.im;
-            a_real[(i + n) + j * nn] = aij.im;
-            a_real[(i + n) + (j + n) * nn] = aij.re;
-
-            let bij = b[i + j * n];
-            b_real[i + j * nn] = bij.re;
-            b_real[(i + n) + j * nn] = bij.im;
-        }
-    }
-
-    let x_real = backend_solve(ctx, &a_real, &b_real, nn, n)?;
-
-    let zero = Cx::new(T::zero(), T::zero());
-    let mut result = vec![zero; n * n];
-    for j in 0..n {
-        for i in 0..n {
-            result[i + j * n] = Cx::new(x_real[i + j * nn], x_real[(i + n) + j * nn]);
-        }
-    }
-    Ok(result)
+    let a_tensor = tensor_from_data(a.to_vec(), &[n, n]).map_err(to_ad_err)?;
+    let b_tensor = tensor_from_data(b.to_vec(), &[n, n]).map_err(to_ad_err)?;
+    let x =
+        <<C as backend::TensorLinalgContextFor<Cx<T>>>::Backend as backend::TensorLinalgBackend<
+            Cx<T>,
+        >>::solve(ctx, &a_tensor, &b_tensor)
+        .map_err(to_ad_err)?;
+    Ok(extract_data(&x)?.0)
 }

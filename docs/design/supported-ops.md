@@ -195,7 +195,8 @@ that remain real-input-only today.
 | --- | --- | --- | --- |
 | `svd` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | singular values remain real |
 | `solve`, `solve_triangular` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | operands must share dtype |
-| `qr`, `lu`, `eigen`, `cholesky`, `inv`, `matrix_exp` | primal only | current `_frule` / `_rrule` are real-only | the dynamic wrapper rejects non-primal complex tensors |
+| `qr`, `lu` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | follows the real-loss/Wirtinger reverse convention used elsewhere |
+| `eigen`, `cholesky`, `inv`, `matrix_exp` | primal only | current `_frule` / `_rrule` are real-only | the dynamic wrapper rejects non-primal complex tensors |
 | `det`, `slogdet`, `pinv`, `norm`, `lstsq` | complex input unsupported | current `_frule` / `_rrule` are real-only | use real tensors only today |
 | `eig` | complex input unsupported; real-input eager reverse is also unsupported | `eig_frule` / `eig_rrule` exist for real inputs | the frontend still lacks a mixed real-to-complex reverse bridge |
 

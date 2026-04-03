@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chainrules_core::Differentiable;
+use chainrules_core::Differentiable as _;
 
 use crate::core::{DynTensor, NodeId};
 use crate::{Error, Result, Tensor};
@@ -19,24 +19,11 @@ use crate::{Error, Result, Tensor};
 #[derive(Debug, Clone, Default)]
 pub struct BackwardOptions {
     pub retain_graph: bool,
-    pub create_graph: bool,
 }
 
-/// Options for functional reverse-mode gradient queries.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::GradOptions;
-///
-/// let opts = GradOptions::default();
-/// assert!(!opts.retain_graph);
-/// assert!(!opts.create_graph);
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct GradOptions {
     pub retain_graph: bool,
-    pub create_graph: bool,
 }
 
 fn reverse_tape(output: &Tensor) -> Option<tidu::expert::Tape<crate::DynTensor>> {
@@ -53,72 +40,42 @@ fn mixed_reverse_graph_error(
     }
 }
 
+fn invalid_argument(message: impl Into<String>) -> Error {
+    chainrules_core::AutodiffError::InvalidArgument(message.into()).into()
+}
+
 fn default_seed(output: &Tensor) -> Result<Tensor> {
     Ok(Tensor::from(output.primal_snapshot().seed_cotangent()))
 }
 
-fn accumulate_optional_grad(slot: &mut Option<Tensor>, grad: Option<Tensor>) -> Result<()> {
+fn accumulate_optional_grad(slot: &mut Option<crate::DynTensor>, grad: Option<crate::DynTensor>) {
     match (slot.take(), grad) {
-        (None, None) => {
-            *slot = None;
-            Ok(())
-        }
-        (Some(existing), None) => {
-            *slot = Some(existing);
-            Ok(())
-        }
-        (None, Some(new_grad)) => {
-            *slot = Some(new_grad);
-            Ok(())
-        }
+        (None, None) => *slot = None,
+        (Some(existing), None) => *slot = Some(existing),
+        (None, Some(new_grad)) => *slot = Some(new_grad),
         (Some(existing), Some(new_grad)) => {
-            *slot = Some(existing.add(&new_grad)?);
-            Ok(())
+            *slot = Some(
+                <crate::DynTensor as chainrules_core::Differentiable>::accumulate_tangent(
+                    existing, &new_grad,
+                ),
+            );
         }
     }
 }
 
-/// Computes gradients of `outputs` with respect to the requested `inputs`.
-///
-/// This mirrors `torch.autograd.grad(...)` more closely than leaf-local
-/// `Tensor::grad()`.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::{grad, set_default_runtime, GradOptions, RuntimeContext, Tensor};
-/// use tenferro_prims::CpuContext;
-///
-/// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-/// let mut x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-/// let mut y = Tensor::from_slice(&[3.0_f64, 4.0], &[2]).unwrap();
-/// x.set_requires_grad(true).unwrap();
-/// y.set_requires_grad(true).unwrap();
-///
-/// let out = x.add(&y).unwrap().sum().unwrap();
-/// let grads = grad(&[&out], &[&x, &y], None, GradOptions::default()).unwrap();
-/// assert_eq!(grads.len(), 2);
-/// ```
 pub fn grad(
     outputs: &[&Tensor],
     inputs: &[&Tensor],
     grad_outputs: Option<&[Tensor]>,
     options: GradOptions,
 ) -> Result<Vec<Option<Tensor>>> {
-    if options.create_graph {
-        return Err(Error::UnsupportedAdOp {
-            op: "grad(create_graph)",
-        });
-    }
     if let Some(grad_outputs) = grad_outputs {
         if grad_outputs.len() != outputs.len() {
-            return Err(Error::InvalidAdTensor {
-                message: format!(
-                    "grad_outputs length mismatch: expected {}, found {}",
-                    outputs.len(),
-                    grad_outputs.len()
-                ),
-            });
+            return Err(invalid_argument(format!(
+                "grad_outputs length mismatch: expected {}, found {}",
+                outputs.len(),
+                grad_outputs.len()
+            )));
         }
     }
 
@@ -158,17 +115,15 @@ pub fn grad(
 
         let grads = output.pullback_wrt(seed, inputs)?;
         for (slot, grad) in accum.iter_mut().zip(grads.into_iter()) {
-            accumulate_optional_grad(slot, grad)?;
+            accumulate_optional_grad(slot, grad);
         }
     }
 
-    if !options.retain_graph {
-        if let Some(tape) = shared_tape {
-            tape.free_graph();
-        }
-    }
-
-    Ok(accum)
+    let _ = options.retain_graph;
+    Ok(accum
+        .into_iter()
+        .map(|grad| grad.map(Tensor::from))
+        .collect())
 }
 
 /// Accumulates gradients into the requested leaf `inputs`.
@@ -186,34 +141,33 @@ pub fn grad(
 /// let mut x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
 /// x.set_requires_grad(true).unwrap();
 /// let out = x.exp().unwrap().sum().unwrap();
-/// backward(&[&out], None, &[&x], BackwardOptions::default()).unwrap();
+/// backward(&[&out], None, BackwardOptions::default()).unwrap();
 /// assert!(x.grad().unwrap().is_some());
 /// ```
 pub fn backward(
     outputs: &[&Tensor],
     grad_outputs: Option<&[Tensor]>,
-    inputs: &[&Tensor],
     options: BackwardOptions,
 ) -> Result<()> {
-    if options.create_graph {
-        return Err(Error::UnsupportedAdOp {
-            op: "backward(create_graph)",
-        });
-    }
-    let grads = grad(
-        outputs,
-        inputs,
-        grad_outputs,
-        GradOptions {
-            retain_graph: options.retain_graph,
-            create_graph: false,
-        },
-    )?;
-    for (input, grad) in inputs.iter().zip(grads.into_iter()) {
-        if let Some(grad) = grad {
-            input.accumulate_grad(&grad)?;
+    if let Some(grad_outputs) = grad_outputs {
+        if grad_outputs.len() != outputs.len() {
+            return Err(invalid_argument(format!(
+                "grad_outputs length mismatch: expected {}, found {}",
+                outputs.len(),
+                grad_outputs.len()
+            )));
         }
     }
+
+    for (index, output) in outputs.iter().enumerate() {
+        let seed = match grad_outputs {
+            Some(grads) => grads[index].primal_snapshot(),
+            None => default_seed(output)?.primal_snapshot(),
+        };
+        output.value().backward_with_seed(seed)?;
+    }
+
+    let _ = options.retain_graph;
     Ok(())
 }
 

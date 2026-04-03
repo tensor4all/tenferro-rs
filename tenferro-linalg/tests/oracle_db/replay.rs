@@ -2,28 +2,39 @@ use std::collections::BTreeMap;
 
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, NumCast, ToPrimitive};
+use tenferro_algebra::Conjugate;
 use tenferro_linalg::{
-    cholesky_frule, cholesky_rrule, cross, eigen, eigen_frule, eigen_rrule, householder_product,
-    inv_frule, inv_rrule, lu_rrule, norm_frule, norm_rrule, pinv, pinv_frule, pinv_rrule, qr_frule,
-    qr_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule, solve_triangular_rrule, svd,
-    svd_frule, svd_rrule, tensorinv, tensorsolve, vander, EigenCotangent, LuCotangent, LuPivot,
-    NormKind, QrCotangent, SolveGrad, SvdCotangent,
+    cholesky_frule, cholesky_rrule, cross, det_frule, det_rrule, eig, eig_frule, eig_rrule, eigen,
+    eigen_frule, eigen_rrule, householder_product, inv_frule, inv_rrule, lstsq_frule, lstsq_rrule,
+    lu_frule, lu_rrule, matrix_exp_frule, matrix_exp_rrule, norm_frule, norm_frule_complex,
+    norm_rrule, norm_rrule_complex, pinv, pinv_frule, pinv_rrule, qr_frule, qr_rrule,
+    slogdet_frule, slogdet_rrule, solve, solve_frule, solve_rrule, solve_triangular_frule,
+    solve_triangular_rrule, svd, svd_frule, svd_rrule, tensorinv, tensorsolve, vander,
+    EigCotangent, EigenCotangent, LiftPermutationMatrixTensor, LuCotangent, LuPivot,
+    MatrixExpAbsTensor, NormKind, QrCotangent, ScaleTensorByRealSameShape, SlogdetCotangent,
+    SlogdetFruleDispatch, SlogdetRruleDispatch, SolveGrad, SvdCotangent,
 };
 use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{KeepCountScalar, Tensor};
 
 use crate::db::{
     case_files, default_oracle_db_root, load_case_records, CaseRecord, DbTensor, ProbeRecord,
 };
 use crate::decode::{
     batched_adjoint_transpose, batched_matmul, batched_transpose, compare_tensor_maps,
-    compare_tensors_typed, decode_f64_tensor_with_core_rank, decode_tensor_with_core_rank,
-    elementwise_abs_jvp, elementwise_abs_vjp, elementwise_sign_mul, tensor_add,
-    tensor_data_col_major, tensor_from_col_major, tensor_map_inner_product, OracleDbScalar,
+    compare_tensor_maps_typed, compare_tensors_typed, decode_f64_tensor_with_core_rank,
+    decode_tensor_with_core_rank, elementwise_abs_jvp, elementwise_abs_vjp, tensor_add,
+    tensor_data_col_major, tensor_from_col_major, tensor_map_inner_product,
+    tensor_map_inner_product_typed, OracleDbScalar,
 };
-use crate::hvp::{central_diff_tensor_maps, perturb_input_map};
-use crate::support::{classify_record, ExpectedErrorKind, RecordSupport, ReplayKind};
+use crate::hvp::{
+    central_diff_tensor_maps, central_diff_tensor_maps_typed, perturb_input_map,
+    perturb_input_map_typed,
+};
+use crate::support::{
+    classify_record, replayable_norm_kind, ExpectedErrorKind, RecordSupport, ReplayKind,
+};
 
 #[derive(Debug)]
 pub struct ReplaySummary {
@@ -110,11 +121,19 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                         replay_solve(record)
                     }
                 }
+                ReplayKind::SolveTriangularIdentity => replay_solve_triangular(record),
+                ReplayKind::LstsqIdentity => replay_lstsq(record),
                 ReplayKind::CholeskyIdentity => replay_cholesky(record),
                 ReplayKind::InvIdentity => replay_inv(record),
+                ReplayKind::DetIdentity => replay_det(record),
+                ReplayKind::SlogdetIdentity => replay_slogdet(record),
                 ReplayKind::LuFactorIdentity => replay_lu_factor(record),
+                ReplayKind::LuIdentity => replay_lu(record),
+                ReplayKind::NormIdentity => replay_norm(record),
                 ReplayKind::CondIdentity => replay_cond(record),
                 ReplayKind::MatrixPowerIdentity => replay_matrix_power(record),
+                ReplayKind::MatrixExpIdentity => replay_matrix_exp(record),
+                ReplayKind::PinvIdentity => replay_pinv(record),
                 ReplayKind::NumericalIdentity => replay_numerical_identity(record),
                 ReplayKind::QrIdentity => replay_qr(record),
                 ReplayKind::SvdUAbs
@@ -122,6 +141,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                 | ReplayKind::SvdVhAbs
                 | ReplayKind::SvdUvhProduct => replay_svd(record),
                 ReplayKind::EighValuesVectorsAbs => replay_eigen(record),
+                ReplayKind::EigValuesVectorsAbs => replay_eig(record),
                 ReplayKind::PinvSingularIdentity => replay_pinv_singular(record),
             }?;
             Ok(ReplayOutcome::Validated { hvp_checked })
@@ -142,6 +162,24 @@ fn comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
         return Err(format!("unsupported comparison kind {}", comparison.kind));
     }
     Ok((comparison.rtol, comparison.atol))
+}
+
+fn optional_float_kwarg(record: &CaseRecord, key: &str) -> Result<Option<f64>, String> {
+    match record.op_kwargs.get(key) {
+        None => Ok(None),
+        Some(value) if value.is_null() => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| format!("op_kwargs.{key} for {} must be a float", record.case_id))
+            .map(Some),
+    }
+}
+
+fn pinv_rcond(record: &CaseRecord) -> Result<Option<f64>, String> {
+    match optional_float_kwarg(record, "rtol")? {
+        Some(value) => Ok(Some(value)),
+        None => optional_float_kwarg(record, "rcond"),
+    }
 }
 
 #[allow(dead_code)]
@@ -204,12 +242,62 @@ where
     Ok(true)
 }
 
+fn validate_hvp_typed<T, F>(
+    label: &str,
+    record: &CaseRecord,
+    base_inputs: &BTreeMap<String, Tensor<T>>,
+    direction: &BTreeMap<String, Tensor<T>>,
+    probe: &ProbeRecord,
+    eval_grad: F,
+) -> Result<bool, String>
+where
+    T: OracleDbScalar,
+    F: Fn(&BTreeMap<String, Tensor<T>>) -> Result<BTreeMap<String, Tensor<T>>, String>,
+{
+    let Some(expected_torch_hvp) = probe.pytorch_ref.hvp.as_ref() else {
+        return Ok(false);
+    };
+    let expected_fd_hvp = probe
+        .fd_ref
+        .hvp
+        .as_ref()
+        .ok_or_else(|| format!("missing fd_ref.hvp for {}", record.case_id))?;
+    let expected_hvp_torch = decode_input_map_like_typed::<T>(record, expected_torch_hvp)?;
+    let expected_hvp_fd = decode_input_map_like_typed::<T>(record, expected_fd_hvp)?;
+    let step = probe.fd_ref.step;
+    let plus_inputs = perturb_input_map_typed(base_inputs, direction, step)?;
+    let minus_inputs = perturb_input_map_typed(base_inputs, direction, -step)?;
+    let grad_plus = eval_grad(&plus_inputs)?;
+    let grad_minus = eval_grad(&minus_inputs)?;
+    let actual_hvp = central_diff_tensor_maps_typed(&grad_plus, &grad_minus, step)?;
+    let (rtol, atol) = second_order_comparison(record)?;
+    compare_tensor_maps_typed(
+        &format!("{label}.hvp.fd"),
+        &expected_hvp_fd,
+        &actual_hvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed(
+        &format!("{label}.hvp.torch"),
+        &expected_hvp_torch,
+        &actual_hvp,
+        rtol,
+        atol,
+    )?;
+    Ok(true)
+}
+
 fn solve_rhs_core_rank(a: &DbTensor, b: &DbTensor) -> usize {
     if b.shape.len() + 1 == a.shape.len() {
         1
     } else {
         2
     }
+}
+
+fn lstsq_residual_core_rank(a: &DbTensor, b: &DbTensor) -> usize {
+    solve_rhs_core_rank(a, b).saturating_sub(1)
 }
 
 fn decode_inputs(record: &CaseRecord) -> Result<BTreeMap<String, Tensor<f64>>, String> {
@@ -241,6 +329,42 @@ fn decode_inputs(record: &CaseRecord) -> Result<BTreeMap<String, Tensor<f64>>, S
         inputs.insert(
             name.clone(),
             decode_f64_tensor_with_core_rank(tensor, core_rank)?,
+        );
+    }
+    Ok(inputs)
+}
+
+fn decode_inputs_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+) -> Result<BTreeMap<String, Tensor<T>>, String> {
+    let mut inputs = BTreeMap::new();
+    for (name, tensor) in &record.inputs {
+        let core_rank = match (record.op.as_str(), name.as_str()) {
+            (
+                "cross"
+                | "householder_product"
+                | "multi_dot"
+                | "pinv_hermitian"
+                | "tensorinv"
+                | "tensorsolve"
+                | "vander"
+                | "vecdot",
+                _,
+            ) => tensor.shape.len(),
+            ("solve" | "solve_ex" | "lu_solve", "b") => {
+                solve_rhs_core_rank(record.inputs.get("a").unwrap(), tensor)
+            }
+            _ => {
+                if tensor.shape.len() <= 1 {
+                    1
+                } else {
+                    2
+                }
+            }
+        };
+        inputs.insert(
+            name.clone(),
+            decode_tensor_with_core_rank::<T>(tensor, core_rank)?,
         );
     }
     Ok(inputs)
@@ -283,9 +407,50 @@ fn decode_input_map_like(
     Ok(out)
 }
 
+fn decode_input_map_like_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+    encoded: &BTreeMap<String, DbTensor>,
+) -> Result<BTreeMap<String, Tensor<T>>, String> {
+    let mut out = BTreeMap::new();
+    for (name, tensor) in encoded {
+        let core_rank = match (record.op.as_str(), name.as_str()) {
+            (
+                "cross"
+                | "householder_product"
+                | "multi_dot"
+                | "pinv_hermitian"
+                | "tensorinv"
+                | "tensorsolve"
+                | "vander"
+                | "vecdot",
+                _,
+            ) => tensor.shape.len(),
+            ("solve" | "solve_ex" | "lu_solve", "b") => {
+                solve_rhs_core_rank(record.inputs.get("a").unwrap(), tensor)
+            }
+            _ => {
+                if tensor.shape.len() <= 1 {
+                    1
+                } else {
+                    2
+                }
+            }
+        };
+        out.insert(
+            name.clone(),
+            decode_tensor_with_core_rank::<T>(tensor, core_rank)?,
+        );
+    }
+    Ok(out)
+}
+
 fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String> {
     match (record.op.as_str(), record.family.as_str(), key) {
         ("solve", "identity", "value") => Ok(solve_rhs_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
+        ("solve_triangular", "identity", "value") => Ok(solve_rhs_core_rank(
             record.inputs.get("a").unwrap(),
             record.inputs.get("b").unwrap(),
         )),
@@ -295,14 +460,31 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
                 record.inputs.get("b").unwrap(),
             ))
         }
+        ("lstsq_grad_oriented", "identity", "output_0") => Ok(solve_rhs_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
+        ("lstsq_grad_oriented", "identity", "output_1") => Ok(lstsq_residual_core_rank(
+            record.inputs.get("a").unwrap(),
+            record.inputs.get("b").unwrap(),
+        )),
         ("cholesky", "identity", "value") => Ok(2),
         ("cholesky_ex", "identity", "output_0")
+        | ("inv", "identity", "value")
         | ("inv_ex", "identity", "output_0")
         | ("lu_factor", "identity", "output_0")
         | ("lu_factor_ex", "identity", "output_0")
-        | ("matrix_power", "identity", "value") => Ok(2),
+        | ("matrix_power", "identity", "value")
+        | ("matrix_exp", "identity", "value")
+        | ("pinv", "identity", "value") => Ok(2),
+        ("det", "identity", "value") => Ok(0),
         ("cond", "identity", "value") => Ok(0),
+        ("norm", "identity", "value")
+        | ("matrix_norm", "identity", "value")
+        | ("vector_norm", "identity", "value") => Ok(0),
+        ("slogdet", "identity", "output_0") | ("slogdet", "identity", "output_1") => Ok(0),
         ("qr", "identity", "output_0") | ("qr", "identity", "output_1") => Ok(2),
+        ("lu", "identity", "output_1") | ("lu", "identity", "output_2") => Ok(2),
         ("svd", "u_abs", "u") => Ok(2),
         ("svd", "s", "s") => Ok(1),
         ("svd", "vh_abs", "s") => Ok(1),
@@ -311,6 +493,8 @@ fn observable_core_rank(record: &CaseRecord, key: &str) -> Result<usize, String>
         ("svd", "uvh_product", "uvh") => Ok(2),
         ("eigh", "values_vectors_abs", "values") => Ok(1),
         ("eigh", "values_vectors_abs", "vectors") => Ok(2),
+        ("eig", "values_vectors_abs", "values") => Ok(1),
+        ("eig", "values_vectors_abs", "vectors") => Ok(2),
         ("pinv_singular", "identity", "value") => Ok(2),
         _ => Err(format!(
             "unsupported observable tensor key {key} for {}/{}",
@@ -334,11 +518,54 @@ fn decode_observable_map(
     Ok(out)
 }
 
+fn decode_observable_map_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+    encoded: &BTreeMap<String, DbTensor>,
+) -> Result<BTreeMap<String, Tensor<T>>, String> {
+    let mut out = BTreeMap::new();
+    for (name, tensor) in encoded {
+        let core_rank = observable_core_rank(record, name)?;
+        out.insert(
+            name.clone(),
+            decode_tensor_with_core_rank::<T>(tensor, core_rank)?,
+        );
+    }
+    Ok(out)
+}
+
 fn probe(record: &CaseRecord) -> Result<&ProbeRecord, String> {
     record
         .probes
         .first()
         .ok_or_else(|| format!("missing probe for {}", record.case_id))
+}
+
+fn squeeze_scalar_tensor_typed<T: OracleDbScalar>(tensor: Tensor<T>) -> Result<Tensor<T>, String> {
+    if tensor.dims().is_empty() {
+        return Ok(tensor);
+    }
+    let numel = tensor.dims().iter().product::<usize>();
+    if numel != 1 {
+        return Err(format!(
+            "expected scalar-like tensor, got dims {:?}",
+            tensor.dims()
+        ));
+    }
+    tensor.reshape(&[]).map_err(|err| {
+        format!(
+            "failed to squeeze scalar-like tensor {:?}: {err}",
+            tensor.dims()
+        )
+    })
+}
+
+fn squeeze_scalar_map_typed<T: OracleDbScalar>(
+    encoded: BTreeMap<String, Tensor<T>>,
+) -> Result<BTreeMap<String, Tensor<T>>, String> {
+    encoded
+        .into_iter()
+        .map(|(name, tensor)| Ok((name, squeeze_scalar_tensor_typed(tensor)?)))
+        .collect()
 }
 
 fn check_adjoint_identity(
@@ -360,9 +587,53 @@ fn check_adjoint_identity(
     Ok(())
 }
 
-fn apply_hermitian_wrapper(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
-    let transpose = batched_transpose(tensor)?;
-    Ok(tensor_add(tensor, &transpose))
+fn check_adjoint_identity_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+    cotangent: &BTreeMap<String, Tensor<T>>,
+    jvp: &BTreeMap<String, Tensor<T>>,
+    vjp: &BTreeMap<String, Tensor<T>>,
+    direction: &BTreeMap<String, Tensor<T>>,
+) -> Result<(), String> {
+    let (rtol, atol) = comparison(record)?;
+    let lhs = tensor_map_inner_product_typed(cotangent, jvp)?;
+    let rhs = tensor_map_inner_product_typed(vjp, direction)?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(())
+}
+
+fn check_mixed_adjoint_identity_typed<T, R>(
+    record: &CaseRecord,
+    cotangent: &BTreeMap<String, Tensor<R>>,
+    jvp: &BTreeMap<String, Tensor<R>>,
+    vjp: &BTreeMap<String, Tensor<T>>,
+    direction: &BTreeMap<String, Tensor<T>>,
+) -> Result<(), String>
+where
+    T: OracleDbScalar,
+    R: OracleDbScalar,
+{
+    let (rtol, atol) = comparison(record)?;
+    let lhs = tensor_map_inner_product_typed(cotangent, jvp)?;
+    let rhs = tensor_map_inner_product_typed(vjp, direction)?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(())
+}
+
+fn apply_hermitian_wrapper_typed<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+) -> Result<Tensor<T>, String> {
+    let adjoint = batched_adjoint_transpose(tensor)?;
+    Ok(tensor_add(tensor, &adjoint))
 }
 
 fn decode_preserving_shape(encoded: &DbTensor) -> Result<Tensor<f64>, String> {
@@ -856,8 +1127,8 @@ fn evaluate_numerical_identity_op(
         "pinv_hermitian" => {
             let (a_api, inverse) = move_trailing_core_to_front(inputs.get("a").unwrap(), 2)?;
             let mut ctx = CpuContext::new(1);
-            let value =
-                pinv(&mut ctx, &a_api, None).map_err(|err| format!("pinv failed: {err}"))?;
+            let value = pinv(&mut ctx, &a_api, pinv_rcond(record)?)
+                .map_err(|err| format!("pinv failed: {err}"))?;
             permute_or_identity(&value, &inverse)
         }
         other => Err(format!("unsupported numerical replay op {}", other)),
@@ -1767,6 +2038,7 @@ fn replay_pinv_hermitian(record: &CaseRecord) -> Result<bool, String> {
     let expected_jvp_torch = decode_tensor_map_preserving_shape(&probe.pytorch_ref.jvp)?;
     let expected_vjp = decode_tensor_map_preserving_shape(&probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
+    let rcond = pinv_rcond(record)?;
 
     let (a_api, inverse) = move_trailing_core_to_front(inputs.get("a").unwrap(), 2)?;
     let (da_api, _) = move_trailing_core_to_front(direction.get("a").unwrap(), 2)?;
@@ -1775,9 +2047,9 @@ fn replay_pinv_hermitian(record: &CaseRecord) -> Result<bool, String> {
     let wrapped_da = scale_tensor(&tensor_add(&da_api, &batched_transpose(&da_api)?), 0.5);
     let wrapped_cot = scale_tensor(&tensor_add(&cot_api, &batched_transpose(&cot_api)?), 0.5);
     let mut ctx = CpuContext::new(1);
-    let (_value, raw_jvp_api) = pinv_frule(&mut ctx, &wrapped_a, &wrapped_da, None)
+    let (_value, raw_jvp_api) = pinv_frule(&mut ctx, &wrapped_a, &wrapped_da, rcond)
         .map_err(|err| format!("pinv_frule failed: {err}"))?;
-    let grad_wrapped = pinv_rrule(&mut ctx, &wrapped_a, &wrapped_cot, None)
+    let grad_wrapped = pinv_rrule(&mut ctx, &wrapped_a, &wrapped_cot, rcond)
         .map_err(|err| format!("pinv_rrule failed: {err}"))?;
     let jvp_api = scale_tensor(&raw_jvp_api, 0.5);
     let grad_api = scale_tensor(
@@ -1816,7 +2088,7 @@ fn replay_pinv_hermitian(record: &CaseRecord) -> Result<bool, String> {
             let (a_api, inverse) = move_trailing_core_to_front(perturbed.get("a").unwrap(), 2)?;
             let wrapped_a = scale_tensor(&tensor_add(&a_api, &batched_transpose(&a_api)?), 0.5);
             let mut ctx = CpuContext::new(1);
-            let grad_wrapped = pinv_rrule(&mut ctx, &wrapped_a, &wrapped_cot, None)
+            let grad_wrapped = pinv_rrule(&mut ctx, &wrapped_a, &wrapped_cot, rcond)
                 .map_err(|err| format!("pinv_rrule failed during HVP replay: {err}"))?;
             let grad_api = scale_tensor(
                 &tensor_add(&grad_wrapped, &batched_transpose(&grad_wrapped)?),
@@ -1846,9 +2118,9 @@ fn replay_numerical_identity(record: &CaseRecord) -> Result<bool, String> {
 
 fn replay_value_key(record: &CaseRecord) -> Result<&'static str, String> {
     match record.op.as_str() {
-        "solve" | "cholesky" | "lu_solve" | "cond" | "matrix_power" | "pinv_singular" => {
-            Ok("value")
-        }
+        "solve" | "solve_triangular" | "cholesky" | "det" | "inv" | "lu_solve" | "cond"
+        | "matrix_power" | "matrix_exp" | "pinv" | "pinv_singular" => Ok("value"),
+        "slogdet" => Ok("output_0"),
         "solve_ex" | "cholesky_ex" | "inv_ex" | "lu_factor" | "lu_factor_ex" => Ok("output_0"),
         _ => Err(format!("no replay value key for op {}", record.op)),
     }
@@ -1867,6 +2139,120 @@ fn case_suffix_index(record: &CaseRecord) -> Result<usize, String> {
         return Err(format!("case ids must be 1-based: {}", record.case_id));
     }
     Ok(index)
+}
+
+fn required_bool_kwarg(record: &CaseRecord, key: &str) -> Result<bool, String> {
+    record
+        .op_kwargs
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| format!("op_kwargs.{key} for {} must be a bool", record.case_id))
+}
+
+fn solve_triangular_flags(record: &CaseRecord) -> Result<(bool, bool, bool), String> {
+    Ok((
+        required_bool_kwarg(record, "left")?,
+        required_bool_kwarg(record, "upper")?,
+        required_bool_kwarg(record, "unitriangular")?,
+    ))
+}
+
+fn tensor_with_unit_diagonal(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+    let dims = tensor.dims();
+    if dims.len() < 2 || dims[0] != dims[1] {
+        return Err(format!(
+            "unit-diagonal adjustment expects square matrix batches, got {:?}",
+            dims
+        ));
+    }
+    let n = dims[0];
+    let batch_count = crate::decode::batch_count(&dims[2..]);
+    let mut data = tensor_data_col_major(tensor);
+    for batch in 0..batch_count {
+        let base = batch * n * n;
+        for i in 0..n {
+            data[base + i + i * n] = 1.0;
+        }
+    }
+    Ok(crate::decode::tensor_from_col_major(data, dims))
+}
+
+fn tensor_with_zero_diagonal(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+    let dims = tensor.dims();
+    if dims.len() < 2 || dims[0] != dims[1] {
+        return Err(format!(
+            "diagonal masking expects square matrix batches, got {:?}",
+            dims
+        ));
+    }
+    let n = dims[0];
+    let batch_count = crate::decode::batch_count(&dims[2..]);
+    let mut data = tensor_data_col_major(tensor);
+    for batch in 0..batch_count {
+        let base = batch * n * n;
+        for i in 0..n {
+            data[base + i + i * n] = 0.0;
+        }
+    }
+    Ok(crate::decode::tensor_from_col_major(data, dims))
+}
+
+fn solve_triangular_runtime_inputs(
+    a: &Tensor<f64>,
+    da: &Tensor<f64>,
+    unitriangular: bool,
+) -> Result<(Tensor<f64>, Tensor<f64>), String> {
+    if unitriangular {
+        Ok((
+            tensor_with_unit_diagonal(a)?,
+            tensor_with_zero_diagonal(da)?,
+        ))
+    } else {
+        Ok((a.clone(), da.clone()))
+    }
+}
+
+fn solve_triangular_jvp_vjp(
+    a: &Tensor<f64>,
+    b: &Tensor<f64>,
+    da: &Tensor<f64>,
+    db: &Tensor<f64>,
+    cotangent: &Tensor<f64>,
+    left: bool,
+    upper: bool,
+    unitriangular: bool,
+) -> Result<(Tensor<f64>, Tensor<f64>, Tensor<f64>), String> {
+    let (a_eff, da_eff) = solve_triangular_runtime_inputs(a, da, unitriangular)?;
+    let mut ctx = CpuContext::new(1);
+
+    let (dx, mut grad_a, grad_b) = if left {
+        let (_x, dx) = solve_triangular_frule(&mut ctx, &a_eff, b, &da_eff, db, upper)
+            .map_err(|err| format!("solve_triangular_frule failed: {err}"))?;
+        let grad = solve_triangular_rrule(&mut ctx, &a_eff, b, cotangent, upper)
+            .map_err(|err| format!("solve_triangular_rrule failed: {err}"))?;
+        (dx, grad.a, grad.b)
+    } else {
+        let a_t = batched_transpose(&a_eff)?;
+        let b_t = batched_transpose(b)?;
+        let da_t = batched_transpose(&da_eff)?;
+        let db_t = batched_transpose(db)?;
+        let cot_t = batched_transpose(cotangent)?;
+        let (_x_t, dx_t) = solve_triangular_frule(&mut ctx, &a_t, &b_t, &da_t, &db_t, !upper)
+            .map_err(|err| format!("solve_triangular right-side frule failed: {err}"))?;
+        let grad_t = solve_triangular_rrule(&mut ctx, &a_t, &b_t, &cot_t, !upper)
+            .map_err(|err| format!("solve_triangular right-side rrule failed: {err}"))?;
+        (
+            batched_transpose(&dx_t)?,
+            batched_transpose(&grad_t.a)?,
+            batched_transpose(&grad_t.b)?,
+        )
+    };
+
+    if unitriangular {
+        grad_a = tensor_with_zero_diagonal(&grad_a)?;
+    }
+
+    Ok((dx, grad_a, grad_b))
 }
 
 fn replay_solve(record: &CaseRecord) -> Result<bool, String> {
@@ -1926,7 +2312,7 @@ fn replay_solve(record: &CaseRecord) -> Result<bool, String> {
     Ok(hvp_checked)
 }
 
-fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
+fn replay_solve_triangular(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -1935,69 +2321,246 @@ fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
     let expected_jvp_torch = decode_observable_map(record, &probe.pytorch_ref.jvp)?;
     let expected_vjp = decode_input_map_like(record, &probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
-    let value_key = replay_value_key(record)?;
-    let orientation = infer_triangular_orientation(
-        expected_jvp_fd
-            .get(value_key)
-            .ok_or_else(|| format!("missing cholesky fd_ref value for {}", record.case_id))?,
+    let (left, upper, unitriangular) = solve_triangular_flags(record)?;
+
+    let (dx, grad_a, grad_b) = solve_triangular_jvp_vjp(
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        direction.get("a").unwrap(),
+        direction.get("b").unwrap(),
+        cotangent.get("value").unwrap(),
+        left,
+        upper,
+        unitriangular,
     )?;
-    let wrapped_a = apply_hermitian_wrapper(inputs.get("a").unwrap())?;
-    let wrapped_da = apply_hermitian_wrapper(direction.get("a").unwrap())?;
 
-    let mut ctx = CpuContext::new(1);
-    let (_l, dl) = cholesky_frule(&mut ctx, &wrapped_a, &wrapped_da)
-        .map_err(|err| format!("cholesky_frule failed: {err}"))?;
-    let raw_cotangent = match orientation {
-        TriangularOrientation::Lower => cotangent.get(value_key).unwrap().clone(),
-        TriangularOrientation::Upper => batched_transpose(cotangent.get(value_key).unwrap())?,
-    };
-    let grad = cholesky_rrule(&mut ctx, &wrapped_a, &raw_cotangent)
-        .map_err(|err| format!("cholesky_rrule failed: {err}"))?;
-
-    let actual_value = match orientation {
-        TriangularOrientation::Lower => dl,
-        TriangularOrientation::Upper => batched_transpose(&dl)?,
-    };
-    let actual_jvp = BTreeMap::from([(String::from(value_key), actual_value)]);
-    let actual_vjp = BTreeMap::from([(String::from("a"), apply_hermitian_wrapper(&grad)?)]);
-    compare_tensor_maps("cholesky.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    let actual_jvp = BTreeMap::from([(String::from("value"), dx)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad_a), (String::from("b"), grad_b)]);
     compare_tensor_maps(
-        "cholesky.jvp.torch",
+        "solve_triangular.jvp.fd",
+        &expected_jvp_fd,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps(
+        "solve_triangular.jvp.torch",
         &expected_jvp_torch,
         &actual_jvp,
         rtol,
         atol,
     )?;
-    compare_tensor_maps("cholesky.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    compare_tensor_maps(
+        "solve_triangular.vjp",
+        &expected_vjp,
+        &actual_vjp,
+        rtol,
+        atol,
+    )?;
+
     let hvp_checked = validate_hvp(
-        "cholesky",
+        "solve_triangular",
         record,
         &inputs,
         &direction,
         probe,
         |perturbed| {
-            let wrapped = apply_hermitian_wrapper(perturbed.get("a").unwrap())?;
-            let mut ctx = CpuContext::new(1);
-            let grad = cholesky_rrule(&mut ctx, &wrapped, &raw_cotangent)
-                .map_err(|err| format!("cholesky_rrule failed during HVP replay: {err}"))?;
-            Ok(BTreeMap::from([(
-                String::from("a"),
-                apply_hermitian_wrapper(&grad)?,
-            )]))
+            let (_dx, grad_a, grad_b) = solve_triangular_jvp_vjp(
+                perturbed.get("a").unwrap(),
+                perturbed.get("b").unwrap(),
+                direction.get("a").unwrap(),
+                direction.get("b").unwrap(),
+                cotangent.get("value").unwrap(),
+                left,
+                upper,
+                unitriangular,
+            )?;
+            Ok(BTreeMap::from([
+                (String::from("a"), grad_a),
+                (String::from("b"), grad_b),
+            ]))
         },
     )?;
     check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
 }
 
-fn replay_inv(record: &CaseRecord) -> Result<bool, String> {
-    let inputs = decode_inputs(record)?;
+fn replay_lstsq_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar
+        + KernelLinalgScalar<Real = T>
+        + num_traits::Float
+        + Conjugate
+        + tenferro_tensor::KeepCountScalar
+        + tenferro_linalg::ScaleTensorByRealSameShape<tenferro_prims::CpuContext>,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
     let probe = probe(record)?;
-    let direction = decode_input_map_like(record, &probe.direction)?;
-    let cotangent = decode_observable_map(record, &probe.cotangent)?;
-    let expected_jvp_fd = decode_observable_map(record, &probe.fd_ref.jvp)?;
-    let expected_jvp_torch = decode_observable_map(record, &probe.pytorch_ref.jvp)?;
-    let expected_vjp = decode_input_map_like(record, &probe.pytorch_ref.vjp)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_value, dvalue) = lstsq_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        direction.get("a").unwrap(),
+        direction.get("b").unwrap(),
+    )
+    .map_err(|err| format!("lstsq_frule failed: {err}"))?;
+    let grad = lstsq_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        inputs.get("b").unwrap(),
+        cotangent.get("output_0"),
+        cotangent.get("output_1"),
+    )
+    .map_err(|err| format!("lstsq_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([
+        (String::from("output_0"), dvalue.solution),
+        (String::from("output_1"), dvalue.residuals),
+    ]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad.a), (String::from("b"), grad.b)]);
+    compare_tensor_maps_typed("lstsq.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "lstsq.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("lstsq.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+
+    let cotangent_output_0 = cotangent.get("output_0").cloned();
+    let cotangent_output_1 = cotangent.get("output_1").cloned();
+    let hvp_checked =
+        validate_hvp_typed("lstsq", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = lstsq_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                perturbed.get("b").unwrap(),
+                cotangent_output_0.as_ref(),
+                cotangent_output_1.as_ref(),
+            )
+            .map_err(|err| format!("lstsq_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([
+                (String::from("a"), grad.a),
+                (String::from("b"), grad.b),
+            ]))
+        })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_lstsq(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_lstsq_typed::<f32>(record),
+        "float64" => replay_lstsq_typed::<f64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_cholesky_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let value_key = replay_value_key(record)?;
+    let orientation = infer_triangular_orientation_typed(
+        expected_jvp_fd
+            .get(value_key)
+            .ok_or_else(|| format!("missing cholesky fd_ref value for {}", record.case_id))?,
+    )?;
+    let wrapped_a = apply_hermitian_wrapper_typed(inputs.get("a").unwrap())?;
+    let wrapped_da = apply_hermitian_wrapper_typed(direction.get("a").unwrap())?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_l, dl) = cholesky_frule(&mut ctx, &wrapped_a, &wrapped_da)
+        .map_err(|err| format!("cholesky_frule failed: {err}"))?;
+    let raw_cotangent = match orientation {
+        TriangularOrientation::Lower => cotangent.get(value_key).unwrap().clone(),
+        TriangularOrientation::Upper => {
+            batched_adjoint_transpose(cotangent.get(value_key).unwrap())?
+        }
+    };
+    let grad = cholesky_rrule(&mut ctx, &wrapped_a, &raw_cotangent)
+        .map_err(|err| format!("cholesky_rrule failed: {err}"))?;
+
+    let actual_value = match orientation {
+        TriangularOrientation::Lower => dl,
+        TriangularOrientation::Upper => batched_adjoint_transpose(&dl)?,
+    };
+    let actual_jvp = BTreeMap::from([(String::from(value_key), actual_value)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), apply_hermitian_wrapper_typed(&grad)?)]);
+    compare_tensor_maps_typed("cholesky.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "cholesky.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("cholesky.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed(
+        "cholesky",
+        record,
+        &inputs,
+        &direction,
+        probe,
+        |perturbed| {
+            let wrapped = apply_hermitian_wrapper_typed(perturbed.get("a").unwrap())?;
+            let mut ctx = CpuContext::new(1);
+            let grad = cholesky_rrule(&mut ctx, &wrapped, &raw_cotangent)
+                .map_err(|err| format!("cholesky_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(
+                String::from("a"),
+                apply_hermitian_wrapper_typed(&grad)?,
+            )]))
+        },
+    )?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float64" => replay_cholesky_t::<f64>(record),
+        "complex64" => replay_cholesky_t::<Complex32>(record),
+        "complex128" => replay_cholesky_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_inv_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
     let value_key = replay_value_key(record)?;
 
@@ -2017,16 +2580,16 @@ fn replay_inv(record: &CaseRecord) -> Result<bool, String> {
 
     let actual_jvp = BTreeMap::from([(String::from(value_key), dainv)]);
     let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
-    compare_tensor_maps("inv.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
-    compare_tensor_maps(
+    compare_tensor_maps_typed("inv.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
         "inv.jvp.torch",
         &expected_jvp_torch,
         &actual_jvp,
         rtol,
         atol,
     )?;
-    compare_tensor_maps("inv.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    let hvp_checked = validate_hvp("inv", record, &inputs, &direction, probe, |perturbed| {
+    compare_tensor_maps_typed("inv.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("inv", record, &inputs, &direction, probe, |perturbed| {
         let mut ctx = CpuContext::new(1);
         let grad = inv_rrule(
             &mut ctx,
@@ -2036,8 +2599,579 @@ fn replay_inv(record: &CaseRecord) -> Result<bool, String> {
         .map_err(|err| format!("inv_rrule failed during HVP replay: {err}"))?;
         Ok(BTreeMap::from([(String::from("a"), grad)]))
     })?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
+}
+
+fn replay_inv(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float64" => replay_inv_t::<f64>(record),
+        "float32" => replay_inv_t::<f32>(record),
+        "complex64" => replay_inv_t::<Complex32>(record),
+        "complex128" => replay_inv_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_lu_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate + LiftPermutationMatrixTensor<CpuContext>,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+
+    let pivot = required_bool_kwarg(record, "pivot")?;
+    if !pivot {
+        return Err(format!(
+            "lu oracle replay currently expects pivot=true for {}",
+            record.case_id
+        ));
+    }
+
+    let cotangent = LuCotangent {
+        l: Some(
+            cotangent
+                .get("output_1")
+                .ok_or_else(|| format!("missing lu cotangent output_1 for {}", record.case_id))?
+                .clone(),
+        ),
+        u: Some(
+            cotangent
+                .get("output_2")
+                .ok_or_else(|| format!("missing lu cotangent output_2 for {}", record.case_id))?
+                .clone(),
+        ),
+    };
+
+    let mut ctx = CpuContext::new(1);
+    let (_result, dresult) = lu_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+        LuPivot::Partial,
+    )
+    .map_err(|err| format!("lu_frule failed: {err}"))?;
+    let grad = lu_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        &cotangent,
+        LuPivot::Partial,
+    )
+    .map_err(|err| format!("lu_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([
+        (String::from("output_1"), dresult.l),
+        (String::from("output_2"), dresult.u),
+    ]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("lu.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("lu.jvp.torch", &expected_jvp_torch, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("lu.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("lu", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let grad = lu_rrule(
+            &mut ctx,
+            perturbed.get("a").unwrap(),
+            &cotangent,
+            LuPivot::Partial,
+        )
+        .map_err(|err| format!("lu_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    check_adjoint_identity_typed(
+        record,
+        &decode_observable_map_typed::<T>(record, &probe.cotangent)?,
+        &actual_jvp,
+        &actual_vjp,
+        &direction,
+    )?;
+    Ok(hvp_checked)
+}
+
+fn replay_lu(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_lu_typed::<f32>(record),
+        "float64" => replay_lu_typed::<f64>(record),
+        "complex64" => replay_lu_typed::<Complex32>(record),
+        "complex128" => replay_lu_typed::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_norm_real_t<T>(record: &CaseRecord, kind: NormKind) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar<Real = T> + num_traits::Float,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent =
+        squeeze_scalar_map_typed(decode_observable_map_typed::<T>(record, &probe.cotangent)?)?;
+    let expected_jvp_fd =
+        squeeze_scalar_map_typed(decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?)?;
+    let expected_jvp_torch = squeeze_scalar_map_typed(decode_observable_map_typed::<T>(
+        record,
+        &probe.pytorch_ref.jvp,
+    )?)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let cotangent_value = cotangent
+        .get("value")
+        .ok_or_else(|| format!("missing norm cotangent value for {}", record.case_id))?
+        .clone();
+
+    let mut ctx = CpuContext::new(1);
+    let (_result, dresult) = norm_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+        kind,
+    )
+    .map_err(|err| format!("norm_frule failed: {err}"))?;
+    let grad = norm_rrule(&mut ctx, inputs.get("a").unwrap(), &cotangent_value, kind)
+        .map_err(|err| format!("norm_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([(String::from("value"), dresult)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("norm.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "norm.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("norm.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked =
+        validate_hvp_typed("norm", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = norm_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                &cotangent_value,
+                kind,
+            )
+            .map_err(|err| format!("norm_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(String::from("a"), grad)]))
+        })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+macro_rules! impl_replay_norm_complex {
+    ($fn_name:ident, $complex_ty:ty, $real_ty:ty) => {
+        fn $fn_name(record: &CaseRecord, kind: NormKind) -> Result<bool, String> {
+            let inputs = decode_inputs_typed::<$complex_ty>(record)?;
+            let probe = probe(record)?;
+            let direction = decode_input_map_like_typed::<$complex_ty>(record, &probe.direction)?;
+            let cotangent = squeeze_scalar_map_typed(decode_observable_map_typed::<$real_ty>(
+                record,
+                &probe.cotangent,
+            )?)?;
+            let expected_jvp_fd = squeeze_scalar_map_typed(
+                decode_observable_map_typed::<$real_ty>(record, &probe.fd_ref.jvp)?,
+            )?;
+            let expected_jvp_torch = squeeze_scalar_map_typed(decode_observable_map_typed::<
+                $real_ty,
+            >(
+                record, &probe.pytorch_ref.jvp
+            )?)?;
+            let expected_vjp =
+                decode_input_map_like_typed::<$complex_ty>(record, &probe.pytorch_ref.vjp)?;
+            let (rtol, atol) = comparison(record)?;
+            let cotangent_value = cotangent
+                .get("value")
+                .ok_or_else(|| format!("missing norm cotangent value for {}", record.case_id))?
+                .clone();
+
+            let mut ctx = CpuContext::new(1);
+            let (_result, dresult) = norm_frule_complex(
+                &mut ctx,
+                inputs.get("a").unwrap(),
+                direction.get("a").unwrap(),
+                kind,
+            )
+            .map_err(|err| format!("norm_frule failed: {err}"))?;
+            let grad =
+                norm_rrule_complex(&mut ctx, inputs.get("a").unwrap(), &cotangent_value, kind)
+                    .map_err(|err| format!("norm_rrule failed: {err}"))?;
+
+            let actual_jvp = BTreeMap::from([(String::from("value"), dresult)]);
+            let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+            compare_tensor_maps_typed("norm.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+            compare_tensor_maps_typed(
+                "norm.jvp.torch",
+                &expected_jvp_torch,
+                &actual_jvp,
+                rtol,
+                atol,
+            )?;
+            compare_tensor_maps_typed("norm.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+            let hvp_checked =
+                validate_hvp_typed("norm", record, &inputs, &direction, probe, |perturbed| {
+                    let mut ctx = CpuContext::new(1);
+                    let grad = norm_rrule_complex(
+                        &mut ctx,
+                        perturbed.get("a").unwrap(),
+                        &cotangent_value,
+                        kind,
+                    )
+                    .map_err(|err| format!("norm_rrule failed during HVP replay: {err}"))?;
+                    Ok(BTreeMap::from([(String::from("a"), grad)]))
+                })?;
+            check_mixed_adjoint_identity_typed(
+                record,
+                &cotangent,
+                &actual_jvp,
+                &actual_vjp,
+                &direction,
+            )?;
+            Ok(hvp_checked)
+        }
+    };
+}
+
+impl_replay_norm_complex!(replay_norm_complex32, Complex32, f32);
+impl_replay_norm_complex!(replay_norm_complex64, Complex64, f64);
+
+fn replay_norm(record: &CaseRecord) -> Result<bool, String> {
+    let kind = replayable_norm_kind(record).ok_or_else(|| {
+        format!(
+            "norm replay requested for unsupported norm subset in {}",
+            record.case_id
+        )
+    })?;
+    match record.dtype.as_str() {
+        "float32" => replay_norm_real_t::<f32>(record, kind),
+        "float64" => replay_norm_real_t::<f64>(record, kind),
+        "complex64" => replay_norm_complex32(record, kind),
+        "complex128" => replay_norm_complex64(record, kind),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_det_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate + ScaleTensorByRealSameShape<CpuContext>,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let value_key = replay_value_key(record)?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_value, jvp_value) = det_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+    )
+    .map_err(|err| format!("det_frule failed: {err}"))?;
+    let grad = det_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        cotangent.get(value_key).unwrap(),
+    )
+    .map_err(|err| format!("det_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([(String::from(value_key), jvp_value)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("det.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "det.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("det.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("det", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let grad = det_rrule(
+            &mut ctx,
+            perturbed.get("a").unwrap(),
+            cotangent.get(value_key).unwrap(),
+        )
+        .map_err(|err| format!("det_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_det(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_det_t::<f32>(record),
+        "float64" => replay_det_t::<f64>(record),
+        "complex64" => replay_det_t::<Complex32>(record),
+        "complex128" => replay_det_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn decode_slogdet_observable_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+    encoded: &BTreeMap<String, DbTensor>,
+) -> Result<(Tensor<T>, Tensor<T::Real>), String>
+where
+    T::Real: OracleDbScalar,
+{
+    let sign = decode_tensor_with_core_rank::<T>(
+        encoded
+            .get("output_0")
+            .ok_or_else(|| format!("missing output_0 for {}", record.case_id))?,
+        observable_core_rank(record, "output_0")?,
+    )?;
+    let logabsdet = decode_tensor_with_core_rank::<T::Real>(
+        encoded
+            .get("output_1")
+            .ok_or_else(|| format!("missing output_1 for {}", record.case_id))?,
+        observable_core_rank(record, "output_1")?,
+    )?;
+    Ok((sign, logabsdet))
+}
+
+fn compare_slogdet_observable_typed<T: OracleDbScalar>(
+    label: &str,
+    expected: &(Tensor<T>, Tensor<T::Real>),
+    actual: &(Tensor<T>, Tensor<T::Real>),
+    rtol: f64,
+    atol: f64,
+) -> Result<(), String>
+where
+    T::Real: OracleDbScalar,
+{
+    compare_tensors_typed(
+        &format!("{label}.output_0"),
+        &expected.0,
+        &actual.0,
+        rtol,
+        atol,
+    )?;
+    compare_tensors_typed(
+        &format!("{label}.output_1"),
+        &expected.1,
+        &actual.1,
+        rtol,
+        atol,
+    )?;
+    Ok(())
+}
+
+fn slogdet_adjoint_identity_typed<T: OracleDbScalar>(
+    record: &CaseRecord,
+    sign_cotangent: &Tensor<T>,
+    logabsdet_cotangent: &Tensor<T::Real>,
+    sign_jvp: &Tensor<T>,
+    logabsdet_jvp: &Tensor<T::Real>,
+    actual_vjp: &BTreeMap<String, Tensor<T>>,
+    direction: &BTreeMap<String, Tensor<T>>,
+) -> Result<(), String>
+where
+    T::Real: OracleDbScalar,
+{
+    let (rtol, atol) = comparison(record)?;
+    let lhs = crate::decode::inner_product_typed(sign_cotangent, sign_jvp)?
+        + crate::decode::inner_product_typed(logabsdet_cotangent, logabsdet_jvp)?;
+    let rhs = tensor_map_inner_product_typed(actual_vjp, direction)?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(())
+}
+
+fn replay_slogdet_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar
+        + KernelLinalgScalar
+        + Conjugate
+        + SlogdetFruleDispatch<CpuContext>
+        + SlogdetRruleDispatch<CpuContext>,
+    T::Real: OracleDbScalar,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let (sign_cotangent, logabsdet_cotangent) =
+        decode_slogdet_observable_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_slogdet_observable_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_slogdet_observable_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_value, jvp_value) = slogdet_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+    )
+    .map_err(|err| format!("slogdet_frule failed: {err}"))?;
+    let grad = slogdet_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        &SlogdetCotangent {
+            sign: Some(sign_cotangent.clone()),
+            logabsdet: Some(logabsdet_cotangent.clone()),
+        },
+    )
+    .map_err(|err| format!("slogdet_rrule failed: {err}"))?;
+
+    let actual_jvp = (jvp_value.sign, jvp_value.logabsdet);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_slogdet_observable_typed("slogdet.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_slogdet_observable_typed(
+        "slogdet.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("slogdet.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked =
+        validate_hvp_typed("slogdet", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = slogdet_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                &SlogdetCotangent {
+                    sign: Some(sign_cotangent.clone()),
+                    logabsdet: Some(logabsdet_cotangent.clone()),
+                },
+            )
+            .map_err(|err| format!("slogdet_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(String::from("a"), grad)]))
+        })?;
+    slogdet_adjoint_identity_typed(
+        record,
+        &sign_cotangent,
+        &logabsdet_cotangent,
+        &actual_jvp.0,
+        &actual_jvp.1,
+        &actual_vjp,
+        &direction,
+    )?;
+    Ok(hvp_checked)
+}
+
+fn replay_slogdet(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_slogdet_t::<f32>(record),
+        "float64" => replay_slogdet_t::<f64>(record),
+        "complex64" => replay_slogdet_t::<Complex32>(record),
+        "complex128" => replay_slogdet_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
+}
+
+fn replay_matrix_exp_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar
+        + KernelLinalgScalar
+        + Conjugate
+        + MatrixExpAbsTensor<CpuContext>
+        + ScaleTensorByRealSameShape<CpuContext>,
+    T::Real: KernelLinalgScalar<Real = T::Real> + Float,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let value_key = replay_value_key(record)?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_exp_a, dexp_a) = matrix_exp_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+    )
+    .map_err(|err| format!("matrix_exp_frule failed: {err}"))?;
+    let grad = matrix_exp_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        cotangent.get(value_key).unwrap(),
+    )
+    .map_err(|err| format!("matrix_exp_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([(String::from(value_key), dexp_a)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed(
+        "matrix_exp.jvp.fd",
+        &expected_jvp_fd,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed(
+        "matrix_exp.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("matrix_exp.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed(
+        "matrix_exp",
+        record,
+        &inputs,
+        &direction,
+        probe,
+        |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = matrix_exp_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                cotangent.get(value_key).unwrap(),
+            )
+            .map_err(|err| format!("matrix_exp_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(String::from("a"), grad)]))
+        },
+    )?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_matrix_exp(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float64" => replay_matrix_exp_t::<f64>(record),
+        "complex64" => replay_matrix_exp_t::<Complex32>(record),
+        "complex128" => replay_matrix_exp_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
 }
 
 fn tensor_mul(left: &Tensor<f64>, right: &Tensor<f64>) -> Result<Tensor<f64>, String> {
@@ -2990,7 +4124,9 @@ fn replay_matrix_power(record: &CaseRecord) -> Result<bool, String> {
     Ok(hvp_checked)
 }
 
-fn infer_triangular_orientation(tensor: &Tensor<f64>) -> Result<TriangularOrientation, String> {
+fn infer_triangular_orientation_typed<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+) -> Result<TriangularOrientation, String> {
     let dims = tensor.dims();
     if dims.len() < 2 || dims[0] != dims[1] {
         return Err(format!(
@@ -3016,7 +4152,10 @@ fn infer_triangular_orientation(tensor: &Tensor<f64>) -> Result<TriangularOrient
         let base = batch * n * n;
         for j in 0..n {
             for i in 0..n {
-                let value = values[base + i + j * n].abs();
+                let value = values[base + i + j * n]
+                    .abs_real()
+                    .to_f64()
+                    .ok_or_else(|| "failed to convert triangular norm".to_string())?;
                 if i < j {
                     upper_norm += value;
                 } else if i > j {
@@ -3034,8 +4173,9 @@ fn infer_triangular_orientation(tensor: &Tensor<f64>) -> Result<TriangularOrient
             TriangularOrientation::Lower
         });
     }
+
     Err(format!(
-        "failed to infer triangular orientation: upper_norm={upper_norm}, lower_norm={lower_norm}"
+        "could not infer triangular orientation from norms upper={upper_norm} lower={lower_norm}"
     ))
 }
 
@@ -3483,17 +4623,212 @@ fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
     }
 }
 
-fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {
-    let inputs = decode_inputs(record)?;
+#[derive(Clone, Debug)]
+struct EigenObservable<T: OracleDbScalar>
+where
+    T::Real: OracleDbScalar,
+{
+    values: Tensor<T::Real>,
+    vectors_abs: Tensor<T::Real>,
+}
+
+impl<T> EigenObservable<T>
+where
+    T: OracleDbScalar,
+    T::Real: OracleDbScalar,
+{
+    fn decode(record: &CaseRecord, encoded: &BTreeMap<String, DbTensor>) -> Result<Self, String> {
+        Ok(Self {
+            values: decode_tensor_with_core_rank(
+                encoded.get("values").ok_or_else(|| {
+                    format!("missing eigen observable values for {}", record.case_id)
+                })?,
+                1,
+            )?,
+            vectors_abs: decode_tensor_with_core_rank(
+                encoded.get("vectors").ok_or_else(|| {
+                    format!("missing eigen observable vectors for {}", record.case_id)
+                })?,
+                2,
+            )?,
+        })
+    }
+
+    fn from_jvp(
+        primal_vectors: &Tensor<T>,
+        dvalues: &Tensor<T::Real>,
+        dvectors: &Tensor<T>,
+    ) -> Self {
+        Self {
+            values: dvalues.clone(),
+            vectors_abs: elementwise_abs_jvp(primal_vectors, dvectors),
+        }
+    }
+
+    fn to_cotangent(&self, primal_vectors: &Tensor<T>) -> EigenCotangent<T, T::Real> {
+        EigenCotangent {
+            values: Some(self.values.clone()),
+            vectors: Some(elementwise_abs_vjp(primal_vectors, &self.vectors_abs)),
+        }
+    }
+
+    fn compare(&self, label: &str, actual: &Self, rtol: f64, atol: f64) -> Result<(), String> {
+        compare_tensors_typed::<T::Real>(
+            &format!("{label}.values"),
+            &self.values,
+            &actual.values,
+            rtol,
+            atol,
+        )?;
+        compare_tensors_typed::<T::Real>(
+            &format!("{label}.vectors"),
+            &self.vectors_abs,
+            &actual.vectors_abs,
+            rtol,
+            atol,
+        )
+    }
+
+    fn real_inner_product(&self, other: &Self) -> Result<f64, String> {
+        Ok(
+            tensor_real_inner_product_typed(&self.values, &other.values)?
+                + tensor_real_inner_product_typed(&self.vectors_abs, &other.vectors_abs)?,
+        )
+    }
+}
+
+fn match_eig_value_permutations<R>(
+    actual: &Tensor<num_complex::Complex<R>>,
+    expected: &Tensor<num_complex::Complex<R>>,
+) -> Result<Vec<Vec<usize>>, String>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    if actual.dims() != expected.dims() {
+        return Err(format!(
+            "eig value permutation requires matching dims, got {:?} vs {:?}",
+            actual.dims(),
+            expected.dims()
+        ));
+    }
+    let dims = actual.dims();
+    let n = dims[0];
+    let bc = crate::decode::batch_count(&dims[1..]);
+    let actual_data = tensor_data_col_major(actual);
+    let expected_data = tensor_data_col_major(expected);
+    let mut permutations = Vec::with_capacity(bc);
+
+    for batch in 0..bc {
+        let actual_batch = &actual_data[batch * n..(batch + 1) * n];
+        let expected_batch = &expected_data[batch * n..(batch + 1) * n];
+        let mut used = vec![false; n];
+        let mut permutation = vec![0usize; n];
+        for (actual_index, actual_value) in actual_batch.iter().enumerate() {
+            let mut best: Option<(usize, f64)> = None;
+            for (expected_index, expected_value) in expected_batch.iter().enumerate() {
+                if used[expected_index] {
+                    continue;
+                }
+                let score = (*actual_value - *expected_value)
+                    .norm_sqr()
+                    .to_f64()
+                    .ok_or_else(|| {
+                        format!("failed to score eig value permutation for batch {batch}")
+                    })?;
+                match best {
+                    Some((_, best_score)) if score >= best_score => {}
+                    _ => best = Some((expected_index, score)),
+                }
+            }
+            let Some((expected_index, _)) = best else {
+                return Err(format!(
+                    "failed to match eig value permutation for batch {batch}"
+                ));
+            };
+            used[expected_index] = true;
+            permutation[actual_index] = expected_index;
+        }
+        permutations.push(permutation);
+    }
+
+    Ok(permutations)
+}
+
+fn permute_eig_value_tensor<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+    permutations: &[Vec<usize>],
+) -> Result<Tensor<T>, String> {
+    let dims = tensor.dims();
+    let n = dims[0];
+    let bc = crate::decode::batch_count(&dims[1..]);
+    if permutations.len() != bc {
+        return Err(format!(
+            "eig value permutation batch mismatch: {} vs {}",
+            permutations.len(),
+            bc
+        ));
+    }
+    let input = tensor_data_col_major(tensor);
+    let mut output = vec![T::zero(); input.len()];
+    for (batch, permutation) in permutations.iter().enumerate() {
+        for actual_index in 0..n {
+            output[batch * n + actual_index] = input[batch * n + permutation[actual_index]];
+        }
+    }
+    Ok(tensor_from_col_major(output, dims))
+}
+
+fn permute_eig_vector_columns<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+    permutations: &[Vec<usize>],
+) -> Result<Tensor<T>, String> {
+    let dims = tensor.dims();
+    let n = dims[0];
+    if dims.get(1).copied() != Some(n) {
+        return Err(format!(
+            "eig vector permutation expects square core dims, got {:?}",
+            dims
+        ));
+    }
+    let bc = crate::decode::batch_count(&dims[2..]);
+    if permutations.len() != bc {
+        return Err(format!(
+            "eig vector permutation batch mismatch: {} vs {}",
+            permutations.len(),
+            bc
+        ));
+    }
+    let input = tensor_data_col_major(tensor);
+    let mut output = vec![T::zero(); input.len()];
+    for (batch, permutation) in permutations.iter().enumerate() {
+        let batch_offset = batch * n * n;
+        for actual_col in 0..n {
+            let expected_col = permutation[actual_col];
+            for row in 0..n {
+                output[batch_offset + row + actual_col * n] =
+                    input[batch_offset + row + expected_col * n];
+            }
+        }
+    }
+    Ok(tensor_from_col_major(output, dims))
+}
+
+fn replay_eigen_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate,
+    T::Real: OracleDbScalar + KernelLinalgScalar<Real = T::Real> + Float,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
     let probe = probe(record)?;
-    let direction = decode_input_map_like(record, &probe.direction)?;
-    let cotangent = decode_observable_map(record, &probe.cotangent)?;
-    let expected_jvp_fd = decode_observable_map(record, &probe.fd_ref.jvp)?;
-    let expected_jvp_torch = decode_observable_map(record, &probe.pytorch_ref.jvp)?;
-    let expected_vjp = decode_input_map_like(record, &probe.pytorch_ref.vjp)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = EigenObservable::<T>::decode(record, &probe.cotangent)?;
+    let expected_jvp_fd = EigenObservable::<T>::decode(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = EigenObservable::<T>::decode(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
-    let wrapped_a = apply_hermitian_wrapper(inputs.get("a").unwrap())?;
-    let wrapped_da = apply_hermitian_wrapper(direction.get("a").unwrap())?;
+    let wrapped_a = apply_hermitian_wrapper_typed(inputs.get("a").unwrap())?;
+    let wrapped_da = apply_hermitian_wrapper_typed(direction.get("a").unwrap())?;
 
     let mut ctx = CpuContext::new(1);
     let (result, dresult) = eigen_frule(&mut ctx, &wrapped_a, &wrapped_da)
@@ -3501,57 +4836,201 @@ fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {
     let grad = eigen_rrule(
         &mut ctx,
         &wrapped_a,
-        &EigenCotangent {
-            values: Some(cotangent.get("values").unwrap().clone()),
-            vectors: Some(elementwise_sign_mul(
-                &result.vectors,
-                cotangent.get("vectors").unwrap(),
-            )),
-        },
+        &cotangent.to_cotangent(&result.vectors),
     )
     .map_err(|err| format!("eigen_rrule failed: {err}"))?;
 
-    let actual_jvp = BTreeMap::from([
-        (String::from("values"), dresult.values),
-        (
-            String::from("vectors"),
-            elementwise_sign_mul(&result.vectors, &dresult.vectors),
-        ),
-    ]);
-    let actual_vjp = BTreeMap::from([(String::from("a"), apply_hermitian_wrapper(&grad)?)]);
-    compare_tensor_maps("eigen.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
-    compare_tensor_maps(
-        "eigen.jvp.torch",
-        &expected_jvp_torch,
-        &actual_jvp,
-        rtol,
-        atol,
-    )?;
-    compare_tensor_maps("eigen.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    let hvp_checked = validate_hvp("eigen", record, &inputs, &direction, probe, |perturbed| {
-        let wrapped = apply_hermitian_wrapper(perturbed.get("a").unwrap())?;
-        let mut ctx = CpuContext::new(1);
-        let primal = eigen(&mut ctx, &wrapped)
-            .map_err(|err| format!("eigen failed during HVP replay: {err}"))?;
-        let grad = eigen_rrule(
-            &mut ctx,
-            &wrapped,
-            &EigenCotangent {
-                values: Some(cotangent.get("values").unwrap().clone()),
-                vectors: Some(elementwise_sign_mul(
-                    &primal.vectors,
-                    cotangent.get("vectors").unwrap(),
-                )),
-            },
-        )
-        .map_err(|err| format!("eigen_rrule failed during HVP replay: {err}"))?;
-        Ok(BTreeMap::from([(
-            String::from("a"),
-            apply_hermitian_wrapper(&grad)?,
-        )]))
-    })?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    let actual_jvp =
+        EigenObservable::<T>::from_jvp(&result.vectors, &dresult.values, &dresult.vectors);
+    let actual_vjp = BTreeMap::from([(String::from("a"), apply_hermitian_wrapper_typed(&grad)?)]);
+    expected_jvp_fd.compare("eigen.jvp.fd", &actual_jvp, rtol, atol)?;
+    expected_jvp_torch.compare("eigen.jvp.torch", &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("eigen.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked =
+        validate_hvp_typed("eigen", record, &inputs, &direction, probe, |perturbed| {
+            let wrapped = apply_hermitian_wrapper_typed(perturbed.get("a").unwrap())?;
+            let mut ctx = CpuContext::new(1);
+            let primal = eigen(&mut ctx, &wrapped)
+                .map_err(|err| format!("eigen failed during HVP replay: {err}"))?;
+            let grad = eigen_rrule(&mut ctx, &wrapped, &cotangent.to_cotangent(&primal.vectors))
+                .map_err(|err| format!("eigen_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(
+                String::from("a"),
+                apply_hermitian_wrapper_typed(&grad)?,
+            )]))
+        })?;
+    let lhs = cotangent.real_inner_product(&actual_jvp)?;
+    let rhs =
+        tensor_real_inner_product_typed(actual_vjp.get("a").unwrap(), direction.get("a").unwrap())?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
     Ok(hvp_checked)
+}
+
+fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_eigen_typed::<f32>(record),
+        "float64" => replay_eigen_typed::<f64>(record),
+        "complex64" => replay_eigen_typed::<Complex32>(record),
+        "complex128" => replay_eigen_typed::<Complex64>(record),
+        other => Err(format!("unsupported eigen replay dtype {other}")),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EigObservable<R>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    values: Tensor<num_complex::Complex<R>>,
+    vectors_abs: Tensor<R>,
+}
+
+impl<R> EigObservable<R>
+where
+    R: OracleDbScalar + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>> + Float,
+    num_complex::Complex<R>: OracleDbScalar + tenferro_linalg_prims::LinalgScalar<Real = R>,
+{
+    fn decode(record: &CaseRecord, encoded: &BTreeMap<String, DbTensor>) -> Result<Self, String> {
+        Ok(Self {
+            values: decode_tensor_with_core_rank(
+                encoded.get("values").ok_or_else(|| {
+                    format!("missing eig observable values for {}", record.case_id)
+                })?,
+                1,
+            )?,
+            vectors_abs: decode_tensor_with_core_rank(
+                encoded.get("vectors").ok_or_else(|| {
+                    format!("missing eig observable vectors for {}", record.case_id)
+                })?,
+                2,
+            )?,
+        })
+    }
+
+    fn from_jvp(
+        primal_vectors: &Tensor<num_complex::Complex<R>>,
+        dvalues: &Tensor<num_complex::Complex<R>>,
+        dvectors: &Tensor<num_complex::Complex<R>>,
+    ) -> Self {
+        Self {
+            values: dvalues.clone(),
+            vectors_abs: elementwise_abs_jvp(primal_vectors, dvectors),
+        }
+    }
+
+    fn to_cotangent(&self, primal_vectors: &Tensor<num_complex::Complex<R>>) -> EigCotangent<R> {
+        EigCotangent {
+            values: Some(self.values.clone()),
+            vectors: Some(elementwise_abs_vjp(primal_vectors, &self.vectors_abs)),
+        }
+    }
+
+    fn compare(&self, label: &str, actual: &Self, rtol: f64, atol: f64) -> Result<(), String> {
+        compare_tensors_typed::<num_complex::Complex<R>>(
+            &format!("{label}.values"),
+            &self.values,
+            &actual.values,
+            rtol,
+            atol,
+        )?;
+        compare_tensors_typed::<R>(
+            &format!("{label}.vectors"),
+            &self.vectors_abs,
+            &actual.vectors_abs,
+            rtol,
+            atol,
+        )
+    }
+
+    fn real_inner_product(&self, other: &Self) -> Result<f64, String> {
+        Ok(
+            tensor_real_inner_product_typed(&self.values, &other.values)?
+                + tensor_real_inner_product_typed(&self.vectors_abs, &other.vectors_abs)?,
+        )
+    }
+
+    fn permuted(&self, permutations: &[Vec<usize>]) -> Result<Self, String> {
+        Ok(Self {
+            values: permute_eig_value_tensor(&self.values, permutations)?,
+            vectors_abs: permute_eig_vector_columns(&self.vectors_abs, permutations)?,
+        })
+    }
+}
+
+fn replay_eig_typed<R>(record: &CaseRecord) -> Result<bool, String>
+where
+    R: OracleDbScalar
+        + KernelLinalgScalar<Real = R, Complex = num_complex::Complex<R>>
+        + Float
+        + KeepCountScalar,
+    num_complex::Complex<R>: OracleDbScalar
+        + tenferro_linalg_prims::LinalgScalar<Real = R>
+        + tenferro_linalg_prims::KernelLinalgScalar,
+{
+    let inputs = decode_inputs_typed::<R>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<R>(record, &probe.direction)?;
+    let cotangent = EigObservable::<R>::decode(record, &probe.cotangent)?;
+    let expected_jvp_fd = EigObservable::<R>::decode(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = EigObservable::<R>::decode(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<R>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let a = inputs.get("a").unwrap();
+    let da = direction.get("a").unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let (result, dresult) =
+        eig_frule(&mut ctx, a, da).map_err(|err| format!("eig_frule failed: {err}"))?;
+    let actual_jvp =
+        EigObservable::<R>::from_jvp(&result.vectors, &dresult.values, &dresult.vectors);
+    let permutations =
+        match_eig_value_permutations(&actual_jvp.values, &expected_jvp_torch.values)?;
+    let cotangent = cotangent.permuted(&permutations)?;
+    let expected_jvp_fd = expected_jvp_fd.permuted(&permutations)?;
+    let expected_jvp_torch = expected_jvp_torch.permuted(&permutations)?;
+    let grad = eig_rrule(&mut ctx, a, &cotangent.to_cotangent(&result.vectors))
+        .map_err(|err| format!("eig_rrule failed: {err}"))?;
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    expected_jvp_fd.compare("eig.jvp.fd", &actual_jvp, rtol, atol)?;
+    expected_jvp_torch.compare("eig.jvp.torch", &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed("eig.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked = validate_hvp_typed("eig", record, &inputs, &direction, probe, |perturbed| {
+        let perturbed_a = perturbed.get("a").unwrap();
+        let mut ctx = CpuContext::new(1);
+        let primal = eig(&mut ctx, perturbed_a)
+            .map_err(|err| format!("eig failed during HVP replay: {err}"))?;
+        let grad = eig_rrule(
+            &mut ctx,
+            perturbed_a,
+            &cotangent.to_cotangent(&primal.vectors),
+        )
+        .map_err(|err| format!("eig_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    let lhs: f64 = cotangent.real_inner_product(&actual_jvp)?;
+    let rhs: f64 =
+        tensor_real_inner_product_typed(actual_vjp.get("a").unwrap(), direction.get("a").unwrap())?;
+    let allowed: f64 = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
+    Ok(hvp_checked)
+}
+
+fn replay_eig(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_eig_typed::<f32>(record),
+        "float64" => replay_eig_typed::<f64>(record),
+        other => Err(format!("unsupported eig replay dtype {other}")),
+    }
 }
 
 fn pinv_factor_product(a: &Tensor<f64>, b: &Tensor<f64>) -> Result<Tensor<f64>, String> {
@@ -3625,4 +5104,75 @@ fn replay_pinv_singular(record: &CaseRecord) -> Result<bool, String> {
     })?;
     check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
+}
+
+fn replay_pinv_t<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar + Conjugate + ScaleTensorByRealSameShape<CpuContext>,
+    T::Real: KeepCountScalar,
+{
+    let inputs = decode_inputs_typed::<T>(record)?;
+    let probe = probe(record)?;
+    let direction = decode_input_map_like_typed::<T>(record, &probe.direction)?;
+    let cotangent = decode_observable_map_typed::<T>(record, &probe.cotangent)?;
+    let expected_jvp_fd = decode_observable_map_typed::<T>(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = decode_observable_map_typed::<T>(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_input_map_like_typed::<T>(record, &probe.pytorch_ref.vjp)?;
+    let (rtol, atol) = comparison(record)?;
+    let value_key = replay_value_key(record)?;
+    let rcond = pinv_rcond(record)?;
+
+    let mut ctx = CpuContext::new(1);
+    let (_ap, dap) = pinv_frule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        direction.get("a").unwrap(),
+        rcond,
+    )
+    .map_err(|err| format!("pinv_frule failed: {err}"))?;
+    let grad = pinv_rrule(
+        &mut ctx,
+        inputs.get("a").unwrap(),
+        cotangent.get(value_key).unwrap(),
+        rcond,
+    )
+    .map_err(|err| format!("pinv_rrule failed: {err}"))?;
+
+    let actual_jvp = BTreeMap::from([(String::from(value_key), dap)]);
+    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
+    compare_tensor_maps_typed("pinv.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
+    compare_tensor_maps_typed(
+        "pinv.jvp.torch",
+        &expected_jvp_torch,
+        &actual_jvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps_typed("pinv.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
+    let hvp_checked =
+        validate_hvp_typed("pinv", record, &inputs, &direction, probe, |perturbed| {
+            let mut ctx = CpuContext::new(1);
+            let grad = pinv_rrule(
+                &mut ctx,
+                perturbed.get("a").unwrap(),
+                cotangent.get(value_key).unwrap(),
+                rcond,
+            )
+            .map_err(|err| format!("pinv_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(String::from("a"), grad)]))
+        })?;
+    check_adjoint_identity_typed(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
+}
+
+fn replay_pinv(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float64" => replay_pinv_t::<f64>(record),
+        "complex64" => replay_pinv_t::<Complex32>(record),
+        "complex128" => replay_pinv_t::<Complex64>(record),
+        other => Err(format!(
+            "unsupported replay dtype {other} for {}",
+            record.case_id
+        )),
+    }
 }

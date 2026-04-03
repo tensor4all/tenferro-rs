@@ -5,6 +5,8 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{with_default_generator, Generator, LogicalMemorySpace, Result};
 
 use super::super::Tensor;
+#[cfg(feature = "cuda")]
+use super::super::TensorParts;
 use crate::MemoryOrder;
 
 #[cfg(feature = "cuda")]
@@ -14,9 +16,9 @@ use crate::DataBuffer;
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime as device_cuda;
 
-fn with_generator<'a, R, F>(
+fn with_generator<R, F>(
     memory_space: LogicalMemorySpace,
-    generator: Option<&'a mut Generator>,
+    generator: Option<&mut Generator>,
     f: F,
 ) -> Result<R>
 where
@@ -53,8 +55,8 @@ fn gpu_generated_tensor<T: Scalar>(
     };
     let runtime = device_cuda::get_or_init(device_id)?;
     let allocation = runtime.alloc::<T>(dims.iter().product())?;
-    let tensor = Tensor::from_parts(
-        unsafe {
+    let tensor = Tensor::from_parts(TensorParts {
+        buffer: unsafe {
             DataBuffer::from_gpu_parts(
                 allocation.device_ptr(),
                 allocation.len(),
@@ -62,15 +64,15 @@ fn gpu_generated_tensor<T: Scalar>(
                 move || drop(allocation),
             )
         },
-        Arc::from(dims),
-        Arc::from(compute_contiguous_strides(dims, order)),
-        0,
-        memory_space,
-        None,
-        None,
-        false,
-        None,
-    );
+        dims: Arc::from(dims),
+        strides: Arc::from(compute_contiguous_strides(dims, order)),
+        offset: 0,
+        logical_memory_space: memory_space,
+        preferred_compute_device: None,
+        event: None,
+        conjugated: false,
+        fw_grad: None,
+    });
     Ok(tensor)
 }
 

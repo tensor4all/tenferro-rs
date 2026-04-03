@@ -7,7 +7,7 @@
 //! // to be consumed directly.
 //! ```
 
-#![allow(clippy::multiple_bound_locations)]
+mod linearized;
 
 pub use tenferro_internal_error::{Error, Result};
 

@@ -220,6 +220,37 @@ fn oracle_db_parser_handles_current_schema() {
 }
 
 #[test]
+fn oracle_db_parser_preserves_op_args() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "norm_f64_identity_args_001",
+        "op": "norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [5],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0, 5.0]
+            }
+        },
+        "op_args": [null],
+        "op_kwargs": { "keepdim": true },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("norm oracle support record should parse");
+
+    assert_eq!(record.op_args.len(), 1);
+    assert!(record.op_args[0].is_null());
+}
+
+#[test]
 fn oracle_db_parser_rejects_half_present_hvp_payloads() {
     let record = json!({
         "case_id": "solve_f64_identity_hvp_half_present",
@@ -394,6 +425,302 @@ fn oracle_db_marks_batch_a_oracles_supported_for_replay() {
             "{op}/{family}/{observable} should be supported"
         );
     }
+}
+
+#[test]
+fn oracle_db_marks_solve_triangular_oracles_supported_for_replay() {
+    let record = oracle_support_record(
+        "solve_triangular_f64_identity_001",
+        "solve_triangular",
+        "identity",
+        "identity",
+    );
+    assert!(
+        matches!(
+            support::classify_record(&record),
+            support::RecordSupport::Supported(_)
+        ),
+        "solve_triangular/identity/identity should be supported"
+    );
+}
+
+#[test]
+fn oracle_db_marks_lu_oracles_supported_for_replay() {
+    let record = oracle_support_record("lu_f64_identity_001", "lu", "identity", "identity");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::LuIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_marks_supported_norm_subsets_for_replay() {
+    let vector_norm = db::parse_case_record_value(json!({
+        "case_id": "norm_c128_identity_001",
+        "op": "norm",
+        "dtype": "complex128",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "complex128",
+                "shape": [5],
+                "order": "row_major",
+                "data": [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0], [5.0, 0.0]]
+            }
+        },
+        "op_args": [null],
+        "op_kwargs": { "keepdim": true },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("vector norm support record should parse");
+    assert!(matches!(
+        support::classify_record(&vector_norm),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+
+    let matrix_norm = db::parse_case_record_value(json!({
+        "case_id": "matrix_norm_f64_identity_020",
+        "op": "matrix_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [2, 2],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0]
+            }
+        },
+        "op_args": [1, [-1, 0], false],
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("matrix norm support record should parse");
+    assert!(matches!(
+        support::classify_record(&matrix_norm),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_marks_supported_lstsq_subset_for_replay() {
+    let supported = db::parse_case_record_value(json!({
+        "case_id": "lstsq_grad_oriented_f64_identity_square",
+        "op": "lstsq_grad_oriented",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [3, 3],
+                "order": "row_major",
+                "data": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            },
+            "b": {
+                "dtype": "float64",
+                "shape": [3, 2],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            }
+        },
+        "op_kwargs": { "driver": "gels" },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": [{
+            "probe_id": "p0",
+            "direction": {},
+            "cotangent": {},
+            "pytorch_ref": {
+                "jvp": {
+                    "output_0": { "dtype": "float64", "shape": [3, 2], "order": "row_major", "data": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
+                    "output_1": { "dtype": "float64", "shape": [0], "order": "row_major", "data": [] }
+                },
+                "vjp": {}
+            },
+            "fd_ref": {
+                "method": "central_difference",
+                "stencil_order": 2,
+                "step": 1e-4,
+                "jvp": {
+                    "output_0": { "dtype": "float64", "shape": [3, 2], "order": "row_major", "data": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
+                    "output_1": { "dtype": "float64", "shape": [0], "order": "row_major", "data": [] }
+                }
+            }
+        }]
+    }))
+    .expect("supported lstsq record should parse");
+    assert!(matches!(
+        support::classify_record(&supported),
+        support::RecordSupport::Supported(support::ReplayKind::LstsqIdentity)
+    ));
+
+    let overdetermined = db::parse_case_record_value(json!({
+        "case_id": "lstsq_grad_oriented_f64_identity_overdetermined",
+        "op": "lstsq_grad_oriented",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [4, 3],
+                "order": "row_major",
+                "data": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+            },
+            "b": {
+                "dtype": "float64",
+                "shape": [4, 2],
+                "order": "row_major",
+                "data": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+            }
+        },
+        "op_kwargs": { "driver": "gels" },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": [{
+            "probe_id": "p0",
+            "direction": {},
+            "cotangent": {},
+            "pytorch_ref": {
+                "jvp": {
+                    "output_0": { "dtype": "float64", "shape": [3, 2], "order": "row_major", "data": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
+                    "output_1": { "dtype": "float64", "shape": [2], "order": "row_major", "data": [1.0, 1.0] }
+                },
+                "vjp": {}
+            },
+            "fd_ref": {
+                "method": "central_difference",
+                "stencil_order": 2,
+                "step": 1e-4,
+                "jvp": {
+                    "output_0": { "dtype": "float64", "shape": [3, 2], "order": "row_major", "data": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] },
+                    "output_1": { "dtype": "float64", "shape": [2], "order": "row_major", "data": [1.0, 1.0] }
+                }
+            }
+        }]
+    }))
+    .expect("overdetermined lstsq record should parse");
+    assert!(matches!(
+        support::classify_record(&overdetermined),
+        support::RecordSupport::Supported(support::ReplayKind::LstsqIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_marks_supported_vector_norm_subset_for_replay() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "vector_norm_f64_identity_001",
+        "op": "vector_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [2],
+                "order": "row_major",
+                "data": [1.0, 2.0]
+            }
+        },
+        "op_kwargs": { "ord": 2, "dim": [0], "keepdim": true },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("supported vector norm record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::NormIdentity)
+    ));
+}
+
+#[test]
+fn oracle_db_leaves_unsupported_vector_norm_subset_rejected() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "vector_norm_f64_identity_scalar",
+        "op": "vector_norm",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [],
+                "order": "row_major",
+                "data": [1.0]
+            }
+        },
+        "op_kwargs": { "ord": 2 },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("unsupported scalar vector norm record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Unsupported { .. }
+    ));
+}
+
+#[test]
+fn oracle_db_marks_supported_eig_subset_for_replay() {
+    let record = oracle_support_record(
+        "eig_f64_values_vectors_abs_001",
+        "eig",
+        "values_vectors_abs",
+        "eig_values_vectors_abs",
+    );
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Supported(support::ReplayKind::EigValuesVectorsAbs)
+    ));
+}
+
+#[test]
+fn oracle_db_leaves_complex_eig_subset_rejected_for_now() {
+    let record = db::parse_case_record_value(json!({
+        "case_id": "eig_c64_values_vectors_abs_001",
+        "op": "eig",
+        "dtype": "complex64",
+        "family": "values_vectors_abs",
+        "expected_behavior": "success",
+        "inputs": {},
+        "observable": { "kind": "eig_values_vectors_abs" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("complex eig support record should parse");
+    assert!(matches!(
+        support::classify_record(&record),
+        support::RecordSupport::Unsupported { .. }
+    ));
 }
 
 #[test]

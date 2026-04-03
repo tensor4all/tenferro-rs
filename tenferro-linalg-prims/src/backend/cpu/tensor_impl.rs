@@ -184,6 +184,7 @@ pub(crate) fn solve_ex<T>(
 ) -> Result<SolveTensorExResult<T>>
 where
     T: KernelLinalgScalar,
+    T::Real: num_traits::Float,
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
@@ -857,6 +858,25 @@ where
             &mut all_values[i * n..(i + 1) * n],
             &mut all_vectors[i * mat_size..(i + 1) * mat_size],
         );
+
+        for col in 0..n {
+            let mut norm_sq = <T::Real as num_traits::Zero>::zero();
+            for row in 0..n {
+                let value = all_vectors[i * mat_size + row + col * n];
+                let mag = <T::Complex as crate::LinalgScalar>::abs_real(&value);
+                norm_sq = norm_sq + mag * mag;
+            }
+            let norm = <T::Real as num_traits::Float>::sqrt(norm_sq);
+            if norm > <T::Real as num_traits::Zero>::zero() {
+                let scale = <T::Complex as crate::LinalgScalar>::from_real(
+                    <T::Real as num_traits::One>::one() / norm,
+                );
+                for row in 0..n {
+                    let index = i * mat_size + row + col * n;
+                    all_vectors[index] = all_vectors[index] * scale;
+                }
+            }
+        }
     }
 
     let mut val_shape = vec![n];

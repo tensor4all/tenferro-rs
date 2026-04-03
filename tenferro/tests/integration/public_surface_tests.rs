@@ -1,111 +1,21 @@
-use num_complex::{Complex32, Complex64};
-use tenferro::{
-    backward, forward_ad, set_default_runtime, BackwardOptions, MemoryOrder, RuntimeContext,
-    ScalarType, Tensor,
-};
-use tenferro_prims::CpuContext;
-use tenferro_tensor::Tensor as DenseTensor;
+use tenferro::{ScalarType, Tensor};
 
-fn scalar_f64(value: f64) -> DenseTensor<f64> {
-    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
-}
+#[test]
+fn tensor_from_slice_reports_dtype_shape_and_layout_flags() {
+    let value = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
 
-fn vector_f64(values: &[f64]) -> DenseTensor<f64> {
-    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
-}
-
-fn vector_f32(values: &[f32]) -> DenseTensor<f32> {
-    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
-}
-
-fn vector_c32(values: &[Complex32]) -> DenseTensor<Complex32> {
-    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
-}
-
-fn vector_c64(values: &[Complex64]) -> DenseTensor<Complex64> {
-    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
-}
-
-fn diag_f32(values: &[f32]) -> Tensor {
-    Tensor::diag(&Tensor::from_tensor(vector_f32(values))).unwrap()
-}
-
-fn diag_c64(values: &[Complex64]) -> Tensor {
-    Tensor::diag(&Tensor::from_tensor(vector_c64(values))).unwrap()
-}
-
-fn assert_cast_values(tensor: &Tensor, expected: &[f64]) {
-    assert_eq!(
-        tensor
-            .as_f64()
-            .unwrap()
-            .primal()
-            .buffer()
-            .as_slice()
-            .unwrap(),
-        expected
-    );
-}
-
-fn assert_cast_values_f32(tensor: &Tensor, expected: &[f32]) {
-    assert_eq!(
-        tensor
-            .as_f32()
-            .unwrap()
-            .primal()
-            .buffer()
-            .as_slice()
-            .unwrap(),
-        expected
-    );
-}
-
-fn assert_cast_values_c32(tensor: &Tensor, expected: &[Complex32]) {
-    assert_eq!(
-        tensor
-            .as_c32()
-            .unwrap()
-            .primal()
-            .buffer()
-            .as_slice()
-            .unwrap(),
-        expected
-    );
-}
-
-fn assert_cast_values_c64(tensor: &Tensor, expected: &[Complex64]) {
-    assert_eq!(
-        tensor
-            .as_c64()
-            .unwrap()
-            .primal()
-            .buffer()
-            .as_slice()
-            .unwrap(),
-        expected
-    );
-}
-
-fn assert_cast_preserves_layout(
-    source: &Tensor,
-    target: ScalarType,
-    expected_type: ScalarType,
-    assert_values: impl Fn(&Tensor),
-) {
-    let cast = source.to_scalar_type(target).unwrap();
-    assert_eq!(cast.scalar_type(), expected_type);
-    assert_eq!(cast.dims(), source.dims());
-    assert_eq!(cast.axis_classes(), source.axis_classes());
-    assert_eq!(cast.is_dense(), source.is_dense());
-    assert_eq!(cast.is_diag(), source.is_diag());
-    assert_values(&cast);
+    assert_eq!(value.scalar_type(), ScalarType::F64);
+    assert_eq!(value.dims(), &[2, 2]);
+    assert!(value.is_dense());
+    assert!(!value.is_diag());
+    assert_eq!(value.try_to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
 }
 
 #[test]
-fn tensor_public_primal_constructor_handles_dense_and_diag() {
-    let dense = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
-    assert!(dense.is_dense());
-    assert_eq!(dense.dims(), &[2]);
+fn tensor_detach_drops_reverse_tracking() {
+    let value = Tensor::from_slice(&[1.0_f64, 2.0], &[2])
+        .unwrap()
+        .with_requires_grad(true);
 
     let diag = Tensor::diag(&Tensor::from_tensor(vector_f64(&[3.0, 4.0]))).unwrap();
     assert!(diag.is_diag());

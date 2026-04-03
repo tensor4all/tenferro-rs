@@ -9,22 +9,19 @@
 //!
 //! - [`tropical_einsum_rrule`]: standalone reverse-mode rule
 //! - [`tropical_einsum_frule`]: standalone forward-mode rule
-//! - [`tracked_tropical_einsum`]: tape-aware tropical einsum
 //! - [`promote_to_tropical`] / [`extract_inner`]: conversions between standard
 //!   and tropical scalar tensors
 
 mod backward;
 mod common;
+mod convert;
 mod forward;
 mod rules;
 mod scalar;
-mod tracked;
 
+pub use convert::{extract_inner, promote_to_tropical};
 pub use rules::{tropical_einsum_frule, tropical_einsum_rrule};
 pub use scalar::TropicalScalar;
-pub use tracked::{
-    extract_inner, promote_to_tropical, tracked_tropical_einsum, TropicalEinsumReverseRule,
-};
 
 #[cfg(test)]
 mod tests;

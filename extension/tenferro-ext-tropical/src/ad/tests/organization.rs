@@ -15,10 +15,10 @@ fn tropical_ad_is_split_into_focused_modules() {
     for needle in [
         "mod backward;",
         "mod common;",
+        "mod convert;",
         "mod forward;",
         "mod rules;",
         "mod scalar;",
-        "mod tracked;",
     ] {
         assert!(
             root.contains(needle),
@@ -34,10 +34,10 @@ fn split_tropical_ad_modules_stay_under_size_guideline() {
         format!("{ROOT}/mod.rs"),
         format!("{ROOT}/scalar.rs"),
         format!("{ROOT}/common.rs"),
+        format!("{ROOT}/convert.rs"),
         format!("{ROOT}/forward.rs"),
         format!("{ROOT}/backward.rs"),
         format!("{ROOT}/rules.rs"),
-        format!("{ROOT}/tracked.rs"),
     ];
     for path in files {
         assert!(
