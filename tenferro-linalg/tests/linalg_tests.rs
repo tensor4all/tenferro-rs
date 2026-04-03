@@ -6207,6 +6207,62 @@ fn slogdet_rrule_none_cotangent() {
 }
 
 #[test]
+fn slogdet_rrule_cotangent_struct_requires_sign_field() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let cotangent = SlogdetCotangent {
+        sign: None,
+        logabsdet: Some(make_tensor(vec![1.0], &[])),
+    };
+    let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "slogdet_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn slogdet_rrule_sign_only_cotangent() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let result = slogdet(&mut ctx, &a).unwrap();
+    assert_eq!(tensor_data(&result.sign)[0], 1.0);
+    let cotangent = SlogdetCotangent {
+        sign: Some(make_tensor(vec![1.0], &[])),
+        logabsdet: None,
+    };
+    let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.is_finite(),
+            "slogdet_rrule sign-only grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn slogdet_rrule_both_cotangents() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let cotangent = SlogdetCotangent {
+        sign: Some(make_tensor(vec![1.0], &[])),
+        logabsdet: Some(make_tensor(vec![1.0], &[])),
+    };
+    let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.is_finite(),
+            "slogdet_rrule both-cotangent grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
 fn qr_rrule_q_only_cotangent() {
     // Line 2878: qr_rrule with r=None -> zero dR branch.
     let mut ctx = CpuContext::new(1);
