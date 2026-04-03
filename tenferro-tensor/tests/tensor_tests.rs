@@ -1112,6 +1112,46 @@ fn huge_strides_rejected_by_layout_validation() {
     );
 }
 
+#[test]
+fn narrow_start_plus_length_overflow_returns_error() {
+    let t = Tensor::<f64>::zeros(&[4, 4], MEM, COL).unwrap();
+    let result = t.narrow(1, usize::MAX, 1);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument for start + length overflow"
+    );
+}
+
+#[test]
+fn narrow_dim_out_of_range_returns_error() {
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
+    let result = t.narrow(5, 0, 1);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument for dim out of range"
+    );
+}
+
+#[test]
+fn tril_triu_return_result_no_panic() {
+    let t = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let lower = t.tril(0);
+    assert!(lower.is_ok());
+    let upper = t.triu(0);
+    assert!(upper.is_ok());
+}
+
+#[test]
+fn tril_triu_rank1_return_result() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let lower = t.tril(0);
+    assert!(lower.is_ok());
+    assert_eq!(lower.unwrap().dims(), &[3]);
+    let upper = t.triu(0);
+    assert!(upper.is_ok());
+    assert_eq!(upper.unwrap().dims(), &[3]);
+}
+
 // ============================================================================
 // Strided copy bounds checking tests (issue #461)
 // ============================================================================
