@@ -6,12 +6,9 @@
 
 #[doc(hidden)]
 pub(crate) use tenferro_linalg_prims::backend::{
-    validate_solve_rhs_shape, zero_trailing_by_counts,
-};
-
-#[cfg(test)]
-pub(crate) use tenferro_linalg_prims::backend::{
-    batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape, validate_square,
+    batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
+    materialize_broadcasted_pivot_batches, validate_lu_pivot_shape, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square, zero_trailing_by_counts, BroadcastBatchIndexer,
 };
 
 use tenferro_device::{LogicalMemorySpace, Result};
