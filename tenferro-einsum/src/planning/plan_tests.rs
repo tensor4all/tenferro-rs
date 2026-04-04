@@ -72,7 +72,7 @@ fn strict_binary_lowering_plan_tracks_non_identity_output_permutation() {
 fn pairwise_step_plan_embeds_strict_binary_lowering_when_available() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[2, 0]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
-    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None).unwrap();
+    let size_dict = crate::util::build_size_dict(&subs, &shapes, None).unwrap();
 
     let step_plan =
         compile_pairwise_step_plan(&subs.inputs[0], &subs.inputs[1], &subs.output, &size_dict)

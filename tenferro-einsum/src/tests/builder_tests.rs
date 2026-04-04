@@ -4,9 +4,9 @@ use computegraph::types::ValRef;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
+use crate::builder::build_einsum_fragment;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
-use crate::v2::builder::build_einsum_fragment;
 
 fn input_key(id: u64) -> TensorInputKey {
     TensorInputKey { id }
