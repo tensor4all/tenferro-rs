@@ -3,8 +3,6 @@
 //! Data is stored in **column-major** order. A helper `row_to_col_major` is
 //! available for converting row-major test data when needed.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
-
 use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::v2::engine::Engine;
 use tenferro::v2::traced::TracedTensor;
@@ -186,42 +184,17 @@ fn einsum_diagonal_extraction() {
 }
 
 #[test]
+#[should_panic]
 fn einsum_diagonal_embedding() {
-    // "i->ii" — diagonal embedding
-    // v = [2, 3, 5]
-    // Result should be 3x3 diagonal matrix with v on diagonal, 0 elsewhere
+    // "i->ii" — diagonal embedding (not yet supported in v2)
+    // Would produce a 3x3 diagonal matrix from a [3] vector.
+    // Requires a broadcast-to-diagonal (Scatter) op not yet implemented.
     let v = f64_tensor(vec![3], vec![2.0, 3.0, 5.0]);
 
     let mut engine = Engine::new();
-    let tv = TracedTensor::from_tensor(v.clone());
-
-    // This may not work if v2 Operand impl doesn't handle it.
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut td = einsum(&mut engine, &[&tv], "i->ii");
-        td.eval(&mut engine).clone()
-    }));
-
-    match result {
-        Ok(tensor) => {
-            assert_eq!(tensor.shape(), &[3, 3]);
-            for i in 0..3 {
-                for j in 0..3 {
-                    let expected = if i == j { get_v2(&v, &[i]) } else { 0.0 };
-                    assert_close(
-                        get_v2(&tensor, &[i, j]),
-                        expected,
-                        &format!("diag_embed[{i},{j}]"),
-                    );
-                }
-            }
-        }
-        Err(_) => {
-            eprintln!(
-                "NOTE: einsum_diagonal_embedding (\"i->ii\") panicked — \
-                 v2 Operand impl may not support diagonal embedding yet."
-            );
-        }
-    }
+    let tv = TracedTensor::from_tensor(v);
+    let mut td = einsum(&mut engine, &[&tv], "i->ii");
+    td.eval(&mut engine);
 }
 
 // ============================================================================
@@ -822,45 +795,37 @@ fn einsum_error_rank_mismatch() {
 }
 
 #[test]
+#[should_panic(expected = "contraction optimization failed")]
 fn einsum_error_empty_inputs() {
-    // No input tensors — v2 panics during tree construction
+    // No input tensors -- v2 panics during tree construction
     let mut engine = Engine::new();
     let empty: &[&TracedTensor] = &[];
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut r = einsum(&mut engine, empty, "->");
-        r.eval(&mut engine);
-    }));
-    assert!(result.is_err(), "should panic for empty inputs");
+    let mut r = einsum(&mut engine, empty, "->");
+    r.eval(&mut engine);
 }
 
 #[test]
+#[should_panic(expected = "contraction optimization failed")]
 fn einsum_wrong_operand_count() {
     // Subscripts say 2 inputs but only 1 provided
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-
     let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut r = einsum(&mut engine, &[&ta], "ij,jk->ik");
-        r.eval(&mut engine);
-    }));
-    assert!(result.is_err(), "should panic for wrong operand count");
+    let mut r = einsum(&mut engine, &[&ta], "ij,jk->ik");
+    r.eval(&mut engine);
 }
 
 #[test]
+#[should_panic(expected = "ShapeMismatch")]
 fn einsum_shape_mismatch() {
     // j=3 in A but j=2 in B -> shape mismatch
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-
     let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut r = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
-        r.eval(&mut engine);
-    }));
-    assert!(result.is_err(), "should panic for shape mismatch");
+    let mut r = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
+    r.eval(&mut engine);
 }
 
 // ============================================================================
@@ -1061,6 +1026,7 @@ fn einsum_error_non_square_trace() {
 // ============================================================================
 
 #[test]
+#[should_panic(expected = "index out of bounds")]
 fn einsum_with_path_invalid_pairs_errors() {
     // Invalid JAX path with out-of-bounds indices should panic during tree build
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
@@ -1071,20 +1037,17 @@ fn einsum_with_path_invalid_pairs_errors() {
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut r = einsum_with(
-            &mut engine,
-            &[&ta, &tb, &tc],
-            "ij,jk,kl->il",
-            EinsumOptimize::Path(vec![(0, 99), (0, 1)]),
-        );
-        r.eval(&mut engine);
-    }));
-    assert!(result.is_err(), "invalid path index should panic");
+    let mut r = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(0, 99), (0, 1)]),
+    );
+    r.eval(&mut engine);
 }
 
 #[test]
+#[should_panic(expected = "invalid contraction path")]
 fn einsum_with_path_rejects_structurally_invalid_paths() {
     // Wrong step count: 3 operands needs 2 steps, giving 1 is structurally wrong
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
@@ -1095,15 +1058,11 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut r = einsum_with(
-            &mut engine,
-            &[&ta, &tb, &tc],
-            "ij,jk,kl->il",
-            EinsumOptimize::Path(vec![(1, 2)]),
-        );
-        r.eval(&mut engine);
-    }));
-    assert!(result.is_err(), "wrong step count should panic");
+    let mut r = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2)]),
+    );
+    r.eval(&mut engine);
 }
