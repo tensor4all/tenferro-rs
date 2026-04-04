@@ -7,7 +7,7 @@ use computegraph::GraphOp;
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::semiring_ops::SemiringOps;
 
-use super::types::Subscripts;
+use crate::planning::tree::ContractionTree;
 
 #[derive(Clone, Debug)]
 struct LabeledVal<Op: GraphOp> {
@@ -309,12 +309,14 @@ fn outer_product<Op: GraphOp + SemiringOps>(
 
 pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
     builder: &mut FragmentBuilder<Op>,
-    subscripts: &Subscripts,
+    tree: &ContractionTree,
     input_vals: &[ValRef<Op>],
     input_shapes: &[Vec<usize>],
 ) -> ValRef<Op> {
+    let subscripts = &tree.subscripts;
+    let n_inputs = subscripts.inputs.len();
     assert_eq!(
-        subscripts.n_inputs(),
+        n_inputs,
         input_vals.len(),
         "number of subscripts inputs must match number of input values"
     );
@@ -324,9 +326,11 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         "number of input values must match number of input shapes"
     );
 
+    let output_labels = &subscripts.output;
+
     let mut labeled: Vec<LabeledVal<Op>> = input_vals
         .iter()
-        .zip(subscripts.input_labels.iter())
+        .zip(subscripts.inputs.iter())
         .zip(input_shapes.iter())
         .map(|((val, labels), shape)| {
             assert_eq!(
@@ -342,18 +346,17 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         })
         .collect();
 
-    let output_labels = &subscripts.output_labels;
-
-    if labeled.len() == 1 {
+    if n_inputs == 1 || tree.step_count() == 0 {
         // Unary: just reduce and reorder
+        let lv = &labeled[0];
         let output_set: HashSet<u32> = output_labels.iter().copied().collect();
-        let reduce_labels: HashSet<u32> = labeled[0]
+        let reduce_labels: HashSet<u32> = lv
             .labels
             .iter()
             .filter(|l| !output_set.contains(l))
             .copied()
             .collect();
-        let result = reduce_val(builder, &labeled[0], &reduce_labels);
+        let result = reduce_val(builder, lv, &reduce_labels);
 
         // Reorder if needed
         if result.labels == *output_labels {
@@ -370,28 +373,21 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         return ValRef::Local(outputs[0]);
     }
 
-    // N >= 2: use greedy contraction path
-    let path = optimize_contraction_path(subscripts, input_shapes);
-
-    for (left, right) in &path {
-        let l = *left;
-        let r = *right;
-        // Contract l and r
-        let result = binary_contract(builder, &labeled[l], &labeled[r], output_labels);
-        // Replace left with result, mark right as consumed (set to empty dummy)
-        labeled[l] = result;
-        labeled[r] = LabeledVal {
-            val: ValRef::Local(usize::MAX),
-            labels: vec![],
-            shape: vec![],
-        };
+    // N >= 2: use contraction tree from v1
+    // Operand indices: 0..n_inputs are originals, n_inputs+step_idx are intermediates
+    for step_idx in 0..tree.step_count() {
+        let (left, right) = tree.step_pair(step_idx).unwrap();
+        // Use the step's intermediate output subscripts so that labels needed
+        // by later contractions are preserved (not pre-reduced away).
+        let (_, _, step_out_labels) = tree.step_subscripts(step_idx).unwrap();
+        let result = binary_contract(builder, &labeled[left], &labeled[right], step_out_labels);
+        // Push intermediate as new entry in labeled
+        labeled.push(result);
     }
 
-    // Find the surviving labeled val (the one that's not consumed)
-    let result = labeled
-        .iter()
-        .find(|lv| !lv.labels.is_empty() || output_labels.is_empty())
-        .unwrap();
+    // The final result is the last intermediate: labeled[n_inputs + step_count - 1]
+    let final_idx = n_inputs + tree.step_count() - 1;
+    let result = &labeled[final_idx];
 
     // Final reduction if result has labels not in output
     let output_set: HashSet<u32> = output_labels.iter().copied().collect();
@@ -425,140 +421,4 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         OpMode::Primal,
     );
     ValRef::Local(outputs[0])
-}
-
-pub fn optimize_contraction_path(
-    subscripts: &Subscripts,
-    input_shapes: &[Vec<usize>],
-) -> Vec<(usize, usize)> {
-    let n = subscripts.n_inputs();
-    if n <= 1 {
-        return vec![];
-    }
-    if n == 2 {
-        return vec![(0, 1)];
-    }
-
-    // Greedy: pick the pair with smallest intermediate tensor size
-    let mut alive: Vec<bool> = vec![true; n];
-    let mut labels: Vec<Vec<u32>> = subscripts.input_labels.clone();
-    let mut shapes: Vec<Vec<usize>> = input_shapes.to_vec();
-    let mut path = Vec::new();
-    let output_set: HashSet<u32> = subscripts.output_labels.iter().copied().collect();
-
-    for _ in 0..(n - 1) {
-        let mut best_pair = (0, 0);
-        let mut best_cost = usize::MAX;
-        let alive_indices: Vec<usize> = (0..n).filter(|&i| alive[i]).collect();
-
-        for i in 0..alive_indices.len() {
-            for j in (i + 1)..alive_indices.len() {
-                let li = alive_indices[i];
-                let lj = alive_indices[j];
-                let cost = intermediate_size(
-                    &labels[li],
-                    &shapes[li],
-                    &labels[lj],
-                    &shapes[lj],
-                    &output_set,
-                );
-                if cost < best_cost {
-                    best_cost = cost;
-                    best_pair = (li, lj);
-                }
-            }
-        }
-
-        let (l, r) = best_pair;
-        path.push((l, r));
-
-        // Update labels/shapes for l, mark r as consumed
-        let mut new_labels = Vec::new();
-        let combined: HashSet<u32> = labels[l].iter().chain(labels[r].iter()).copied().collect();
-        // Result labels: labels that appear in output or in other alive operands
-        let other_labels: HashSet<u32> = alive_indices
-            .iter()
-            .filter(|&&i| i != l && i != r)
-            .flat_map(|&i| labels[i].iter().copied())
-            .collect();
-
-        for &label in &labels[l] {
-            if output_set.contains(&label) || other_labels.contains(&label) {
-                if !new_labels.contains(&label) {
-                    new_labels.push(label);
-                }
-            }
-        }
-        for &label in &labels[r] {
-            if output_set.contains(&label) || other_labels.contains(&label) {
-                if !new_labels.contains(&label) {
-                    new_labels.push(label);
-                }
-            }
-        }
-
-        let label_to_size = |l: u32| -> usize {
-            for (&lab, &sz) in labels[best_pair.0].iter().zip(shapes[best_pair.0].iter()) {
-                if lab == l {
-                    return sz;
-                }
-            }
-            for (&lab, &sz) in labels[best_pair.1].iter().zip(shapes[best_pair.1].iter()) {
-                if lab == l {
-                    return sz;
-                }
-            }
-            // Check all alive
-            for &i in &alive_indices {
-                for (&lab, &sz) in labels[i].iter().zip(shapes[i].iter()) {
-                    if lab == l {
-                        return sz;
-                    }
-                }
-            }
-            panic!("label {} not found", l);
-        };
-
-        let new_shape: Vec<usize> = new_labels.iter().map(|&l| label_to_size(l)).collect();
-
-        let _ = combined;
-        labels[l] = new_labels;
-        shapes[l] = new_shape;
-        alive[r] = false;
-    }
-
-    path
-}
-
-fn intermediate_size(
-    lhs_labels: &[u32],
-    lhs_shape: &[usize],
-    rhs_labels: &[u32],
-    rhs_shape: &[usize],
-    output_set: &HashSet<u32>,
-) -> usize {
-    // The intermediate result has all labels that are in output or in either operand
-    // minus the contracting dims (in both but not output).
-    let mut result_labels = Vec::new();
-    for (i, &l) in lhs_labels.iter().enumerate() {
-        if output_set.contains(&l) || !rhs_labels.contains(&l) {
-            // Free or batch or output-only
-            if !result_labels.contains(&(l, lhs_shape[i])) {
-                result_labels.push((l, lhs_shape[i]));
-            }
-        }
-        // contracting: in both, not in output -> excluded
-    }
-    for (i, &l) in rhs_labels.iter().enumerate() {
-        if !lhs_labels.contains(&l) {
-            if !result_labels.contains(&(l, rhs_shape[i])) {
-                result_labels.push((l, rhs_shape[i]));
-            }
-        }
-    }
-    result_labels
-        .iter()
-        .map(|(_, s)| s)
-        .product::<usize>()
-        .max(1)
 }

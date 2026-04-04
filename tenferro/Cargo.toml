@@ -19,6 +19,7 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 tenferro-ops = { path = "../tenferro-ops" }
 tenferro-einsum = { path = "../tenferro-einsum" }
+omeco.workspace = true
 computegraph.workspace = true
 chainrules-core.workspace = true
 tidu.workspace = true

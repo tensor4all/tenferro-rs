@@ -8,8 +8,9 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
+use omeco::ScoreFunction;
 use tenferro_einsum::v2::builder::build_einsum_fragment;
-use tenferro_einsum::v2::types::Subscripts;
+use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, Subscripts};
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -204,12 +205,21 @@ impl TracedTensor {
     }
 
     pub fn traced_einsum(subscript_str: &str, inputs: &[&TracedTensor]) -> TracedTensor {
-        let subscripts = Subscripts::parse(subscript_str);
+        let subscripts = Subscripts::parse(subscript_str).expect("invalid einsum subscripts");
 
         let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| t.shape.clone()).collect();
+        let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
 
         // Compute output shape from subscripts and input shapes
         let out_shape = compute_einsum_output_shape(&subscripts, &shapes);
+
+        // Build contraction tree with FLOPS-first scoring
+        let options = ContractionOptimizerOptions {
+            score: ScoreFunction::time_optimized(),
+            ..Default::default()
+        };
+        let tree = ContractionTree::optimize_with_options(&subscripts, &shape_refs, &options)
+            .expect("contraction optimization failed");
 
         let mut builder = FragmentBuilder::new();
 
@@ -221,7 +231,7 @@ impl TracedTensor {
             input_vals.push(val_ref);
         }
 
-        let result_ref = build_einsum_fragment(&mut builder, &subscripts, &input_vals, &shapes);
+        let result_ref = build_einsum_fragment(&mut builder, &tree, &input_vals, &shapes);
 
         match result_ref {
             ValRef::Local(result_local) => {
@@ -312,14 +322,14 @@ fn apply_binary(
 fn compute_einsum_output_shape(subscripts: &Subscripts, shapes: &[Vec<usize>]) -> Vec<usize> {
     // Build label -> size mapping from inputs
     let mut label_to_size = std::collections::HashMap::new();
-    for (labels, shape) in subscripts.input_labels.iter().zip(shapes.iter()) {
+    for (labels, shape) in subscripts.inputs.iter().zip(shapes.iter()) {
         for (&label, &size) in labels.iter().zip(shape.iter()) {
             label_to_size.insert(label, size);
         }
     }
-    // Output shape is determined by output_labels
+    // Output shape is determined by output labels
     let out_shape: Vec<usize> = subscripts
-        .output_labels
+        .output
         .iter()
         .map(|l| {
             *label_to_size
