@@ -1,3 +1,37 @@
+// TODO: Unimplemented einsum optimizations
+//
+// The current v2 einsum builder produces correct but unoptimized IR.
+// The following optimizations from v1 / the spec are not yet implemented:
+//
+// Compiler passes (spec: optimizer-passes.md):
+//   - TransposeFolding: absorb Transpose into DotGeneral dimension_numbers.
+//     v1 equivalent: lazy permutation (dispatch.rs:446-454).
+//     Impact: eliminates physical copies for permuted GEMM inputs.
+//   - DotDimensionSorter: sort contracting dims to avoid transposes.
+//     v1 equivalent: implicit (modes already ordered).
+//   - DotDecomposer: canonicalize DotGeneral to [batch, M, K] × [batch, K, N].
+//     v1 equivalent: fusability check + partial materialization.
+//     Impact: maps arbitrary DotGeneral to BatchedGemm without extra copies.
+//   - ReductionSimplification: hoist independent ReduceSum before DotGeneral.
+//     v1 equivalent: pre-reduction (dispatch.rs:121-139).
+//
+// Einsum-level optimizations:
+//   - Diagonal embedding ("i->ii"): requires Scatter op (not yet implemented).
+//   - Hyper-edge einsum ("ik,k,kj->ij"): 3+ tensors sharing an index.
+//     Currently decomposed into binary steps; v1 handled this with a
+//     specialized dispatch path.
+//   - Binary diagonal ("ii,jk->ijk"): v1 diagonal plan in dispatch.rs.
+//     Currently works via ExtractDiag + standard contraction, but v1 had
+//     fused paths for better performance.
+//
+// Execution-level optimizations:
+//   - Stride-aware engine: v1 inspects strides at dispatch time and uses
+//     BLAS trans flags for transposed inputs. v2 engine does physical copies.
+//   - Buffer pooling: v1 reuses buffers via Arc refcount + pool.
+//     v2 has last_use liveness analysis but no pool.
+//   - SemiringFastPath: optional fused patterns (contract, elementwise_mul/add).
+//     Trait exists but no implementation.
+
 use std::collections::{HashMap, HashSet};
 
 use computegraph::fragment::FragmentBuilder;
