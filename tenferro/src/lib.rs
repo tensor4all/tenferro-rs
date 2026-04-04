@@ -28,6 +28,8 @@
 //!   [`Tensor::diag`], [`Tensor::diag_embed`], and
 //!   [`Tensor::with_axis_classes`].
 
+pub mod v2;
+
 mod core;
 pub mod error;
 #[cfg(test)]
