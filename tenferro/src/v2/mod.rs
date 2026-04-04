@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod buffer_pool;
 pub mod compiler;
 pub mod cpu_backend;
 pub mod einsum;
