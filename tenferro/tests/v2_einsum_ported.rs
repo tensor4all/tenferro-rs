@@ -149,7 +149,6 @@ fn einsum_full_contraction() {
 }
 
 #[test]
-#[ignore = "v2 einsum does not yet support repeated-index trace (\"ii->\")"]
 fn einsum_trace() {
     // "ii->" — trace of 2x2 matrix
     // col-major [1,2,3,4]: a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4
@@ -166,7 +165,6 @@ fn einsum_trace() {
 }
 
 #[test]
-#[ignore = "v2 einsum does not yet support repeated-index diagonal extraction (\"ii->i\")"]
 fn einsum_diagonal_extraction() {
     // "ii->i" — extract diagonal of 3x3 matrix
     // col-major [1..9]: a[0,0]=1, a[1,0]=2, ..., a[1,1]=5, ..., a[2,2]=9
@@ -494,7 +492,6 @@ fn contraction_tree_from_pairs_rejects_wrong_step_count() {
 // ============================================================================
 
 #[test]
-#[ignore = "v2 einsum does not yet support repeated-index partial trace (\"iij->j\")"]
 fn einsum_partial_trace_with_free_index() {
     // "iij->j" — partial trace: v[j] = sum_i T[i,i,j]
     // T[2,2,3] col-major: data 1..12
