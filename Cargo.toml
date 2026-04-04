@@ -69,3 +69,6 @@ ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { path = "../computegraph-rs" }
+
+[patch."https://github.com/tensor4all/computegraph-rs.git"]
+computegraph = { path = "../computegraph-rs" }
