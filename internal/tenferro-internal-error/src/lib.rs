@@ -77,6 +77,16 @@ pub enum Error {
     /// Linalg operation is available only for dense tensor inputs.
     #[error("linalg operation `{op}` requires dense tensor inputs")]
     UnsupportedStructuredLinalg { op: &'static str },
+
+    /// AD tensor state is invalid for the requested operation.
+    #[error("invalid AD tensor: {message}")]
+    InvalidAdTensor { message: String },
+
+    /// Reverse-mode operands belong to different tapes.
+    #[error(
+        "reverse-mode operands must share one tape: expected tape {expected}, found tape {found}"
+    )]
+    MixedReverseTape { expected: u64, found: u64 },
 }
 
 /// Convenience result alias for `tenferro` surface errors.

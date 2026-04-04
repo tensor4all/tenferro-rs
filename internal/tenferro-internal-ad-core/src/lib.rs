@@ -13,6 +13,7 @@ pub mod ops;
 mod registry;
 mod tape;
 mod tensor;
+mod value;
 
 #[doc(hidden)]
 pub use core::AdValue;
@@ -28,6 +29,11 @@ pub use tape::pullback;
 pub use tensor::AdTensor;
 #[doc(hidden)]
 pub use tensor::AdTensorSnapshot;
+pub use tidu::{
+    AdResult, AutodiffError, CheckpointHint, LinearizableOp, LinearizedOp, Schema, SlotSchema,
+    Value,
+};
+pub use value::{new_dyn_value, new_reverse_leaf, DynValue};
 
 #[cfg(test)]
 mod tests;

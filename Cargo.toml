@@ -49,7 +49,7 @@ serde = "1"
 serde_json = "1"
 chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", rev = "6cc46775b33653f91df96ca1571ce9905a6224f8" }
 chainrules = { git = "https://github.com/tensor4all/chainrules-rs", rev = "6cc46775b33653f91df96ca1571ce9905a6224f8" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "9e4739167ba46a8eb619604dab82d002c4b6cf90" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "f2f57f75d228fdfa2494fb7d9a6a2e3efa019a0d" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }
