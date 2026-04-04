@@ -36,24 +36,3 @@ macro_rules! dispatch_einsum_runtime {
 }
 
 pub(crate) use dispatch_einsum_runtime;
-
-macro_rules! dispatch_standard_runtime {
-    ($op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
-        crate::runtime::dispatch::with_runtime(
-            crate::runtime::dispatch::runtime_slot_closure!(
-                crate::runtime::dispatch::CpuRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-            crate::runtime::dispatch::runtime_slot_closure!(
-                crate::runtime::dispatch::CudaRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-            crate::runtime::dispatch::runtime_slot_closure!(
-                crate::runtime::dispatch::RocmRuntimeSlot,
-                |$ctx, $backend, $runtime| $body
-            ),
-        )
-    }};
-}
-
-pub(crate) use dispatch_standard_runtime;

@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::ComplexFloat;
 
 /// Forward-mode AD rule for norm (JVP / pushforward).
 ///
@@ -297,4 +298,91 @@ where
     let dnrm = tensor_from_data(dnrm_data, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((nrm, dnrm))
+}
+
+#[doc(hidden)]
+pub fn norm_frule_complex<T, R, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+    tangent: &Tensor<T>,
+    kind: NormKind,
+) -> AdResult<(Tensor<R>, Tensor<R>)>
+where
+    T: KernelLinalgScalar<Real = R> + ComplexFloat<Real = R> + crate::NormPrimal<C>,
+    R: LinalgScalar<Real = R> + num_traits::Float,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>
+        + tenferro_prims::TensorComplexRealContextFor<T>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<R>, Context = C>,
+    C::ComplexRealBackend: tenferro_prims::TensorComplexRealPrims<T, Context = C, Real = R>,
+    C::Backend: 'static,
+{
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_frule_complex")
+        .map_err(to_ad_err)?;
+    ensure_complex_norm_ad_supported(kind)?;
+
+    let nrm = crate::norm(ctx, tensor, kind).map_err(to_ad_err)?;
+    let conj_tensor = crate::prims_bridge::scalar_unary_same_shape(
+        ctx,
+        tensor,
+        tenferro_prims::ScalarUnaryOp::Conj,
+    )
+    .map_err(to_ad_err)?;
+    let product = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &conj_tensor,
+        tangent,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
+    .map_err(to_ad_err)?;
+    let kept_axes = norm_kept_axes(tensor.ndim());
+    let numerator = crate::prims_bridge::complex_real_reduce_keep_axes(
+        ctx,
+        &product,
+        tenferro_prims::ComplexRealUnaryOp::Real,
+        &kept_axes,
+        tenferro_prims::ScalarReductionOp::Sum,
+    )
+    .map_err(to_ad_err)?;
+    let zero =
+        crate::prims_bridge::full_like_constant(R::zero(), nrm.dims(), nrm.logical_memory_space())
+            .map_err(to_ad_err)?;
+    let nonzero = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &nrm,
+        &zero,
+        tenferro_prims::ScalarBinaryOp::Greater,
+    )
+    .map_err(to_ad_err)?;
+    let quotient = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &numerator,
+        &nrm,
+        tenferro_prims::ScalarBinaryOp::Div,
+    )
+    .map_err(to_ad_err)?;
+    let output_tangent =
+        crate::prims_bridge::scalar_where_same_shape(ctx, &nonzero, &quotient, &zero)
+            .map_err(to_ad_err)?;
+    Ok((nrm, output_tangent))
+}
+
+fn ensure_complex_norm_ad_supported(kind: NormKind) -> AdResult<()> {
+    match kind {
+        NormKind::Fro => Ok(()),
+        NormKind::Lp(p) if p == 2.0 => Ok(()),
+        _ => Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "complex norm AD currently supports Fro and vector L2 only, got {kind:?}"
+        ))),
+    }
+}
+
+fn norm_kept_axes(ndim: usize) -> Vec<usize> {
+    if ndim <= 1 {
+        Vec::new()
+    } else {
+        (2..ndim).collect()
+    }
 }

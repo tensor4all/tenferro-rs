@@ -15,7 +15,7 @@ pub fn unflatten_index_column_major(mut flat: usize, dims: &[usize], out: &mut [
 
 pub fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -> Result<T> {
     if indices.len() != tensor.dims().len() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "index rank mismatch: indices has rank {}, tensor has rank {}",
                 indices.len(),
@@ -28,7 +28,7 @@ pub fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -
     for (axis, &idx) in indices.iter().enumerate() {
         let dim = tensor.dims()[axis];
         if idx >= dim {
-            return Err(Error::InvalidAdTensor {
+            return Err(Error::InvalidTensorOperands {
                 message: format!(
                     "index out of bounds on axis {}: idx={} >= dim={}",
                     axis, idx, dim
@@ -36,17 +36,18 @@ pub fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -
             });
         }
         let stride = tensor.strides()[axis];
-        let step = (idx as isize)
-            .checked_mul(stride)
-            .ok_or_else(|| Error::InvalidAdTensor {
-                message: format!(
-                    "offset overflow on axis {}: idx={} * stride={}",
-                    axis, idx, stride
-                ),
-            })?;
+        let step =
+            (idx as isize)
+                .checked_mul(stride)
+                .ok_or_else(|| Error::InvalidTensorOperands {
+                    message: format!(
+                        "offset overflow on axis {}: idx={} * stride={}",
+                        axis, idx, stride
+                    ),
+                })?;
         offset = offset
             .checked_add(step)
-            .ok_or_else(|| Error::InvalidAdTensor {
+            .ok_or_else(|| Error::InvalidTensorOperands {
                 message: format!("offset overflow: {} + {} on axis {}", offset, step, axis),
             })?;
     }
@@ -54,16 +55,16 @@ pub fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -
     let buffer = tensor
         .buffer()
         .as_slice()
-        .ok_or_else(|| Error::InvalidAdTensor {
+        .ok_or_else(|| Error::InvalidTensorOperands {
             message: "tensor buffer is not host-accessible".to_string(),
         })?;
-    let pos = usize::try_from(offset).map_err(|_| Error::InvalidAdTensor {
+    let pos = usize::try_from(offset).map_err(|_| Error::InvalidTensorOperands {
         message: format!("negative tensor offset computed: {}", offset),
     })?;
     buffer
         .get(pos)
         .copied()
-        .ok_or_else(|| Error::InvalidAdTensor {
+        .ok_or_else(|| Error::InvalidTensorOperands {
             message: format!("computed offset {} is out of buffer bounds", pos),
         })
 }
@@ -77,7 +78,7 @@ where
     T: Scalar + Copy,
 {
     if lhs.dims() != rhs.dims() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "shape mismatch in binary map: lhs={:?}, rhs={:?}",
                 lhs.dims(),
@@ -126,7 +127,7 @@ where
     T: Scalar + Copy + PartialOrd,
 {
     if input.is_empty() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: "max is undefined for empty tensor".to_string(),
         });
     }
@@ -151,7 +152,7 @@ where
     T: Scalar + Copy + Sub<Output = T> + AbsAsF64,
 {
     if lhs.dims() != rhs.dims() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "shape mismatch in max_abs_diff: lhs={:?}, rhs={:?}",
                 lhs.dims(),

@@ -452,3 +452,75 @@ fn try_execute_contract_gemm_with_beta_accumulates_into_existing_output() {
         }
     }
 }
+
+#[test]
+fn temp_view_mut_in_modes_permutes_correctly() {
+    let mut temp = TempTensor {
+        data: vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        dims: vec![2, 3],
+        strides: vec![1, 2],
+    };
+
+    let view = temp_view_mut_in_modes(&mut temp, &[0, 1], &[1, 0], "Contract").unwrap();
+    assert_eq!(view.dims(), &[3, 2]);
+}
+
+#[test]
+fn inspect_contract_preparation_rejects_invalid_b_modes() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[2, 3], |idx| 1.0 + (idx[0] * 10 + idx[1]) as f64);
+    let b = tensor_from_fn(&[3, 4], |idx| -1.0 + (idx[0] * 10 + idx[1]) as f64);
+    let mut out = Tensor::zeros(
+        &[2, 4],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let spec = build_contract_gemm_spec(&[0, 1], &[1, 2], &[0, 2]).unwrap();
+
+    let a_view = tensor_to_view(&a).unwrap();
+    let b_view = tensor_to_view(&b).unwrap();
+    let mut out_view = tensor_to_view_mut(&mut out).unwrap();
+    let err = inspect_contract_preparation(
+        &mut ctx,
+        &[&a_view, &b_view],
+        &mut out_view,
+        &[0, 1],
+        &[9, 2],
+        &[0, 2],
+        &spec,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("reorder B")));
+}
+
+#[test]
+fn inspect_contract_preparation_rejects_invalid_output_modes() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[2, 3], |idx| 1.0 + (idx[0] * 10 + idx[1]) as f64);
+    let b = tensor_from_fn(&[3, 4], |idx| -1.0 + (idx[0] * 10 + idx[1]) as f64);
+    let mut out = Tensor::zeros(
+        &[2, 4],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let spec = build_contract_gemm_spec(&[0, 1], &[1, 2], &[0, 2]).unwrap();
+
+    let a_view = tensor_to_view(&a).unwrap();
+    let b_view = tensor_to_view(&b).unwrap();
+    let mut out_view = tensor_to_view_mut(&mut out).unwrap();
+    let err = inspect_contract_preparation(
+        &mut ctx,
+        &[&a_view, &b_view],
+        &mut out_view,
+        &[0, 1],
+        &[1, 2],
+        &[9, 2],
+        &spec,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, Error::InvalidArgument(message) if message.contains("reorder output")));
+}

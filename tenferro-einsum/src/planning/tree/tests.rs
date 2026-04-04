@@ -367,3 +367,64 @@ fn nested_to_pairs_handles_leaf_nodes() {
     assert_eq!(result, 42);
     assert!(pairs.is_empty());
 }
+
+#[test]
+fn from_pairs_with_two_operands_builds_single_step_tree() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[3, 4][..], &[4, 5][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+
+    assert_eq!(tree.step_count(), 1);
+    assert_eq!(tree.step_pair(0), Some((0, 1)));
+    assert_eq!(tree.step_pair(1), None);
+
+    let (lhs, rhs, out) = tree.step_subscripts(0).unwrap();
+    assert_eq!(lhs, &[0, 1]);
+    assert_eq!(rhs, &[1, 2]);
+    assert_eq!(out, &[0, 2]);
+}
+
+#[test]
+fn optimize_with_annealing_schedule_produces_valid_tree() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4], &[4, 5]], &[0, 5]);
+    let shapes = [
+        &[2, 3][..],
+        &[3, 4][..],
+        &[4, 3][..],
+        &[3, 2][..],
+        &[2, 5][..],
+    ];
+    let options = ContractionOptimizerOptions {
+        betas: vec![0.5, 1.0, 2.0],
+        ntrials: 2,
+        niters: 3,
+        score: ScoreFunction::space_optimized(8.0),
+    };
+
+    let tree = ContractionTree::optimize_with_options(&subs, &shapes, &options).unwrap();
+    assert_eq!(tree.step_count(), subs.inputs.len() - 1);
+}
+
+#[test]
+fn step_pair_returns_none_for_out_of_bounds() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+
+    assert_eq!(tree.step_pair(0), Some((0, 1)));
+    assert_eq!(tree.step_pair(5), None);
+    assert_eq!(tree.step_subscripts(5), None);
+}
+
+#[test]
+fn optimize_with_space_optimized_score_builds_tree() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[3, 4][..], &[4, 5][..], &[5, 6][..]];
+    let options = ContractionOptimizerOptions {
+        score: ScoreFunction::space_optimized(8.0),
+        ..ContractionOptimizerOptions::default()
+    };
+
+    let tree = ContractionTree::optimize_with_options(&subs, &shapes, &options).unwrap();
+    assert_eq!(tree.step_count(), 2);
+}

@@ -299,11 +299,7 @@ where
     };
     let memory_space = base.logical_memory_space();
     if output_numel == 0 {
-        return Ok(Tensor::zeros(
-            &output_dims,
-            memory_space,
-            MemoryOrder::ColumnMajor,
-        )?);
+        return Tensor::zeros(&output_dims, memory_space, MemoryOrder::ColumnMajor);
     }
 
     let mut current = Tensor::ones(base.dims(), memory_space, MemoryOrder::ColumnMajor)?;

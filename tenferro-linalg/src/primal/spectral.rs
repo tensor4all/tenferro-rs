@@ -108,11 +108,11 @@ where
     let k = m.min(n);
     if k == 0 {
         let dims = output_dims(&[n, m], batch_dims);
-        return Ok(Tensor::zeros(
+        return Tensor::zeros(
             &dims,
             tensor.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        )?);
+        );
     }
 
     let svd_result = svd(ctx, tensor, None)?;
@@ -230,11 +230,11 @@ where
     let input = ensure_col_major(tensor);
     if n == 0 {
         let dims = output_dims(&[n, n], batch_dims);
-        return Ok(Tensor::zeros(
+        return Tensor::zeros(
             &dims,
             input.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        )?);
+        );
     }
 
     let batch_norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(ctx, &input)?;

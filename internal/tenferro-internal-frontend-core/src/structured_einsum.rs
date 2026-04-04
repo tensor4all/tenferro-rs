@@ -66,7 +66,7 @@ where
         tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[tensor.payload()], None)
             .map_err(Error::from)?;
     if out.dims() != tensor.logical_dims() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "structured_to_dense output shape mismatch: expected {:?}, got {:?}",
                 tensor.logical_dims(),
@@ -88,7 +88,7 @@ where
     C: TensorTempPoolContext,
 {
     if dense.dims() != layout.logical_dims() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "structured compression shape mismatch: expected {:?}, got {:?}",
                 layout.logical_dims(),
@@ -130,11 +130,11 @@ where
             )
         })
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| Error::InvalidAdTensor {
+        .map_err(|e| Error::InvalidTensorOperands {
             message: format!("invalid structured operand metadata: {e}"),
         })?;
     let plan = plan_axis_classes_for_subscripts(&operand_meta, subscripts).map_err(|e| {
-        Error::InvalidAdTensor {
+        Error::InvalidTensorOperands {
             message: format!("failed to plan structured einsum: {e}"),
         }
     })?;
@@ -145,7 +145,7 @@ where
     for (operand_idx, operand) in operands.iter().enumerate() {
         let class_roots = &plan.operand_plans[operand_idx].class_roots;
         if operand.payload().dims().len() != class_roots.len() {
-            return Err(Error::InvalidAdTensor {
+            return Err(Error::InvalidTensorOperands {
                 message: format!(
                     "operand {} payload rank {} does not match planned local class count {}",
                     operand_idx,
@@ -192,7 +192,7 @@ where
     T: Scalar,
 {
     if lhs.logical_dims() != rhs.logical_dims() || lhs.axis_classes() != rhs.axis_classes() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "structured tangent layout mismatch: lhs dims {:?} classes {:?}, rhs dims {:?} classes {:?}",
                 lhs.logical_dims(),
@@ -262,7 +262,7 @@ where
     C: TensorTempPoolContext,
 {
     if payload.dims().len() != roots.len() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "payload rank {} must match roots length {}",
                 payload.dims().len(),
@@ -310,7 +310,7 @@ pub fn usize_vec_to_u32(values: &[usize]) -> Result<Vec<u32>> {
     values
         .iter()
         .map(|&v| {
-            u32::try_from(v).map_err(|_| Error::InvalidAdTensor {
+            u32::try_from(v).map_err(|_| Error::InvalidTensorOperands {
                 message: format!("label id {} does not fit into u32", v),
             })
         })

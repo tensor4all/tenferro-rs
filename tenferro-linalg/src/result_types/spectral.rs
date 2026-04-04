@@ -83,3 +83,37 @@ pub enum NormKind {
     /// General Lp norm.
     Lp(f64),
 }
+
+/// Vector norm order for [`crate::vector_norm`]-style public surfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VectorNormOrd {
+    /// General vector p-norm.
+    P(f64),
+    /// Zero-"norm" / count of nonzero entries.
+    Zero,
+    /// Positive infinity norm.
+    PosInf,
+    /// Negative infinity norm.
+    NegInf,
+}
+
+/// Matrix norm order for [`crate::matrix_norm`]-style public surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixNormOrd {
+    /// Frobenius norm.
+    Fro,
+    /// Nuclear norm.
+    Nuc,
+    /// Induced matrix 1-norm.
+    One,
+    /// Minimum column-sum norm.
+    NegOne,
+    /// Spectral norm.
+    Two,
+    /// Smallest singular value norm.
+    NegTwo,
+    /// Infinity norm.
+    PosInf,
+    /// Minimum row-sum norm.
+    NegInf,
+}

@@ -249,7 +249,7 @@ impl DynTensor {
                     tensor_map_binary_typed(a.payload(), b.payload(), |x, y| x - y)?,
                 )?)))
             }
-            _ => Err(Error::InvalidAdTensor {
+            _ => Err(Error::InvalidTensorOperands {
                 message: format!(
                     "dtype mismatch in try_sub: lhs={:?}, rhs={:?}",
                     self.scalar_type(),
@@ -300,7 +300,7 @@ impl DynTensor {
                     MemoryOrder::ColumnMajor,
                 )?),
             ))),
-            Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
+            Self::C32(_) | Self::C64(_) => Err(Error::InvalidTensorOperands {
                 message: "max is undefined for complex tensors; call abs_tensor() first"
                     .to_string(),
             }),
@@ -311,7 +311,7 @@ impl DynTensor {
         match self.max()? {
             Self::F32(t) => Ok(t.payload().buffer().as_slice().unwrap()[0] as f64),
             Self::F64(t) => Ok(t.payload().buffer().as_slice().unwrap()[0]),
-            Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
+            Self::C32(_) | Self::C64(_) => Err(Error::InvalidTensorOperands {
                 message: "max_as_f64 expects a real tensor".to_string(),
             }),
         }
@@ -331,7 +331,7 @@ where
     T: tenferro_algebra::Scalar,
 {
     if lhs.logical_dims() != rhs.logical_dims() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "{op_name} requires matching logical_dims, got lhs={:?}, rhs={:?}",
                 lhs.logical_dims(),
@@ -340,7 +340,7 @@ where
         });
     }
     if lhs.axis_classes() != rhs.axis_classes() {
-        return Err(Error::InvalidAdTensor {
+        return Err(Error::InvalidTensorOperands {
             message: format!(
                 "{op_name} requires matching axis_classes, got lhs={:?}, rhs={:?}",
                 lhs.axis_classes(),

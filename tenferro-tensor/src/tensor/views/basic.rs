@@ -388,8 +388,11 @@ impl<T> Tensor<T> {
         let new_stride = if dim < ndim {
             self.strides[dim]
         } else {
-            let last_stride = if ndim > 0 { self.strides[ndim - 1] } else { 1 };
-            last_stride
+            if ndim > 0 {
+                self.strides[ndim - 1]
+            } else {
+                1
+            }
         };
         new_strides.insert(dim, new_stride);
 

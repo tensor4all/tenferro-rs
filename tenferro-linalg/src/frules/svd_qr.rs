@@ -1,5 +1,10 @@
 use super::*;
 
+type SvdFruleOutput<T> = (
+    SvdResult<T, <T as LinalgScalar>::Real>,
+    SvdResult<T, <T as LinalgScalar>::Real>,
+);
+
 // ============================================================================
 // AD functions: frule (forward-mode, stateless)
 // ============================================================================
@@ -29,7 +34,7 @@ pub fn svd_frule<T, C>(
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
-) -> AdResult<(SvdResult<T, T::Real>, SvdResult<T, T::Real>)>
+) -> AdResult<SvdFruleOutput<T>>
 where
     T: KernelLinalgScalar,
     T::Real: num_traits::Float,
@@ -177,7 +182,7 @@ where
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col).unwrap();
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn qr_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn qr_frule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -193,7 +198,7 @@ where
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let k = m.min(n);
     let bc = batch_count(batch_dims);
-    let half: T = scalar_from(0.5).map_err(to_ad_err)?;
+    let half: T::Real = scalar_from(0.5).map_err(to_ad_err)?;
 
     let (q_data, _) = extract_data(&result.q)?;
     let (r_data, _) = extract_data(&result.r)?;
@@ -209,24 +214,24 @@ where
 
         let (dq_b_vec, dr_b_vec) = if m >= n {
             let r_sq = r_b[..n * n].to_vec();
-            let darinv_t = backend_solve_tri(
+            let darinv_h = backend_solve_tri(
                 ctx,
-                &transpose(&r_sq, n, n),
-                &transpose(da_b, m, n),
+                &adjoint_transpose(&r_sq, n, n),
+                &adjoint_transpose(da_b, m, n),
                 n,
                 m,
                 false,
             )?;
-            let darinv = transpose(&darinv_t, n, m);
-            let qhdarinv = backend_mat_mul(ctx, &transpose(q_b, m, n), n, m, &darinv, n)?;
-            let sym = add_vec(&qhdarinv, &transpose(&qhdarinv, n, n));
+            let darinv = adjoint_transpose(&darinv_h, n, m);
+            let qhdarinv = backend_mat_mul(ctx, &adjoint_transpose(q_b, m, n), n, m, &darinv, n)?;
+            let sym = add_vec(&qhdarinv, &adjoint_transpose(&qhdarinv, n, n));
 
             let mut dr_hat = vec![T::zero(); n * n];
             for j in 0..n {
                 for i in 0..=j {
                     let mut val = sym[i + j * n];
                     if i == j {
-                        val = val * half;
+                        val = T::from_real(val.real_part() * half);
                     }
                     dr_hat[i + j * n] = val;
                 }
@@ -236,27 +241,20 @@ where
             let dr = backend_mat_mul(ctx, &dr_hat, n, n, &r_sq, n)?;
             (dq, dr)
         } else {
-            let qhda = backend_mat_mul(ctx, &transpose(q_b, m, k), k, m, da_b, n)?;
-            // k = min(m,n) so k*n == k*k when n == k (the only case reaching here)
-            let r1 = r_b[..k * n].to_vec();
-
-            let mut qhda1 = vec![T::zero(); k * k];
-            for j in 0..k {
-                for i in 0..k {
-                    qhda1[i + j * k] = qhda[i + j * k];
-                }
-            }
-            let qhda1_rinv_t = backend_solve_tri(
+            let qhda = backend_mat_mul(ctx, &adjoint_transpose(q_b, m, k), k, m, da_b, n)?;
+            let r1 = r_b[..k * k].to_vec();
+            let qhda1 = qhda[..k * k].to_vec();
+            let qhda1_rinv_h = backend_solve_tri(
                 ctx,
-                &transpose(&r1, k, k),
-                &transpose(&qhda1, k, k),
+                &adjoint_transpose(&r1, k, k),
+                &adjoint_transpose(&qhda1, k, k),
                 k,
                 k,
                 false,
             )?;
-            let qhda1_rinv = transpose(&qhda1_rinv_t, k, k);
-            let lower = tril_strict(&qhda1_rinv, k);
-            let dq_hat = sub_vec(&lower, &transpose(&lower, k, k));
+            let qhda1_rinv = adjoint_transpose(&qhda1_rinv_h, k, k);
+            let lower = tril_im(&qhda1_rinv, k)?;
+            let dq_hat = tril_im_inv(&lower, k)?;
 
             let dr = sub_vec(&qhda, &backend_mat_mul(ctx, &dq_hat, k, k, r_b, n)?);
             let dq = backend_mat_mul(ctx, q_b, m, k, &dq_hat, k)?;

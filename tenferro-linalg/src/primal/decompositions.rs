@@ -152,9 +152,40 @@ where
     C::Backend: 'static,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::qr(ctx, tensor)?;
+    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let k = m.min(n);
+    let bc = batch_count(batch_dims);
+    let (mut q_data, _) =
+        extract_data(&result.q).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+    let (mut r_data, _) =
+        extract_data(&result.r).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+
+    for batch in 0..bc {
+        let q_base = batch * m * k;
+        let r_base = batch * k * n;
+        for i in 0..k {
+            let diag = r_data[r_base + i + i * k];
+            if diag.imag_part() == T::Real::zero() {
+                continue;
+            }
+            let mag = diag.abs_real();
+            if mag == T::Real::zero() {
+                continue;
+            }
+            let phase = diag / T::from_real(mag);
+            for row in 0..m {
+                q_data[q_base + row + i * m] = q_data[q_base + row + i * m] * phase;
+            }
+            let phase_inv = phase.conj();
+            for col in 0..n {
+                r_data[r_base + i + col * k] = r_data[r_base + i + col * k] * phase_inv;
+            }
+        }
+    }
+
     Ok(QrResult {
-        q: result.q,
-        r: result.r,
+        q: tensor_from_data(q_data, result.q.dims())?,
+        r: tensor_from_data(r_data, result.r.dims())?,
     })
 }
 

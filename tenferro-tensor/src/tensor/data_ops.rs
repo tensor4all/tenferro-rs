@@ -6,7 +6,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
 
-use super::Tensor;
+use super::{Tensor, TensorParts};
 use crate::layout::{compute_contiguous_strides, copy_strided, is_contiguous_in_order};
 use crate::{DataBuffer, MemoryOrder};
 
@@ -32,17 +32,17 @@ impl<T> Tensor<T> {
     where
         T: tenferro_algebra::Conjugate,
     {
-        Tensor::from_parts(
-            self.buffer.clone(),
-            self.dims.clone(),
-            self.strides.clone(),
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event.clone(),
-            !self.conjugated,
-            None,
-        )
+        Tensor::from_parts(TensorParts {
+            buffer: self.buffer.clone(),
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event.clone(),
+            conjugated: !self.conjugated,
+            fw_grad: None,
+        })
     }
 
     /// Consume this tensor and return a lazily-conjugated version.
@@ -58,17 +58,17 @@ impl<T> Tensor<T> {
     where
         T: tenferro_algebra::Conjugate,
     {
-        Tensor::from_parts(
-            self.buffer,
-            self.dims,
-            self.strides,
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event,
-            !self.conjugated,
-            None,
-        )
+        Tensor::from_parts(TensorParts {
+            buffer: self.buffer,
+            dims: self.dims,
+            strides: self.strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: !self.conjugated,
+            fw_grad: None,
+        })
     }
 }
 
@@ -130,17 +130,17 @@ impl<T: Scalar> Tensor<T> {
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
         self.wait();
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return Tensor::from_parts(
-                self.buffer.clone(),
-                self.dims.clone(),
-                self.strides.clone(),
-                self.offset,
-                self.logical_memory_space,
-                self.preferred_compute_device,
-                self.event.clone(),
-                self.conjugated,
-                self.fw_grad.clone(),
-            );
+            return Tensor::from_parts(TensorParts {
+                buffer: self.buffer.clone(),
+                dims: self.dims.clone(),
+                strides: self.strides.clone(),
+                offset: self.offset,
+                logical_memory_space: self.logical_memory_space,
+                preferred_compute_device: self.preferred_compute_device,
+                event: self.event.clone(),
+                conjugated: self.conjugated,
+                fw_grad: self.fw_grad.clone(),
+            });
         }
 
         #[cfg(feature = "cuda")]
@@ -178,17 +178,17 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return Tensor::from_parts(
-                self.buffer,
-                self.dims,
-                self.strides,
-                self.offset,
-                self.logical_memory_space,
-                self.preferred_compute_device,
-                self.event,
-                self.conjugated,
-                self.fw_grad,
-            );
+            return Tensor::from_parts(TensorParts {
+                buffer: self.buffer,
+                dims: self.dims,
+                strides: self.strides,
+                offset: self.offset,
+                logical_memory_space: self.logical_memory_space,
+                preferred_compute_device: self.preferred_compute_device,
+                event: self.event,
+                conjugated: self.conjugated,
+                fw_grad: self.fw_grad,
+            });
         }
         self.contiguous(order)
     }
@@ -357,17 +357,17 @@ impl<T: Scalar> Tensor<T> {
             }
         }
 
-        Tensor::from_parts(
-            DataBuffer::from_vec(data),
-            self.dims.clone(),
-            std::sync::Arc::from(out_strides),
-            0,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            None,
-            self.conjugated,
-            None,
-        )
+        Tensor::from_parts(TensorParts {
+            buffer: DataBuffer::from_vec(data),
+            dims: self.dims.clone(),
+            strides: std::sync::Arc::from(out_strides),
+            offset: 0,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+            fw_grad: None,
+        })
     }
 
     /// Extract the lower triangular part of a matrix.

@@ -1,12 +1,11 @@
-mod dyn_ad_tensor;
-mod tensor_ops;
+mod results;
+mod tensor;
 
-pub use dyn_ad_tensor::{
-    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
-    LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult, Tensor,
-    TensorScalarDowncast,
+pub use results::{
+    EigResult, EighResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult,
+};
+pub use tenferro_internal_ad_linalg::results::{
+    CholeskyExResult, InvExResult, LuFactorExResult, LuFactorResult, LuPivot, SolveExResult,
 };
 pub use tenferro_internal_frontend_core::{DynTensor, DynTensorTyped, ScalarType};
-
-#[cfg(test)]
-mod tests;
+pub use tensor::Tensor;

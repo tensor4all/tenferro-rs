@@ -11,7 +11,7 @@
 //! use tenferro::v2::engine::Engine;
 //! use tenferro::v2::traced::TracedTensor;
 //!
-//! let mut engine = Engine::new(HostBackend::new());
+//! let mut engine = Engine::new(CpuBackend::new());
 //! let a = TracedTensor::from_tensor(tensor_a);
 //! let b = TracedTensor::from_tensor(tensor_b);
 //!
