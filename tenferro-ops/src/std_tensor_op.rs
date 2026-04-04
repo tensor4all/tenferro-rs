@@ -72,15 +72,69 @@ impl GraphOp for StdTensorOp {
     type InputKey = TensorInputKey;
 
     fn n_inputs(&self) -> usize {
-        todo!()
+        match self {
+            Self::Add | Self::Mul | Self::DotGeneral(_) => 2,
+            Self::Neg
+            | Self::Conj
+            | Self::Transpose { .. }
+            | Self::Reshape { .. }
+            | Self::BroadcastInDim { .. }
+            | Self::ReduceSum { .. } => 1,
+            Self::Div | Self::Maximum | Self::Minimum | Self::Pow => 2,
+            Self::Abs
+            | Self::Sign
+            | Self::Exp
+            | Self::Log
+            | Self::Sin
+            | Self::Cos
+            | Self::Tanh
+            | Self::Sqrt
+            | Self::Rsqrt
+            | Self::Expm1
+            | Self::Log1p => 1,
+            Self::Select | Self::Clamp => 3,
+            Self::Compare(_) => 2,
+            _ => todo!("n_inputs not yet implemented for {:?}", self),
+        }
     }
 
     fn n_outputs(&self) -> usize {
-        todo!()
+        match self {
+            Self::Add
+            | Self::Mul
+            | Self::Neg
+            | Self::Conj
+            | Self::DotGeneral(_)
+            | Self::Transpose { .. }
+            | Self::Reshape { .. }
+            | Self::BroadcastInDim { .. }
+            | Self::ReduceSum { .. } => 1,
+            _ => todo!("n_outputs not yet implemented for {:?}", self),
+        }
     }
 
-    fn eval(&self, _ctx: &mut Self::Context, _inputs: &[&Self::Operand]) -> Vec<Self::Operand> {
-        todo!()
+    fn eval(&self, _ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand> {
+        use computegraph::Operand;
+        match self {
+            Self::Add => vec![inputs[0].add(inputs[1])],
+            Self::Mul => vec![inputs[0].multiply(inputs[1])],
+            Self::Neg => vec![inputs[0].neg()],
+            Self::Conj => vec![inputs[0].conj()],
+            Self::DotGeneral(config) => vec![inputs[0].dot_general(
+                inputs[1],
+                &config.lhs_contracting_dims,
+                &config.rhs_contracting_dims,
+                &config.lhs_batch_dims,
+                &config.rhs_batch_dims,
+            )],
+            Self::Transpose { perm } => vec![inputs[0].transpose_perm(perm)],
+            Self::Reshape { shape } => vec![inputs[0].reshape(shape)],
+            Self::BroadcastInDim { shape, dims } => {
+                vec![inputs[0].broadcast_in_dim(shape, dims)]
+            }
+            Self::ReduceSum { axes } => vec![inputs[0].reduce_sum(axes)],
+            _ => todo!("eval not yet implemented for {:?}", self),
+        }
     }
 }
 
