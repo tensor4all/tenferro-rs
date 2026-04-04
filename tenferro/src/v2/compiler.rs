@@ -26,6 +26,10 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     dims: dims.clone(),
                 },
                 StdTensorOp::ReduceSum { axes } => StableHloOp::ReduceSum { axes: axes.clone() },
+                StdTensorOp::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
                 StdTensorOp::Div => StableHloOp::Divide,
                 StdTensorOp::Abs => StableHloOp::Abs,
                 StdTensorOp::Sign => StableHloOp::Sign,
@@ -89,6 +93,10 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                     dims: dims.clone(),
                 },
                 StableHloOp::ReduceSum { axes } => ExecOp::ReduceSum { axes: axes.clone() },
+                StableHloOp::ExtractDiag { axis_a, axis_b } => ExecOp::ExtractDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
                 StableHloOp::Divide => ExecOp::Divide,
                 StableHloOp::Abs => ExecOp::Abs,
                 StableHloOp::Sign => ExecOp::Sign,

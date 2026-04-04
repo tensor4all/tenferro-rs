@@ -44,6 +44,9 @@ pub enum StdTensorOp {
     Expm1,
     Log1p,
 
+    // Tier 1: diagonal extraction (AD-closed with Scatter)
+    ExtractDiag { axis_a: usize, axis_b: usize },
+
     // Tier 2: indexing
     Gather(GatherConfig),
     Scatter(ScatterConfig),
@@ -79,7 +82,8 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
-            | Self::ReduceSum { .. } => 1,
+            | Self::ReduceSum { .. }
+            | Self::ExtractDiag { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow => 2,
             Self::Abs
             | Self::Sign
@@ -108,7 +112,8 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
-            | Self::ReduceSum { .. } => 1,
+            | Self::ReduceSum { .. }
+            | Self::ExtractDiag { .. } => 1,
             _ => todo!("n_outputs not yet implemented for {:?}", self),
         }
     }
@@ -133,6 +138,9 @@ impl GraphOp for StdTensorOp {
                 vec![inputs[0].broadcast_in_dim(shape, dims)]
             }
             Self::ReduceSum { axes } => vec![inputs[0].reduce_sum(axes)],
+            Self::ExtractDiag { axis_a, axis_b } => {
+                vec![inputs[0].extract_diagonal(*axis_a, *axis_b)]
+            }
             _ => todo!("eval not yet implemented for {:?}", self),
         }
     }
@@ -191,5 +199,9 @@ impl SemiringOps for StdTensorOp {
 
     fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
         StdTensorOp::BroadcastInDim { shape, dims }
+    }
+
+    fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
+        StdTensorOp::ExtractDiag { axis_a, axis_b }
     }
 }

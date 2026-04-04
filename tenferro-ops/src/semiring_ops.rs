@@ -9,4 +9,5 @@ pub trait SemiringOps: GraphOp {
     fn transpose_op(perm: Vec<usize>) -> Self;
     fn reshape(shape: Vec<usize>) -> Self;
     fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self;
+    fn extract_diag(axis_a: usize, axis_b: usize) -> Self;
 }

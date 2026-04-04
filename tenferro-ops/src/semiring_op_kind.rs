@@ -9,4 +9,5 @@ pub enum SemiringOpKind {
     Transpose { perm: Vec<usize> },
     Reshape { shape: Vec<usize> },
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    ExtractDiag { axis_a: usize, axis_b: usize },
 }

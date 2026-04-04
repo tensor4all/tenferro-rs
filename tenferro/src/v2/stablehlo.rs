@@ -15,6 +15,7 @@ pub enum StableHloOp {
     Reshape { shape: Vec<usize> },
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
     ReduceSum { axes: Vec<usize> },
+    ExtractDiag { axis_a: usize, axis_b: usize },
     // Tier 2 elementwise
     Divide,
     Abs,

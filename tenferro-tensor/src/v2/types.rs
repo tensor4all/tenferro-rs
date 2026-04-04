@@ -243,6 +243,10 @@ impl Tensor {
     pub fn transpose_perm(&self, perm: &[usize]) -> Self {
         dispatch_tensor!(self, t => typed_transpose(t, perm))
     }
+
+    pub fn extract_diagonal(&self, axis_a: usize, axis_b: usize) -> Self {
+        dispatch_tensor!(self, t => typed_extract_diagonal(t, axis_a, axis_b))
+    }
 }
 
 fn typed_neg<T>(t: &TypedTensor<T>) -> TypedTensor<T>
@@ -277,6 +281,54 @@ fn typed_transpose<T: Clone + Zero>(t: &TypedTensor<T>, perm: &[usize]) -> Typed
         let val = t.host_data()[t.linear_offset(&src_idx)].clone();
         let off_out = result.linear_offset(&dst_idx);
         result.host_data_mut()[off_out] = val;
+    }
+    result
+}
+
+fn typed_extract_diagonal<T: Clone + Zero>(
+    t: &TypedTensor<T>,
+    axis_a: usize,
+    axis_b: usize,
+) -> TypedTensor<T> {
+    assert!(axis_a < axis_b, "extract_diagonal requires axis_a < axis_b");
+    assert_eq!(
+        t.shape[axis_a], t.shape[axis_b],
+        "extract_diagonal requires equal sizes on both axes"
+    );
+    let n = t.shape[axis_a];
+    // New shape: remove axis_b, keep axis_a
+    let mut new_shape = Vec::new();
+    for (i, &s) in t.shape.iter().enumerate() {
+        if i != axis_b {
+            new_shape.push(s);
+        }
+    }
+    let out_n: usize = new_shape.iter().product();
+    let mut result = TypedTensor::zeros(new_shape.clone());
+    let out_rank = new_shape.len();
+    let in_rank = t.shape.len();
+    let mut out_idx = vec![0usize; out_rank];
+    let mut in_idx = vec![0usize; in_rank];
+    for flat in 0..out_n {
+        flat_to_multi(flat, &new_shape, &mut out_idx);
+        // Map output index back to input index.
+        // axis_b was removed. Positions before axis_b map 1:1.
+        // Positions >= axis_b in output map to position+1 in input.
+        // axis_a in output gives the diagonal index; axis_b in input
+        // gets the same value as axis_a.
+        let mut j = 0;
+        for i in 0..in_rank {
+            if i == axis_b {
+                in_idx[i] = in_idx[axis_a]; // diagonal: same index
+            } else {
+                in_idx[i] = out_idx[j];
+                j += 1;
+            }
+        }
+        let _ = n; // used only in assertions above
+        let val = t.get(&in_idx).clone();
+        let off = result.linear_offset(&out_idx);
+        result.host_data_mut()[off] = val;
     }
     result
 }

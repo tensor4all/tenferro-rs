@@ -104,4 +104,8 @@ impl<T: Operand> SemiringOps for SemiringOp<T> {
     fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
         Self::new(SemiringOpKind::BroadcastInDim { shape, dims })
     }
+
+    fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
+        Self::new(SemiringOpKind::ExtractDiag { axis_a, axis_b })
+    }
 }

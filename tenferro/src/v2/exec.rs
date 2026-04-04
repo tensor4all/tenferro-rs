@@ -12,6 +12,7 @@ pub enum ExecOp {
     // Semiring (SemiringCore dispatch)
     BatchedGemm(DotGeneralConfig),
     ReduceSum { axes: Vec<usize> },
+    ExtractDiag { axis_a: usize, axis_b: usize },
     // Semiring elementwise (algebra-dependent dispatch)
     Add,
     Multiply,

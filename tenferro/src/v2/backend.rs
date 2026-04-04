@@ -96,6 +96,10 @@ pub fn eval_exec_ir_host(program: &ExecProgram, inputs: Vec<Tensor>) -> Vec<Tens
                 .as_ref()
                 .unwrap()
                 .reduce_sum(axes),
+            ExecOp::ExtractDiag { axis_a, axis_b } => slots[inst.input_slots[0]]
+                .as_ref()
+                .unwrap()
+                .extract_diagonal(*axis_a, *axis_b),
             other => todo!("eval_exec_ir_host: unsupported op {:?}", other),
         };
         slots[inst.output_slots[0]] = Some(result);
