@@ -85,6 +85,8 @@
 //! assert_eq!(owned.dims(), &[3, 4]);
 //! ```
 
+pub mod v2;
+
 #[cfg(feature = "cuda")]
 mod cuda_runtime;
 
