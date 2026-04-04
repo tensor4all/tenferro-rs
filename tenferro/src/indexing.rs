@@ -1,5 +1,5 @@
 use tenferro_ops::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub fn gather(_input: &Tensor, _config: &GatherConfig) -> Tensor {
     todo!("indexing::gather")

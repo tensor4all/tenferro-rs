@@ -1,7 +1,7 @@
 use tenferro_ops::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::v2::DType;
+use tenferro_tensor::DType;
 
 #[derive(Clone, Debug)]
 pub enum StableHloOp {

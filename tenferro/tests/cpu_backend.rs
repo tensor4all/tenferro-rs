@@ -8,7 +8,7 @@ use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
 use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::v2::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))

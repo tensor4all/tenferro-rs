@@ -1,4 +1,4 @@
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub fn reduce_prod(_input: &Tensor, _axes: &[usize]) -> Tensor {
     todo!("reduction::reduce_prod")

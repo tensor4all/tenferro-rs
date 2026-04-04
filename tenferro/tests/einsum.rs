@@ -8,7 +8,7 @@ use tenferro::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
 use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts};
-use tenferro_tensor::v2::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 // ============================================================================
 // Helpers

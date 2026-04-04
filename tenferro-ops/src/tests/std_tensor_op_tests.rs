@@ -1,7 +1,7 @@
 use crate::config::DotGeneralConfig;
 use crate::std_tensor_op::StdTensorOp;
 use computegraph::GraphOp;
-use tenferro_tensor::v2::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 fn eval_op(op: &StdTensorOp, inputs: &[&Tensor]) -> Vec<Tensor> {
     op.eval(&mut (), inputs)

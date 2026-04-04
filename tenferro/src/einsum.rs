@@ -26,13 +26,13 @@ use std::sync::Arc;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::ValRef;
 use omeco::ScoreFunction;
-use tenferro_einsum::v2::builder::build_einsum_fragment;
+use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
 
 use super::backend::SemiringCore;
 use super::engine::Engine;
 use super::traced::TracedTensor;
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///

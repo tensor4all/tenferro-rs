@@ -70,7 +70,7 @@ pub enum StdTensorOp {
 }
 
 impl GraphOp for StdTensorOp {
-    type Operand = tenferro_tensor::v2::Tensor;
+    type Operand = tenferro_tensor::Tensor;
     type Context = ();
     type InputKey = TensorInputKey;
 

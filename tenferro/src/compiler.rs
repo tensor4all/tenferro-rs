@@ -2,7 +2,7 @@ use computegraph::compile::CompiledProgram;
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::semiring_ops::SemiringOps;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::v2::DType;
+use tenferro_tensor::DType;
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 use super::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};

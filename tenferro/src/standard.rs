@@ -1,6 +1,6 @@
 use computegraph::Operand;
 use tenferro_ops::config::CompareDir;
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub fn neg(input: &Tensor) -> Tensor {
     input.neg()

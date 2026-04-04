@@ -1,11 +1,11 @@
 use computegraph::Operand;
 use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 #[cfg(feature = "cpu-faer")]
 use num_traits::{One, Zero};
 #[cfg(feature = "cpu-faer")]
-use tenferro_tensor::v2::{col_major_strides, Buffer, TypedTensor};
+use tenferro_tensor::{col_major_strides, Buffer, TypedTensor};
 
 use super::backend::SemiringCore;
 

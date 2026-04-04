@@ -36,4 +36,3 @@ num-traits.workspace = true
 
 [dev-dependencies]
 tenferro-algebra = { path = "../tenferro-algebra" }
-tenferro-prims = { path = "../tenferro-prims" }

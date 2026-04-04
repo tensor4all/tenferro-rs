@@ -1,7 +1,7 @@
 use super::exec::{ExecOp, ExecProgram};
 use super::{indexing, linalg, reduction, standard, structural};
 use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub trait SemiringCore {
     type Operand;

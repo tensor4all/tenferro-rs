@@ -5,7 +5,7 @@ use tenferro::compiler::{
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};
 use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::v2::DType;
+use tenferro_tensor::DType;
 
 // ============================================================================
 // Helper: build a StableHloProgram from a list of instructions

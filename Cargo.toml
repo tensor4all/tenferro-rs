@@ -1,36 +1,15 @@
 [workspace]
 members = [
-    # core
+    # v2 core (6 crates)
     "tenferro-device",
     "tenferro-algebra",
-    "tenferro-prims",
     "tenferro-tensor",
-    "tenferro-einsum",
-    "tenferro-linalg-prims",
-    "tenferro-linalg",
-    "tenferro-tensor-compute",
-    "tenferro-dynamic-compute",
-    "tenferro-capi",
-    # internal
-    "internal/tenferro-internal-error",
-    "internal/tenferro-internal-runtime",
-    "internal/tenferro-internal-frontend-core",
-    "internal/tenferro-internal-ad-core",
-    "internal/tenferro-internal-ad-ops",
-    "internal/tenferro-internal-ad-linalg",
-    "internal/tenferro-internal-ad-surface",
-    # extension
-    "extension/tenferro-ext-tropical",
-    "extension/tenferro-ext-tropical-capi",
-    "extension/tenferro-ext-burn",
-    "extension/tenferro-ext-mdarray",
-    "extension/tenferro-ext-ndarray",
     "tenferro-ops",
+    "tenferro-einsum",
     "tenferro",
 ]
 default-members = [
     "tenferro-tensor",
-    "tenferro-tensor-compute",
 ]
 resolver = "2"
 

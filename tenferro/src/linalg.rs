@@ -1,4 +1,4 @@
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub fn cholesky(_input: &Tensor) -> Tensor {
     todo!("linalg::cholesky")

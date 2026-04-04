@@ -1,5 +1,5 @@
 use computegraph::Operand;
-use tenferro_tensor::v2::Tensor;
+use tenferro_tensor::Tensor;
 
 pub fn permute(input: &Tensor, perm: &[usize]) -> Tensor {
     input.transpose_perm(perm)

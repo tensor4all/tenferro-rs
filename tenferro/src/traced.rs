@@ -11,7 +11,7 @@ use computegraph::LocalValId;
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::v2::{DType, Tensor};
+use tenferro_tensor::{DType, Tensor};
 
 use super::backend::{eval_exec_ir, SemiringCore};
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
