@@ -10,6 +10,15 @@ description = "AD-aware ergonomic tensor wrapper on top of tenferro APIs."
 [lib]
 test = false
 
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["dep:faer"]
+cpu-blas = ["dep:cblas-sys"]
+provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src"]
+src-openblas = ["provider-src", "blas-src/openblas"]
+src-accelerate = ["provider-src", "blas-src/accelerate"]
+src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
+
 [dependencies]
 tenferro-internal-error = { path = "../internal/tenferro-internal-error" }
 tenferro-internal-ad-surface = { path = "../internal/tenferro-internal-ad-surface" }
@@ -23,10 +32,14 @@ omeco.workspace = true
 computegraph.workspace = true
 chainrules-core.workspace = true
 tidu.workspace = true
-
-[dev-dependencies]
+faer = { workspace = true, optional = true }
+cblas-sys = { workspace = true, optional = true }
+cblas-src = { workspace = true, optional = true }
+blas-src = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
+
+[dev-dependencies]
 chainrules.workspace = true
 tenferro-internal-ad-core = { path = "../internal/tenferro-internal-ad-core" }
 tenferro-internal-ad-ops = { path = "../internal/tenferro-internal-ad-ops" }
