@@ -1,4 +1,4 @@
-use crate::v2::types::{DType, Tensor, TypedTensor};
+use crate::types::{DType, Tensor, TypedTensor};
 use computegraph::Operand;
 
 #[test]
