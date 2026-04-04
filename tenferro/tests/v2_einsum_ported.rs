@@ -3,10 +3,10 @@
 //! Data is stored in **column-major** order. A helper `row_to_col_major` is
 //! available for converting row-major test data when needed.
 
-use tenferro::v2::cpu_backend::CpuBackend;
-use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
-use tenferro::v2::engine::Engine;
-use tenferro::v2::traced::TracedTensor;
+use tenferro::cpu_backend::CpuBackend;
+use tenferro::einsum::{einsum, einsum_with, EinsumOptimize};
+use tenferro::engine::Engine;
+use tenferro::traced::TracedTensor;
 use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts};
 use tenferro_tensor::v2::{Tensor, TypedTensor};
 

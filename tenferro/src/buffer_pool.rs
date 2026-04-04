@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```ignore
-//! use tenferro::v2::buffer_pool::BufferPool;
+//! use tenferro::buffer_pool::BufferPool;
 //!
 //! let mut pool = BufferPool::new();
 //! let buf = pool.allocate(1024);
@@ -27,7 +27,7 @@
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::buffer_pool::BufferPool;
+/// use tenferro::buffer_pool::BufferPool;
 ///
 /// let mut pool = BufferPool::new();
 /// let buf = pool.allocate(256);
@@ -43,7 +43,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro::v2::buffer_pool::BufferPool;
+    /// use tenferro::buffer_pool::BufferPool;
     /// let pool = BufferPool::new();
     /// ```
     pub fn new() -> Self {
@@ -58,7 +58,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro::v2::buffer_pool::BufferPool;
+    /// use tenferro::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = pool.allocate(64);
@@ -88,7 +88,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro::v2::buffer_pool::BufferPool;
+    /// use tenferro::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = pool.allocate(128);

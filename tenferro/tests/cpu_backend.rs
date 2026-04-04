@@ -2,11 +2,11 @@
 //!
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
-use tenferro::v2::buffer_pool::BufferPool;
-use tenferro::v2::cpu_backend::CpuBackend;
-use tenferro::v2::einsum::einsum;
-use tenferro::v2::engine::Engine;
-use tenferro::v2::traced::TracedTensor;
+use tenferro::buffer_pool::BufferPool;
+use tenferro::cpu_backend::CpuBackend;
+use tenferro::einsum::einsum;
+use tenferro::engine::Engine;
+use tenferro::traced::TracedTensor;
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_tensor::v2::{Tensor, TypedTensor};
 

@@ -21,8 +21,8 @@ use super::gemm::faer_gemm::FaerGemm;
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::cpu_backend::CpuBackend;
-/// use tenferro::v2::engine::Engine;
+/// use tenferro::cpu_backend::CpuBackend;
+/// use tenferro::engine::Engine;
 ///
 /// let engine = Engine::new(CpuBackend::new());
 /// ```
@@ -34,7 +34,7 @@ impl CpuBackend {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro::v2::cpu_backend::CpuBackend;
+    /// use tenferro::cpu_backend::CpuBackend;
     /// let backend = CpuBackend::new();
     /// ```
     pub fn new() -> Self {

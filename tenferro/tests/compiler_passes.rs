@@ -1,9 +1,9 @@
-use tenferro::v2::compiler::{
+use tenferro::compiler::{
     compile_to_exec, dot_decomposer, dot_dimension_sorter, reduction_simplification,
     transpose_folding,
 };
-use tenferro::v2::exec::ExecOp;
-use tenferro::v2::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};
+use tenferro::exec::ExecOp;
+use tenferro::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_tensor::v2::DType;
 

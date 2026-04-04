@@ -1,7 +1,7 @@
-use tenferro::v2::cpu_backend::CpuBackend;
-use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
-use tenferro::v2::engine::Engine;
-use tenferro::v2::traced::{eval_all, TracedTensor};
+use tenferro::cpu_backend::CpuBackend;
+use tenferro::einsum::{einsum, einsum_with, EinsumOptimize};
+use tenferro::engine::Engine;
+use tenferro::traced::{eval_all, TracedTensor};
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_tensor::v2::{Tensor, TypedTensor};
 

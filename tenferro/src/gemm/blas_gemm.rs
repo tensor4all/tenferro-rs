@@ -14,7 +14,7 @@ use num_complex::{Complex32, Complex64};
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::gemm::blas_gemm::BlasGemm;
+/// use tenferro::gemm::blas_gemm::BlasGemm;
 ///
 /// let a = vec![1.0f64, 2.0, 3.0, 4.0]; // 2x2 col-major
 /// let b = vec![5.0, 6.0, 7.0, 8.0];

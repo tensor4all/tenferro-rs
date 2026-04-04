@@ -13,7 +13,7 @@ use num_complex::{Complex32, Complex64};
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::gemm::faer_gemm::FaerGemm;
+/// use tenferro::gemm::faer_gemm::FaerGemm;
 ///
 /// // Perform a small 2x2 GEMM with column-major strides.
 /// let a = [1.0f64, 2.0, 3.0, 4.0]; // 2x2 col-major

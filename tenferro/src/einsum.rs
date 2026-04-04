@@ -7,9 +7,9 @@
 //! # Quick start
 //!
 //! ```ignore
-//! use tenferro::v2::einsum::einsum;
-//! use tenferro::v2::engine::Engine;
-//! use tenferro::v2::traced::TracedTensor;
+//! use tenferro::einsum::einsum;
+//! use tenferro::engine::Engine;
+//! use tenferro::traced::TracedTensor;
 //!
 //! let mut engine = Engine::new(CpuBackend::new());
 //! let a = TracedTensor::from_tensor(tensor_a);
@@ -46,7 +46,7 @@ use tenferro_tensor::v2::Tensor;
 /// ```ignore
 /// use omeco::ScoreFunction;
 /// use tenferro_einsum::ContractionOptimizerOptions;
-/// use tenferro::v2::einsum::{einsum_with, EinsumOptimize};
+/// use tenferro::einsum::{einsum_with, EinsumOptimize};
 ///
 /// // Default: FLOPS-first (minimize computation time)
 /// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
@@ -187,9 +187,9 @@ impl Default for EinsumOptimize {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::einsum::einsum;
-/// use tenferro::v2::engine::Engine;
-/// use tenferro::v2::traced::TracedTensor;
+/// use tenferro::einsum::einsum;
+/// use tenferro::engine::Engine;
+/// use tenferro::traced::TracedTensor;
 ///
 /// // Matrix multiply
 /// let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik");
@@ -224,9 +224,9 @@ pub fn einsum<B: SemiringCore<Operand = Tensor>>(
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::v2::einsum::{einsum_with, EinsumOptimize};
-/// use tenferro::v2::engine::Engine;
-/// use tenferro::v2::traced::TracedTensor;
+/// use tenferro::einsum::{einsum_with, EinsumOptimize};
+/// use tenferro::engine::Engine;
+/// use tenferro::traced::TracedTensor;
 ///
 /// // Left-to-right, no optimizer
 /// let c = einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
