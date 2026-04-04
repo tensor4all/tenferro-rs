@@ -1,3 +1,4 @@
+use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::v2::engine::Engine;
 use tenferro::v2::traced::{eval_all, TracedTensor};
 use tenferro_ops::config::DotGeneralConfig;
@@ -14,11 +15,11 @@ fn test_einsum_matmul() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = TracedTensor::traced_einsum("ij,jk->ik", &[&ta, &tb]);
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
 
-    let mut engine = Engine::new();
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // C = A*B = [[1*1+3*2+5*3, 1*4+3*5+5*6], [2*1+4*2+6*3, 2*4+4*5+6*6]]
@@ -33,11 +34,11 @@ fn test_einsum_inner_product() {
     let a = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = TracedTensor::traced_einsum("i,i->", &[&ta, &tb]);
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "i,i->");
 
-    let mut engine = Engine::new();
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // 1*4 + 2*5 + 3*6 = 32
@@ -50,10 +51,10 @@ fn test_einsum_row_sum() {
     // A = [[1,3,5],[2,4,6]] col-major: [1,2,3,4,5,6]
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor(a);
-    let mut tc = TracedTensor::traced_einsum("ij->i", &[&ta]);
-
     let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let mut tc = einsum(&mut engine, &[&ta], "ij->i");
+
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // row sums: [1+3+5, 2+4+6] = [9, 12]
@@ -66,11 +67,11 @@ fn test_einsum_hadamard() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = TracedTensor::traced_einsum("ij,ij->ij", &[&ta, &tb]);
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,ij->ij");
 
-    let mut engine = Engine::new();
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     assert_eq!(data, &[5.0, 12.0, 21.0, 32.0]);
@@ -82,16 +83,15 @@ fn test_einsum_outer_product() {
     let a = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b = f64_tensor(vec![2], vec![4.0, 5.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = TracedTensor::traced_einsum("i,j->ij", &[&ta, &tb]);
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "i,j->ij");
 
-    let mut engine = Engine::new();
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // C[i,j] = a[i]*b[j]
-    // C = [[1*4, 1*5], [2*4, 2*5], [3*4, 3*5]]
-    //   = [[4, 5], [8, 10], [12, 15]]
+    // C = [[4, 5], [8, 10], [12, 15]]
     // col-major: [4, 8, 12, 5, 10, 15]
     assert_eq!(data, &[4.0, 8.0, 12.0, 5.0, 10.0, 15.0]);
 }
@@ -104,11 +104,11 @@ fn test_einsum_matvec() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tv = TracedTensor::from_tensor(v);
-    let mut tc = TracedTensor::traced_einsum("ij,j->i", &[&ta, &tv]);
+    let mut tc = einsum(&mut engine, &[&ta, &tv], "ij,j->i");
 
-    let mut engine = Engine::new();
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // w = A*v = [1*1+3*2+5*3, 2*1+4*2+6*3] = [22, 28]
@@ -120,10 +120,10 @@ fn test_einsum_transpose() {
     // Transpose: A[2,3] -> A^T[3,2] via "ij->ji"
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor(a);
-    let mut tc = TracedTensor::traced_einsum("ij->ji", &[&ta]);
-
     let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let mut tc = einsum(&mut engine, &[&ta], "ij->ji");
+
     let result = tc.eval(&mut engine);
     let data = get_f64_data(result);
     // A^T col-major: [1,3,5, 2,4,6]
@@ -146,27 +146,146 @@ fn test_einsum_chain_matmul_3() {
     // C = [[1,5],[2,6],[3,7],[4,8]]
     let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 
+    let mut engine = Engine::new();
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);
-    let mut td = TracedTensor::traced_einsum("ij,jk,kl->il", &[&ta, &tb, &tc]);
+    let mut td = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
 
-    let mut engine = Engine::new();
     let result = td.eval(&mut engine);
     let data = get_f64_data(result);
 
     // D = A * B * C where A[2,3], B[3,4], C[4,2] (col-major)
-    // AB = A*B: AB[i,k] = sum_j A[i,j]*B[j,k]
-    // AB[0,0]=22, AB[1,0]=28, AB[0,1]=49, AB[1,1]=64
-    // AB[0,2]=76, AB[1,2]=100, AB[0,3]=103, AB[1,3]=136
-    //
-    // D = AB*C: D[i,l] = sum_k AB[i,k]*C[k,l]
-    // C[k,l]: C[0,0]=1,C[1,0]=2,C[2,0]=3,C[3,0]=4,C[0,1]=5,C[1,1]=6,C[2,1]=7,C[3,1]=8
-    // D[0,0] = 22*1+49*2+76*3+103*4 = 22+98+228+412 = 760
-    // D[1,0] = 28*1+64*2+100*3+136*4 = 28+128+300+544 = 1000
-    // D[0,1] = 22*5+49*6+76*7+103*8 = 110+294+532+824 = 1760
-    // D[1,1] = 28*5+64*6+100*7+136*8 = 140+384+700+1088 = 2312
-    // col-major: [D[0,0], D[1,0], D[0,1], D[1,1]] = [760, 1000, 1760, 2312]
+    // D[0,0]=760, D[1,0]=1000, D[0,1]=1760, D[1,1]=2312
+    // col-major: [760, 1000, 1760, 2312]
+    assert_eq!(data, &[760.0, 1000.0, 1760.0, 2312.0]);
+}
+
+// ============================================================================
+// New einsum_with tests
+// ============================================================================
+
+#[test]
+fn test_einsum_with_path() {
+    // A[2,3] x B[3,4] x C[4,2] -> D[2,2]
+    // JAX path: contract B*C first (positions 1,2), then A*result (positions 0,1)
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+
+    // Contract B*C first, then A with result
+    let mut td = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    );
+
+    let result = td.eval(&mut engine);
+    let data = get_f64_data(result);
+    assert_eq!(data, &[760.0, 1000.0, 1760.0, 2312.0]);
+}
+
+#[test]
+fn test_einsum_false() {
+    // A[2,3] x B[3,4] x C[4,2] -> D[2,2]
+    // No optimization: contract left-to-right (A*B first, then result*C)
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+
+    let mut td = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::False,
+    );
+
+    let result = td.eval(&mut engine);
+    let data = get_f64_data(result);
+    assert_eq!(data, &[760.0, 1000.0, 1760.0, 2312.0]);
+}
+
+#[test]
+fn test_einsum_chain_3_auto() {
+    // N=3 chain multiply with default auto optimization.
+    // Same data as test_einsum_chain_matmul_3 but explicitly using EinsumOptimize::default().
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+
+    let mut td = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::default(),
+    );
+
+    let result = td.eval(&mut engine);
+    let data = get_f64_data(result);
+    assert_eq!(data, &[760.0, 1000.0, 1760.0, 2312.0]);
+}
+
+#[test]
+fn test_einsum_with_nested() {
+    // A[2,3] x B[3,4] x C[4,2] -> D[2,2]
+    // Use NestedEinsum to specify: contract A*B first, then result*C
+    use tenferro_einsum::NestedEinsum;
+
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new();
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+
+    let nested = NestedEinsum::parse("(ij,jk),kl->il").unwrap();
+    let mut td = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Nested(nested),
+    );
+
+    let result = td.eval(&mut engine);
+    let data = get_f64_data(result);
     assert_eq!(data, &[760.0, 1000.0, 1760.0, 2312.0]);
 }
 
