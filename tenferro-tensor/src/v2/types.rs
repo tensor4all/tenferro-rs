@@ -21,8 +21,15 @@ pub struct Placement {
 }
 
 #[derive(Clone, Debug)]
+pub struct BufferHandle<T> {
+    pub id: u64,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+#[derive(Clone, Debug)]
 pub enum Buffer<T> {
     Host(Vec<T>),
+    Backend(BufferHandle<T>),
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +38,7 @@ pub struct TypedTensor<T> {
     pub shape: Vec<usize>,
     pub strides: Vec<isize>,
     pub placement: Placement,
+    pub preferred_compute_device: Option<ComputeDevice>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

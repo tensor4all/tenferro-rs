@@ -5,15 +5,19 @@ use tenferro_tensor::v2::DType;
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
-    Add,
-    Multiply,
-    Negate,
-    Conj,
-    BatchedGemm(DotGeneralConfig),
+    // Structural (common infrastructure)
     Permute { perm: Vec<usize> },
     Reshape { shape: Vec<usize> },
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    // Semiring (SemiringCore dispatch)
+    BatchedGemm(DotGeneralConfig),
     ReduceSum { axes: Vec<usize> },
+    // Semiring elementwise (algebra-dependent dispatch)
+    Add,
+    Multiply,
+    // Standard elementwise
+    Negate,
+    Conj,
     Divide,
     Abs,
     Sign,
@@ -22,6 +26,7 @@ pub enum ExecOp {
     Compare(CompareDir),
     Select,
     Clamp,
+    // Standard analytic
     Exp,
     Log,
     Sin,
@@ -32,6 +37,7 @@ pub enum ExecOp {
     Pow,
     Expm1,
     Log1p,
+    // Indexing
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
@@ -39,14 +45,13 @@ pub enum ExecOp {
     Pad(PadConfig),
     Concatenate { axis: usize },
     Reverse { axes: Vec<usize> },
+    // Additional reductions
     ReduceProd { axes: Vec<usize> },
     ReduceMax { axes: Vec<usize> },
     ReduceMin { axes: Vec<usize> },
+    // Linalg: Cholesky direct, others via CustomCall
     Cholesky,
-    Svd,
-    Qr,
-    Eigh,
-    Solve,
+    CustomCall { target: String },
 }
 
 #[derive(Clone, Debug)]

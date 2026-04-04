@@ -5,6 +5,7 @@ use tenferro_tensor::v2::DType;
 
 #[derive(Clone, Debug)]
 pub enum StableHloOp {
+    // Tier 1 (AD-closed core)
     Add,
     Multiply,
     Negate,
@@ -14,6 +15,7 @@ pub enum StableHloOp {
     Reshape { shape: Vec<usize> },
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
     ReduceSum { axes: Vec<usize> },
+    // Tier 2 elementwise
     Divide,
     Abs,
     Sign,
@@ -22,6 +24,7 @@ pub enum StableHloOp {
     Compare(CompareDir),
     Select,
     Clamp,
+    // Tier 2 analytic
     Exp,
     Log,
     Sin,
@@ -32,6 +35,7 @@ pub enum StableHloOp {
     Pow,
     Expm1,
     Log1p,
+    // Indexing
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
@@ -39,14 +43,18 @@ pub enum StableHloOp {
     Pad(PadConfig),
     Concatenate { axis: usize },
     Reverse { axes: Vec<usize> },
+    // Additional reductions
     ReduceProd { axes: Vec<usize> },
     ReduceMax { axes: Vec<usize> },
     ReduceMin { axes: Vec<usize> },
+    // Linalg: only Cholesky is a direct StableHLO op
     Cholesky,
-    Svd,
-    Qr,
-    Eigh,
-    Solve,
+    // All other linalg (SVD, QR, Eigh, Solve) lower to custom_call
+    CustomCall { target: String },
+    // Multi-output access
+    GetTupleElement { index: usize },
+    // Constant (from Fragment input nodes)
+    Constant,
 }
 
 #[derive(Clone, Debug)]
