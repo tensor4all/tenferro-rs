@@ -8,6 +8,8 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
+use tenferro_einsum::v2::builder::build_einsum_fragment;
+use tenferro_einsum::v2::types::Subscripts;
 use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -200,6 +202,65 @@ impl TracedTensor {
             out_shape,
         )
     }
+
+    pub fn traced_einsum(subscript_str: &str, inputs: &[&TracedTensor]) -> TracedTensor {
+        let subscripts = Subscripts::parse(subscript_str);
+
+        let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| t.shape.clone()).collect();
+
+        // Compute output shape from subscripts and input shapes
+        let out_shape = compute_einsum_output_shape(&subscripts, &shapes);
+
+        let mut builder = FragmentBuilder::new();
+
+        // Add parents and create ValRef for each input
+        let mut input_vals = Vec::new();
+        for input in inputs {
+            builder.add_parent(input.fragment.clone());
+            let val_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
+            input_vals.push(val_ref);
+        }
+
+        let result_ref = build_einsum_fragment(&mut builder, &subscripts, &input_vals, &shapes);
+
+        match result_ref {
+            ValRef::Local(result_local) => {
+                builder.set_outputs(vec![result_local]);
+                let fragment = Arc::new(builder.build());
+
+                let mut merged = HashMap::new();
+                for input in inputs {
+                    merged.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+
+                TracedTensor {
+                    shape: out_shape,
+                    dtype: inputs[0].dtype,
+                    fragment,
+                    val: result_local,
+                    data: None,
+                    inputs_map: Arc::new(merged),
+                }
+            }
+            ValRef::External(_) => {
+                // Identity pass-through: the einsum doesn't add any ops.
+                // Find which input was returned and clone its TracedTensor.
+                for (i, iv) in input_vals.iter().enumerate() {
+                    if *iv == result_ref {
+                        return TracedTensor {
+                            shape: out_shape,
+                            dtype: inputs[i].dtype,
+                            fragment: inputs[i].fragment.clone(),
+                            val: inputs[i].val,
+                            data: inputs[i].data.clone(),
+                            inputs_map: inputs[i].inputs_map.clone(),
+                        };
+                    }
+                }
+                panic!("build_einsum_fragment returned unrecognized external ref");
+            }
+        }
+    }
 }
 
 fn apply_unary(op: StdTensorOp, input: &TracedTensor, out_shape: Vec<usize>) -> TracedTensor {
@@ -245,6 +306,31 @@ fn apply_binary(
         val: outputs[0],
         data: None,
         inputs_map: Arc::new(merged),
+    }
+}
+
+fn compute_einsum_output_shape(subscripts: &Subscripts, shapes: &[Vec<usize>]) -> Vec<usize> {
+    // Build label -> size mapping from inputs
+    let mut label_to_size = std::collections::HashMap::new();
+    for (labels, shape) in subscripts.input_labels.iter().zip(shapes.iter()) {
+        for (&label, &size) in labels.iter().zip(shape.iter()) {
+            label_to_size.insert(label, size);
+        }
+    }
+    // Output shape is determined by output_labels
+    let out_shape: Vec<usize> = subscripts
+        .output_labels
+        .iter()
+        .map(|l| {
+            *label_to_size
+                .get(l)
+                .expect("output label not found in inputs")
+        })
+        .collect();
+    if out_shape.is_empty() {
+        vec![1]
+    } else {
+        out_shape
     }
 }
 
