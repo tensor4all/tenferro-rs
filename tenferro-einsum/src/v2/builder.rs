@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
@@ -63,6 +63,36 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         labels: new_labels,
         shape: new_shape,
     }
+}
+
+fn diagonalize_repeated<Op: GraphOp + SemiringOps>(
+    builder: &mut FragmentBuilder<Op>,
+    lv: &LabeledVal<Op>,
+) -> LabeledVal<Op> {
+    let mut seen: HashMap<u32, usize> = HashMap::new();
+    for (i, &label) in lv.labels.iter().enumerate() {
+        if let Some(&first) = seen.get(&label) {
+            // Found repeated label at axes `first` and `i`
+            let outputs = builder.add_op(
+                Op::extract_diag(first, i),
+                vec![lv.val.clone()],
+                OpMode::Primal,
+            );
+            let mut new_labels = lv.labels.clone();
+            new_labels.remove(i);
+            let mut new_shape = lv.shape.clone();
+            new_shape.remove(i);
+            let result = LabeledVal {
+                val: ValRef::Local(outputs[0]),
+                labels: new_labels,
+                shape: new_shape,
+            };
+            // Recurse in case there are more repeated labels
+            return diagonalize_repeated(builder, &result);
+        }
+        seen.insert(label, i);
+    }
+    lv.clone()
 }
 
 fn binary_contract<Op: GraphOp + SemiringOps>(
@@ -345,6 +375,11 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
             }
         })
         .collect();
+
+    // Diagonalize repeated indices in each input
+    for lv in &mut labeled {
+        *lv = diagonalize_repeated(builder, lv);
+    }
 
     if n_inputs == 1 || tree.step_count() == 0 {
         // Unary: just reduce and reorder
