@@ -13,7 +13,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::v2::{DType, Tensor};
 
-use super::backend::eval_exec_ir_host;
+use super::backend::{eval_exec_ir, SemiringCore};
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
 use super::engine::Engine;
 
@@ -58,7 +58,7 @@ impl TracedTensor {
         }
     }
 
-    pub fn eval(&mut self, _engine: &mut Engine) -> &Tensor {
+    pub fn eval<B: SemiringCore<Operand = Tensor>>(&mut self, engine: &mut Engine<B>) -> &Tensor {
         if self.data.is_some() {
             return self.data.as_ref().unwrap();
         }
@@ -85,7 +85,7 @@ impl TracedTensor {
             })
             .collect();
 
-        let mut results = eval_exec_ir_host(&exec, input_tensors);
+        let mut results = eval_exec_ir(&mut engine.backend, &exec, input_tensors);
         assert_eq!(results.len(), 1);
 
         self.data = Some(results.remove(0));
@@ -248,7 +248,10 @@ fn apply_binary(
     }
 }
 
-pub fn eval_all(engine: &mut Engine, outputs: &mut [&mut TracedTensor]) -> Vec<Tensor> {
+pub fn eval_all<B: SemiringCore<Operand = Tensor>>(
+    engine: &mut Engine<B>,
+    outputs: &mut [&mut TracedTensor],
+) -> Vec<Tensor> {
     let mut all_fragments = Vec::new();
     let mut output_keys = Vec::new();
     let mut all_inputs: HashMap<TensorInputKey, Tensor> = HashMap::new();
@@ -274,12 +277,11 @@ pub fn eval_all(engine: &mut Engine, outputs: &mut [&mut TracedTensor]) -> Vec<T
         })
         .collect();
 
-    let results = eval_exec_ir_host(&exec, input_tensors);
+    let results = eval_exec_ir(&mut engine.backend, &exec, input_tensors);
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
         tt.data = Some(result.clone());
     }
 
-    let _ = engine;
     results
 }

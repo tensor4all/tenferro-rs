@@ -5,6 +5,7 @@
 
 use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::v2::engine::Engine;
+use tenferro::v2::host_backend::HostBackend;
 use tenferro::v2::traced::TracedTensor;
 use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts};
 use tenferro_tensor::v2::{Tensor, TypedTensor};
@@ -74,7 +75,7 @@ fn einsum_identity() {
     // a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4, a[0,2]=5, a[1,2]=6
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut tb = einsum(&mut engine, &[&ta], "ij->ij");
     let result = tb.eval(&mut engine);
@@ -96,7 +97,7 @@ fn einsum_transpose() {
     // "ij->ji"
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut tb = einsum(&mut engine, &[&ta], "ij->ji");
     let result = tb.eval(&mut engine);
@@ -120,7 +121,7 @@ fn einsum_sum_reduce() {
     // b[0] = 1+3+5 = 9, b[1] = 2+4+6 = 12
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut tb = einsum(&mut engine, &[&ta], "ij->i");
     let result = tb.eval(&mut engine);
@@ -136,7 +137,7 @@ fn einsum_full_contraction() {
     // "ij->" — sum all elements = 1+2+3+4+5+6 = 21
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut tb = einsum(&mut engine, &[&ta], "ij->");
     let result = tb.eval(&mut engine);
@@ -153,7 +154,7 @@ fn einsum_trace() {
     // trace = 1 + 4 = 5
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut tb = einsum(&mut engine, &[&ta], "ii->");
     let result = tb.eval(&mut engine);
@@ -171,7 +172,7 @@ fn einsum_diagonal_extraction() {
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     );
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut tb = einsum(&mut engine, &[&ta], "ii->i");
     let result = tb.eval(&mut engine);
@@ -191,7 +192,7 @@ fn einsum_diagonal_embedding() {
     // Requires a broadcast-to-diagonal (Scatter) op not yet implemented.
     let v = f64_tensor(vec![3], vec![2.0, 3.0, 5.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tv = TracedTensor::from_tensor(v);
     let mut td = einsum(&mut engine, &[&tv], "i->ii");
     td.eval(&mut engine);
@@ -213,7 +214,7 @@ fn einsum_matmul() {
         ],
     );
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let tb = TracedTensor::from_tensor(b.clone());
     let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
@@ -242,7 +243,7 @@ fn einsum_outer_product() {
     let u = f64_tensor(vec![2], vec![1.0, 2.0]);
     let v = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tu = TracedTensor::from_tensor(u.clone());
     let tv = TracedTensor::from_tensor(v.clone());
     let mut tm = einsum(&mut engine, &[&tu, &tv], "i,j->ij");
@@ -267,7 +268,7 @@ fn einsum_dot_product() {
     let u = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let v = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tu = TracedTensor::from_tensor(u);
     let tv = TracedTensor::from_tensor(v);
     let mut td = einsum(&mut engine, &[&tu, &tv], "i,i->");
@@ -285,7 +286,7 @@ fn einsum_matvec() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let x = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let tx = TracedTensor::from_tensor(x.clone());
     let mut ty = einsum(&mut engine, &[&ta, &tx], "ij,j->i");
@@ -307,7 +308,7 @@ fn einsum_elementwise_mul() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let tb = TracedTensor::from_tensor(b.clone());
     let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,ij->ij");
@@ -337,7 +338,7 @@ fn einsum_three_matrices() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let tb = TracedTensor::from_tensor(b.clone());
     let tc = TracedTensor::from_tensor(c.clone());
@@ -382,7 +383,7 @@ fn einsum_with_path_matches_flat_nary() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
 
     // Auto-optimized
     let ta = TracedTensor::from_tensor(a.clone());
@@ -439,7 +440,7 @@ fn contraction_tree_from_pairs() {
         ],
     );
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);
@@ -471,7 +472,7 @@ fn einsum_partial_trace_with_free_index() {
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
     let t = f64_tensor(vec![2, 2, 3], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tt = TracedTensor::from_tensor(t.clone());
     let mut tv = einsum(&mut engine, &[&tt], "iij->j");
     let result = tv.eval(&mut engine);
@@ -513,7 +514,7 @@ fn einsum_batched_matmul() {
     //   data[6]=B[0,1,1]=4, data[7]=B[1,1,1]=8
     let b = f64_tensor(vec![2, 2, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let tb = TracedTensor::from_tensor(b.clone());
     let mut tc = einsum(&mut engine, &[&ta, &tb], "bij,bjk->bik");
@@ -547,7 +548,7 @@ fn einsum_reduce_first_axis() {
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
     );
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut ty = einsum(&mut engine, &[&ta], "ij->j");
     let result = ty.eval(&mut engine);
@@ -570,7 +571,7 @@ fn einsum_self_contraction_trace() {
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
     let t = f64_tensor(vec![2, 3, 2], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tt = TracedTensor::from_tensor(t.clone());
     let mut tv = einsum(&mut engine, &[&tt], "ijk->j");
     let result = tv.eval(&mut engine);
@@ -607,7 +608,7 @@ fn test_optimize_false_left_to_right() {
     );
     let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
 
     // Reference: auto optimization
     let ta = TracedTensor::from_tensor(a.clone());
@@ -651,7 +652,7 @@ fn test_optimize_path_jax_compatible() {
     );
     let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
 
     // Reference
     let ta = TracedTensor::from_tensor(a.clone());
@@ -695,7 +696,7 @@ fn test_optimize_nested() {
     );
     let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
 
     // Reference
     let ta = TracedTensor::from_tensor(a.clone());
@@ -744,7 +745,7 @@ fn test_optimize_tree() {
     let shapes: &[&[usize]] = &[&[2, 3], &[3, 4], &[4, 2]];
     let tree = ContractionTree::optimize(&subs, shapes).unwrap();
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
 
     // Reference
     let ta = TracedTensor::from_tensor(a.clone());
@@ -786,7 +787,7 @@ fn einsum_error_rank_mismatch() {
     // Subscripts say "ij" (rank 2) but tensor is rank 1
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tv = TracedTensor::from_tensor(v);
     // v2 panics during contraction tree optimization because the subscript
     // label count doesn't match the tensor's rank.
@@ -798,7 +799,7 @@ fn einsum_error_rank_mismatch() {
 #[should_panic(expected = "contraction optimization failed")]
 fn einsum_error_empty_inputs() {
     // No input tensors -- v2 panics during tree construction
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let empty: &[&TracedTensor] = &[];
     let mut r = einsum(&mut engine, empty, "->");
     r.eval(&mut engine);
@@ -809,7 +810,7 @@ fn einsum_error_empty_inputs() {
 fn einsum_wrong_operand_count() {
     // Subscripts say 2 inputs but only 1 provided
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut r = einsum(&mut engine, &[&ta], "ij,jk->ik");
     r.eval(&mut engine);
@@ -821,7 +822,7 @@ fn einsum_shape_mismatch() {
     // j=3 in A but j=2 in B -> shape mismatch
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let mut r = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
@@ -839,7 +840,7 @@ fn einsum_trace_rank3_to_vector() {
     let data: Vec<f64> = (1..=18).map(|x| x as f64).collect();
     let t = f64_tensor(vec![3, 2, 3], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let tt = TracedTensor::from_tensor(t.clone());
     let mut tv = einsum(&mut engine, &[&tt], "iji->j");
     let result = tv.eval(&mut engine);
@@ -862,7 +863,7 @@ fn einsum_multi_pair_trace_iijj() {
     let data: Vec<f64> = (0..total).map(|x| x as f64).collect();
     let a = f64_tensor(vec![n, n, n, n], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut ts = einsum(&mut engine, &[&ta], "iijj->");
     let result = ts.eval(&mut engine);
@@ -884,7 +885,7 @@ fn einsum_diag_extract_reduce_ijj_to_i() {
     let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
     let a = f64_tensor(vec![2, 3, 3], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut ty = einsum(&mut engine, &[&ta], "ijj->i");
     let result = ty.eval(&mut engine);
@@ -905,7 +906,7 @@ fn einsum_diag_extract_no_reduce_ijj_to_ij() {
     let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
     let a = f64_tensor(vec![2, 3, 3], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut ty = einsum(&mut engine, &[&ta], "ijj->ij");
     let result = ty.eval(&mut engine);
@@ -929,7 +930,7 @@ fn einsum_diag_extract_permuted_jii_to_j() {
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let a = f64_tensor(vec![3, 2, 2], data);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a.clone());
     let mut ty = einsum(&mut engine, &[&ta], "jii->j");
     let result = ty.eval(&mut engine);
@@ -952,7 +953,7 @@ fn einsum_scalar_vector_products() {
 
     // ",k->k": scalar * vector
     {
-        let mut engine = Engine::new();
+        let mut engine = Engine::new(HostBackend::new());
         let ts = TracedTensor::from_tensor(three.clone());
         let tv = TracedTensor::from_tensor(v4.clone());
         let mut result = einsum(&mut engine, &[&ts, &tv], ",k->k");
@@ -966,7 +967,7 @@ fn einsum_scalar_vector_products() {
 
     // "i,->i": vector * scalar
     {
-        let mut engine = Engine::new();
+        let mut engine = Engine::new(HostBackend::new());
         let tv = TracedTensor::from_tensor(v3.clone());
         let ts = TracedTensor::from_tensor(two.clone());
         let mut result = einsum(&mut engine, &[&tv, &ts], "i,->i");
@@ -979,7 +980,7 @@ fn einsum_scalar_vector_products() {
 
     // ",->": scalar * scalar
     {
-        let mut engine = Engine::new();
+        let mut engine = Engine::new(HostBackend::new());
         let ts = TracedTensor::from_tensor(three.clone());
         let t7 = TracedTensor::from_tensor(seven.clone());
         let mut result = einsum(&mut engine, &[&ts, &t7], ",->");
@@ -1003,7 +1004,7 @@ fn einsum_scalar_vector_products() {
 fn einsum_error_output_label_not_in_input() {
     // Output references label 'k' which is not in any input
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut r = einsum(&mut engine, &[&ta], "ij->ik");
     r.eval(&mut engine);
@@ -1015,7 +1016,7 @@ fn einsum_error_non_square_trace() {
     // Trace "ii->" but matrix is 2x3 (non-square)
     // v2 catches this at contraction tree optimization time
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let mut r = einsum(&mut engine, &[&ta], "ii->");
     r.eval(&mut engine);
@@ -1033,7 +1034,7 @@ fn einsum_with_path_invalid_pairs_errors() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);
@@ -1054,7 +1055,7 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(HostBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
     let tc = TracedTensor::from_tensor(c);

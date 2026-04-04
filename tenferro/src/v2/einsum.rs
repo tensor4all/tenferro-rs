@@ -11,7 +11,7 @@
 //! use tenferro::v2::engine::Engine;
 //! use tenferro::v2::traced::TracedTensor;
 //!
-//! let mut engine = Engine::new();
+//! let mut engine = Engine::new(HostBackend::new());
 //! let a = TracedTensor::from_tensor(tensor_a);
 //! let b = TracedTensor::from_tensor(tensor_b);
 //!
@@ -29,8 +29,10 @@ use omeco::ScoreFunction;
 use tenferro_einsum::v2::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
 
+use super::backend::SemiringCore;
 use super::engine::Engine;
 use super::traced::TracedTensor;
+use tenferro_tensor::v2::Tensor;
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
@@ -207,7 +209,11 @@ impl Default for EinsumOptimize {
 /// // Outer product
 /// let o = einsum(&mut engine, &[&x, &y], "i,j->ij");
 /// ```
-pub fn einsum(engine: &mut Engine, inputs: &[&TracedTensor], subscripts: &str) -> TracedTensor {
+pub fn einsum<B: SemiringCore<Operand = Tensor>>(
+    engine: &mut Engine<B>,
+    inputs: &[&TracedTensor],
+    subscripts: &str,
+) -> TracedTensor {
     einsum_with(engine, inputs, subscripts, EinsumOptimize::default())
 }
 
@@ -230,8 +236,8 @@ pub fn einsum(engine: &mut Engine, inputs: &[&TracedTensor], subscripts: &str) -
 /// let c = einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Path(vec![(1, 2), (0, 1)]));
 /// ```
-pub fn einsum_with(
-    engine: &mut Engine,
+pub fn einsum_with<B: SemiringCore<Operand = Tensor>>(
+    engine: &mut Engine<B>,
     inputs: &[&TracedTensor],
     subscripts: &str,
     optimize: EinsumOptimize,
