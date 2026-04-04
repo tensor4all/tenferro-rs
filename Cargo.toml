@@ -25,6 +25,7 @@ members = [
     "extension/tenferro-ext-burn",
     "extension/tenferro-ext-mdarray",
     "extension/tenferro-ext-ndarray",
+    "tenferro-ops",
     "tenferro",
 ]
 default-members = [
@@ -67,3 +68,7 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
+computegraph = { path = "../computegraph-rs" }
+
+[patch."https://github.com/tensor4all/computegraph-rs.git"]
+computegraph = { path = "../computegraph-rs" }

@@ -42,6 +42,8 @@
 //! and [`Tensor::matrix_exp`] require an installed runtime via
 //! [`set_default_runtime`] or [`runtime::with_runtime`].
 
+pub mod v2;
+
 mod core;
 pub mod error;
 #[path = "jvp.rs"]

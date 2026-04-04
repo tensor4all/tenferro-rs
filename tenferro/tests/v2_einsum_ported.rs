@@ -1,0 +1,1069 @@
+//! Ported v1 einsum tests adapted for the v2 traced pipeline.
+//!
+//! Data is stored in **column-major** order. A helper `row_to_col_major` is
+//! available for converting row-major test data when needed.
+
+use tenferro::v2::einsum::{einsum, einsum_with, EinsumOptimize};
+use tenferro::v2::engine::Engine;
+use tenferro::v2::host_backend::HostBackend;
+use tenferro::v2::traced::TracedTensor;
+use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts};
+use tenferro_tensor::v2::{Tensor, TypedTensor};
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
+
+fn get_f64_data(t: &Tensor) -> &[f64] {
+    match t {
+        Tensor::F64(inner) => inner.host_data(),
+        _ => panic!("expected F64"),
+    }
+}
+
+/// Read a single element from a v2 Tensor by multi-index (col-major).
+fn get_v2(t: &Tensor, idx: &[usize]) -> f64 {
+    match t {
+        Tensor::F64(inner) => *inner.get(idx),
+        _ => panic!("expected F64"),
+    }
+}
+
+/// Convert row-major data to column-major for a given shape.
+#[allow(dead_code)]
+fn row_to_col_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
+    let n: usize = shape.iter().product();
+    let mut col_data = vec![0.0; n];
+    let rank = shape.len();
+    if rank <= 1 {
+        return data.to_vec();
+    }
+    for rm_flat in 0..n {
+        let mut idx = vec![0usize; rank];
+        let mut rem = rm_flat;
+        for d in (0..rank).rev() {
+            idx[d] = rem % shape[d];
+            rem /= shape[d];
+        }
+        let mut cm_flat = 0;
+        let mut stride = 1;
+        for d in 0..rank {
+            cm_flat += idx[d] * stride;
+            stride *= shape[d];
+        }
+        col_data[cm_flat] = data[rm_flat];
+    }
+    col_data
+}
+
+fn assert_close(a: f64, b: f64, label: &str) {
+    assert!((a - b).abs() < 1e-10, "{label}: got {a}, expected {b}");
+}
+
+// ============================================================================
+// Group 1: Basic unary operations
+// ============================================================================
+
+#[test]
+fn einsum_identity() {
+    // "ij->ij" — identity copy
+    // v1 data: col-major [1,2,3,4,5,6] shape [2,3]
+    // a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4, a[0,2]=5, a[1,2]=6
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut tb = einsum(&mut engine, &[&ta], "ij->ij");
+    let result = tb.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 3]);
+    for i in 0..2 {
+        for j in 0..3 {
+            assert_close(
+                get_v2(result, &[i, j]),
+                get_v2(&a, &[i, j]),
+                &format!("identity[{i},{j}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_transpose() {
+    // "ij->ji"
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut tb = einsum(&mut engine, &[&ta], "ij->ji");
+    let result = tb.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[3, 2]);
+    for i in 0..2 {
+        for j in 0..3 {
+            assert_close(
+                get_v2(result, &[j, i]),
+                get_v2(&a, &[i, j]),
+                &format!("transpose[{j},{i}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_sum_reduce() {
+    // "ij->i" — sum over j
+    // a col-major: a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4, a[0,2]=5, a[1,2]=6
+    // b[0] = 1+3+5 = 9, b[1] = 2+4+6 = 12
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut tb = einsum(&mut engine, &[&ta], "ij->i");
+    let result = tb.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2]);
+    let data = get_f64_data(result);
+    assert_close(data[0], 9.0, "sum_reduce[0]");
+    assert_close(data[1], 12.0, "sum_reduce[1]");
+}
+
+#[test]
+fn einsum_full_contraction() {
+    // "ij->" — sum all elements = 1+2+3+4+5+6 = 21
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut tb = einsum(&mut engine, &[&ta], "ij->");
+    let result = tb.eval(&mut engine);
+
+    // v2 returns shape [1] for scalar output
+    let data = get_f64_data(result);
+    assert_close(data[0], 21.0, "full_contraction");
+}
+
+#[test]
+fn einsum_trace() {
+    // "ii->" — trace of 2x2 matrix
+    // col-major [1,2,3,4]: a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4
+    // trace = 1 + 4 = 5
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut tb = einsum(&mut engine, &[&ta], "ii->");
+    let result = tb.eval(&mut engine);
+
+    let data = get_f64_data(result);
+    assert_close(data[0], 5.0, "trace");
+}
+
+#[test]
+fn einsum_diagonal_extraction() {
+    // "ii->i" — extract diagonal of 3x3 matrix
+    // col-major [1..9]: a[0,0]=1, a[1,0]=2, ..., a[1,1]=5, ..., a[2,2]=9
+    let a = f64_tensor(
+        vec![3, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+    );
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut tb = einsum(&mut engine, &[&ta], "ii->i");
+    let result = tb.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[3]);
+    let data = get_f64_data(result);
+    assert_close(data[0], 1.0, "diag[0]");
+    assert_close(data[1], 5.0, "diag[1]");
+    assert_close(data[2], 9.0, "diag[2]");
+}
+
+#[test]
+#[should_panic]
+fn einsum_diagonal_embedding() {
+    // "i->ii" — diagonal embedding (not yet supported in v2)
+    // Would produce a 3x3 diagonal matrix from a [3] vector.
+    // Requires a broadcast-to-diagonal (Scatter) op not yet implemented.
+    let v = f64_tensor(vec![3], vec![2.0, 3.0, 5.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tv = TracedTensor::from_tensor(v);
+    let mut td = einsum(&mut engine, &[&tv], "i->ii");
+    td.eval(&mut engine);
+}
+
+// ============================================================================
+// Group 2: Binary operations
+// ============================================================================
+
+#[test]
+fn einsum_matmul() {
+    // "ij,jk->ik"
+    // Same data as v1: A[2,3] col-major [1,2,3,4,5,6], B[3,4] col-major [1..12]
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
+    let result = tc.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 4]);
+    // Verify against manual computation
+    for i in 0..2 {
+        for k in 0..4 {
+            let mut expected = 0.0;
+            for j in 0..3 {
+                expected += get_v2(&a, &[i, j]) * get_v2(&b, &[j, k]);
+            }
+            assert_close(
+                get_v2(result, &[i, k]),
+                expected,
+                &format!("matmul[{i},{k}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_outer_product() {
+    // "i,j->ij"
+    let u = f64_tensor(vec![2], vec![1.0, 2.0]);
+    let v = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tu = TracedTensor::from_tensor(u.clone());
+    let tv = TracedTensor::from_tensor(v.clone());
+    let mut tm = einsum(&mut engine, &[&tu, &tv], "i,j->ij");
+    let result = tm.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 3]);
+    for i in 0..2 {
+        for j in 0..3 {
+            let expected = get_v2(&u, &[i]) * get_v2(&v, &[j]);
+            assert_close(
+                get_v2(result, &[i, j]),
+                expected,
+                &format!("outer[{i},{j}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_dot_product() {
+    // "i,i->"
+    let u = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
+    let v = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tu = TracedTensor::from_tensor(u);
+    let tv = TracedTensor::from_tensor(v);
+    let mut td = einsum(&mut engine, &[&tu, &tv], "i,i->");
+    let result = td.eval(&mut engine);
+
+    // 1*4 + 2*5 + 3*6 = 32
+    let data = get_f64_data(result);
+    assert_close(data[0], 32.0, "dot_product");
+}
+
+#[test]
+fn einsum_matvec() {
+    // "ij,j->i"
+    // A[2,3] col-major [1,2,3,4,5,6], x = [1,2,3]
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let x = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tx = TracedTensor::from_tensor(x.clone());
+    let mut ty = einsum(&mut engine, &[&ta, &tx], "ij,j->i");
+    let result = ty.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2]);
+    for i in 0..2 {
+        let mut expected = 0.0;
+        for j in 0..3 {
+            expected += get_v2(&a, &[i, j]) * get_v2(&x, &[j]);
+        }
+        assert_close(get_v2(result, &[i]), expected, &format!("matvec[{i}]"));
+    }
+}
+
+#[test]
+fn einsum_elementwise_mul() {
+    // "ij,ij->ij" — Hadamard product
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ij,ij->ij");
+    let result = tc.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 2]);
+    for i in 0..2 {
+        for j in 0..2 {
+            let expected = get_v2(&a, &[i, j]) * get_v2(&b, &[i, j]);
+            assert_close(
+                get_v2(result, &[i, j]),
+                expected,
+                &format!("hadamard[{i},{j}]"),
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Group 3: N-ary operations
+// ============================================================================
+
+#[test]
+fn einsum_three_matrices() {
+    // "ij,jk,kl->il" — chain multiply 3 matrices
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut td = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let result_d = td.eval(&mut engine);
+
+    assert_eq!(result_d.shape(), &[2, 2]);
+
+    // Verify D = A @ B @ C by computing step-by-step
+    // First: AB
+    let ta2 = TracedTensor::from_tensor(a.clone());
+    let tb2 = TracedTensor::from_tensor(b.clone());
+    let mut tab = einsum(&mut engine, &[&ta2, &tb2], "ij,jk->ik");
+    let ab = tab.eval(&mut engine).clone();
+
+    // Then: (AB) @ C
+    let tab2 = TracedTensor::from_tensor(ab);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut tabc = einsum(&mut engine, &[&tab2, &tc2], "ij,jk->ik");
+    let abc = tabc.eval(&mut engine);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            assert_close(
+                get_v2(result_d, &[i, j]),
+                get_v2(abc, &[i, j]),
+                &format!("three_mat[{i},{j}]"),
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Group 4: Contraction tree / path tests
+// ============================================================================
+
+#[test]
+fn einsum_with_path_matches_flat_nary() {
+    // Verify that an explicit JAX path produces the same result as auto-optimized.
+    // A[2,2], B[2,2], C[2,2]; "ij,jk,kl->il"
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+
+    // Auto-optimized
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let auto_result = auto.eval(&mut engine).clone();
+
+    // Explicit path: contract B*C first (positions 1,2), then A*result (positions 0,1)
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut via_path = einsum_with(
+        &mut engine,
+        &[&ta2, &tb2, &tc2],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+    );
+    let path_result = via_path.eval(&mut engine);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            assert_close(
+                get_v2(path_result, &[i, j]),
+                get_v2(&auto_result, &[i, j]),
+                &format!("path_vs_auto[{i},{j}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn contraction_tree_from_pairs() {
+    // Build contraction tree from explicit pairs and verify shape.
+    // A[2,3] B[3,4] C[4,5] -> D[2,5]
+    // Contract B*C first (pair 1,2 -> index 3), then A*T (pair 0,3)
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4], &[4, 5]], &[(1, 2), (0, 3)])
+        .unwrap();
+
+    // Use the tree with v2 API
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(
+        vec![4, 5],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+            17.0, 18.0, 19.0, 20.0,
+        ],
+    );
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+    let mut td = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Tree(tree),
+    );
+    let result = td.eval(&mut engine);
+    assert_eq!(result.shape(), &[2, 5]);
+}
+
+#[test]
+fn contraction_tree_from_pairs_rejects_wrong_step_count() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let result = ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2], &[2, 2]], &[(1, 2)]);
+    assert!(result.is_err(), "wrong number of path steps must error");
+}
+
+// ============================================================================
+// Group 5: Complex contraction patterns
+// ============================================================================
+
+#[test]
+fn einsum_partial_trace_with_free_index() {
+    // "iij->j" — partial trace: v[j] = sum_i T[i,i,j]
+    // T[2,2,3] col-major: data 1..12
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = f64_tensor(vec![2, 2, 3], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tt = TracedTensor::from_tensor(t.clone());
+    let mut tv = einsum(&mut engine, &[&tt], "iij->j");
+    let result = tv.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[3]);
+    for j in 0..3 {
+        let mut expected = 0.0;
+        for i in 0..2 {
+            expected += get_v2(&t, &[i, i, j]);
+        }
+        assert_close(
+            get_v2(result, &[j]),
+            expected,
+            &format!("partial_trace[{j}]"),
+        );
+    }
+}
+
+#[test]
+fn einsum_batched_matmul() {
+    // "bij,bjk->bik" — batched matrix multiply
+    // batch=2, each is 2x2
+    // A col-major [2,2,2]:
+    //   batch 0: I = [[1,0],[0,1]]
+    //   batch 1: 2I = [[2,0],[0,2]]
+    // Col-major for [2,2,2]: leftmost varies fastest
+    //   A[b,i,j] with strides [1,2,4]
+    //   data[0]=A[0,0,0]=1, data[1]=A[1,0,0]=2
+    //   data[2]=A[0,1,0]=0, data[3]=A[1,1,0]=0
+    //   data[4]=A[0,0,1]=0, data[5]=A[1,0,1]=0
+    //   data[6]=A[0,1,1]=1, data[7]=A[1,1,1]=2
+    let a = f64_tensor(vec![2, 2, 2], vec![1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0]);
+    // B col-major [2,2,2]:
+    //   B[b,j,k] with strides [1,2,4]
+    //   batch 0: [[1,3],[2,4]], batch 1: [[5,7],[6,8]]
+    //   data[0]=B[0,0,0]=1, data[1]=B[1,0,0]=5
+    //   data[2]=B[0,1,0]=2, data[3]=B[1,1,0]=6
+    //   data[4]=B[0,0,1]=3, data[5]=B[1,0,1]=7
+    //   data[6]=B[0,1,1]=4, data[7]=B[1,1,1]=8
+    let b = f64_tensor(vec![2, 2, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "bij,bjk->bik");
+    let result = tc.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 2, 2]);
+    for batch in 0..2 {
+        for i in 0..2 {
+            for k in 0..2 {
+                let mut expected = 0.0;
+                for j in 0..2 {
+                    expected += get_v2(&a, &[batch, i, j]) * get_v2(&b, &[batch, j, k]);
+                }
+                assert_close(
+                    get_v2(result, &[batch, i, k]),
+                    expected,
+                    &format!("batched_matmul[{batch},{i},{k}]"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn einsum_reduce_first_axis() {
+    // "ij->j" — sum over first axis
+    // A[3,4] col-major: data [0..12] with strides [1,3]
+    //   A[0,0]=0, A[1,0]=1, A[2,0]=2, A[0,1]=3, A[1,1]=4, A[2,1]=5, ...
+    let a = f64_tensor(
+        vec![3, 4],
+        vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+    );
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut ty = einsum(&mut engine, &[&ta], "ij->j");
+    let result = ty.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[4]);
+    for j in 0..4 {
+        let expected = get_v2(&a, &[0, j]) + get_v2(&a, &[1, j]) + get_v2(&a, &[2, j]);
+        assert_close(
+            get_v2(result, &[j]),
+            expected,
+            &format!("reduce_first[{j}]"),
+        );
+    }
+}
+
+#[test]
+fn einsum_self_contraction_trace() {
+    // "ijk->j" — self-contraction: sum over i and k (not a trace — just reduction)
+    // T[2,3,2] col-major: data 1..12
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = f64_tensor(vec![2, 3, 2], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tt = TracedTensor::from_tensor(t.clone());
+    let mut tv = einsum(&mut engine, &[&tt], "ijk->j");
+    let result = tv.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[3]);
+    for j in 0..3 {
+        let mut expected = 0.0;
+        for i in 0..2 {
+            for k in 0..2 {
+                expected += get_v2(&t, &[i, j, k]);
+            }
+        }
+        assert_close(
+            get_v2(result, &[j]),
+            expected,
+            &format!("self_contraction[{j}]"),
+        );
+    }
+}
+
+// ============================================================================
+// Group 6: EinsumOptimize variants (v2-specific)
+// ============================================================================
+
+#[test]
+fn test_optimize_false_left_to_right() {
+    // EinsumOptimize::False contracts left-to-right
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+
+    // Reference: auto optimization
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let auto_result = auto.eval(&mut engine).clone();
+
+    // False: left-to-right
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut ltr = einsum_with(
+        &mut engine,
+        &[&ta2, &tb2, &tc2],
+        "ij,jk,kl->il",
+        EinsumOptimize::False,
+    );
+    let ltr_result = ltr.eval(&mut engine);
+
+    for i in 0..2 {
+        for l in 0..2 {
+            assert_close(
+                get_v2(ltr_result, &[i, l]),
+                get_v2(&auto_result, &[i, l]),
+                &format!("false_ltr[{i},{l}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_optimize_path_jax_compatible() {
+    // EinsumOptimize::Path with JAX-style indices
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+
+    // Reference
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let auto_result = auto.eval(&mut engine).clone();
+
+    // Path: contract A*B first (0,1), then result*C (0,1)
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut path = einsum_with(
+        &mut engine,
+        &[&ta2, &tb2, &tc2],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+    );
+    let path_result = path.eval(&mut engine);
+
+    for i in 0..2 {
+        for l in 0..2 {
+            assert_close(
+                get_v2(path_result, &[i, l]),
+                get_v2(&auto_result, &[i, l]),
+                &format!("path_jax[{i},{l}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_optimize_nested() {
+    // EinsumOptimize::Nested with parenthesized notation
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+
+    // Reference
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let auto_result = auto.eval(&mut engine).clone();
+
+    // Nested: "(ij,jk),kl->il" = contract A*B first, then result*C
+    let nested = NestedEinsum::parse("(ij,jk),kl->il").unwrap();
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut nested_result = einsum_with(
+        &mut engine,
+        &[&ta2, &tb2, &tc2],
+        "ij,jk,kl->il",
+        EinsumOptimize::Nested(nested),
+    );
+    let result = nested_result.eval(&mut engine);
+
+    for i in 0..2 {
+        for l in 0..2 {
+            assert_close(
+                get_v2(result, &[i, l]),
+                get_v2(&auto_result, &[i, l]),
+                &format!("nested[{i},{l}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn test_optimize_tree() {
+    // EinsumOptimize::Tree with pre-computed ContractionTree
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+
+    let subs = Subscripts::parse("ij,jk,kl->il").unwrap();
+    let shapes: &[&[usize]] = &[&[2, 3], &[3, 4], &[4, 2]];
+    let tree = ContractionTree::optimize(&subs, shapes).unwrap();
+
+    let mut engine = Engine::new(HostBackend::new());
+
+    // Reference
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut auto = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il");
+    let auto_result = auto.eval(&mut engine).clone();
+
+    // Tree
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut tree_result = einsum_with(
+        &mut engine,
+        &[&ta2, &tb2, &tc2],
+        "ij,jk,kl->il",
+        EinsumOptimize::Tree(tree),
+    );
+    let result = tree_result.eval(&mut engine);
+
+    for i in 0..2 {
+        for l in 0..2 {
+            assert_close(
+                get_v2(result, &[i, l]),
+                get_v2(&auto_result, &[i, l]),
+                &format!("tree[{i},{l}]"),
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Group 7: Error cases
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "contraction optimization failed")]
+fn einsum_error_rank_mismatch() {
+    // Subscripts say "ij" (rank 2) but tensor is rank 1
+    let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tv = TracedTensor::from_tensor(v);
+    // v2 panics during contraction tree optimization because the subscript
+    // label count doesn't match the tensor's rank.
+    let mut result = einsum(&mut engine, &[&tv], "ij->i");
+    result.eval(&mut engine);
+}
+
+#[test]
+#[should_panic(expected = "contraction optimization failed")]
+fn einsum_error_empty_inputs() {
+    // No input tensors -- v2 panics during tree construction
+    let mut engine = Engine::new(HostBackend::new());
+    let empty: &[&TracedTensor] = &[];
+    let mut r = einsum(&mut engine, empty, "->");
+    r.eval(&mut engine);
+}
+
+#[test]
+#[should_panic(expected = "contraction optimization failed")]
+fn einsum_wrong_operand_count() {
+    // Subscripts say 2 inputs but only 1 provided
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut r = einsum(&mut engine, &[&ta], "ij,jk->ik");
+    r.eval(&mut engine);
+}
+
+#[test]
+#[should_panic(expected = "ShapeMismatch")]
+fn einsum_shape_mismatch() {
+    // j=3 in A but j=2 in B -> shape mismatch
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let mut r = einsum(&mut engine, &[&ta, &tb], "ij,jk->ik");
+    r.eval(&mut engine);
+}
+
+// ============================================================================
+// Group 8: Ported repeated-index and diagonal-extract patterns
+// ============================================================================
+
+#[test]
+fn einsum_trace_rank3_to_vector() {
+    // "iji->j" — trace of rank-3 tensor: v[j] = sum_i T[i,j,i]
+    // T[3,2,3] col-major: data 1..18
+    let data: Vec<f64> = (1..=18).map(|x| x as f64).collect();
+    let t = f64_tensor(vec![3, 2, 3], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let tt = TracedTensor::from_tensor(t.clone());
+    let mut tv = einsum(&mut engine, &[&tt], "iji->j");
+    let result = tv.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2]);
+    for j in 0..2 {
+        let mut expected = 0.0;
+        for i in 0..3 {
+            expected += get_v2(&t, &[i, j, i]);
+        }
+        assert_close(get_v2(result, &[j]), expected, &format!("trace_rank3[{j}]"));
+    }
+}
+
+#[test]
+fn einsum_multi_pair_trace_iijj() {
+    // "iijj->" — trace over two pairs of repeated indices
+    let n = 3;
+    let total = n * n * n * n;
+    let data: Vec<f64> = (0..total).map(|x| x as f64).collect();
+    let a = f64_tensor(vec![n, n, n, n], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut ts = einsum(&mut engine, &[&ta], "iijj->");
+    let result = ts.eval(&mut engine);
+
+    // v2 scalar shape is [1]
+    assert_eq!(result.shape(), &[1]);
+    let mut expected = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            expected += get_v2(&a, &[i, i, j, j]);
+        }
+    }
+    assert_close(get_f64_data(result)[0], expected, "multi_pair_trace_iijj");
+}
+
+#[test]
+fn einsum_diag_extract_reduce_ijj_to_i() {
+    // "ijj->i" — extract diagonal along axes 1,2, then free axis 0
+    let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
+    let a = f64_tensor(vec![2, 3, 3], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut ty = einsum(&mut engine, &[&ta], "ijj->i");
+    let result = ty.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2]);
+    for i in 0..2 {
+        let mut expected = 0.0;
+        for j in 0..3 {
+            expected += get_v2(&a, &[i, j, j]);
+        }
+        assert_close(get_v2(result, &[i]), expected, &format!("ijj_to_i[{i}]"));
+    }
+}
+
+#[test]
+fn einsum_diag_extract_no_reduce_ijj_to_ij() {
+    // "ijj->ij" — extract diagonal along axes 1,2, keep both i and j
+    let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
+    let a = f64_tensor(vec![2, 3, 3], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut ty = einsum(&mut engine, &[&ta], "ijj->ij");
+    let result = ty.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[2, 3]);
+    for i in 0..2 {
+        for j in 0..3 {
+            let expected = get_v2(&a, &[i, j, j]);
+            assert_close(
+                get_v2(result, &[i, j]),
+                expected,
+                &format!("ijj_to_ij[{i},{j}]"),
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_diag_extract_permuted_jii_to_j() {
+    // "jii->j" — extract diagonal along axes 1,2, reduce over i
+    let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+    let a = f64_tensor(vec![3, 2, 2], data);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let mut ty = einsum(&mut engine, &[&ta], "jii->j");
+    let result = ty.eval(&mut engine);
+
+    assert_eq!(result.shape(), &[3]);
+    for j in 0..3 {
+        let expected = get_v2(&a, &[j, 0, 0]) + get_v2(&a, &[j, 1, 1]);
+        assert_close(get_v2(result, &[j]), expected, &format!("jii_to_j[{j}]"));
+    }
+}
+
+#[test]
+fn einsum_scalar_vector_products() {
+    // v2 scalars use shape [] (rank 0, 1 element)
+    let three = f64_tensor(vec![], vec![3.0]);
+    let two = f64_tensor(vec![], vec![2.0]);
+    let v4 = f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let v3 = f64_tensor(vec![3], vec![10.0, 20.0, 30.0]);
+    let seven = f64_tensor(vec![], vec![7.0]);
+
+    // ",k->k": scalar * vector
+    {
+        let mut engine = Engine::new(HostBackend::new());
+        let ts = TracedTensor::from_tensor(three.clone());
+        let tv = TracedTensor::from_tensor(v4.clone());
+        let mut result = einsum(&mut engine, &[&ts, &tv], ",k->k");
+        let r = result.eval(&mut engine);
+        assert_eq!(r.shape(), &[4]);
+        assert_close(get_v2(r, &[0]), 3.0, "scalar*vec[0]");
+        assert_close(get_v2(r, &[1]), 6.0, "scalar*vec[1]");
+        assert_close(get_v2(r, &[2]), 9.0, "scalar*vec[2]");
+        assert_close(get_v2(r, &[3]), 12.0, "scalar*vec[3]");
+    }
+
+    // "i,->i": vector * scalar
+    {
+        let mut engine = Engine::new(HostBackend::new());
+        let tv = TracedTensor::from_tensor(v3.clone());
+        let ts = TracedTensor::from_tensor(two.clone());
+        let mut result = einsum(&mut engine, &[&tv, &ts], "i,->i");
+        let r = result.eval(&mut engine);
+        assert_eq!(r.shape(), &[3]);
+        assert_close(get_v2(r, &[0]), 20.0, "vec*scalar[0]");
+        assert_close(get_v2(r, &[1]), 40.0, "vec*scalar[1]");
+        assert_close(get_v2(r, &[2]), 60.0, "vec*scalar[2]");
+    }
+
+    // ",->": scalar * scalar
+    {
+        let mut engine = Engine::new(HostBackend::new());
+        let ts = TracedTensor::from_tensor(three.clone());
+        let t7 = TracedTensor::from_tensor(seven.clone());
+        let mut result = einsum(&mut engine, &[&ts, &t7], ",->");
+        let r = result.eval(&mut engine);
+        // v2 may produce [] or [1] for scalar output
+        assert!(
+            r.shape().is_empty() || r.shape() == &[1],
+            "expected scalar shape, got {:?}",
+            r.shape()
+        );
+        assert_close(get_f64_data(r)[0], 21.0, "scalar*scalar");
+    }
+}
+
+// ============================================================================
+// Group 9: Error cases (ported from v1)
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "output label not found in inputs")]
+fn einsum_error_output_label_not_in_input() {
+    // Output references label 'k' which is not in any input
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut r = einsum(&mut engine, &[&ta], "ij->ik");
+    r.eval(&mut engine);
+}
+
+#[test]
+#[should_panic(expected = "ShapeMismatch")]
+fn einsum_error_non_square_trace() {
+    // Trace "ii->" but matrix is 2x3 (non-square)
+    // v2 catches this at contraction tree optimization time
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let mut r = einsum(&mut engine, &[&ta], "ii->");
+    r.eval(&mut engine);
+}
+
+// ============================================================================
+// Group 10: Path tests (ported from v1)
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "index out of bounds")]
+fn einsum_with_path_invalid_pairs_errors() {
+    // Invalid JAX path with out-of-bounds indices should panic during tree build
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+    let mut r = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(0, 99), (0, 1)]),
+    );
+    r.eval(&mut engine);
+}
+
+#[test]
+#[should_panic(expected = "invalid contraction path")]
+fn einsum_with_path_rejects_structurally_invalid_paths() {
+    // Wrong step count: 3 operands needs 2 steps, giving 1 is structurally wrong
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
+
+    let mut engine = Engine::new(HostBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+    let mut r = einsum_with(
+        &mut engine,
+        &[&ta, &tb, &tc],
+        "ij,jk,kl->il",
+        EinsumOptimize::Path(vec![(1, 2)]),
+    );
+    r.eval(&mut engine);
+}

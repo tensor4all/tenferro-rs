@@ -279,6 +279,8 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
+pub mod v2;
+
 // Internal modules
 pub(crate) mod ad;
 pub(crate) mod api;
