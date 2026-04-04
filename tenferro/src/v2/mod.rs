@@ -1,9 +1,9 @@
 pub mod backend;
 pub mod compiler;
+pub mod cpu_backend;
 pub mod einsum;
 pub mod engine;
 pub mod exec;
-pub mod host_backend;
 pub mod indexing;
 pub mod linalg;
 pub mod reduction;

@@ -4,15 +4,43 @@ use tenferro_tensor::v2::Tensor;
 
 use super::backend::SemiringCore;
 
-pub struct HostBackend;
+/// CPU backend for the v2 engine.
+///
+/// When the `cpu-faer` feature is enabled (default), batched GEMM uses
+/// faer's strided matmul for zero-copy, zero-allocation execution.
+/// Otherwise a naive fallback is used.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro::v2::cpu_backend::CpuBackend;
+/// use tenferro::v2::engine::Engine;
+///
+/// let engine = Engine::new(CpuBackend::new());
+/// ```
+pub struct CpuBackend;
 
-impl HostBackend {
+impl CpuBackend {
+    /// Create a new CPU backend instance.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::v2::cpu_backend::CpuBackend;
+    /// let backend = CpuBackend::new();
+    /// ```
     pub fn new() -> Self {
         Self
     }
 }
 
-impl SemiringCore for HostBackend {
+impl Default for CpuBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SemiringCore for CpuBackend {
     type Operand = Tensor;
 
     fn batched_gemm(&mut self, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor {
