@@ -274,3 +274,54 @@ fn test_zero_one_factory() {
     assert_eq!(o.shape(), &[2, 3]);
     assert_eq!(o.dtype(), DType::F64);
 }
+
+#[test]
+fn test_extract_diagonal_2d() {
+    // 3x3 matrix -> [3] diagonal
+    // Col-major data: [1,2,3,4,5,6,7,8,9]
+    // a[0,0]=1, a[1,0]=2, a[2,0]=3, a[0,1]=4, a[1,1]=5, a[2,1]=6, a[0,2]=7, a[1,2]=8, a[2,2]=9
+    // Diagonal: [1, 5, 9]
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+    ));
+    let d = t.extract_diagonal(0, 1);
+    assert_eq!(d.shape(), &[3]);
+    match &d {
+        Tensor::F64(inner) => {
+            assert_eq!(*inner.get(&[0]), 1.0);
+            assert_eq!(*inner.get(&[1]), 5.0);
+            assert_eq!(*inner.get(&[2]), 9.0);
+        }
+        _ => panic!("unexpected dtype"),
+    }
+}
+
+#[test]
+fn test_extract_diagonal_3d() {
+    // [2,3,3] tensor -> [2,3] tensor (diagonal along axes 1,2)
+    // Col-major: strides [1,2,6]
+    // t[b,i,j] with b=0..2, i=0..3, j=0..3
+    let data: Vec<f64> = (1..=18).map(|x| x as f64).collect();
+    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 3, 3], data));
+    let d = t.extract_diagonal(1, 2);
+    assert_eq!(d.shape(), &[2, 3]);
+    // d[b,i] = t[b,i,i]
+    match &d {
+        Tensor::F64(inner) => match &t {
+            Tensor::F64(orig) => {
+                for b in 0..2 {
+                    for i in 0..3 {
+                        assert_eq!(
+                            *inner.get(&[b, i]),
+                            *orig.get(&[b, i, i]),
+                            "d[{b},{i}] != t[{b},{i},{i}]"
+                        );
+                    }
+                }
+            }
+            _ => panic!("unexpected dtype"),
+        },
+        _ => panic!("unexpected dtype"),
+    }
+}

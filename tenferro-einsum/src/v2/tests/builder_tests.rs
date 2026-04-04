@@ -140,3 +140,66 @@ fn tree_ternary() {
     let tree = make_tree("ij,jk,kl->il", &[&[2, 3], &[3, 4], &[4, 5]]);
     assert_eq!(tree.step_count(), 2);
 }
+
+#[test]
+fn test_diagonalize_repeated() {
+    // "ii->i" should produce an ExtractDiag in the fragment
+    let tree = make_tree("ii->i", &[&[3, 3]]);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+
+    let result = build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3, 3]]);
+
+    builder.set_outputs(vec![match &result {
+        ValRef::Local(id) => *id,
+        _ => panic!("expected local"),
+    }]);
+    let fragment = builder.build();
+    let ops: Vec<_> = fragment.ops().iter().map(|n| &n.op).collect();
+    // Should contain exactly one ExtractDiag
+    let extract_count = ops
+        .iter()
+        .filter(|op| matches!(op, StdTensorOp::ExtractDiag { .. }))
+        .count();
+    assert_eq!(
+        extract_count, 1,
+        "expected 1 ExtractDiag, got {extract_count}"
+    );
+    // No ReduceSum (output has 'i', so nothing to reduce)
+    let reduce_count = ops
+        .iter()
+        .filter(|op| matches!(op, StdTensorOp::ReduceSum { .. }))
+        .count();
+    assert_eq!(reduce_count, 0, "expected 0 ReduceSum, got {reduce_count}");
+}
+
+#[test]
+fn test_trace_fragment() {
+    // "ii->" should produce ExtractDiag + ReduceSum in the fragment
+    let tree = make_tree("ii->", &[&[3, 3]]);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+
+    let result = build_einsum_fragment(&mut builder, &tree, &[ValRef::Local(a)], &[vec![3, 3]]);
+
+    builder.set_outputs(vec![match &result {
+        ValRef::Local(id) => *id,
+        _ => panic!("expected local"),
+    }]);
+    let fragment = builder.build();
+    let ops: Vec<_> = fragment.ops().iter().map(|n| &n.op).collect();
+    // Should contain ExtractDiag followed by ReduceSum
+    let extract_count = ops
+        .iter()
+        .filter(|op| matches!(op, StdTensorOp::ExtractDiag { .. }))
+        .count();
+    assert_eq!(
+        extract_count, 1,
+        "expected 1 ExtractDiag, got {extract_count}"
+    );
+    let reduce_count = ops
+        .iter()
+        .filter(|op| matches!(op, StdTensorOp::ReduceSum { .. }))
+        .count();
+    assert_eq!(reduce_count, 1, "expected 1 ReduceSum, got {reduce_count}");
+}
