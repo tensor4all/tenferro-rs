@@ -25,8 +25,8 @@ pub fn concatenate(_inputs: &[&Tensor], _axis: usize) -> Tensor {
     todo!("concatenate")
 }
 
-pub fn reverse(_input: &Tensor, _axes: &[usize]) -> Tensor {
-    todo!("reverse")
+pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
+    dispatch_tensor!(input, tensor => typed_reverse(tensor, axes))
 }
 
 fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) -> TypedTensor<T> {
@@ -65,4 +65,32 @@ fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) ->
     }
 
     TypedTensor::from_vec(out_shape, out_data)
+}
+
+fn typed_reverse<T: Copy + Clone>(input: &TypedTensor<T>, axes: &[usize]) -> TypedTensor<T> {
+    let rank = input.shape.len();
+    let mut reverse_axis = vec![false; rank];
+    for &axis in axes {
+        assert!(axis < rank, "reverse: axis out of bounds");
+        reverse_axis[axis] = true;
+    }
+
+    let out_len = input.n_elements();
+    let mut out_data = Vec::with_capacity(out_len);
+    let mut out_idx = vec![0usize; rank];
+    let mut in_idx = vec![0usize; rank];
+
+    for flat in 0..out_len {
+        flat_to_multi(flat, &input.shape, &mut out_idx);
+        for axis in 0..rank {
+            in_idx[axis] = if reverse_axis[axis] {
+                input.shape[axis] - 1 - out_idx[axis]
+            } else {
+                out_idx[axis]
+            };
+        }
+        out_data.push(*input.get(&in_idx));
+    }
+
+    TypedTensor::from_vec(input.shape.clone(), out_data)
 }

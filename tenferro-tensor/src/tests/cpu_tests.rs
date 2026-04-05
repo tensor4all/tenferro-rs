@@ -358,6 +358,24 @@ fn test_slice() {
 }
 
 #[test]
+fn test_reverse_axis_zero() {
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let mut backend = CpuBackend::new();
+    let out = backend.reverse(&input, &[0]);
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(get_f64(&out, &[0, 0]), 2.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 1.0);
+    assert_eq!(get_f64(&out, &[0, 1]), 4.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 3.0);
+    assert_eq!(get_f64(&out, &[0, 2]), 6.0);
+    assert_eq!(get_f64(&out, &[1, 2]), 5.0);
+}
+
+#[test]
 fn test_dot_general_matmul() {
     let a = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],
