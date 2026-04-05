@@ -51,7 +51,7 @@ fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 pub struct Engine<B: TensorBackend> {
     pub(crate) backend: B,
     pub(crate) compile_cache: HashMap<CacheKey, ExecProgram>,
-    pub(crate) _buffer_pool: BufferPool,
+    pub(crate) buffer_pool: BufferPool,
 }
 
 impl<B: TensorBackend> Engine<B> {
@@ -69,8 +69,22 @@ impl<B: TensorBackend> Engine<B> {
         Self {
             backend,
             compile_cache: HashMap::new(),
-            _buffer_pool: BufferPool::new(),
+            buffer_pool: BufferPool::new(),
         }
+    }
+
+    /// Number of reusable host buffers currently retained by the engine.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// assert_eq!(engine.buffer_pool_len(), 0);
+    /// ```
+    pub fn buffer_pool_len(&self) -> usize {
+        self.buffer_pool.len()
     }
 
     /// Look up a cached ExecProgram, or cache and return the given one.
