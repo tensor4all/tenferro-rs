@@ -56,6 +56,71 @@ fn finite_diff_scalar_rhs(
     (f(lhs, &rp) - f(lhs, &rm)) / (2.0 * h)
 }
 
+fn finite_diff_complex(
+    f: impl Fn(&[Complex64]) -> f64,
+    x: &[Complex64],
+    idx: usize,
+    h: f64,
+) -> Complex64 {
+    let mut xp = x.to_vec();
+    let mut xm = x.to_vec();
+    xp[idx] += Complex64::new(h, 0.0);
+    xm[idx] -= Complex64::new(h, 0.0);
+    let df_dre = (f(&xp) - f(&xm)) / (2.0 * h);
+
+    let mut xp = x.to_vec();
+    let mut xm = x.to_vec();
+    xp[idx] += Complex64::new(0.0, h);
+    xm[idx] -= Complex64::new(0.0, h);
+    let df_dim = (f(&xp) - f(&xm)) / (2.0 * h);
+
+    Complex64::new(df_dre, df_dim)
+}
+
+fn finite_diff_complex_lhs(
+    f: impl Fn(&[Complex64], &[Complex64]) -> f64,
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    idx: usize,
+    h: f64,
+) -> Complex64 {
+    let mut lp = lhs.to_vec();
+    let mut lm = lhs.to_vec();
+    lp[idx] += Complex64::new(h, 0.0);
+    lm[idx] -= Complex64::new(h, 0.0);
+    let df_dre = (f(&lp, rhs) - f(&lm, rhs)) / (2.0 * h);
+
+    let mut lp = lhs.to_vec();
+    let mut lm = lhs.to_vec();
+    lp[idx] += Complex64::new(0.0, h);
+    lm[idx] -= Complex64::new(0.0, h);
+    let df_dim = (f(&lp, rhs) - f(&lm, rhs)) / (2.0 * h);
+
+    Complex64::new(df_dre, df_dim)
+}
+
+fn finite_diff_complex_rhs(
+    f: impl Fn(&[Complex64], &[Complex64]) -> f64,
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    idx: usize,
+    h: f64,
+) -> Complex64 {
+    let mut rp = rhs.to_vec();
+    let mut rm = rhs.to_vec();
+    rp[idx] += Complex64::new(h, 0.0);
+    rm[idx] -= Complex64::new(h, 0.0);
+    let df_dre = (f(lhs, &rp) - f(lhs, &rm)) / (2.0 * h);
+
+    let mut rp = rhs.to_vec();
+    let mut rm = rhs.to_vec();
+    rp[idx] += Complex64::new(0.0, h);
+    rm[idx] -= Complex64::new(0.0, h);
+    let df_dim = (f(lhs, &rp) - f(lhs, &rm)) / (2.0 * h);
+
+    Complex64::new(df_dre, df_dim)
+}
+
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
@@ -128,6 +193,40 @@ fn scalar_f64_tensor(value: f64) -> Tensor {
     f64_tensor(vec![], vec![value])
 }
 
+fn scalar_c64_tensor(value: Complex64) -> Tensor {
+    c64_tensor(vec![], vec![value])
+}
+
+fn add_real_reduce_sum_loss(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: computegraph::LocalValId,
+    input_shape: Vec<usize>,
+) -> computegraph::LocalValId {
+    let conjugated = builder.add_op(
+        StdTensorOp::Conj,
+        vec![ValRef::Local(input)],
+        OpMode::Primal,
+    );
+    let summed = builder.add_op(
+        StdTensorOp::Add,
+        vec![ValRef::Local(input), ValRef::Local(conjugated[0])],
+        OpMode::Primal,
+    );
+    let scaled = builder.add_op(
+        StdTensorOp::Scale { factor: 0.5 },
+        vec![ValRef::Local(summed[0])],
+        OpMode::Primal,
+    );
+    builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: (0..input_shape.len()).collect(),
+            input_shape,
+        },
+        vec![ValRef::Local(scaled[0])],
+        OpMode::Primal,
+    )[0]
+}
+
 fn build_svd_values_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -147,6 +246,21 @@ fn build_svd_values_sum_fragment() -> (
     );
     let loss_key = builder.global_key(loss[0]).clone();
     builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
+fn build_svd_values_real_sum_complex_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(12_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let loss = add_real_reduce_sum_loss(&mut builder, svd[1], vec![2]);
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
@@ -196,6 +310,21 @@ fn build_eigh_values_sum_fragment() -> (
     );
     let loss_key = builder.global_key(loss[0]).clone();
     builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
+fn build_eigh_values_real_sum_complex_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(22_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let loss = add_real_reduce_sum_loss(&mut builder, eigh[0], vec![2]);
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
@@ -324,6 +453,55 @@ fn build_triangular_solve_sum_fragment() -> (
     (Arc::new(builder.build()), a_key, b_key, loss_key)
 }
 
+fn build_solve_real_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let a_key = tensor_input_key(32_000);
+    let b_key = tensor_input_key(32_001);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(a_key.clone());
+    let b = builder.add_input(b_key.clone());
+    let solve = builder.add_op(
+        StdTensorOp::Solve,
+        vec![ValRef::Local(a), ValRef::Local(b)],
+        OpMode::Primal,
+    );
+    let loss = add_real_reduce_sum_loss(&mut builder, solve[0], vec![2, 1]);
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), a_key, b_key, loss_key)
+}
+
+fn build_triangular_solve_real_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let a_key = tensor_input_key(37_000);
+    let b_key = tensor_input_key(37_001);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(a_key.clone());
+    let b = builder.add_input(b_key.clone());
+    let solve = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+        vec![ValRef::Local(a), ValRef::Local(b)],
+        OpMode::Primal,
+    );
+    let loss = add_real_reduce_sum_loss(&mut builder, solve[0], vec![2, 1]);
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), a_key, b_key, loss_key)
+}
+
 fn build_cholesky_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -350,6 +528,25 @@ fn build_cholesky_sum_fragment() -> (
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
+fn build_cholesky_real_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(42_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let cholesky = builder.add_op(
+        StdTensorOp::Cholesky,
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let loss = add_real_reduce_sum_loss(&mut builder, cholesky[0], vec![2, 2]);
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
 fn build_qr_r_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -372,11 +569,12 @@ fn build_qr_r_sum_fragment() -> (
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
-fn grad_from_fragment_with_inputs(
+fn grad_from_fragment_with_inputs_and_cotangent(
     fragment: Arc<Fragment<StdTensorOp>>,
     loss_key: GlobalValKey<StdTensorOp>,
     input_key: TensorInputKey,
     mut inputs_map: HashMap<TensorInputKey, Tensor>,
+    cotangent: Tensor,
 ) -> Tensor {
     let view = resolve(vec![fragment.clone()]);
     let linear = differentiate(
@@ -397,7 +595,7 @@ fn grad_from_fragment_with_inputs(
     };
     let transposed_fragment = Arc::new(transposed.fragment);
 
-    inputs_map.insert(cotangent_input_key, scalar_f64_tensor(1.0));
+    inputs_map.insert(cotangent_input_key, cotangent);
 
     eval_fragment_outputs(
         vec![fragment, linear_fragment, transposed_fragment.clone()],
@@ -407,6 +605,21 @@ fn grad_from_fragment_with_inputs(
     .into_iter()
     .next()
     .expect("gradient output")
+}
+
+fn grad_from_fragment_with_inputs(
+    fragment: Arc<Fragment<StdTensorOp>>,
+    loss_key: GlobalValKey<StdTensorOp>,
+    input_key: TensorInputKey,
+    inputs_map: HashMap<TensorInputKey, Tensor>,
+) -> Tensor {
+    grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        input_key,
+        inputs_map,
+        scalar_f64_tensor(1.0),
+    )
 }
 
 fn grad_from_fragment(
@@ -500,6 +713,55 @@ fn sum_qr_r(data: &[f64]) -> f64 {
     get_f64_data(&outputs[1]).iter().sum()
 }
 
+fn sum_real_parts(values: &[Complex64]) -> f64 {
+    values.iter().map(|value| value.re).sum()
+}
+
+fn sum_svd_values_complex(data: &[Complex64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = c64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::svd(&mut backend, &input);
+    sum_real_parts(get_c64_data(&outputs[1]))
+}
+
+fn sum_eigh_values_complex(data: &[Complex64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = c64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::eigh(&mut backend, &input);
+    sum_real_parts(get_c64_data(&outputs[0]))
+}
+
+fn sum_cholesky_real_parts_complex(data: &[Complex64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = c64_tensor(vec![2, 2], data.to_vec());
+    let output = TensorBackend::cholesky(&mut backend, &input);
+    sum_real_parts(get_c64_data(&output))
+}
+
+fn sum_solve_real_parts_complex(a: &[Complex64], b: &[Complex64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let a_tensor = c64_tensor(vec![2, 2], a.to_vec());
+    let b_tensor = c64_tensor(vec![2, 1], b.to_vec());
+    let output = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor);
+    sum_real_parts(get_c64_data(&output))
+}
+
+fn sum_triangular_solve_real_parts_complex(a: &[Complex64], b: &[Complex64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let a_tensor = c64_tensor(vec![2, 2], a.to_vec());
+    let b_tensor = c64_tensor(vec![2, 1], b.to_vec());
+    let output = TensorBackend::triangular_solve(
+        &mut backend,
+        &a_tensor,
+        &b_tensor,
+        true,
+        true,
+        false,
+        false,
+    );
+    sum_real_parts(get_c64_data(&output))
+}
+
 fn assert_close_slice(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
     for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -561,6 +823,59 @@ fn assert_grad_matches_finite_diff_rhs(
         assert!(
             (actual[index] - expected).abs() <= TOL,
             "rhs index {index}: expected {expected}, got {}",
+            actual[index]
+        );
+    }
+}
+
+fn assert_grad_matches_complex_finite_diff(
+    actual: &[Complex64],
+    base: &[Complex64],
+    indices: &[usize],
+    tol: f64,
+    f: impl Fn(&[Complex64]) -> f64,
+) {
+    for &index in indices {
+        let expected = finite_diff_complex(&f, base, index, 1e-6);
+        assert!(
+            (actual[index] - expected).norm() <= tol,
+            "index {index}: expected {expected:?}, got {:?}",
+            actual[index]
+        );
+    }
+}
+
+fn assert_grad_matches_complex_finite_diff_lhs(
+    actual: &[Complex64],
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    tol: f64,
+    f: &impl Fn(&[Complex64], &[Complex64]) -> f64,
+) {
+    assert_eq!(actual.len(), lhs.len());
+    for index in 0..lhs.len() {
+        let expected = finite_diff_complex_lhs(f, lhs, rhs, index, 1e-6);
+        assert!(
+            (actual[index] - expected).norm() <= tol,
+            "lhs index {index}: expected {expected:?}, got {:?}",
+            actual[index]
+        );
+    }
+}
+
+fn assert_grad_matches_complex_finite_diff_rhs(
+    actual: &[Complex64],
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    tol: f64,
+    f: &impl Fn(&[Complex64], &[Complex64]) -> f64,
+) {
+    assert_eq!(actual.len(), rhs.len());
+    for index in 0..rhs.len() {
+        let expected = finite_diff_complex_rhs(f, lhs, rhs, index, 1e-6);
+        assert!(
+            (actual[index] - expected).norm() <= tol,
+            "rhs index {index}: expected {expected:?}, got {:?}",
             actual[index]
         );
     }
@@ -1388,6 +1703,169 @@ fn grad_qr_r_matches_finite_diff() {
             grad_data[index]
         );
     }
+}
+
+#[test]
+fn grad_eigh_values_complex_matches_finite_diff() {
+    let a_data = vec![
+        Complex64::new(3.0, 0.0),
+        Complex64::new(1.0, -2.0),
+        Complex64::new(1.0, 2.0),
+        Complex64::new(4.0, 0.0),
+    ];
+    let (fragment, input_key, loss_key) = build_eigh_values_real_sum_complex_fragment();
+    let grad = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        input_key.clone(),
+        HashMap::from([(input_key, c64_tensor(vec![2, 2], a_data.clone()))]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_data = get_c64_data(&grad);
+
+    assert_grad_matches_complex_finite_diff(
+        grad_data,
+        &a_data,
+        &[0, 1, 3],
+        1e-5,
+        sum_eigh_values_complex,
+    );
+}
+
+#[test]
+fn grad_svd_values_complex_matches_finite_diff() {
+    let a_data = vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(-0.7, 0.3),
+        Complex64::new(0.2, -1.1),
+        Complex64::new(2.3, -0.4),
+    ];
+    let (fragment, input_key, loss_key) = build_svd_values_real_sum_complex_fragment();
+    let grad = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        input_key.clone(),
+        HashMap::from([(input_key, c64_tensor(vec![2, 2], a_data.clone()))]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_data = get_c64_data(&grad);
+
+    assert_grad_matches_complex_finite_diff(
+        grad_data,
+        &a_data,
+        &[0, 1, 2, 3],
+        2e-4,
+        sum_svd_values_complex,
+    );
+}
+
+#[test]
+fn grad_cholesky_complex_matches_finite_diff() {
+    let a_data = vec![
+        Complex64::new(4.0, 0.0),
+        Complex64::new(1.0, -1.0),
+        Complex64::new(1.0, 1.0),
+        Complex64::new(3.0, 0.0),
+    ];
+    let (fragment, input_key, loss_key) = build_cholesky_real_sum_fragment();
+    let grad = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        input_key.clone(),
+        HashMap::from([(input_key, c64_tensor(vec![2, 2], a_data.clone()))]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_data = get_c64_data(&grad);
+
+    assert_grad_matches_complex_finite_diff(
+        grad_data,
+        &a_data,
+        &[0, 1, 3],
+        2e-4,
+        sum_cholesky_real_parts_complex,
+    );
+}
+
+#[test]
+fn grad_solve_complex_matches_finite_diff() {
+    let a_data = vec![
+        Complex64::new(2.0, 0.5),
+        Complex64::new(1.1, -0.2),
+        Complex64::new(-0.3, 0.7),
+        Complex64::new(3.0, -0.4),
+    ];
+    let b_data = vec![Complex64::new(1.0, -0.25), Complex64::new(-0.5, 1.5)];
+    let (fragment, a_key, b_key, loss_key) = build_solve_real_sum_fragment();
+
+    let grad_a = grad_from_fragment_with_inputs_and_cotangent(
+        fragment.clone(),
+        loss_key.clone(),
+        a_key.clone(),
+        HashMap::from([
+            (a_key.clone(), c64_tensor(vec![2, 2], a_data.clone())),
+            (b_key.clone(), c64_tensor(vec![2, 1], b_data.clone())),
+        ]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_a_data = get_c64_data(&grad_a);
+
+    let grad_b = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        b_key.clone(),
+        HashMap::from([
+            (a_key, c64_tensor(vec![2, 2], a_data.clone())),
+            (b_key, c64_tensor(vec![2, 1], b_data.clone())),
+        ]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_b_data = get_c64_data(&grad_b);
+
+    assert_grad_matches_complex_finite_diff_lhs(
+        grad_a_data,
+        &a_data,
+        &b_data,
+        2e-4,
+        &sum_solve_real_parts_complex,
+    );
+    assert_grad_matches_complex_finite_diff_rhs(
+        grad_b_data,
+        &a_data,
+        &b_data,
+        2e-4,
+        &sum_solve_real_parts_complex,
+    );
+}
+
+#[test]
+fn grad_triangular_solve_complex_matches_finite_diff() {
+    let a_data = vec![
+        Complex64::new(2.0, 0.0),
+        Complex64::new(0.75, -0.5),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.5, 0.25),
+    ];
+    let b_data = vec![Complex64::new(0.5, 1.0), Complex64::new(-1.2, 0.3)];
+    let (fragment, a_key, b_key, loss_key) = build_triangular_solve_real_sum_fragment();
+    let grad_b = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        loss_key,
+        b_key.clone(),
+        HashMap::from([
+            (a_key, c64_tensor(vec![2, 2], a_data.clone())),
+            (b_key, c64_tensor(vec![2, 1], b_data.clone())),
+        ]),
+        scalar_c64_tensor(Complex64::new(1.0, 0.0)),
+    );
+    let grad_b_data = get_c64_data(&grad_b);
+
+    assert_grad_matches_complex_finite_diff_rhs(
+        grad_b_data,
+        &a_data,
+        &b_data,
+        1e-5,
+        &sum_triangular_solve_real_parts_complex,
+    );
 }
 
 #[test]

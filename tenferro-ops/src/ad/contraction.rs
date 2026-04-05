@@ -105,10 +105,12 @@ pub fn transpose_dot_general(
     let mut result = vec![None, None];
 
     if active_mask[0] {
+        let rhs_conj =
+            builder.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_lhs(config, &lhs_free, &rhs_free);
         let out = builder.add_op(
             StdTensorOp::DotGeneral(transpose_config),
-            vec![cotangent.clone(), inputs[1].clone()],
+            vec![cotangent.clone(), ValRef::Local(rhs_conj)],
             OpMode::Linear {
                 active_mask: vec![true, false],
             },
@@ -117,10 +119,12 @@ pub fn transpose_dot_general(
     }
 
     if active_mask[1] {
+        let lhs_conj =
+            builder.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_rhs(config, &lhs_free, &rhs_free);
         let out = builder.add_op(
             StdTensorOp::DotGeneral(transpose_config),
-            vec![inputs[0].clone(), cotangent],
+            vec![ValRef::Local(lhs_conj), cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },

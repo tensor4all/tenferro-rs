@@ -179,6 +179,7 @@ pub fn linearize_cholesky(
 
     let l = ValRef::External(primal_out[0].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da);
+    let l_conj = fixed_unary(builder, StdTensorOp::Conj, l.clone());
 
     let tmp = builder.add_op(
         StdTensorOp::TriangularSolve {
@@ -187,7 +188,7 @@ pub fn linearize_cholesky(
             transpose_a: true,
             unit_diagonal: false,
         },
-        vec![l.clone(), ValRef::Local(da_self_adjoint)],
+        vec![ValRef::Local(l_conj), ValRef::Local(da_self_adjoint)],
         OpMode::Linear {
             active_mask: vec![false, true],
         },
@@ -303,10 +304,10 @@ pub fn transpose_solve(
 
     let mut result = vec![None, None];
     if active_mask[1] {
-        let a_t = transpose_2d_fixed(builder, inputs[0].clone());
+        let a_h = adjoint_2d_fixed(builder, inputs[0].clone());
         let out = builder.add_op(
             StdTensorOp::Solve,
-            vec![ValRef::Local(a_t), ValRef::Local(ct)],
+            vec![ValRef::Local(a_h), ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -336,6 +337,7 @@ pub fn transpose_triangular_solve(
 
     let mut result = vec![None, None];
     if active_mask[1] {
+        let conjugated_a = fixed_unary(builder, StdTensorOp::Conj, inputs[0].clone());
         let out = builder.add_op(
             StdTensorOp::TriangularSolve {
                 left_side,
@@ -343,7 +345,7 @@ pub fn transpose_triangular_solve(
                 transpose_a: !transpose_a,
                 unit_diagonal,
             },
-            vec![inputs[0].clone(), ValRef::Local(ct)],
+            vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -581,12 +583,28 @@ fn self_adjoint_from_lower_linear(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: LocalValId,
 ) -> LocalValId {
-    let input_h = adjoint_2d_linear(builder, input);
-    let sum = linear_add(builder, input, input_h);
+    let strict_lower = builder.add_op(
+        StdTensorOp::Tril { k: -1 },
+        vec![ValRef::Local(input)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+    let strict_lower_h = adjoint_2d_linear(builder, strict_lower);
+    let offdiag = linear_add(builder, strict_lower, strict_lower_h);
+
     let diag = extract_diag_linear(builder, input);
-    let diag_mat = embed_diag_linear(builder, diag);
-    let neg_diag = linear_neg(builder, diag_mat);
-    linear_add(builder, sum, neg_diag)
+    let diag_h = linear_unary(builder, StdTensorOp::Conj, diag);
+    let diag_sum = linear_add(builder, diag, diag_h);
+    let real_diag = builder.add_op(
+        StdTensorOp::Scale { factor: 0.5 },
+        vec![ValRef::Local(diag_sum)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+    let diag_mat = embed_diag_linear(builder, real_diag);
+    linear_add(builder, offdiag, diag_mat)
 }
 
 fn matmul_fixed(

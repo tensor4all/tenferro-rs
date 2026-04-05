@@ -134,9 +134,11 @@ pub fn transpose_mul(
     let mut result = vec![None, None];
 
     if active_mask[0] {
+        let rhs_conj =
+            builder.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
         let out = builder.add_op(
             StdTensorOp::Mul,
-            vec![inputs[1].clone(), ValRef::Local(ct)],
+            vec![ValRef::Local(rhs_conj), ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -145,9 +147,11 @@ pub fn transpose_mul(
     }
 
     if active_mask[1] {
+        let lhs_conj =
+            builder.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let out = builder.add_op(
             StdTensorOp::Mul,
-            vec![inputs[0].clone(), ValRef::Local(ct)],
+            vec![ValRef::Local(lhs_conj), ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
