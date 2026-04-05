@@ -1,5 +1,5 @@
-use crate::config::DotGeneralConfig;
 use computegraph::GraphOp;
+use tenferro_tensor::DotGeneralConfig;
 
 pub trait SemiringOps: GraphOp {
     fn add_op() -> Self;
@@ -10,4 +10,5 @@ pub trait SemiringOps: GraphOp {
     fn reshape(shape: Vec<usize>) -> Self;
     fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self;
     fn extract_diag(axis_a: usize, axis_b: usize) -> Self;
+    fn embed_diag(axis_a: usize, axis_b: usize) -> Self;
 }

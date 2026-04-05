@@ -4,8 +4,7 @@ use tenferro::compiler::{
 };
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};
-use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, DotGeneralConfig};
 
 // ============================================================================
 // Helper: build a StableHloProgram from a list of instructions

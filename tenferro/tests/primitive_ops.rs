@@ -1,8 +1,7 @@
-use tenferro::cpu_backend::CpuBackend;
 use tenferro::engine::Engine;
 use tenferro::traced::{eval_all, TracedTensor};
-use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::cpu::CpuBackend;
+use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
@@ -23,7 +22,7 @@ fn test_add() {
     let tb = TracedTensor::from_tensor(b);
     let mut tc = ta.traced_add(&tb);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[5.0, 7.0, 9.0]);
 }
 
@@ -35,7 +34,7 @@ fn test_mul() {
     let tb = TracedTensor::from_tensor(b);
     let mut tc = ta.traced_mul(&tb);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[4.0, 10.0, 18.0]);
 }
 
@@ -45,7 +44,7 @@ fn test_neg() {
     let ta = TracedTensor::from_tensor(a);
     let mut tb = ta.traced_neg();
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine);
+    let result = tb.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[-1.0, 2.0, -3.0]);
 }
 
@@ -63,7 +62,7 @@ fn test_dot_general() {
     };
     let mut tc = ta.traced_dot_general(&tb, config);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     // C = [[22, 49], [28, 64]] col-major: [22, 28, 49, 64]
     assert_eq!(get_f64_data(result), &[22.0, 28.0, 49.0, 64.0]);
 }
@@ -75,7 +74,7 @@ fn test_broadcast_reduce() {
     let tb = tv.traced_broadcast_in_dim(&[3, 2], &[0]);
     let mut tr = tb.traced_reduce_sum(&[1]);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tr.eval(&mut engine);
+    let result = tr.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[2.0, 4.0, 6.0]);
 }
 
@@ -85,7 +84,7 @@ fn test_transpose() {
     let ta = TracedTensor::from_tensor(a);
     let mut tb = ta.traced_transpose(&[1, 0]);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine);
+    let result = tb.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 }
 
@@ -95,7 +94,7 @@ fn test_reshape() {
     let ta = TracedTensor::from_tensor(a);
     let mut tb = ta.traced_reshape(&[6]);
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine);
+    let result = tb.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
 
@@ -108,7 +107,7 @@ fn test_eval_all() {
     let mut sum = ta.traced_add(&tb);
     let mut prod = ta.traced_mul(&tb);
     let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut sum, &mut prod]);
+    let results = eval_all(&mut engine, &mut [&mut sum, &mut prod]).unwrap();
     assert_eq!(get_f64_data(&results[0]), &[4.0, 6.0]);
     assert_eq!(get_f64_data(&results[1]), &[3.0, 8.0]);
 }
@@ -124,6 +123,6 @@ fn test_chained_ops() {
     let sum = ta.traced_add(&tb);
     let mut result = sum.traced_mul(&tc);
     let mut engine = Engine::new(CpuBackend::new());
-    let out = result.eval(&mut engine);
+    let out = result.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(out), &[40.0, 120.0]);
 }

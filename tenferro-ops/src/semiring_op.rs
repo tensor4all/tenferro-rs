@@ -2,9 +2,10 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-use computegraph::{GraphOp, Operand};
+use computegraph::GraphOp;
+use tenferro_algebra::Algebra;
+use tenferro_tensor::{DotGeneralConfig, TypedTensor};
 
-use crate::config::DotGeneralConfig;
 use crate::semiring_op_kind::SemiringOpKind;
 use crate::semiring_ops::SemiringOps;
 
@@ -13,12 +14,12 @@ pub struct SemiringInputKey {
     pub id: u64,
 }
 
-pub struct SemiringOp<T> {
+pub struct SemiringOp<Alg: Algebra> {
     pub kind: SemiringOpKind,
-    _marker: PhantomData<T>,
+    _marker: PhantomData<Alg>,
 }
 
-impl<T> SemiringOp<T> {
+impl<Alg: Algebra> SemiringOp<Alg> {
     pub fn new(kind: SemiringOpKind) -> Self {
         Self {
             kind,
@@ -27,7 +28,7 @@ impl<T> SemiringOp<T> {
     }
 }
 
-impl<T> Clone for SemiringOp<T> {
+impl<Alg: Algebra> Clone for SemiringOp<Alg> {
     fn clone(&self) -> Self {
         Self {
             kind: self.kind.clone(),
@@ -36,7 +37,7 @@ impl<T> Clone for SemiringOp<T> {
     }
 }
 
-impl<T> fmt::Debug for SemiringOp<T> {
+impl<Alg: Algebra> fmt::Debug for SemiringOp<Alg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SemiringOp")
             .field("kind", &self.kind)
@@ -44,39 +45,41 @@ impl<T> fmt::Debug for SemiringOp<T> {
     }
 }
 
-impl<T> Hash for SemiringOp<T> {
+impl<Alg: Algebra> Hash for SemiringOp<Alg> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.kind.hash(state);
     }
 }
 
-impl<T> PartialEq for SemiringOp<T> {
+impl<Alg: Algebra> PartialEq for SemiringOp<Alg> {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
     }
 }
 
-impl<T> Eq for SemiringOp<T> {}
+impl<Alg: Algebra> Eq for SemiringOp<Alg> {}
 
-impl<T: Operand> GraphOp for SemiringOp<T> {
-    type Operand = T;
+impl<Alg> GraphOp for SemiringOp<Alg>
+where
+    Alg: Algebra + Send + Sync + 'static,
+{
+    type Operand = TypedTensor<Alg::Scalar>;
     type Context = ();
     type InputKey = SemiringInputKey;
 
     fn n_inputs(&self) -> usize {
-        todo!()
+        self.kind.n_inputs()
     }
 
     fn n_outputs(&self) -> usize {
-        todo!()
-    }
-
-    fn eval(&self, _ctx: &mut Self::Context, _inputs: &[&Self::Operand]) -> Vec<Self::Operand> {
-        todo!()
+        1
     }
 }
 
-impl<T: Operand> SemiringOps for SemiringOp<T> {
+impl<Alg> SemiringOps for SemiringOp<Alg>
+where
+    Alg: Algebra + Send + Sync + 'static,
+{
     fn add_op() -> Self {
         Self::new(SemiringOpKind::Add)
     }
@@ -107,5 +110,9 @@ impl<T: Operand> SemiringOps for SemiringOp<T> {
 
     fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
         Self::new(SemiringOpKind::ExtractDiag { axis_a, axis_b })
+    }
+
+    fn embed_diag(axis_a: usize, axis_b: usize) -> Self {
+        Self::new(SemiringOpKind::EmbedDiag { axis_a, axis_b })
     }
 }

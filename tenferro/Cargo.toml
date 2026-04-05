@@ -12,12 +12,13 @@ test = false
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["dep:faer"]
-cpu-blas = ["dep:cblas-sys"]
-provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src"]
-src-openblas = ["provider-src", "blas-src/openblas"]
-src-accelerate = ["provider-src", "blas-src/accelerate"]
-src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
+cpu-faer = ["tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-tensor/cpu-blas"]
+provider-src = ["cpu-blas", "tenferro-tensor/provider-src"]
+src-openblas = ["provider-src", "tenferro-tensor/src-openblas"]
+src-accelerate = ["provider-src", "tenferro-tensor/src-accelerate"]
+src-intel-mkl-dynamic-parallel = ["provider-src", "tenferro-tensor/src-intel-mkl-dynamic-parallel"]
+cuda = ["tenferro-tensor/cuda"]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor" }
@@ -27,12 +28,10 @@ omeco.workspace = true
 computegraph.workspace = true
 chainrules-core.workspace = true
 tidu.workspace = true
-faer = { workspace = true, optional = true }
-cblas-sys = { workspace = true, optional = true }
-cblas-src = { workspace = true, optional = true }
-blas-src = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
+thiserror.workspace = true
+tenferro-algebra = { path = "../tenferro-algebra" }
 
 [dev-dependencies]
 tenferro-algebra = { path = "../tenferro-algebra" }

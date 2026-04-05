@@ -38,8 +38,8 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
 use computegraph::GraphOp;
 
-use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::semiring_ops::SemiringOps;
+use tenferro_tensor::DotGeneralConfig;
 
 use crate::planning::tree::ContractionTree;
 
@@ -80,13 +80,17 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &l)| l)
         .collect();
-    let new_shape: Vec<usize> = lv
+    let mut new_shape: Vec<usize> = lv
         .shape
         .iter()
         .enumerate()
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &s)| s)
         .collect();
+    // Runtime convention: scalar results have shape [1], not [].
+    if new_shape.is_empty() {
+        new_shape.push(1);
+    }
     let outputs = builder.add_op(
         Op::reduce_sum(reduce_axes),
         vec![lv.val.clone()],
@@ -97,6 +101,51 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         labels: new_labels,
         shape: new_shape,
     }
+}
+
+/// Embed diagonal axes when the output requires higher multiplicity of a label
+/// than the current tensor has. For example, "i->ii" needs to embed axis 0
+/// into a new axis 1 of the same size.
+fn embed_repeated<Op: GraphOp + SemiringOps>(
+    builder: &mut FragmentBuilder<Op>,
+    lv: &LabeledVal<Op>,
+    output_labels: &[u32],
+) -> LabeledVal<Op> {
+    // Count how many times each label appears in output vs current labels.
+    let mut result = lv.clone();
+    for &label in output_labels {
+        let current_count = result.labels.iter().filter(|&&l| l == label).count();
+        let output_count = output_labels.iter().filter(|&&l| l == label).count();
+        if output_count > current_count {
+            // Need to embed: find the existing axis with this label and
+            // insert a duplicate axis after it.
+            let axis_a = result
+                .labels
+                .iter()
+                .position(|&l| l == label)
+                .expect("label must exist in current tensor for embedding");
+            // Insert the new axis right after axis_a.
+            let axis_b = axis_a + 1;
+            let n = result.shape[axis_a];
+            let outputs = builder.add_op(
+                Op::embed_diag(axis_a, axis_b),
+                vec![result.val.clone()],
+                OpMode::Primal,
+            );
+            let mut new_labels = result.labels.clone();
+            new_labels.insert(axis_b, label);
+            let mut new_shape = result.shape.clone();
+            new_shape.insert(axis_b, n);
+            result = LabeledVal {
+                val: ValRef::Local(outputs[0]),
+                labels: new_labels,
+                shape: new_shape,
+            };
+            // Recurse to handle cases like "i->iii" (multiple embeddings).
+            return embed_repeated(builder, &result, output_labels);
+        }
+    }
+    result
 }
 
 fn diagonalize_repeated<Op: GraphOp + SemiringOps>(
@@ -337,6 +386,26 @@ fn outer_product<Op: GraphOp + SemiringOps>(
         };
     }
 
+    // Helper: reshape scalar [1] → [] before broadcast, since broadcast_in_dim
+    // requires dims.len() == tensor.rank() and scalars have no label dims.
+    let prepare_scalar = |builder: &mut FragmentBuilder<Op>,
+                          lv: &LabeledVal<Op>|
+     -> LabeledVal<Op> {
+        if lv.labels.is_empty() && lv.shape == [1] {
+            let outputs = builder.add_op(Op::reshape(vec![]), vec![lv.val.clone()], OpMode::Primal);
+            LabeledVal {
+                val: ValRef::Local(outputs[0]),
+                labels: vec![],
+                shape: vec![],
+            }
+        } else {
+            lv.clone()
+        }
+    };
+
+    let lhs = prepare_scalar(builder, lhs);
+    let rhs = prepare_scalar(builder, rhs);
+
     // Broadcast both to combined shape, then Mul
     let lhs_dims: Vec<usize> = lhs
         .labels
@@ -416,7 +485,7 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
     }
 
     if n_inputs == 1 || tree.step_count() == 0 {
-        // Unary: just reduce and reorder
+        // Unary: reduce, embed, and reorder
         let lv = &labeled[0];
         let output_set: HashSet<u32> = output_labels.iter().copied().collect();
         let reduce_labels: HashSet<u32> = lv
@@ -426,6 +495,9 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
             .copied()
             .collect();
         let result = reduce_val(builder, lv, &reduce_labels);
+
+        // Embed diagonal axes if output needs higher multiplicity
+        let result = embed_repeated(builder, &result, output_labels);
 
         // Reorder if needed
         if result.labels == *output_labels {

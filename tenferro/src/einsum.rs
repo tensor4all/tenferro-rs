@@ -28,11 +28,11 @@ use computegraph::types::ValRef;
 use omeco::ScoreFunction;
 use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
+use tenferro_tensor::TensorBackend;
 
-use super::backend::SemiringCore;
 use super::engine::Engine;
+use super::error::{Error, Result};
 use super::traced::TracedTensor;
-use tenferro_tensor::Tensor;
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
@@ -209,11 +209,11 @@ impl Default for EinsumOptimize {
 /// // Outer product
 /// let o = einsum(&mut engine, &[&x, &y], "i,j->ij");
 /// ```
-pub fn einsum<B: SemiringCore<Operand = Tensor>>(
+pub fn einsum<B: TensorBackend>(
     engine: &mut Engine<B>,
     inputs: &[&TracedTensor],
     subscripts: &str,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     einsum_with(engine, inputs, subscripts, EinsumOptimize::default())
 }
 
@@ -236,19 +236,20 @@ pub fn einsum<B: SemiringCore<Operand = Tensor>>(
 /// let c = einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Path(vec![(1, 2), (0, 1)]));
 /// ```
-pub fn einsum_with<B: SemiringCore<Operand = Tensor>>(
+pub fn einsum_with<B: TensorBackend>(
     engine: &mut Engine<B>,
     inputs: &[&TracedTensor],
     subscripts: &str,
     optimize: EinsumOptimize,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let _ = engine;
-    let subs = Subscripts::parse(subscripts).expect("invalid einsum subscripts");
+    let subs =
+        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| t.shape.clone()).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
 
-    let tree = resolve_strategy(optimize, &subs, &shape_refs);
-    build_traced_from_tree(inputs, &subs, &tree, &shapes)
+    let tree = resolve_strategy(optimize, &subs, &shape_refs)?;
+    Ok(build_traced_from_tree(inputs, &subs, &tree, &shapes))
 }
 
 /// Resolve an [`EinsumOptimize`] strategy to a [`ContractionTree`].
@@ -256,33 +257,35 @@ fn resolve_strategy(
     optimize: EinsumOptimize,
     subs: &Subscripts,
     shapes: &[&[usize]],
-) -> ContractionTree {
+) -> Result<ContractionTree> {
     match optimize {
         EinsumOptimize::Auto(opts) => ContractionTree::optimize_with_options(subs, shapes, &opts)
-            .expect("contraction optimization failed"),
+            .map_err(|e| Error::ContractionError(format!("{e}"))),
         EinsumOptimize::False => {
-            // Left-to-right: in JAX position-based terms, always (0,1).
             let n = subs.inputs.len();
             if n <= 1 {
-                ContractionTree::from_pairs(subs, shapes, &[]).expect("from_pairs failed")
+                ContractionTree::from_pairs(subs, shapes, &[])
+                    .map_err(|e| Error::ContractionError(format!("{e}")))
             } else {
                 let jax_path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
                 let v1_pairs = jax_path_to_v1_pairs(&jax_path, n);
-                ContractionTree::from_pairs(subs, shapes, &v1_pairs).expect("from_pairs failed")
+                ContractionTree::from_pairs(subs, shapes, &v1_pairs)
+                    .map_err(|e| Error::ContractionError(format!("{e}")))
             }
         }
         EinsumOptimize::Nested(nested) => {
             let n = subs.inputs.len();
             let v1_pairs = nested_to_v1_pairs(&nested, n);
             ContractionTree::from_pairs(subs, shapes, &v1_pairs)
-                .expect("nested einsum conversion to contraction tree failed")
+                .map_err(|e| Error::ContractionError(format!("{e}")))
         }
         EinsumOptimize::Path(jax_path) => {
             let n = subs.inputs.len();
             let v1_pairs = jax_path_to_v1_pairs(&jax_path, n);
-            ContractionTree::from_pairs(subs, shapes, &v1_pairs).expect("invalid contraction path")
+            ContractionTree::from_pairs(subs, shapes, &v1_pairs)
+                .map_err(|e| Error::ContractionError(format!("{e}")))
         }
-        EinsumOptimize::Tree(tree) => tree,
+        EinsumOptimize::Tree(tree) => Ok(tree),
     }
 }
 

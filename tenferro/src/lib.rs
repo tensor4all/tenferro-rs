@@ -9,27 +9,20 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use tenferro::cpu_backend::CpuBackend;
 //! use tenferro::einsum::einsum;
 //! use tenferro::engine::Engine;
 //! use tenferro::traced::TracedTensor;
+//! use tenferro_tensor::cpu::CpuBackend;
 //!
 //! let engine = Engine::new(CpuBackend::default());
 //! // ... build and execute traced computations
 //! ```
 
-pub mod backend;
 pub mod buffer_pool;
 pub mod compiler;
-pub mod cpu_backend;
 pub mod einsum;
 pub mod engine;
+pub mod error;
 pub mod exec;
-pub(crate) mod gemm;
-pub mod indexing;
-pub mod linalg;
-pub mod reduction;
 pub mod stablehlo;
-pub mod standard;
-pub mod structural;
 pub mod traced;

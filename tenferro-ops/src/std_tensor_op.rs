@@ -3,11 +3,11 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
 
-use crate::config::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-};
 use crate::input_key::TensorInputKey;
 use crate::semiring_ops::SemiringOps;
+use tenferro_tensor::{
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum StdTensorOp {
@@ -44,8 +44,9 @@ pub enum StdTensorOp {
     Expm1,
     Log1p,
 
-    // Tier 1: diagonal extraction (AD-closed with Scatter)
+    // Tier 1: diagonal extraction / embedding (AD-closed pair)
     ExtractDiag { axis_a: usize, axis_b: usize },
+    EmbedDiag { axis_a: usize, axis_b: usize },
 
     // Tier 2: indexing
     Gather(GatherConfig),
@@ -83,7 +84,8 @@ impl GraphOp for StdTensorOp {
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
             | Self::ReduceSum { .. }
-            | Self::ExtractDiag { .. } => 1,
+            | Self::ExtractDiag { .. }
+            | Self::EmbedDiag { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow => 2,
             Self::Abs
             | Self::Sign
@@ -113,35 +115,9 @@ impl GraphOp for StdTensorOp {
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
             | Self::ReduceSum { .. }
-            | Self::ExtractDiag { .. } => 1,
+            | Self::ExtractDiag { .. }
+            | Self::EmbedDiag { .. } => 1,
             _ => todo!("n_outputs not yet implemented for {:?}", self),
-        }
-    }
-
-    fn eval(&self, _ctx: &mut Self::Context, inputs: &[&Self::Operand]) -> Vec<Self::Operand> {
-        use computegraph::Operand;
-        match self {
-            Self::Add => vec![inputs[0].add(inputs[1])],
-            Self::Mul => vec![inputs[0].multiply(inputs[1])],
-            Self::Neg => vec![inputs[0].neg()],
-            Self::Conj => vec![inputs[0].conj()],
-            Self::DotGeneral(config) => vec![inputs[0].dot_general(
-                inputs[1],
-                &config.lhs_contracting_dims,
-                &config.rhs_contracting_dims,
-                &config.lhs_batch_dims,
-                &config.rhs_batch_dims,
-            )],
-            Self::Transpose { perm } => vec![inputs[0].transpose_perm(perm)],
-            Self::Reshape { shape } => vec![inputs[0].reshape(shape)],
-            Self::BroadcastInDim { shape, dims } => {
-                vec![inputs[0].broadcast_in_dim(shape, dims)]
-            }
-            Self::ReduceSum { axes } => vec![inputs[0].reduce_sum(axes)],
-            Self::ExtractDiag { axis_a, axis_b } => {
-                vec![inputs[0].extract_diagonal(*axis_a, *axis_b)]
-            }
-            _ => todo!("eval not yet implemented for {:?}", self),
         }
     }
 }
@@ -203,5 +179,9 @@ impl SemiringOps for StdTensorOp {
 
     fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
         StdTensorOp::ExtractDiag { axis_a, axis_b }
+    }
+
+    fn embed_diag(axis_a: usize, axis_b: usize) -> Self {
+        StdTensorOp::EmbedDiag { axis_a, axis_b }
     }
 }

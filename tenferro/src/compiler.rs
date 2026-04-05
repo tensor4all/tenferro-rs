@@ -1,8 +1,9 @@
 use computegraph::compile::CompiledProgram;
-use tenferro_ops::config::DotGeneralConfig;
-use tenferro_ops::semiring_ops::SemiringOps;
+use tenferro_algebra::Algebra;
+use tenferro_ops::semiring_op::SemiringOp;
+use tenferro_ops::semiring_op_kind::SemiringOpKind;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, DotGeneralConfig};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 use super::stablehlo::{StableHloInstruction, StableHloOp, StableHloProgram};
@@ -28,6 +29,10 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 },
                 StdTensorOp::ReduceSum { axes } => StableHloOp::ReduceSum { axes: axes.clone() },
                 StdTensorOp::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
+                StdTensorOp::EmbedDiag { axis_a, axis_b } => StableHloOp::EmbedDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,
                 },
@@ -67,10 +72,51 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
     }
 }
 
-pub fn lower_semiring_to_stablehlo<Op: SemiringOps>(
-    _prog: &CompiledProgram<Op>,
-) -> StableHloProgram {
-    todo!()
+pub fn lower_semiring_to_stablehlo<Alg>(prog: &CompiledProgram<SemiringOp<Alg>>) -> StableHloProgram
+where
+    Alg: Algebra + Send + Sync + 'static,
+{
+    let instructions = prog
+        .instructions
+        .iter()
+        .map(|instr| {
+            let op = match &instr.op.kind {
+                SemiringOpKind::Add => StableHloOp::Add,
+                SemiringOpKind::Mul => StableHloOp::Multiply,
+                SemiringOpKind::DotGeneral(c) => StableHloOp::DotGeneral(c.clone()),
+                SemiringOpKind::ReduceSum { axes } => StableHloOp::ReduceSum { axes: axes.clone() },
+                SemiringOpKind::Transpose { perm } => StableHloOp::Transpose { perm: perm.clone() },
+                SemiringOpKind::Reshape { shape } => StableHloOp::Reshape {
+                    shape: shape.clone(),
+                },
+                SemiringOpKind::BroadcastInDim { shape, dims } => StableHloOp::BroadcastInDim {
+                    shape: shape.clone(),
+                    dims: dims.clone(),
+                },
+                SemiringOpKind::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
+                SemiringOpKind::EmbedDiag { axis_a, axis_b } => StableHloOp::EmbedDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
+            };
+            StableHloInstruction {
+                op,
+                input_slots: instr.inputs.clone(),
+                output_slots: instr.outputs.clone(),
+                dtype: DType::F64,
+            }
+        })
+        .collect();
+
+    StableHloProgram {
+        instructions,
+        input_slots: prog.input_slots.clone(),
+        output_slots: prog.output_slots.clone(),
+        n_slots: prog.n_slots,
+    }
 }
 
 pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
@@ -102,6 +148,10 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 },
                 StableHloOp::ReduceSum { axes } => ExecOp::ReduceSum { axes: axes.clone() },
                 StableHloOp::ExtractDiag { axis_a, axis_b } => ExecOp::ExtractDiag {
+                    axis_a: *axis_a,
+                    axis_b: *axis_b,
+                },
+                StableHloOp::EmbedDiag { axis_a, axis_b } => ExecOp::EmbedDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,
                 },

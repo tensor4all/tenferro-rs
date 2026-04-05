@@ -1,7 +1,6 @@
-use tenferro_ops::config::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+use tenferro_tensor::{
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::DType;
 
 #[derive(Clone, Debug)]
 pub enum StableHloOp {
@@ -16,6 +15,7 @@ pub enum StableHloOp {
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
     ReduceSum { axes: Vec<usize> },
     ExtractDiag { axis_a: usize, axis_b: usize },
+    EmbedDiag { axis_a: usize, axis_b: usize },
     // Tier 2 elementwise
     Divide,
     Abs,

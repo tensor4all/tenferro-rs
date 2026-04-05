@@ -11,3 +11,4 @@ tenferro-tensor = { path = "../tenferro-tensor" }
 computegraph.workspace = true
 chainrules-core = { path = "../../chainrules-rs", package = "chainrules" }
 num-complex.workspace = true
+tenferro-algebra = { path = "../tenferro-algebra" }

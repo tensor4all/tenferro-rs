@@ -10,6 +10,7 @@ description = "High-level einsum with N-ary contraction tree optimization for th
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-ops = { path = "../tenferro-ops" }
+tenferro-tensor = { path = "../tenferro-tensor" }
 computegraph.workspace = true
 omeco.workspace = true
 

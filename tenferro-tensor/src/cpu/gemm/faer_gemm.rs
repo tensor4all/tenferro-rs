@@ -1,39 +1,6 @@
-//! Zero-copy strided GEMM via faer.
-//!
-//! The [`FaerGemm`] trait is implemented for `f32`, `f64`, `Complex32`,
-//! and `Complex64`. It wraps `faer::linalg::matmul::matmul` with
-//! arbitrary row/col strides, avoiding any temporary allocation.
-
 use num_complex::{Complex32, Complex64};
 
-/// Trait for types that support strided GEMM via faer (zero-copy, zero-allocation).
-///
-/// Computes `C = beta * C + alpha * A * B` using faer's matmul with arbitrary strides.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro::gemm::faer_gemm::FaerGemm;
-///
-/// // Perform a small 2x2 GEMM with column-major strides.
-/// let a = [1.0f64, 2.0, 3.0, 4.0]; // 2x2 col-major
-/// let b = [5.0, 6.0, 7.0, 8.0];
-/// let mut c = [0.0f64; 4];
-/// unsafe {
-///     f64::strided_gemm(
-///         1.0, a.as_ptr(), 2, 2, 1, 2,
-///         b.as_ptr(), 2, 1, 2,
-///         0.0, c.as_mut_ptr(), 1, 2,
-///     );
-/// }
-/// ```
 pub(crate) trait FaerGemm: Sized {
-    /// Perform `C = beta * C + alpha * A * B` with arbitrary strides.
-    ///
-    /// # Safety
-    ///
-    /// All pointers must be valid for the given dimensions and strides.
-    /// The caller must ensure no aliasing between A, B and C memory regions.
     #[allow(clippy::too_many_arguments)]
     unsafe fn strided_gemm(
         alpha: Self,
@@ -81,7 +48,6 @@ macro_rules! impl_faer_gemm {
                     Accum::Replace
                 } else {
                     if beta != one {
-                        // Scale C by beta before accumulating
                         let mut col_off = 0isize;
                         for _ in 0..n {
                             let mut off = col_off;

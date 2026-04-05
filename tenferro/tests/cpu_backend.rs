@@ -3,12 +3,10 @@
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
 use tenferro::buffer_pool::BufferPool;
-use tenferro::cpu_backend::CpuBackend;
 use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
-use tenferro_ops::config::DotGeneralConfig;
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
@@ -55,7 +53,7 @@ fn test_faer_gemm_basic_f64() {
     let mut tc = ta.traced_dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f64_data(result);
     // C = A*B = [[22,49],[28,64]] col-major: [22,28,49,64]
     assert_eq!(data, &[22.0, 28.0, 49.0, 64.0]);
@@ -77,7 +75,7 @@ fn test_faer_gemm_basic_f32() {
     let mut tc = ta.traced_dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f32_data(result);
     assert_eq!(data, &[22.0f32, 28.0, 49.0, 64.0]);
 }
@@ -107,7 +105,7 @@ fn test_faer_gemm_identity() {
     let mut tc = ta.traced_dot_general(&ti, config);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f64_data(result);
     let expected = get_f64_data(&a);
     assert_eq!(data, expected);
@@ -148,7 +146,7 @@ fn test_batched_gemm() {
     let mut tc = ta.traced_dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
 
     // Batch 0: C0 = A0*B0 = [[1*5+3*6, 1*7+3*8],[2*5+4*6, 2*7+4*8]]
     //             = [[23,31],[34,46]]
@@ -185,9 +183,9 @@ fn test_batched_gemm_via_einsum() {
     let mut engine = Engine::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk");
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk").unwrap();
 
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f64_data(result);
     // Same result as above, potentially in a different layout due to einsum
     // reordering. The einsum output indices are "ilk" so shape is [i=2, l=2, k=2].
@@ -217,9 +215,9 @@ fn test_strided_input_via_einsum() {
     let mut engine = Engine::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor(a);
     let tb = TracedTensor::from_tensor(b);
-    let mut tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik");
+    let mut tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik").unwrap();
 
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f64_data(result);
 
     // A^T = [[1,2,3],[4,5,6]]
@@ -246,7 +244,7 @@ fn test_vector_dot_product() {
     let mut tc = tv.traced_dot_general(&tw, config);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine);
+    let result = tc.eval(&mut engine).unwrap();
     let data = get_f64_data(result);
     // 1*4 + 2*5 + 3*6 = 32
     assert_eq!(data, &[32.0]);

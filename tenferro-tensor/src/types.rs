@@ -1,6 +1,15 @@
 use num_complex::Complex;
 use num_traits::{One, Zero};
 
+/// Memory location for tensor storage.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::MemoryKind;
+///
+/// let kind = MemoryKind::UnpinnedHost;
+/// ```
 #[derive(Clone, Debug)]
 pub enum MemoryKind {
     Device,
@@ -9,39 +18,114 @@ pub enum MemoryKind {
     Other(String),
 }
 
+/// Concrete compute device description.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::ComputeDevice;
+///
+/// let device = ComputeDevice { kind: "cuda".into(), ordinal: 0 };
+/// ```
 #[derive(Clone, Debug)]
 pub struct ComputeDevice {
     pub kind: String,
     pub ordinal: usize,
 }
 
+/// Placement metadata for a tensor buffer.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::{ComputeDevice, MemoryKind, Placement};
+///
+/// let placement = Placement {
+///     memory_kind: MemoryKind::Device,
+///     resident_device: Some(ComputeDevice { kind: "cuda".into(), ordinal: 0 }),
+/// };
+/// ```
 #[derive(Clone, Debug)]
 pub struct Placement {
     pub memory_kind: MemoryKind,
     pub resident_device: Option<ComputeDevice>,
 }
 
+/// Backend-owned buffer handle.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::BufferHandle;
+///
+/// let handle = BufferHandle::<f64>::new(7);
+/// ```
 #[derive(Clone, Debug)]
 pub struct BufferHandle<T> {
     pub id: u64,
     _phantom: std::marker::PhantomData<T>,
 }
 
+impl<T> BufferHandle<T> {
+    /// Create a new backend buffer handle.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::BufferHandle;
+    ///
+    /// let handle = BufferHandle::<f64>::new(1);
+    /// assert_eq!(handle.id, 1);
+    /// ```
+    pub fn new(id: u64) -> Self {
+        Self {
+            id,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Tensor storage.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::Buffer;
+///
+/// let host = Buffer::Host(vec![1.0_f64, 2.0]);
+/// ```
 #[derive(Clone, Debug)]
 pub enum Buffer<T> {
     Host(Vec<T>),
     Backend(BufferHandle<T>),
 }
 
+/// Contiguous column-major typed tensor storage.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::TypedTensor;
+///
+/// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+/// assert_eq!(t.shape, vec![2, 2]);
+/// ```
 #[derive(Clone, Debug)]
 pub struct TypedTensor<T> {
     pub buffer: Buffer<T>,
     pub shape: Vec<usize>,
-    pub strides: Vec<isize>,
     pub placement: Placement,
-    pub preferred_compute_device: Option<ComputeDevice>,
 }
 
+/// Runtime scalar dtype tag.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::DType;
+///
+/// assert_eq!(DType::F64 as u8, DType::F64 as u8);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DType {
     F32,
@@ -50,6 +134,16 @@ pub enum DType {
     C64,
 }
 
+/// Dynamic tensor enum over the supported scalar types.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::{Tensor, TypedTensor};
+///
+/// let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+/// assert_eq!(t.shape(), &[2]);
+/// ```
 #[derive(Clone, Debug)]
 pub enum Tensor {
     F32(TypedTensor<f32>),
@@ -58,6 +152,15 @@ pub enum Tensor {
     C64(TypedTensor<Complex<f64>>),
 }
 
+/// Column-major strides derived from a shape.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::col_major_strides;
+///
+/// assert_eq!(col_major_strides(&[2, 3]), vec![1, 2]);
+/// ```
 pub fn col_major_strides(shape: &[usize]) -> Vec<isize> {
     if shape.is_empty() {
         return vec![];
@@ -77,34 +180,58 @@ pub(crate) fn default_placement() -> Placement {
 }
 
 impl<T: Clone + Zero> TypedTensor<T> {
+    /// Allocate a zero-filled tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
+    /// assert_eq!(t.n_elements(), 6);
+    /// ```
     pub fn zeros(shape: Vec<usize>) -> Self {
         let n: usize = shape.iter().product();
-        let strides = col_major_strides(&shape);
         Self {
             buffer: Buffer::Host(vec![T::zero(); n]),
             shape,
-            strides,
             placement: default_placement(),
-            preferred_compute_device: None,
         }
     }
 }
 
 impl<T: Clone + One + Zero> TypedTensor<T> {
+    /// Allocate a one-filled tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::ones(vec![2]);
+    /// assert_eq!(t.host_data(), &[1.0, 1.0]);
+    /// ```
     pub fn ones(shape: Vec<usize>) -> Self {
         let n: usize = shape.iter().product();
-        let strides = col_major_strides(&shape);
         Self {
             buffer: Buffer::Host(vec![T::one(); n]),
             shape,
-            strides,
             placement: default_placement(),
-            preferred_compute_device: None,
         }
     }
 }
 
 impl<T: Clone> TypedTensor<T> {
+    /// Create a tensor from a column-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(t.get(&[1, 0]), &2.0);
+    /// ```
     pub fn from_vec(shape: Vec<usize>, data: Vec<T>) -> Self {
         let n: usize = shape.iter().product();
         assert_eq!(
@@ -114,20 +241,37 @@ impl<T: Clone> TypedTensor<T> {
             data.len(),
             n
         );
-        let strides = col_major_strides(&shape);
         Self {
             buffer: Buffer::Host(data),
             shape,
-            strides,
             placement: default_placement(),
-            preferred_compute_device: None,
         }
     }
 
+    /// Number of elements in the tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
+    /// assert_eq!(t.n_elements(), 6);
+    /// ```
     pub fn n_elements(&self) -> usize {
         self.shape.iter().product()
     }
 
+    /// Borrow the host buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.host_data(), &[1.0, 2.0]);
+    /// ```
     pub fn host_data(&self) -> &[T] {
         match &self.buffer {
             Buffer::Host(v) => v,
@@ -135,6 +279,17 @@ impl<T: Clone> TypedTensor<T> {
         }
     }
 
+    /// Mutably borrow the host buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let mut t = TypedTensor::<f64>::zeros(vec![2]);
+    /// t.host_data_mut()[0] = 3.0;
+    /// assert_eq!(t.host_data(), &[3.0, 0.0]);
+    /// ```
     pub fn host_data_mut(&mut self) -> &mut [T] {
         match &mut self.buffer {
             Buffer::Host(v) => v,
@@ -142,51 +297,85 @@ impl<T: Clone> TypedTensor<T> {
         }
     }
 
-    pub(crate) fn linear_offset(&self, indices: &[usize]) -> usize {
+    /// Compute the linear column-major offset for an index.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
+    /// assert_eq!(t.linear_offset(&[1, 2]), 5);
+    /// ```
+    pub fn linear_offset(&self, indices: &[usize]) -> usize {
         assert_eq!(indices.len(), self.shape.len());
-        let mut offset: isize = 0;
+        let mut offset = 0usize;
+        let mut stride = 1usize;
         for (i, &idx) in indices.iter().enumerate() {
             assert!(idx < self.shape[i], "index out of bounds");
-            offset += idx as isize * self.strides[i];
+            offset += idx * stride;
+            stride *= self.shape[i];
         }
-        offset as usize
+        offset
     }
 
+    /// Borrow a single element by multi-index.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.get(&[1]), &2.0);
+    /// ```
     pub fn get(&self, indices: &[usize]) -> &T {
         let off = self.linear_offset(indices);
         &self.host_data()[off]
     }
 
+    /// Mutably borrow a single element by multi-index.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let mut t = TypedTensor::<f64>::zeros(vec![1]);
+    /// *t.get_mut(&[0]) = 7.0;
+    /// assert_eq!(t.host_data(), &[7.0]);
+    /// ```
     pub fn get_mut(&mut self, indices: &[usize]) -> &mut T {
         let off = self.linear_offset(indices);
         &mut self.host_data_mut()[off]
     }
 }
 
+/// Element-wise conjugation helper.
 pub trait ConjElem {
-    fn conj_elem(&self) -> Self;
+    fn conj_elem(self) -> Self;
 }
 
 impl ConjElem for f32 {
-    fn conj_elem(&self) -> Self {
-        *self
+    fn conj_elem(self) -> Self {
+        self
     }
 }
 
 impl ConjElem for f64 {
-    fn conj_elem(&self) -> Self {
-        *self
+    fn conj_elem(self) -> Self {
+        self
     }
 }
 
 impl ConjElem for Complex<f32> {
-    fn conj_elem(&self) -> Self {
+    fn conj_elem(self) -> Self {
         self.conj()
     }
 }
 
 impl ConjElem for Complex<f64> {
-    fn conj_elem(&self) -> Self {
+    fn conj_elem(self) -> Self {
         self.conj()
     }
 }
@@ -218,6 +407,16 @@ pub(crate) use dispatch_binary;
 pub(crate) use dispatch_tensor;
 
 impl Tensor {
+    /// Tensor shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, TypedTensor};
+    ///
+    /// let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// assert_eq!(t.shape(), &[2]);
+    /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
             Tensor::F32(t) => &t.shape,
@@ -227,6 +426,16 @@ impl Tensor {
         }
     }
 
+    /// Tensor dtype tag.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{DType, Tensor, TypedTensor};
+    ///
+    /// let t = Tensor::F64(TypedTensor::from_vec(vec![1], vec![1.0]));
+    /// assert_eq!(t.dtype(), DType::F64);
+    /// ```
     pub fn dtype(&self) -> DType {
         match self {
             Tensor::F32(_) => DType::F32,
@@ -235,102 +444,6 @@ impl Tensor {
             Tensor::C64(_) => DType::C64,
         }
     }
-
-    pub fn neg(&self) -> Self {
-        dispatch_tensor!(self, t => typed_neg(t))
-    }
-
-    pub fn transpose_perm(&self, perm: &[usize]) -> Self {
-        dispatch_tensor!(self, t => typed_transpose(t, perm))
-    }
-
-    pub fn extract_diagonal(&self, axis_a: usize, axis_b: usize) -> Self {
-        dispatch_tensor!(self, t => typed_extract_diagonal(t, axis_a, axis_b))
-    }
-}
-
-fn typed_neg<T>(t: &TypedTensor<T>) -> TypedTensor<T>
-where
-    T: Clone + std::ops::Neg<Output = T> + Zero,
-{
-    let n = t.n_elements();
-    let mut result = TypedTensor::zeros(t.shape.clone());
-    let mut idx_buf = vec![0usize; t.shape.len()];
-    for flat in 0..n {
-        flat_to_multi(flat, &t.shape, &mut idx_buf);
-        let val = t.get(&idx_buf).clone().neg();
-        let off_out = result.linear_offset(&idx_buf);
-        result.host_data_mut()[off_out] = val;
-    }
-    result
-}
-
-fn typed_transpose<T: Clone + Zero>(t: &TypedTensor<T>, perm: &[usize]) -> TypedTensor<T> {
-    let rank = t.shape.len();
-    assert_eq!(perm.len(), rank);
-    let new_shape: Vec<usize> = perm.iter().map(|&p| t.shape[p]).collect();
-    let n = t.n_elements();
-    let mut result = TypedTensor::zeros(new_shape.clone());
-    let mut src_idx = vec![0usize; rank];
-    let mut dst_idx = vec![0usize; rank];
-    for flat in 0..n {
-        flat_to_multi(flat, &t.shape, &mut src_idx);
-        for (d, &p) in perm.iter().enumerate() {
-            dst_idx[d] = src_idx[p];
-        }
-        let val = t.host_data()[t.linear_offset(&src_idx)].clone();
-        let off_out = result.linear_offset(&dst_idx);
-        result.host_data_mut()[off_out] = val;
-    }
-    result
-}
-
-fn typed_extract_diagonal<T: Clone + Zero>(
-    t: &TypedTensor<T>,
-    axis_a: usize,
-    axis_b: usize,
-) -> TypedTensor<T> {
-    assert!(axis_a < axis_b, "extract_diagonal requires axis_a < axis_b");
-    assert_eq!(
-        t.shape[axis_a], t.shape[axis_b],
-        "extract_diagonal requires equal sizes on both axes"
-    );
-    let n = t.shape[axis_a];
-    // New shape: remove axis_b, keep axis_a
-    let mut new_shape = Vec::new();
-    for (i, &s) in t.shape.iter().enumerate() {
-        if i != axis_b {
-            new_shape.push(s);
-        }
-    }
-    let out_n: usize = new_shape.iter().product();
-    let mut result = TypedTensor::zeros(new_shape.clone());
-    let out_rank = new_shape.len();
-    let in_rank = t.shape.len();
-    let mut out_idx = vec![0usize; out_rank];
-    let mut in_idx = vec![0usize; in_rank];
-    for flat in 0..out_n {
-        flat_to_multi(flat, &new_shape, &mut out_idx);
-        // Map output index back to input index.
-        // axis_b was removed. Positions before axis_b map 1:1.
-        // Positions >= axis_b in output map to position+1 in input.
-        // axis_a in output gives the diagonal index; axis_b in input
-        // gets the same value as axis_a.
-        let mut j = 0;
-        for i in 0..in_rank {
-            if i == axis_b {
-                in_idx[i] = in_idx[axis_a]; // diagonal: same index
-            } else {
-                in_idx[i] = out_idx[j];
-                j += 1;
-            }
-        }
-        let _ = n; // used only in assertions above
-        let val = t.get(&in_idx).clone();
-        let off = result.linear_offset(&out_idx);
-        result.host_data_mut()[off] = val;
-    }
-    result
 }
 
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {

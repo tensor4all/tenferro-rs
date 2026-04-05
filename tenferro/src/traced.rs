@@ -8,14 +8,14 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
-use tenferro_ops::config::DotGeneralConfig;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend};
 
-use super::backend::{eval_exec_ir, SemiringCore};
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
 use super::engine::Engine;
+use super::error::{Error, Result};
+use super::exec::eval_exec_ir;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -58,9 +58,9 @@ impl TracedTensor {
         }
     }
 
-    pub fn eval<B: SemiringCore<Operand = Tensor>>(&mut self, engine: &mut Engine<B>) -> &Tensor {
+    pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
         if self.data.is_some() {
-            return self.data.as_ref().unwrap();
+            return Ok(self.data.as_ref().unwrap());
         }
 
         let output_key = self.fragment.vals()[self.val].key.clone();
@@ -72,24 +72,35 @@ impl TracedTensor {
         let stablehlo = lower_to_stablehlo(&compiled);
         let exec = compile_to_exec(&stablehlo);
 
-        let input_tensors: Vec<Tensor> = graph
-            .inputs
-            .iter()
-            .map(|key| match key {
-                GlobalValKey::Input(k) => self
-                    .inputs_map
-                    .get(k)
-                    .expect("missing input data for key")
-                    .clone(),
-                _ => panic!("expected Input key in graph inputs"),
-            })
-            .collect();
+        let mut input_tensors = Vec::with_capacity(graph.inputs.len());
+        for key in &graph.inputs {
+            match key {
+                GlobalValKey::Input(k) => {
+                    let tensor = self.inputs_map.get(k).ok_or_else(|| {
+                        Error::MissingInput(format!("missing input data for key {:?}", k))
+                    })?;
+                    input_tensors.push(tensor.clone());
+                }
+                _ => {
+                    return Err(Error::Internal(
+                        "expected Input key in graph inputs".to_string(),
+                    ));
+                }
+            }
+        }
 
-        let mut results = eval_exec_ir(&mut engine.backend, &exec, input_tensors);
-        assert_eq!(results.len(), 1);
+        // Use compile cache: store or retrieve the ExecProgram.
+        let cached_exec = engine.get_or_compile(exec);
+        let mut results = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors);
+        if results.len() != 1 {
+            return Err(Error::Internal(format!(
+                "expected 1 output, got {}",
+                results.len()
+            )));
+        }
 
         self.data = Some(results.remove(0));
-        self.data.as_ref().unwrap()
+        Ok(self.data.as_ref().unwrap())
     }
 
     pub fn grad(&self, _wrt: &TracedTensor) -> TracedTensor {
@@ -248,10 +259,10 @@ fn apply_binary(
     }
 }
 
-pub fn eval_all<B: SemiringCore<Operand = Tensor>>(
+pub fn eval_all<B: TensorBackend>(
     engine: &mut Engine<B>,
     outputs: &mut [&mut TracedTensor],
-) -> Vec<Tensor> {
+) -> Result<Vec<Tensor>> {
     let mut all_fragments = Vec::new();
     let mut output_keys = Vec::new();
     let mut all_inputs: HashMap<TensorInputKey, Tensor> = HashMap::new();
@@ -268,20 +279,29 @@ pub fn eval_all<B: SemiringCore<Operand = Tensor>>(
     let stablehlo = lower_to_stablehlo(&compiled);
     let exec = compile_to_exec(&stablehlo);
 
-    let input_tensors: Vec<Tensor> = graph
-        .inputs
-        .iter()
-        .map(|key| match key {
-            GlobalValKey::Input(k) => all_inputs.get(k).expect("missing input").clone(),
-            _ => panic!("expected Input key"),
-        })
-        .collect();
+    let mut input_tensors = Vec::with_capacity(graph.inputs.len());
+    for key in &graph.inputs {
+        match key {
+            GlobalValKey::Input(k) => {
+                let tensor = all_inputs.get(k).ok_or_else(|| {
+                    Error::MissingInput(format!("missing input data for key {:?}", k))
+                })?;
+                input_tensors.push(tensor.clone());
+            }
+            _ => {
+                return Err(Error::Internal(
+                    "expected Input key in graph inputs".to_string(),
+                ));
+            }
+        }
+    }
 
-    let results = eval_exec_ir(&mut engine.backend, &exec, input_tensors);
+    let cached_exec = engine.get_or_compile(exec);
+    let results = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors);
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
         tt.data = Some(result.clone());
     }
 
-    results
+    Ok(results)
 }

@@ -86,7 +86,7 @@ The workspace now uses three naming buckets:
 | **`tenferro-tensor-compute`** | You want typed `Tensor<T>` with einsum and linalg — **start here** |
 | `tenferro-dynamic-compute` | You want runtime-selected dtypes without automatic differentiation |
 | `tenferro` | You need reverse-mode automatic differentiation |
-| `tenferro-tensor` | You only need the data type, no computation (library authors) |
+| `tenferro-tensor` | You need the tensor runtime layer: dynamic tensor values, backend traits, or CPU/GPU execution kernels |
 
 - **Typed path** (`tenferro-tensor-compute`): `Tensor<T>` with a fixed scalar type at compile time. Best when you know the scalar type and do not need automatic gradient tracking.
 - **Dynamic primal path** (`tenferro-dynamic-compute`): dynamic scalar type without automatic differentiation. Best when you need runtime dtype selection but no tape/gradient state.

@@ -185,6 +185,30 @@ cargo bench -p tenferro-prims -- contraction
 RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
 
+## CPU Kernel Implementation Rules
+
+**No naive CPU loop fallbacks.** All CPU tensor kernels must use optimized
+implementations. Hand-written element-by-element loops are prohibited in
+production code paths.
+
+Required backends by operation category:
+
+| Category | Required backend |
+|---|---|
+| Elementwise (add, mul, neg, exp, ...) | strided-kernel (`map_into`, `zip_map2_into`, etc.) |
+| Reduction (reduce_sum, reduce_prod, ...) | strided-kernel (`reduce`, `reduce_axis`) |
+| Structural (transpose, broadcast, extract_diag) | strided-kernel (`permute`+`copy_into`, `broadcast`, `diagonal_view`) |
+| GEMM (dot_general) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
+| Linalg (svd, qr, cholesky, eigh, solve) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
+
+Exceptions (no strided-kernel API available):
+- `reshape`: metadata-only (contiguous memory, shape swap only)
+- `embed_diagonal`: dedicated implementation
+- Indexing ops (gather, scatter, slice, pad, concatenate, reverse): dedicated implementation
+
+Exactly one CPU backend must be enabled at build time (`cpu-faer` or `cpu-blas`).
+Both disabled or both enabled triggers `compile_error!`.
+
 ## Common Performance Anti-Patterns
 
 When writing performance-sensitive code (GEMM, tensor operations, inner loops), avoid these mistakes:
