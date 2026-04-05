@@ -196,6 +196,8 @@ impl TensorBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> Tensor {
         match input {
             Tensor::F64(t) => Tensor::F64(linalg::cholesky(t)),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => Tensor::C64(linalg::cholesky(t)),
             _ => todo!("cholesky: unsupported dtype"),
         }
     }
@@ -203,6 +205,8 @@ impl TensorBackend for CpuBackend {
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor> {
         match input {
             Tensor::F64(t) => linalg::svd(t).into_iter().map(Tensor::F64).collect(),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => linalg::svd(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("svd: unsupported dtype"),
         }
     }
@@ -210,6 +214,8 @@ impl TensorBackend for CpuBackend {
     fn qr(&mut self, input: &Tensor) -> Vec<Tensor> {
         match input {
             Tensor::F64(t) => linalg::qr(t).into_iter().map(Tensor::F64).collect(),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => linalg::qr(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("qr: unsupported dtype"),
         }
     }
@@ -217,6 +223,8 @@ impl TensorBackend for CpuBackend {
     fn eigh(&mut self, input: &Tensor) -> Vec<Tensor> {
         match input {
             Tensor::F64(t) => linalg::eigh(t).into_iter().map(Tensor::F64).collect(),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => linalg::eigh(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("eigh: unsupported dtype"),
         }
     }
@@ -224,6 +232,8 @@ impl TensorBackend for CpuBackend {
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
         match (a, b) {
             (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(linalg::solve(a, b)),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => Tensor::C64(linalg::solve(a, b)),
             _ => todo!("solve: unsupported dtype"),
         }
     }
