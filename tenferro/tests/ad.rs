@@ -9,9 +9,8 @@ use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use num_complex::Complex64;
 use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::einsum::einsum;
-use tenferro::engine::Engine;
 use tenferro::exec::eval_exec_ir;
-use tenferro::traced::TracedTensor;
+use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
@@ -967,8 +966,7 @@ fn grad_matmul_sum() {
 
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], a_data.clone()));
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
-    let matmul = a.traced_dot_general(&b, matmul_config());
-    let loss = matmul.traced_reduce_sum(&[0, 1]);
+    let loss = matmul(&a, &b).sum(&[0, 1]);
     assert!(loss.shape.is_empty());
     let grad = loss.grad(&a).unwrap();
 
@@ -978,9 +976,7 @@ fn grad_matmul_sum() {
     let f = |xs: &[f64]| {
         let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], xs.to_vec()));
         let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
-        let matmul = a.traced_dot_general(&b, matmul_config());
-        let loss = matmul.traced_reduce_sum(&[0, 1]);
-        eval_scalar(loss)
+        eval_scalar(matmul(&a, &b).sum(&[0, 1]))
     };
 
     for index in 0..a_data.len() {
@@ -1138,7 +1134,7 @@ fn jvp_elementwise_add_y_tangent() {
     let y = TracedTensor::from_tensor(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
     let dy = TracedTensor::from_tensor(f64_tensor(vec![3], vec![0.5, -1.0, 2.0]));
 
-    let sum = x.traced_add(&y);
+    let sum = &x + &y;
     let jvp = sum.jvp(&y, &dy);
 
     let result = eval_tensor(jvp);
@@ -1243,7 +1239,7 @@ fn grad_transpose() {
 fn grad_exp() {
     let x_data = vec![0.2, -0.7, 1.3];
     let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
-    let loss = x.traced_exp().traced_reduce_sum(&[0]);
+    let loss = x.exp().sum(&[0]);
     let grad = loss.grad(&x).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -1253,7 +1249,7 @@ fn grad_exp() {
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
-        eval_scalar(x.traced_exp().traced_reduce_sum(&[0]))
+        eval_scalar(x.exp().sum(&[0]))
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }

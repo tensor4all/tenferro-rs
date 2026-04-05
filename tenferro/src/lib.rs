@@ -9,14 +9,13 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use tenferro::einsum::einsum;
-//! use tenferro::engine::Engine;
-//! use tenferro::traced::TracedTensor;
-//! use tenferro_tensor::cpu::CpuBackend;
+//! use tenferro::{CpuBackend, Engine, TracedTensor};
 //!
-//! let engine = Engine::new(CpuBackend::default());
+//! let mut engine = Engine::new(CpuBackend::default());
 //! // ... build and execute traced computations
 //! ```
+
+use tenferro_tensor::DotGeneralConfig;
 
 pub mod buffer_pool;
 pub mod compiler;
@@ -26,3 +25,40 @@ pub mod error;
 pub mod exec;
 pub mod stablehlo;
 pub mod traced;
+
+pub use engine::Engine;
+pub use tenferro_tensor::cpu::CpuBackend;
+pub use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
+pub use traced::TracedTensor;
+
+/// Matrix multiplication helper for rank-2 traced tensors.
+///
+/// This contracts the last dimension of `a` with the first dimension of `b`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let c = tenferro::matmul(&a, &b);
+/// ```
+pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![a.shape.len() - 1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: a.shape.len(),
+        rhs_rank: b.shape.len(),
+    };
+    a.traced_dot_general(b, config)
+}
+
+/// Elementwise power helper.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let y = tenferro::pow(&base, &exp);
+/// ```
+pub fn pow(base: &TracedTensor, exp: &TracedTensor) -> TracedTensor {
+    base.traced_pow(exp)
+}

@@ -41,6 +41,38 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
 }
 
+impl std::ops::Add for &TracedTensor {
+    type Output = TracedTensor;
+
+    fn add(self, rhs: &TracedTensor) -> TracedTensor {
+        self.traced_add(rhs)
+    }
+}
+
+impl std::ops::Mul for &TracedTensor {
+    type Output = TracedTensor;
+
+    fn mul(self, rhs: &TracedTensor) -> TracedTensor {
+        self.traced_mul(rhs)
+    }
+}
+
+impl std::ops::Neg for &TracedTensor {
+    type Output = TracedTensor;
+
+    fn neg(self) -> TracedTensor {
+        self.traced_neg()
+    }
+}
+
+impl std::ops::Div for &TracedTensor {
+    type Output = TracedTensor;
+
+    fn div(self, rhs: &TracedTensor) -> TracedTensor {
+        self.traced_div(rhs)
+    }
+}
+
 impl TracedTensor {
     pub fn from_tensor(tensor: Tensor) -> Self {
         let shape = tensor.shape().to_vec();
@@ -362,6 +394,149 @@ impl TracedTensor {
         let mut out_shape = self.shape.clone();
         out_shape.insert(axis_b, self.shape[axis_a]);
         apply_unary(StdTensorOp::EmbedDiag { axis_a, axis_b }, self, out_shape)
+    }
+
+    /// Alias for [`Self::traced_exp`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.exp();
+    /// ```
+    pub fn exp(&self) -> TracedTensor {
+        self.traced_exp()
+    }
+
+    /// Alias for [`Self::traced_log`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.log();
+    /// ```
+    pub fn log(&self) -> TracedTensor {
+        self.traced_log()
+    }
+
+    /// Alias for [`Self::traced_sin`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sin();
+    /// ```
+    pub fn sin(&self) -> TracedTensor {
+        self.traced_sin()
+    }
+
+    /// Alias for [`Self::traced_cos`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.cos();
+    /// ```
+    pub fn cos(&self) -> TracedTensor {
+        self.traced_cos()
+    }
+
+    /// Alias for [`Self::traced_tanh`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.tanh();
+    /// ```
+    pub fn tanh(&self) -> TracedTensor {
+        self.traced_tanh()
+    }
+
+    /// Alias for [`Self::traced_sqrt`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sqrt();
+    /// ```
+    pub fn sqrt(&self) -> TracedTensor {
+        self.traced_sqrt()
+    }
+
+    /// Alias for [`Self::traced_conj`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.conj();
+    /// ```
+    pub fn conj(&self) -> TracedTensor {
+        self.traced_conj()
+    }
+
+    /// Alias for [`Self::traced_abs`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.abs();
+    /// ```
+    pub fn abs(&self) -> TracedTensor {
+        self.traced_abs()
+    }
+
+    /// Alias for [`Self::traced_sign`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sign();
+    /// ```
+    pub fn sign(&self) -> TracedTensor {
+        self.traced_sign()
+    }
+
+    /// Alias for [`Self::traced_reshape`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reshape(&[2, 2]);
+    /// ```
+    pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
+        self.traced_reshape(shape)
+    }
+
+    /// Alias for [`Self::traced_transpose`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.transpose(&[1, 0]);
+    /// ```
+    pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
+        self.traced_transpose(perm)
+    }
+
+    /// Alias for [`Self::traced_reduce_sum`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sum(&[0]);
+    /// ```
+    pub fn sum(&self, axes: &[usize]) -> TracedTensor {
+        self.traced_reduce_sum(axes)
+    }
+
+    /// Alias for [`Self::traced_broadcast_in_dim`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.broadcast(&[2, 3], &[1]);
+    /// ```
+    pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
+        self.traced_broadcast_in_dim(shape, dims)
     }
 }
 
