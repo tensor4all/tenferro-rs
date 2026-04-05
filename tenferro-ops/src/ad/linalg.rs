@@ -106,11 +106,7 @@ pub fn linearize_svd(
 
     let s_ones = one_like_fixed(builder, s.clone());
     let s_sq = fixed_mul(builder, s.clone(), s.clone());
-    let s_eps_sq = fixed_scale(
-        builder,
-        ValRef::Local(s_ones),
-        F_MATRIX_EPS * F_MATRIX_EPS,
-    );
+    let s_eps_sq = fixed_scale(builder, ValRef::Local(s_ones), F_MATRIX_EPS * F_MATRIX_EPS);
     let safe_s_sq = fixed_add(builder, ValRef::Local(s_sq), ValRef::Local(s_eps_sq));
     let s_inv = fixed_div(builder, s.clone(), ValRef::Local(safe_s_sq));
     let s_inv_mat = embed_diag_fixed(builder, ValRef::Local(s_inv));
@@ -262,18 +258,21 @@ pub fn linearize_qr(
     let q = ValRef::External(primal_out[0].clone());
     let r = ValRef::External(primal_out[1].clone());
 
-    let dx_rinv = builder.add_op(
+    let r_h = adjoint_2d_fixed(builder, r.clone());
+    let da_h = adjoint_2d_linear(builder, da);
+    let dx_rinv_h = builder.add_op(
         StdTensorOp::TriangularSolve {
-            left_side: false,
-            lower: false,
+            left_side: true,
+            lower: true,
             transpose_a: false,
             unit_diagonal: false,
         },
-        vec![r.clone(), ValRef::Local(da)],
+        vec![ValRef::Local(r_h), ValRef::Local(da_h)],
         OpMode::Linear {
             active_mask: vec![false, true],
         },
     )[0];
+    let dx_rinv = adjoint_2d_linear(builder, dx_rinv_h);
     let qh = adjoint_2d_fixed(builder, q.clone());
     let qt_dx_rinv = matmul_linear(
         builder,
@@ -281,32 +280,23 @@ pub fn linearize_qr(
         ValRef::Local(dx_rinv),
         vec![false, true],
     );
-    let lower = builder.add_op(
-        StdTensorOp::Tril { k: -1 },
-        vec![ValRef::Local(qt_dx_rinv)],
+    let qt_dx_rinv_h = adjoint_2d_linear(builder, qt_dx_rinv);
+    let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
+    let upper = builder.add_op(
+        StdTensorOp::Triu { k: 1 },
+        vec![ValRef::Local(sym)],
         OpMode::Linear {
             active_mask: vec![true],
         },
     )[0];
-    let lower_h = adjoint_2d_linear(builder, lower);
-    let d_omega = linear_sub(builder, lower, lower_h);
+    let sym_diag = extract_diag_linear(builder, sym);
+    let half_sym_diag = linear_unary(builder, StdTensorOp::Scale { factor: 0.5 }, sym_diag);
+    let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
+    let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 
-    let d_omega_minus_qt_dx = linear_sub(builder, d_omega, qt_dx_rinv);
-    let q_term = matmul_linear(
-        builder,
-        q.clone(),
-        ValRef::Local(d_omega_minus_qt_dx),
-        vec![false, true],
-    );
-    let dq = linear_add(builder, q_term, dx_rinv);
-
-    let qt_dx_minus_d_omega = linear_sub(builder, qt_dx_rinv, d_omega);
-    let dr = matmul_linear(
-        builder,
-        ValRef::Local(qt_dx_minus_d_omega),
-        r,
-        vec![true, false],
-    );
+    let q_dr_hat = matmul_linear(builder, q.clone(), ValRef::Local(dr_hat), vec![false, true]);
+    let dq = linear_sub(builder, dx_rinv, q_dr_hat);
+    let dr = matmul_linear(builder, ValRef::Local(dr_hat), r, vec![true, false]);
 
     vec![Some(dq), Some(dr)]
 }
