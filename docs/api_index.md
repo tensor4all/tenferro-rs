@@ -155,6 +155,14 @@ structured result types. It is intentionally smaller than the public linalg API
 surface and exists to keep `tenferro-prims` focused on semiring/scalar
 execution.
 
+<a id="tenferro-ops"></a>
+### [tenferro-ops](tenferro_ops/index.html) <small>(Layer 3)</small>
+
+Metadata-only operation descriptors shared across the runtime pipeline.
+This crate defines semiring-aware operation enums and standard tensor op
+descriptors without owning execution kernels. `tenferro` and
+`tenferro-tensor` use it as the IR-facing operation surface.
+
 <a id="tenferro-tensor"></a>
 ### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 2)</small>
 

@@ -1,68 +1,64 @@
 #![allow(clippy::multiple_bound_locations)]
 
-//! `tenferro`: AD-aware tensor interface layer on top of `tenferro-rs`.
+//! `tenferro`: traced tensor computation with StableHLO-style IR.
 //!
-//! The public surface includes reverse-mode helpers plus a narrow JVP
-//! transform, [`jvp`], which returns [`JvpResult`] with primal outputs and
-//! optional output tangents for the currently wired operations.
+//! This crate provides a tracing-based tensor computation framework where
+//! operations are recorded into a StableHLO-compatible intermediate
+//! representation, then compiled and executed on a backend (e.g., CPU).
 //!
 //! # Examples
 //!
-//! ```rust
-//! use tenferro::{jvp, Tensor};
+//! ```rust,ignore
+//! use tenferro::{CpuBackend, Engine, TracedTensor};
 //!
-//! let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
-//! let primals = [x];
-//! let tangents = [Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2]).unwrap())];
-//!
-//! let result = jvp(
-//!     |inputs| Ok(vec![inputs[0].add(&inputs[0]).unwrap().exp().unwrap().sum().unwrap()]),
-//!     &primals,
-//!     &tangents,
-//! )
-//! .unwrap();
-//!
-//! assert_eq!(result.outputs.len(), 1);
-//! assert_eq!(result.output_tangents.len(), 1);
+//! let mut engine = Engine::new(CpuBackend::default());
+//! // ... build and execute traced computations
 //! ```
-//!
-//! Builder `.run()` execution is configured through [`set_default_runtime`].
-//! The primary public frontend is [`Tensor`], backed by `tidu`'s
-//! `Value<DynTensor>` carrier. Custom downstream operations should use
-//! [`LinearizableOp`] and [`LinearizedOp`] directly; `jvp` is not a public
-//! dual-builder API and does not imply higher-order forward-mode or HVP
-//! support.
-//!
-//! Runtime-dispatched tensor operations such as [`Tensor::einsum`],
-//! [`Tensor::solve`], [`Tensor::solve_triangular`], [`Tensor::det`],
-//! [`Tensor::inv`], [`Tensor::slogdet`], [`Tensor::cholesky`],
-//! [`Tensor::lstsq`], [`Tensor::lu`], [`Tensor::norm`],
-//! [`Tensor::vector_norm`], [`Tensor::matrix_norm`], [`Tensor::qr`],
-//! [`Tensor::svd`], [`Tensor::eig`], [`Tensor::eigh`], [`Tensor::pinv`],
-//! and [`Tensor::matrix_exp`] require an installed runtime via
-//! [`set_default_runtime`] or [`runtime::with_runtime`].
 
-mod core;
+use tenferro_tensor::DotGeneralConfig;
+
+pub mod buffer_pool;
+pub mod compiler;
+pub mod einsum;
+pub mod engine;
 pub mod error;
-#[path = "jvp.rs"]
-mod jvp_api;
-pub mod runtime;
-mod scalar_value;
-pub mod snapshot;
+pub mod exec;
+pub mod stablehlo;
+pub mod traced;
 
-pub use core::{
-    CholeskyExResult, EigResult, EighResult, InvExResult, LstsqResult, LuFactorExResult,
-    LuFactorResult, LuPivot, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult,
-    SvdResult, Tensor,
-};
-pub use error::{Error, Result};
-pub use jvp_api::{jvp, JvpResult};
-pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
-pub use scalar_value::ScalarValue;
-pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
-pub use tenferro_internal_ad_surface::{
-    backward, grad, with_ad_policy, AdExecutionPolicy, BackwardOptions, CheckpointHint,
-    CheckpointMode, GradOptions, LinearizableOp, LinearizedOp, MatrixNormOrd, NormKind, Schema,
-    SlotSchema, SvdOptions, Value, VectorNormOrd,
-};
-pub use tenferro_tensor::MemoryOrder;
+pub use engine::Engine;
+pub use tenferro_tensor::cpu::CpuBackend;
+pub use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
+pub use traced::TracedTensor;
+
+/// Matrix multiplication helper for rank-2 traced tensors.
+///
+/// This contracts the last dimension of `a` with the first dimension of `b`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let c = tenferro::matmul(&a, &b);
+/// ```
+pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![a.shape.len() - 1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: a.shape.len(),
+        rhs_rank: b.shape.len(),
+    };
+    a.traced_dot_general(b, config)
+}
+
+/// Elementwise power helper.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let y = tenferro::pow(&base, &exp);
+/// ```
+pub fn pow(base: &TracedTensor, exp: &TracedTensor) -> TracedTensor {
+    base.traced_pow(exp)
+}

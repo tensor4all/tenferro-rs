@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use tenferro_device::{Error, Result as DeviceResult};
 
-use crate::execution::util::{build_size_dict, compute_output_shape};
 use crate::syntax::subscripts::Subscripts;
+use crate::util::{build_size_dict, compute_output_shape};
 
 /// Narrow lowering plan for the bridge-equivalent binary GEMM path.
 #[derive(Debug, PartialEq, Eq)]

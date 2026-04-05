@@ -220,7 +220,7 @@ fn nested_to_pairs_rejects_non_binary_nodes() {
 fn self_greedy_pair_optimizer_returns_valid_sequence() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
     let shapes = [&[2, 3][..], &[3, 5][..], &[5, 7][..]];
-    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None).unwrap();
+    let size_dict = crate::util::build_size_dict(&subs, &shapes, None).unwrap();
 
     let pairs = optimize_self_greedy_pairs(&subs, &size_dict);
 

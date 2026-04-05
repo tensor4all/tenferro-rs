@@ -40,25 +40,15 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --workspace --release
 
-  test-inject-prims:
-    name: cargo test (prims inject)
+  test-inject-blas:
+    name: cargo test (blas inject)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run inject tests for tenferro-prims
-        run: cargo test -p tenferro-prims --test inject_tests --release --no-default-features --features "gemm-blas,provider-inject"
-
-  test-inject-linalg:
-    name: cargo test (linalg inject)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run inject tests for tenferro-linalg
-        run: cargo test -p tenferro-linalg --test inject_tests --release --no-default-features --features "linalg-lapack,provider-inject"
+      - name: Run inject tests for tenferro-tensor
+        run: cargo test -p tenferro-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
 
   coverage:
     name: coverage

@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use tenferro_device::{Error, Result as DeviceResult};
 
-use crate::execution::util::{build_size_dict, compute_output_shape};
 use crate::planning::classify::classify_modes;
 pub(crate) use crate::planning::strict_binary::{
     compile_strict_binary_lowering_plan, compile_strict_binary_lowering_step_plan,
@@ -10,6 +9,7 @@ pub(crate) use crate::planning::strict_binary::{
 };
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
+use crate::util::{build_size_dict, compute_output_shape};
 
 /// Pre-computed information for reducing axes unique to one operand.
 #[derive(Debug, PartialEq, Eq)]

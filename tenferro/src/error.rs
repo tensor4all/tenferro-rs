@@ -1,34 +1,45 @@
-/// Crate-wide error type for dynamic `tenferro` APIs.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro::{Error, Result};
-///
-/// fn maybe_fail(flag: bool) -> Result<()> {
-///     if flag {
-///         Ok(())
-///     } else {
-///         Err(Error::UnsupportedAdOp { op: "demo" })
-///     }
-/// }
-///
-/// assert!(maybe_fail(true).is_ok());
-/// assert!(maybe_fail(false).is_err());
-/// ```
-pub use tenferro_internal_error::Error;
+//! Error types for the tenferro crate.
+//!
+//! # Examples
+//!
+//! ```ignore
+//! use tenferro::error::Error;
+//!
+//! let err = Error::InvalidSubscripts("bad label".into());
+//! assert!(err.to_string().contains("bad label"));
+//! ```
 
-/// Convenience result alias for dynamic `tenferro` APIs.
+/// Errors produced by einsum, eval, and other tenferro operations.
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro::{Error, Result};
+/// ```ignore
+/// use tenferro::error::Error;
 ///
-/// let ok: Result<i32> = Ok(1);
-/// let err: Result<i32> = Err(Error::UnsupportedAdOp { op: "sample" });
-///
-/// assert_eq!(ok.unwrap(), 1);
-/// assert!(err.is_err());
+/// let err = Error::InvalidSubscripts("rank mismatch".into());
 /// ```
-pub use tenferro_internal_error::Result;
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Einsum subscript string is invalid or cannot be parsed.
+    #[error("invalid subscripts: {0}")]
+    InvalidSubscripts(String),
+
+    /// Contraction optimization failed (shape mismatch, bad path, etc.).
+    #[error("contraction error: {0}")]
+    ContractionError(String),
+
+    /// A required input tensor is missing from the inputs map.
+    #[error("missing input: {0}")]
+    MissingInput(String),
+
+    /// Reverse-mode gradient requires a scalar output.
+    #[error("grad requires a scalar output, got shape {shape:?}")]
+    NonScalarGrad { shape: Vec<usize> },
+
+    /// An unexpected internal error.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+/// Result type alias for tenferro operations.
+pub type Result<T> = std::result::Result<T, Error>;

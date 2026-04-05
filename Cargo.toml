@@ -1,35 +1,15 @@
 [workspace]
 members = [
-    # core
+    # v2 core (6 crates)
     "tenferro-device",
     "tenferro-algebra",
-    "tenferro-prims",
     "tenferro-tensor",
+    "tenferro-ops",
     "tenferro-einsum",
-    "tenferro-linalg-prims",
-    "tenferro-linalg",
-    "tenferro-tensor-compute",
-    "tenferro-dynamic-compute",
-    "tenferro-capi",
-    # internal
-    "internal/tenferro-internal-error",
-    "internal/tenferro-internal-runtime",
-    "internal/tenferro-internal-frontend-core",
-    "internal/tenferro-internal-ad-core",
-    "internal/tenferro-internal-ad-ops",
-    "internal/tenferro-internal-ad-linalg",
-    "internal/tenferro-internal-ad-surface",
-    # extension
-    "extension/tenferro-ext-tropical",
-    "extension/tenferro-ext-tropical-capi",
-    "extension/tenferro-ext-burn",
-    "extension/tenferro-ext-mdarray",
-    "extension/tenferro-ext-ndarray",
     "tenferro",
 ]
 default-members = [
     "tenferro-tensor",
-    "tenferro-tensor-compute",
 ]
 resolver = "2"
 
@@ -47,9 +27,9 @@ thiserror = "2"
 criterion = "0.5"
 serde = "1"
 serde_json = "1"
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", rev = "6cc46775b33653f91df96ca1571ce9905a6224f8" }
-chainrules = { git = "https://github.com/tensor4all/chainrules-rs", rev = "6cc46775b33653f91df96ca1571ce9905a6224f8" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "f2f57f75d228fdfa2494fb7d9a6a2e3efa019a0d" }
+chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "ed7eeed", package = "chainrules" }
+chainrules = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "ed7eeed" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "b86715e" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }
@@ -67,3 +47,4 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "b361eac" }

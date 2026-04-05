@@ -84,6 +84,12 @@ Keep source files **small and focused** — one logical concern per file. Use **
 
 When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
 
+### Test Coverage Target
+
+Every source file should have **90%+ line coverage**. When adding new code,
+add tests that cover the new paths. When modifying existing code, check
+coverage for the modified file and add tests if below 90%.
+
 ### Unit Test Organization
 
 For Rust modules, keep production source files focused on production code.
@@ -172,6 +178,7 @@ cargo test test_name
 cargo fmt --check
 
 # Coverage check (per-file thresholds)
+# Target: 90%+ line coverage per file. Files below 90% should have tests added.
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
@@ -184,6 +191,30 @@ cargo bench -p tenferro-prims -- contraction
 # Run benchmarks with native CPU features
 RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
+
+## CPU Kernel Implementation Rules
+
+**No naive CPU loop fallbacks.** All CPU tensor kernels must use optimized
+implementations. Hand-written element-by-element loops are prohibited in
+production code paths.
+
+Required backends by operation category:
+
+| Category | Required backend |
+|---|---|
+| Elementwise (add, mul, neg, exp, ...) | strided-kernel (`map_into`, `zip_map2_into`, etc.) |
+| Reduction (reduce_sum, reduce_prod, ...) | strided-kernel (`reduce`, `reduce_axis`) |
+| Structural (transpose, broadcast, extract_diag) | strided-kernel (`permute`+`copy_into`, `broadcast`, `diagonal_view`) |
+| GEMM (dot_general) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
+| Linalg (svd, qr, cholesky, eigh, solve) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
+
+Exceptions (no strided-kernel API available):
+- `reshape`: metadata-only (contiguous memory, shape swap only)
+- `embed_diagonal`: dedicated implementation
+- Indexing ops (gather, scatter, slice, pad, concatenate, reverse): dedicated implementation
+
+Exactly one CPU backend must be enabled at build time (`cpu-faer` or `cpu-blas`).
+Both disabled or both enabled triggers `compile_error!`.
 
 ## Common Performance Anti-Patterns
 

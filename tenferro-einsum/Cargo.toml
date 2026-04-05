@@ -9,18 +9,10 @@ description = "High-level einsum with N-ary contraction tree optimization for th
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
-tenferro-algebra = { path = "../tenferro-algebra" }
-tenferro-prims = { path = "../tenferro-prims" }
+tenferro-ops = { path = "../tenferro-ops" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-tidu.workspace = true
-strided-view.workspace = true
-strided-perm.workspace = true
-num-traits.workspace = true
+computegraph.workspace = true
 omeco.workspace = true
-smallvec = "1.13"
-
-[features]
-profile-dispatch = []
 
 [dev-dependencies]
-num-complex.workspace = true
+tenferro-ops = { path = "../tenferro-ops" }
