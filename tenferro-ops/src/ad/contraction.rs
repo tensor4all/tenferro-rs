@@ -89,34 +89,46 @@ pub fn transpose_dot_general(
         OpMode::Primal => return vec![None, None],
     };
 
-    assert_supported_matrix_dot(config);
+    let lhs_free = compute_free_dims(
+        config.lhs_rank,
+        &config.lhs_contracting_dims,
+        &config.lhs_batch_dims,
+    );
+    let rhs_free = compute_free_dims(
+        config.rhs_rank,
+        &config.rhs_contracting_dims,
+        &config.rhs_batch_dims,
+    );
+    let output_rank = config.lhs_batch_dims.len() + lhs_free.len() + rhs_free.len();
+    let cotangent = normalize_scalar_cotangent(builder, ct, output_rank);
 
-    match active_mask.as_slice() {
-        [true, false] => {
-            let rhs_t = transpose_matrix(builder, inputs[1].clone());
-            let out = builder.add_op(
-                StdTensorOp::DotGeneral(transpose_config_for_lhs(config)),
-                vec![ValRef::Local(ct), ValRef::Local(rhs_t)],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
-            );
-            vec![Some(out[0]), None]
-        }
-        [false, true] => {
-            let lhs_t = transpose_matrix(builder, inputs[0].clone());
-            let out = builder.add_op(
-                StdTensorOp::DotGeneral(transpose_config_for_rhs(config)),
-                vec![ValRef::Local(lhs_t), ValRef::Local(ct)],
-                OpMode::Linear {
-                    active_mask: vec![false, true],
-                },
-            );
-            vec![None, Some(out[0])]
-        }
-        [false, false] => vec![None, None],
-        _ => todo!("transpose_dot_general only supports single-active matrix terms"),
+    let mut result = vec![None, None];
+
+    if active_mask[0] {
+        let (transpose_config, perm) = transpose_plan_for_lhs(config, &lhs_free, &rhs_free);
+        let out = builder.add_op(
+            StdTensorOp::DotGeneral(transpose_config),
+            vec![cotangent.clone(), inputs[1].clone()],
+            OpMode::Linear {
+                active_mask: vec![true, false],
+            },
+        );
+        result[0] = Some(add_transpose_if_needed(builder, out[0], &perm));
     }
+
+    if active_mask[1] {
+        let (transpose_config, perm) = transpose_plan_for_rhs(config, &lhs_free, &rhs_free);
+        let out = builder.add_op(
+            StdTensorOp::DotGeneral(transpose_config),
+            vec![inputs[0].clone(), cotangent],
+            OpMode::Linear {
+                active_mask: vec![false, true],
+            },
+        );
+        result[1] = Some(add_transpose_if_needed(builder, out[0], &perm));
+    }
+
+    result
 }
 
 pub fn transpose_reduce_sum(
@@ -164,55 +176,137 @@ pub fn transpose_reduce_sum(
     }
 }
 
-fn assert_supported_matrix_dot(config: &DotGeneralConfig) {
-    assert!(
-        config.lhs_batch_dims.is_empty() && config.rhs_batch_dims.is_empty(),
-        "transpose_dot_general only supports non-batched matrix contractions"
-    );
-    assert_eq!(
-        config.lhs_contracting_dims,
-        vec![1],
-        "transpose_dot_general only supports lhs_contracting_dims=[1]"
-    );
-    assert_eq!(
-        config.rhs_contracting_dims,
-        vec![0],
-        "transpose_dot_general only supports rhs_contracting_dims=[0]"
-    );
+fn compute_free_dims(rank: usize, contracting: &[usize], batch: &[usize]) -> Vec<usize> {
+    let mut is_bound = vec![false; rank];
+    for &dim in batch {
+        is_bound[dim] = true;
+    }
+    for &dim in contracting {
+        is_bound[dim] = true;
+    }
+
+    (0..rank).filter(|&dim| !is_bound[dim]).collect()
 }
 
-fn transpose_matrix(
+fn normalize_scalar_cotangent(
     builder: &mut FragmentBuilder<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
+    cotangent: LocalValId,
+    output_rank: usize,
+) -> ValRef<StdTensorOp> {
+    if output_rank == 0 {
+        let scalar = builder.add_op(
+            StdTensorOp::Reshape {
+                from_shape: vec![1],
+                to_shape: vec![],
+            },
+            vec![ValRef::Local(cotangent)],
+            OpMode::Linear {
+                active_mask: vec![true],
+            },
+        );
+        ValRef::Local(scalar[0])
+    } else {
+        ValRef::Local(cotangent)
+    }
+}
+
+fn transpose_plan_for_lhs(
+    config: &DotGeneralConfig,
+    lhs_free: &[usize],
+    rhs_free: &[usize],
+) -> (DotGeneralConfig, Vec<usize>) {
+    let n_batch = config.lhs_batch_dims.len();
+    let output_rank = n_batch + lhs_free.len() + rhs_free.len();
+    let ct_rhs_free_positions: Vec<usize> = (n_batch + lhs_free.len()..output_rank).collect();
+
+    let rhs_contracting_order =
+        compute_free_dims(config.rhs_rank, rhs_free, &config.rhs_batch_dims);
+    let mut result_order = Vec::with_capacity(config.lhs_rank);
+    result_order.extend(config.lhs_batch_dims.iter().copied());
+    result_order.extend(lhs_free.iter().copied());
+    for rhs_dim in rhs_contracting_order {
+        let pair_idx = config
+            .rhs_contracting_dims
+            .iter()
+            .position(|&dim| dim == rhs_dim)
+            .expect("rhs contracting dimension must be paired");
+        result_order.push(config.lhs_contracting_dims[pair_idx]);
+    }
+
+    (
+        DotGeneralConfig {
+            lhs_contracting_dims: ct_rhs_free_positions,
+            rhs_contracting_dims: rhs_free.to_vec(),
+            lhs_batch_dims: (0..n_batch).collect(),
+            rhs_batch_dims: config.rhs_batch_dims.clone(),
+            lhs_rank: output_rank,
+            rhs_rank: config.rhs_rank,
+        },
+        permutation_to_original_order(config.lhs_rank, &result_order),
+    )
+}
+
+fn transpose_plan_for_rhs(
+    config: &DotGeneralConfig,
+    lhs_free: &[usize],
+    rhs_free: &[usize],
+) -> (DotGeneralConfig, Vec<usize>) {
+    let n_batch = config.lhs_batch_dims.len();
+    let ct_lhs_free_positions: Vec<usize> = (n_batch..n_batch + lhs_free.len()).collect();
+
+    let lhs_contracting_order =
+        compute_free_dims(config.lhs_rank, lhs_free, &config.lhs_batch_dims);
+    let mut result_order = Vec::with_capacity(config.rhs_rank);
+    result_order.extend(config.rhs_batch_dims.iter().copied());
+    for lhs_dim in lhs_contracting_order {
+        let pair_idx = config
+            .lhs_contracting_dims
+            .iter()
+            .position(|&dim| dim == lhs_dim)
+            .expect("lhs contracting dimension must be paired");
+        result_order.push(config.rhs_contracting_dims[pair_idx]);
+    }
+    result_order.extend(rhs_free.iter().copied());
+
+    let output_rank = n_batch + lhs_free.len() + rhs_free.len();
+    (
+        DotGeneralConfig {
+            lhs_contracting_dims: lhs_free.to_vec(),
+            rhs_contracting_dims: ct_lhs_free_positions,
+            lhs_batch_dims: config.lhs_batch_dims.clone(),
+            rhs_batch_dims: (0..n_batch).collect(),
+            lhs_rank: config.lhs_rank,
+            rhs_rank: output_rank,
+        },
+        permutation_to_original_order(config.rhs_rank, &result_order),
+    )
+}
+
+fn permutation_to_original_order(rank: usize, result_order: &[usize]) -> Vec<usize> {
+    let mut perm = vec![0; rank];
+    for (result_axis, &original_dim) in result_order.iter().enumerate() {
+        perm[original_dim] = result_axis;
+    }
+    perm
+}
+
+fn add_transpose_if_needed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    perm: &[usize],
 ) -> LocalValId {
+    if perm.iter().enumerate().all(|(dim, &axis)| dim == axis) {
+        return input;
+    }
+
     let out = builder.add_op(
-        StdTensorOp::Transpose { perm: vec![1, 0] },
-        vec![input],
+        StdTensorOp::Transpose {
+            perm: perm.to_vec(),
+        },
+        vec![ValRef::Local(input)],
         OpMode::Linear {
             active_mask: vec![true],
         },
     );
     out[0]
-}
-
-fn transpose_config_for_lhs(config: &DotGeneralConfig) -> DotGeneralConfig {
-    DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: config.lhs_rank,
-        rhs_rank: config.rhs_rank,
-    }
-}
-
-fn transpose_config_for_rhs(config: &DotGeneralConfig) -> DotGeneralConfig {
-    DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: config.lhs_rank,
-        rhs_rank: config.rhs_rank,
-    }
 }

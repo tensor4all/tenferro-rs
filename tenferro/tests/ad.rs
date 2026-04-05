@@ -1,5 +1,6 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
 use tenferro_tensor::cpu::CpuBackend;
@@ -86,6 +87,42 @@ fn grad_matmul_sum() {
         let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
         let matmul = a.traced_dot_general(&b, matmul_config());
         let loss = matmul.traced_reduce_sum(&[0, 1]);
+        eval_scalar(loss)
+    };
+
+    for index in 0..a_data.len() {
+        let expected = finite_diff_scalar(&f, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= TOL,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_batched_matmul_sum() {
+    let a_shape = vec![2, 3, 4];
+    let b_shape = vec![2, 4, 5];
+    let a_data: Vec<f64> = (0..24).map(|idx| 0.25 + idx as f64 * 0.1).collect();
+    let b_data: Vec<f64> = (0..40).map(|idx| 0.5 + idx as f64 * 0.05).collect();
+
+    let a = TracedTensor::from_tensor(f64_tensor(a_shape.clone(), a_data.clone()));
+    let b = TracedTensor::from_tensor(f64_tensor(b_shape.clone(), b_data.clone()));
+    let mut engine = Engine::new(CpuBackend::new());
+    let product = einsum(&mut engine, &[&a, &b], "bij,bjk->bik").unwrap();
+    let loss = product.traced_reduce_sum(&[0, 1, 2]);
+    let grad = loss.grad(&a);
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+
+    let f = |xs: &[f64]| {
+        let a = TracedTensor::from_tensor(f64_tensor(a_shape.clone(), xs.to_vec()));
+        let b = TracedTensor::from_tensor(f64_tensor(b_shape.clone(), b_data.clone()));
+        let mut engine = Engine::new(CpuBackend::new());
+        let product = einsum(&mut engine, &[&a, &b], "bij,bjk->bik").unwrap();
+        let loss = product.traced_reduce_sum(&[0, 1, 2]);
         eval_scalar(loss)
     };
 
