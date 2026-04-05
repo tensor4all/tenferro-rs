@@ -54,6 +54,9 @@ macro_rules! impl_stub_backend {
             fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Tensor {
                 todo!(concat!($label, " clamp"))
             }
+            fn scale(&mut self, _input: &Tensor, _factor: f64) -> Tensor {
+                todo!(concat!($label, " scale"))
+            }
             fn exp(&mut self, _input: &Tensor) -> Tensor {
                 todo!(concat!($label, " exp"))
             }
@@ -113,6 +116,12 @@ macro_rules! impl_stub_backend {
                 _axis_b: usize,
             ) -> Tensor {
                 todo!(concat!($label, " embed_diagonal"))
+            }
+            fn tril(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+                todo!(concat!($label, " tril"))
+            }
+            fn triu(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+                todo!(concat!($label, " triu"))
             }
             fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
                 todo!(concat!($label, " reduce_sum"))

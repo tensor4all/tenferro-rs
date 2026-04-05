@@ -26,6 +26,14 @@ pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
     dispatch_tensor!(input, t => typed_embed_diagonal(t, axis_a, axis_b))
 }
 
+pub fn tril(input: &Tensor, k: i64) -> Tensor {
+    dispatch_tensor!(input, t => typed_tril(t, k))
+}
+
+pub fn triu(input: &Tensor, k: i64) -> Tensor {
+    dispatch_tensor!(input, t => typed_triu(t, k))
+}
+
 pub fn typed_transpose<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
@@ -128,5 +136,51 @@ pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
         }
         *out.get_mut(&out_idx) = *tensor.get(&in_idx);
     }
+    out
+}
+
+pub fn typed_tril<T: Copy + Zero + Clone>(tensor: &TypedTensor<T>, k: i64) -> TypedTensor<T> {
+    typed_triangular_mask(tensor, k, false)
+}
+
+pub fn typed_triu<T: Copy + Zero + Clone>(tensor: &TypedTensor<T>, k: i64) -> TypedTensor<T> {
+    typed_triangular_mask(tensor, k, true)
+}
+
+fn typed_triangular_mask<T: Copy + Zero + Clone>(
+    tensor: &TypedTensor<T>,
+    k: i64,
+    upper: bool,
+) -> TypedTensor<T> {
+    assert!(
+        tensor.shape.len() >= 2,
+        "triangular mask: expected rank >= 2, got {}",
+        tensor.shape.len()
+    );
+
+    let rows = tensor.shape[0];
+    let cols = tensor.shape[1];
+    let batch_count: usize = tensor.shape[2..].iter().product::<usize>().max(1);
+    let block_size = rows * cols;
+    let mut out = tensor.clone();
+    let data = out.host_data_mut();
+
+    for batch_idx in 0..batch_count {
+        let base = batch_idx * block_size;
+        for col in 0..cols {
+            let boundary = col as i64 - k;
+            for row in 0..rows {
+                let keep = if upper {
+                    (row as i64) <= boundary
+                } else {
+                    (row as i64) >= boundary
+                };
+                if !keep {
+                    data[base + row + col * rows] = T::zero();
+                }
+            }
+        }
+    }
+
     out
 }

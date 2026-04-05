@@ -28,6 +28,9 @@ pub fn linearize(
         }
         StdTensorOp::Abs => elementwise_tier2::linearize_abs(builder, primal_in, tangent_in),
         StdTensorOp::Sign => elementwise_tier2::linearize_sign(builder, tangent_in),
+        StdTensorOp::Scale { factor } => {
+            elementwise_tier2::linearize_scale(builder, tangent_in, *factor)
+        }
         StdTensorOp::Exp => analytic::linearize_exp(builder, primal_out, tangent_in),
         StdTensorOp::Log => analytic::linearize_log(builder, primal_in, tangent_in),
         StdTensorOp::Sin => analytic::linearize_sin(builder, primal_in, tangent_in),
@@ -57,6 +60,8 @@ pub fn linearize(
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::linearize_embed_diag(builder, tangent_in, *axis_a, *axis_b)
         }
+        StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
+        StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Solve => linalg::linearize_solve(builder, primal_in, primal_out, tangent_in),
         StdTensorOp::TriangularSolve {
             left_side,
@@ -72,11 +77,9 @@ pub fn linearize(
             *transpose_a,
             *unit_diagonal,
         ),
-        // TODO: implement the JAX cholesky_jvp_rule once lower-triangular projection is available.
-        StdTensorOp::Cholesky => todo!("linearize not implemented for {:?}", op),
+        StdTensorOp::Cholesky => linalg::linearize_cholesky(builder, primal_out, tangent_in),
         StdTensorOp::Svd => linalg::linearize_svd(builder, primal_out, tangent_in),
-        // TODO: implement the JAX qr_jvp_rule once triangular-part primitives are available.
-        StdTensorOp::Qr => todo!("linearize not implemented for {:?}", op),
+        StdTensorOp::Qr => linalg::linearize_qr(builder, primal_out, tangent_in),
         StdTensorOp::Eigh => linalg::linearize_eigh(builder, primal_out, tangent_in),
         _ => todo!("linearize not implemented for {:?}", op),
     }
@@ -97,6 +100,9 @@ pub fn transpose_rule(
         StdTensorOp::Div => elementwise_tier2::transpose_div(builder, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sign => elementwise_tier2::transpose_sign(builder, cotangent_out, mode),
+        StdTensorOp::Scale { factor } => {
+            elementwise_tier2::transpose_scale(builder, cotangent_out, mode, *factor)
+        }
         StdTensorOp::Exp => analytic::transpose_exp(builder, cotangent_out, inputs, mode),
         StdTensorOp::Log => analytic::transpose_log(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sin => analytic::transpose_sin(builder, cotangent_out, inputs, mode),
@@ -126,6 +132,8 @@ pub fn transpose_rule(
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::transpose_embed_diag(builder, cotangent_out, *axis_a, *axis_b)
         }
+        StdTensorOp::Tril { k } => structural::transpose_tril(builder, cotangent_out, *k),
+        StdTensorOp::Triu { k } => structural::transpose_triu(builder, cotangent_out, *k),
         StdTensorOp::Solve => linalg::transpose_solve(builder, cotangent_out, inputs, mode),
         StdTensorOp::TriangularSolve {
             left_side,

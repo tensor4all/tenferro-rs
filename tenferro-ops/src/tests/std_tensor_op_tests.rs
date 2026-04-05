@@ -99,6 +99,7 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Div.n_inputs(), 2);
     assert_eq!(StdTensorOp::Pow.n_inputs(), 2);
     assert_eq!(StdTensorOp::Abs.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Scale { factor: 0.5 }.n_inputs(), 1);
     assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
     assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
     assert_eq!(
@@ -146,6 +147,10 @@ fn test_std_tensor_op_input_output_counts() {
         .n_outputs(),
         1
     );
+    assert_eq!(StdTensorOp::Tril { k: -1 }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Tril { k: -1 }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::Triu { k: 1 }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Triu { k: 1 }.n_outputs(), 1);
 }
 
 #[test]

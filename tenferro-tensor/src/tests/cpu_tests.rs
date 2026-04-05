@@ -6,7 +6,8 @@ use crate::config::{
 };
 use crate::cpu::{
     add, broadcast_in_dim, conj, dynamic_slice, embed_diagonal, extract_diagonal, gather, mul, neg,
-    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scatter, transpose, CpuBackend,
+    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scatter, transpose, tril, triu,
+    CpuBackend,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -543,6 +544,40 @@ fn test_broadcast_in_dim() {
         assert_eq!(get_f64(&m, &[1, j]), 2.0);
         assert_eq!(get_f64(&m, &[2, j]), 3.0);
     }
+}
+
+#[test]
+fn test_tril_3x3() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+    ));
+    let lower = tril(&t, 0);
+    assert_eq!(lower.shape(), &[3, 3]);
+    assert_eq!(
+        match &lower {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[1.0, 2.0, 3.0, 0.0, 5.0, 6.0, 0.0, 0.0, 9.0]
+    );
+}
+
+#[test]
+fn test_triu_3x3() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+    ));
+    let upper = triu(&t, 0);
+    assert_eq!(upper.shape(), &[3, 3]);
+    assert_eq!(
+        match &upper {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0]
+    );
 }
 
 #[test]

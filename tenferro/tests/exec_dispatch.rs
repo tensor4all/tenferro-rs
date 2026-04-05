@@ -112,6 +112,9 @@ impl TensorBackend for FakeTensorBackend {
     fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Tensor {
         self.result("clamp", 12.0)
     }
+    fn scale(&mut self, _input: &Tensor, _factor: f64) -> Tensor {
+        self.result("scale", 12.5)
+    }
     fn exp(&mut self, _input: &Tensor) -> Tensor {
         self.result("exp", 13.0)
     }
@@ -156,6 +159,12 @@ impl TensorBackend for FakeTensorBackend {
     }
     fn embed_diagonal(&mut self, _input: &Tensor, _axis_a: usize, _axis_b: usize) -> Tensor {
         self.result("embed_diagonal", 27.0)
+    }
+    fn tril(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+        self.result("tril", 27.5)
+    }
+    fn triu(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+        self.result("triu", 27.75)
     }
     fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
         self.result("reduce_sum", 28.0)
@@ -286,6 +295,8 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "embed_diagonal",
             27.0,
         ),
+        (ExecOp::Tril { k: -1 }, 1, "tril", 27.5),
+        (ExecOp::Triu { k: 1 }, 1, "triu", 27.75),
         (ExecOp::Add, 2, "add", 1.0),
         (ExecOp::Multiply, 2, "mul", 2.0),
         (ExecOp::Negate, 1, "neg", 3.0),
@@ -298,6 +309,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Compare(CompareDir::Eq), 2, "compare", 10.0),
         (ExecOp::Select, 3, "select", 11.0),
         (ExecOp::Clamp, 3, "clamp", 12.0),
+        (ExecOp::Scale { factor: 0.5 }, 1, "scale", 12.5),
         (ExecOp::Exp, 1, "exp", 13.0),
         (ExecOp::Log, 1, "log", 14.0),
         (ExecOp::Sin, 1, "sin", 15.0),

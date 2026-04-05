@@ -32,6 +32,10 @@ pub(crate) trait Tier2Elem: Copy + Clone + One + Zero {
     fn is_nonzero(self) -> bool;
 }
 
+pub(crate) trait ScaleElem: Copy + Clone + Zero + Mul<Output = Self> {
+    fn from_factor(factor: f64) -> Self;
+}
+
 macro_rules! impl_tier2_elem_real {
     ($ty:ty) => {
         impl Tier2Elem for $ty {
@@ -143,6 +147,30 @@ impl_tier2_elem_real!(f64);
 impl_tier2_elem_complex!(f32);
 impl_tier2_elem_complex!(f64);
 
+impl ScaleElem for f32 {
+    fn from_factor(factor: f64) -> Self {
+        factor as f32
+    }
+}
+
+impl ScaleElem for f64 {
+    fn from_factor(factor: f64) -> Self {
+        factor
+    }
+}
+
+impl ScaleElem for Complex<f32> {
+    fn from_factor(factor: f64) -> Self {
+        Self::new(factor as f32, 0.0)
+    }
+}
+
+impl ScaleElem for Complex<f64> {
+    fn from_factor(factor: f64) -> Self {
+        Self::new(factor, 0.0)
+    }
+}
+
 pub fn add(lhs: &Tensor, rhs: &Tensor) -> Tensor {
     dispatch_binary!(lhs, rhs, |a, b| typed_add(a, b))
 }
@@ -189,6 +217,10 @@ pub fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> Tensor {
 
 pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor {
     dispatch_ternary!(input, lower, upper, |x, lo, hi| typed_clamp(x, lo, hi))
+}
+
+pub fn scale(input: &Tensor, factor: f64) -> Tensor {
+    dispatch_tensor!(input, t => typed_scale(t, factor))
 }
 
 pub fn typed_add<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
@@ -245,6 +277,16 @@ where
 {
     let mut out = typed_array(&input.shape, T::zero());
     map_into(&mut out.view_mut(), &typed_view(input), |x| -x).expect("typed_neg");
+    tensor_from_array(out)
+}
+
+pub(crate) fn typed_scale<T>(input: &TypedTensor<T>, factor: f64) -> TypedTensor<T>
+where
+    T: ScaleElem,
+{
+    let factor = T::from_factor(factor);
+    let mut out = typed_array(&input.shape, T::zero());
+    map_into(&mut out.view_mut(), &typed_view(input), |x| x * factor).expect("typed_scale");
     tensor_from_array(out)
 }
 

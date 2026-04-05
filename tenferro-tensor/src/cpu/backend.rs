@@ -85,6 +85,10 @@ impl TensorBackend for CpuBackend {
         elementwise::clamp(input, lower, upper)
     }
 
+    fn scale(&mut self, input: &Tensor, factor: f64) -> Tensor {
+        elementwise::scale(input, factor)
+    }
+
     fn exp(&mut self, input: &Tensor) -> Tensor {
         analytic::exp(input)
     }
@@ -143,6 +147,14 @@ impl TensorBackend for CpuBackend {
 
     fn embed_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
         structural::embed_diagonal(input, axis_a, axis_b)
+    }
+
+    fn tril(&mut self, input: &Tensor, k: i64) -> Tensor {
+        structural::tril(input, k)
+    }
+
+    fn triu(&mut self, input: &Tensor, k: i64) -> Tensor {
+        structural::triu(input, k)
     }
 
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {

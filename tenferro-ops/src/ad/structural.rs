@@ -80,6 +80,46 @@ pub fn linearize_broadcast_in_dim(
     }
 }
 
+pub fn linearize_tril(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    k: i64,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::Tril { k },
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn linearize_triu(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    k: i64,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::Triu { k },
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
 pub fn transpose_transpose(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
@@ -152,6 +192,46 @@ pub fn transpose_broadcast_in_dim(
                     axes: broadcast_axes,
                     input_shape: shape.to_vec(),
                 },
+                vec![ValRef::Local(ct)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn transpose_tril(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    k: i64,
+) -> Vec<Option<LocalValId>> {
+    match cotangent_out[0] {
+        Some(ct) => {
+            let out = builder.add_op(
+                StdTensorOp::Tril { k },
+                vec![ValRef::Local(ct)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn transpose_triu(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    k: i64,
+) -> Vec<Option<LocalValId>> {
+    match cotangent_out[0] {
+        Some(ct) => {
+            let out = builder.add_op(
+                StdTensorOp::Triu { k },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
                     active_mask: vec![true],

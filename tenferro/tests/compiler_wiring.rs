@@ -9,8 +9,8 @@ fn make_program(instructions: Vec<Instruction<StdTensorOp>>) -> CompiledProgram<
     CompiledProgram {
         instructions,
         input_slots: vec![0, 1, 2],
-        output_slots: vec![3, 4, 5, 6, 7, 8, 9],
-        n_slots: 10,
+        output_slots: vec![3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        n_slots: 13,
     }
 }
 
@@ -44,6 +44,8 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(StdTensorOp::Slice(slice.clone()), vec![0], vec![6]),
         make_instr(StdTensorOp::Reverse { axes: vec![0] }, vec![1], vec![7]),
         make_instr(StdTensorOp::Concatenate { axis: 0 }, vec![0, 1], vec![8]),
+        make_instr(StdTensorOp::Tril { k: -1 }, vec![2], vec![9]),
+        make_instr(StdTensorOp::Scale { factor: 0.5 }, vec![0], vec![10]),
         make_instr(
             StdTensorOp::TriangularSolve {
                 left_side: true,
@@ -52,8 +54,9 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
                 unit_diagonal: false,
             },
             vec![0, 1],
-            vec![9],
+            vec![11],
         ),
+        make_instr(StdTensorOp::Triu { k: 1 }, vec![2], vec![12]),
     ]);
 
     let stablehlo = lower_to_stablehlo(&program);
@@ -83,12 +86,24 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
     ));
     assert!(matches!(
         stablehlo.instructions[6].op,
+        StableHloOp::Tril { k: -1 }
+    ));
+    assert!(matches!(
+        stablehlo.instructions[7].op,
+        StableHloOp::Scale { factor } if factor == 0.5
+    ));
+    assert!(matches!(
+        stablehlo.instructions[8].op,
         StableHloOp::TriangularSolve {
             left_side: true,
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
         }
+    ));
+    assert!(matches!(
+        stablehlo.instructions[9].op,
+        StableHloOp::Triu { k: 1 }
     ));
 
     let exec = compile_to_exec(&stablehlo);
@@ -116,8 +131,13 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         exec.instructions[5].op,
         ExecOp::Concatenate { axis: 0 }
     ));
+    assert!(matches!(exec.instructions[6].op, ExecOp::Tril { k: -1 }));
     assert!(matches!(
-        exec.instructions[6].op,
+        exec.instructions[7].op,
+        ExecOp::Scale { factor } if factor == 0.5
+    ));
+    assert!(matches!(
+        exec.instructions[8].op,
         ExecOp::TriangularSolve {
             left_side: true,
             lower: true,
@@ -125,4 +145,5 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
             unit_diagonal: false,
         }
     ));
+    assert!(matches!(exec.instructions[9].op, ExecOp::Triu { k: 1 }));
 }

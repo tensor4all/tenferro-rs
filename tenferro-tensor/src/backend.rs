@@ -49,6 +49,7 @@ pub trait TensorBackend {
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> Tensor;
     fn select(&mut self, pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> Tensor;
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor;
+    fn scale(&mut self, input: &Tensor, factor: f64) -> Tensor;
 
     fn exp(&mut self, input: &Tensor) -> Tensor;
     fn log(&mut self, input: &Tensor) -> Tensor;
@@ -66,6 +67,8 @@ pub trait TensorBackend {
     fn broadcast_in_dim(&mut self, input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor;
     fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
     fn embed_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
+    fn tril(&mut self, input: &Tensor, k: i64) -> Tensor;
+    fn triu(&mut self, input: &Tensor, k: i64) -> Tensor;
 
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;

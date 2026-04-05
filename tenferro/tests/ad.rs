@@ -324,6 +324,54 @@ fn build_triangular_solve_sum_fragment() -> (
     (Arc::new(builder.build()), a_key, b_key, loss_key)
 }
 
+fn build_cholesky_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(40_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let cholesky = builder.add_op(
+        StdTensorOp::Cholesky,
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![3, 3],
+        },
+        vec![ValRef::Local(cholesky[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
+fn build_qr_r_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(45_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let qr = builder.add_op(StdTensorOp::Qr, vec![ValRef::Local(a)], OpMode::Primal);
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![2, 2],
+        },
+        vec![ValRef::Local(qr[1])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
 fn grad_from_fragment_with_inputs(
     fragment: Arc<Fragment<StdTensorOp>>,
     loss_key: GlobalValKey<StdTensorOp>,
@@ -436,6 +484,20 @@ fn sum_triangular_solve(a: &[f64], b: &[f64]) -> f64 {
         false,
     );
     get_f64_data(&out).iter().sum()
+}
+
+fn sum_cholesky(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![3, 3], data.to_vec());
+    let output = TensorBackend::cholesky(&mut backend, &input);
+    get_f64_data(&output).iter().sum()
+}
+
+fn sum_qr_r(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![3, 2], data.to_vec());
+    let outputs = TensorBackend::qr(&mut backend, &input);
+    get_f64_data(&outputs[1]).iter().sum()
 }
 
 fn assert_close_slice(actual: &[f64], expected: &[f64]) {
@@ -1282,4 +1344,80 @@ fn grad_triangular_solve_rhs_matches_finite_diff() {
     let grad_b_data = get_f64_data(&grad_b);
 
     assert_grad_matches_finite_diff_rhs(grad_b_data, &a_data, &b_data, &sum_triangular_solve);
+}
+
+#[test]
+fn grad_cholesky_matches_finite_diff_on_lower_triangle() {
+    let a_data = vec![5.0, 1.0, 0.5, 1.0, 4.0, 0.75, 0.5, 0.75, 3.5];
+    let (fragment, input_key, loss_key) = build_cholesky_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![3, 3], a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in [0usize, 1, 2, 4, 5, 8] {
+        let expected = finite_diff_scalar(sum_cholesky, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_qr_r_matches_finite_diff() {
+    let a_data = vec![1.5, 0.2, 0.4, 0.3, 1.7, -0.6];
+    let (fragment, input_key, loss_key) = build_qr_r_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![3, 2], a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected = finite_diff_scalar(sum_qr_r, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_svd_values_repeated_singular_values_is_finite() {
+    let a_data = vec![1.0, 0.0, 0.0, 1.0];
+    let (fragment, input_key, loss_key) = build_svd_values_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data),
+    );
+
+    for &value in get_f64_data(&grad) {
+        assert!(value.is_finite(), "svd gradient not finite: {value}");
+    }
+}
+
+#[test]
+fn grad_eigh_values_degenerate_spectrum_is_finite() {
+    let a_data = vec![2.0, 0.0, 0.0, 2.0];
+    let (fragment, input_key, loss_key) = build_eigh_values_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data),
+    );
+
+    for &value in get_f64_data(&grad) {
+        assert!(value.is_finite(), "eigh gradient not finite: {value}");
+    }
 }

@@ -4,6 +4,8 @@ use tenferro_tensor::DotGeneralConfig;
 
 use crate::std_tensor_op::StdTensorOp;
 
+const F_MATRIX_EPS: f64 = 1.0e-12;
+
 pub fn linearize_solve(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
@@ -87,17 +89,20 @@ pub fn linearize_svd(
     let ds = extract_diag_linear(builder, ds_mat);
 
     let diag_s = embed_diag_fixed(builder, s.clone());
-    let ones_vec = one_like_fixed(builder, s);
-    let eye = embed_diag_fixed(builder, ValRef::Local(ones_vec));
     let ones_mat = one_like_fixed(builder, ValRef::Local(diag_s));
     let s_col = matmul_fixed(builder, ValRef::Local(diag_s), ValRef::Local(ones_mat));
     let s_row = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_s));
     let s_sum = fixed_add(builder, ValRef::Local(s_col), ValRef::Local(s_row));
     let s_diff = fixed_sub(builder, ValRef::Local(s_col), ValRef::Local(s_row));
-    let s_diffs = fixed_mul(builder, ValRef::Local(s_sum), ValRef::Local(s_diff));
-    let denom = fixed_add(builder, ValRef::Local(eye), ValRef::Local(s_diffs));
-    let f_plus_eye = fixed_div(builder, ValRef::Local(ones_mat), ValRef::Local(denom));
-    let f = fixed_sub(builder, ValRef::Local(f_plus_eye), ValRef::Local(eye));
+    let s_gap = fixed_mul(builder, ValRef::Local(s_sum), ValRef::Local(s_diff));
+    let s_gap_sq = fixed_mul(builder, ValRef::Local(s_gap), ValRef::Local(s_gap));
+    let eps_sq = fixed_scale(
+        builder,
+        ValRef::Local(ones_mat),
+        F_MATRIX_EPS * F_MATRIX_EPS,
+    );
+    let safe_gap = fixed_add(builder, ValRef::Local(s_gap_sq), ValRef::Local(eps_sq));
+    let f = fixed_div(builder, ValRef::Local(s_gap), ValRef::Local(safe_gap));
 
     // TODO: add the complex dUdV diagonal correction and rectangular JAX correction terms.
     let dss = hadamard_fixed_linear(builder, ValRef::Local(s_col), ds_mat);
@@ -145,19 +150,142 @@ pub fn linearize_eigh(
     let dw = extract_diag_linear(builder, projected);
 
     let diag_w = embed_diag_fixed(builder, w.clone());
-    let ones_vec = one_like_fixed(builder, w);
-    let eye = embed_diag_fixed(builder, ValRef::Local(ones_vec));
     let ones_mat = one_like_fixed(builder, ValRef::Local(diag_w));
     let w_col = matmul_fixed(builder, ValRef::Local(diag_w), ValRef::Local(ones_mat));
     let w_row = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_w));
     let diff = fixed_sub(builder, ValRef::Local(w_row), ValRef::Local(w_col));
-    let denom = fixed_add(builder, ValRef::Local(eye), ValRef::Local(diff));
-    let f_plus_eye = fixed_div(builder, ValRef::Local(ones_mat), ValRef::Local(denom));
-    let f = fixed_sub(builder, ValRef::Local(f_plus_eye), ValRef::Local(eye));
+    let diff_sq = fixed_mul(builder, ValRef::Local(diff), ValRef::Local(diff));
+    let eps_sq = fixed_scale(
+        builder,
+        ValRef::Local(ones_mat),
+        F_MATRIX_EPS * F_MATRIX_EPS,
+    );
+    let safe_diff = fixed_add(builder, ValRef::Local(diff_sq), ValRef::Local(eps_sq));
+    let f = fixed_div(builder, ValRef::Local(diff), ValRef::Local(safe_diff));
     let fm = hadamard_fixed_linear(builder, ValRef::Local(f), projected);
     let dv = matmul_linear(builder, v, ValRef::Local(fm), vec![false, true]);
 
     vec![Some(dw), Some(dv)]
+}
+
+pub fn linearize_cholesky(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+) -> Vec<Option<LocalValId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None];
+    };
+
+    let l = ValRef::External(primal_out[0].clone());
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da);
+
+    let tmp = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: false,
+            lower: true,
+            transpose_a: true,
+            unit_diagonal: false,
+        },
+        vec![l.clone(), ValRef::Local(da_self_adjoint)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0];
+    let s = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+        vec![l.clone(), ValRef::Local(tmp)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0];
+
+    let strict_lower = builder.add_op(
+        StdTensorOp::Tril { k: -1 },
+        vec![ValRef::Local(s)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+    let diag_s = extract_diag_linear(builder, s);
+    let half_diag = builder.add_op(
+        StdTensorOp::Scale { factor: 0.5 },
+        vec![ValRef::Local(diag_s)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+    let half_diag_mat = embed_diag_linear(builder, half_diag);
+    let phi_s = linear_add(builder, strict_lower, half_diag_mat);
+    let dl = matmul_linear(builder, l, ValRef::Local(phi_s), vec![false, true]);
+
+    vec![Some(dl)]
+}
+
+pub fn linearize_qr(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+) -> Vec<Option<LocalValId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None, None];
+    };
+
+    let q = ValRef::External(primal_out[0].clone());
+    let r = ValRef::External(primal_out[1].clone());
+
+    let dx_rinv = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: false,
+            lower: false,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+        vec![r.clone(), ValRef::Local(da)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0];
+    let qh = adjoint_2d_fixed(builder, q.clone());
+    let qt_dx_rinv = matmul_linear(
+        builder,
+        ValRef::Local(qh),
+        ValRef::Local(dx_rinv),
+        vec![false, true],
+    );
+    let lower = builder.add_op(
+        StdTensorOp::Tril { k: -1 },
+        vec![ValRef::Local(qt_dx_rinv)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+    let lower_h = adjoint_2d_linear(builder, lower);
+    let d_omega = linear_sub(builder, lower, lower_h);
+
+    let d_omega_minus_qt_dx = linear_sub(builder, d_omega, qt_dx_rinv);
+    let q_term = matmul_linear(
+        builder,
+        q.clone(),
+        ValRef::Local(d_omega_minus_qt_dx),
+        vec![false, true],
+    );
+    let dq = linear_add(builder, q_term, dx_rinv);
+
+    let qt_dx_minus_d_omega = linear_sub(builder, qt_dx_rinv, d_omega);
+    let dr = matmul_linear(
+        builder,
+        ValRef::Local(qt_dx_minus_d_omega),
+        r,
+        vec![true, false],
+    );
+
+    vec![Some(dq), Some(dr)]
 }
 
 pub fn transpose_solve(
@@ -320,6 +448,14 @@ fn fixed_div(
     fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
 }
 
+fn fixed_scale(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: ValRef<StdTensorOp>,
+    factor: f64,
+) -> LocalValId {
+    fixed_unary(builder, StdTensorOp::Scale { factor }, input)
+}
+
 fn fixed_sub(
     builder: &mut FragmentBuilder<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
@@ -339,6 +475,15 @@ fn linear_add(
 
 fn linear_neg(builder: &mut FragmentBuilder<StdTensorOp>, input: LocalValId) -> LocalValId {
     linear_unary(builder, StdTensorOp::Neg, input)
+}
+
+fn linear_sub(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lhs: LocalValId,
+    rhs: LocalValId,
+) -> LocalValId {
+    let neg_rhs = linear_neg(builder, rhs);
+    linear_add(builder, lhs, neg_rhs)
 }
 
 fn hadamard_fixed_linear(

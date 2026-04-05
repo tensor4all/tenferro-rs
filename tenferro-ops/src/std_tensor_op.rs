@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
@@ -9,7 +11,7 @@ use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StdTensorOp {
     // Tier 1: semiring
     Add,
@@ -42,6 +44,9 @@ pub enum StdTensorOp {
     Compare(CompareDir),
     Select,
     Clamp,
+    Scale {
+        factor: f64,
+    },
 
     // Tier 2: analytic
     Exp,
@@ -63,6 +68,12 @@ pub enum StdTensorOp {
     EmbedDiag {
         axis_a: usize,
         axis_b: usize,
+    },
+    Tril {
+        k: i64,
+    },
+    Triu {
+        k: i64,
     },
 
     // Tier 2: indexing
@@ -105,6 +116,92 @@ pub enum StdTensorOp {
     },
 }
 
+impl Eq for StdTensorOp {}
+
+impl Hash for StdTensorOp {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Add
+            | Self::Mul
+            | Self::Neg
+            | Self::Conj
+            | Self::Div
+            | Self::Abs
+            | Self::Sign
+            | Self::Maximum
+            | Self::Minimum
+            | Self::Select
+            | Self::Clamp
+            | Self::Exp
+            | Self::Log
+            | Self::Sin
+            | Self::Cos
+            | Self::Tanh
+            | Self::Sqrt
+            | Self::Rsqrt
+            | Self::Pow
+            | Self::Expm1
+            | Self::Log1p
+            | Self::Cholesky
+            | Self::Svd
+            | Self::Qr
+            | Self::Eigh
+            | Self::Solve => {}
+            Self::DotGeneral(config) => config.hash(state),
+            Self::Transpose { perm } => perm.hash(state),
+            Self::Reshape {
+                from_shape,
+                to_shape,
+            } => {
+                from_shape.hash(state);
+                to_shape.hash(state);
+            }
+            Self::BroadcastInDim { shape, dims } => {
+                shape.hash(state);
+                dims.hash(state);
+            }
+            Self::ReduceSum { axes, input_shape } => {
+                axes.hash(state);
+                input_shape.hash(state);
+            }
+            Self::Compare(dir) => dir.hash(state),
+            Self::Scale { factor } => hash_f64(*factor, state),
+            Self::ExtractDiag { axis_a, axis_b } | Self::EmbedDiag { axis_a, axis_b } => {
+                axis_a.hash(state);
+                axis_b.hash(state);
+            }
+            Self::Tril { k } | Self::Triu { k } => k.hash(state),
+            Self::Gather(config) => config.hash(state),
+            Self::Scatter(config) => config.hash(state),
+            Self::Slice(config) => config.hash(state),
+            Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
+            Self::Pad(config) => config.hash(state),
+            Self::Concatenate { axis } => axis.hash(state),
+            Self::Reverse { axes } => axes.hash(state),
+            Self::ReduceProd { axes } | Self::ReduceMax { axes } | Self::ReduceMin { axes } => {
+                axes.hash(state);
+            }
+            Self::TriangularSolve {
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            } => {
+                left_side.hash(state);
+                lower.hash(state);
+                transpose_a.hash(state);
+                unit_diagonal.hash(state);
+            }
+        }
+    }
+}
+
+fn hash_f64<H: Hasher>(value: f64, state: &mut H) {
+    let bits = if value == 0.0 { 0 } else { value.to_bits() };
+    bits.hash(state);
+}
+
 impl GraphOp for StdTensorOp {
     type Operand = tenferro_tensor::Tensor;
     type Context = ();
@@ -121,6 +218,8 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
+            | Self::Tril { .. }
+            | Self::Triu { .. }
             | Self::Slice(_)
             | Self::Pad(_)
             | Self::Reverse { .. } => 1,
@@ -134,6 +233,7 @@ impl GraphOp for StdTensorOp {
             }
             Self::Abs
             | Self::Sign
+            | Self::Scale { .. }
             | Self::Exp
             | Self::Log
             | Self::Sin
@@ -165,6 +265,7 @@ impl GraphOp for StdTensorOp {
             | Self::Div
             | Self::Abs
             | Self::Sign
+            | Self::Scale { .. }
             | Self::Maximum
             | Self::Minimum
             | Self::Compare(_)
@@ -182,6 +283,8 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
+            | Self::Tril { .. }
+            | Self::Triu { .. }
             | Self::Gather(_)
             | Self::Scatter(_)
             | Self::Slice(_)

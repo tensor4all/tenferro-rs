@@ -31,6 +31,12 @@ pub enum StableHloOp {
         axis_a: usize,
         axis_b: usize,
     },
+    Tril {
+        k: i64,
+    },
+    Triu {
+        k: i64,
+    },
     // Tier 2 elementwise
     Divide,
     Abs,
@@ -40,6 +46,9 @@ pub enum StableHloOp {
     Compare(CompareDir),
     Select,
     Clamp,
+    Scale {
+        factor: f64,
+    },
     // Tier 2 analytic
     Exp,
     Log,

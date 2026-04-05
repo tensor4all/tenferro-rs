@@ -32,6 +32,12 @@ pub enum ExecOp {
         axis_a: usize,
         axis_b: usize,
     },
+    Tril {
+        k: i64,
+    },
+    Triu {
+        k: i64,
+    },
     Add,
     Multiply,
     Negate,
@@ -44,6 +50,9 @@ pub enum ExecOp {
     Compare(CompareDir),
     Select,
     Clamp,
+    Scale {
+        factor: f64,
+    },
     Exp,
     Log,
     Sin,
@@ -140,6 +149,8 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ExecOp::EmbedDiag { axis_a, axis_b } => {
                 backend.embed_diagonal(get(&slots, &inst.input_slots, 0), *axis_a, *axis_b)
             }
+            ExecOp::Tril { k } => backend.tril(get(&slots, &inst.input_slots, 0), *k),
+            ExecOp::Triu { k } => backend.triu(get(&slots, &inst.input_slots, 0), *k),
             ExecOp::Add => backend.add(
                 get(&slots, &inst.input_slots, 0),
                 get(&slots, &inst.input_slots, 1),
@@ -179,6 +190,7 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 get(&slots, &inst.input_slots, 1),
                 get(&slots, &inst.input_slots, 2),
             ),
+            ExecOp::Scale { factor } => backend.scale(get(&slots, &inst.input_slots, 0), *factor),
             ExecOp::Exp => backend.exp(get(&slots, &inst.input_slots, 0)),
             ExecOp::Log => backend.log(get(&slots, &inst.input_slots, 0)),
             ExecOp::Sin => backend.sin(get(&slots, &inst.input_slots, 0)),
