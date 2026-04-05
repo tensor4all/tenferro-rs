@@ -1,4 +1,5 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 
@@ -224,6 +225,28 @@ fn diagonal_scatter_config() -> ScatterConfig {
         scatter_dims_to_operand_dims: vec![0, 1],
         index_vector_dim: 1,
     }
+}
+
+#[test]
+fn cpu_backend_default_uses_available_parallelism() {
+    let backend = CpuBackend::new();
+    let expected = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    assert_eq!(backend.num_threads(), expected);
+}
+
+#[test]
+fn cpu_backend_with_threads_creates_custom_pool() {
+    let backend = CpuBackend::with_threads(2);
+    assert_eq!(backend.num_threads(), 2);
+}
+
+#[test]
+fn cpu_backend_shared_pool() {
+    let b1 = CpuBackend::with_threads(3);
+    let b2 = CpuBackend::with_threads(3);
+    assert!(Arc::ptr_eq(&b1.pool, &b2.pool));
 }
 
 #[test]
