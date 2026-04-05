@@ -444,9 +444,5 @@ fn compute_einsum_output_shape(subscripts: &Subscripts, shapes: &[Vec<usize>]) -
                 .expect("output label not found in inputs")
         })
         .collect();
-    if out_shape.is_empty() {
-        vec![1]
-    } else {
-        out_shape
-    }
+    out_shape
 }

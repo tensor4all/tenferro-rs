@@ -143,7 +143,7 @@ fn einsum_full_contraction() {
     let mut tb = einsum(&mut engine, &[&ta], "ij->").unwrap();
     let result = tb.eval(&mut engine).unwrap();
 
-    // v2 returns shape [1] for scalar output
+    assert!(result.shape().is_empty());
     let data = get_f64_data(result);
     assert_close(data[0], 21.0, "full_contraction");
 }
@@ -160,6 +160,7 @@ fn einsum_trace() {
     let mut tb = einsum(&mut engine, &[&ta], "ii->").unwrap();
     let result = tb.eval(&mut engine).unwrap();
 
+    assert!(result.shape().is_empty());
     let data = get_f64_data(result);
     assert_close(data[0], 5.0, "trace");
 }
@@ -880,8 +881,7 @@ fn einsum_multi_pair_trace_iijj() {
     let mut ts = einsum(&mut engine, &[&ta], "iijj->").unwrap();
     let result = ts.eval(&mut engine).unwrap();
 
-    // v2 scalar shape is [1]
-    assert_eq!(result.shape(), &[1]);
+    assert!(result.shape().is_empty());
     let mut expected = 0.0;
     for i in 0..n {
         for j in 0..n {
@@ -997,12 +997,7 @@ fn einsum_scalar_vector_products() {
         let t7 = TracedTensor::from_tensor(seven.clone());
         let mut result = einsum(&mut engine, &[&ts, &t7], ",->").unwrap();
         let r = result.eval(&mut engine).unwrap();
-        // v2 may produce [] or [1] for scalar output
-        assert!(
-            r.shape().is_empty() || r.shape() == &[1],
-            "expected scalar shape, got {:?}",
-            r.shape()
-        );
+        assert!(r.shape().is_empty());
         assert_close(get_f64_data(r)[0], 21.0, "scalar*scalar");
     }
 }
@@ -1163,7 +1158,7 @@ fn einsum_three_way_repeated_label_trace() {
     let mut ts = einsum(&mut engine, &[&tt], "iii->").unwrap();
     let result = ts.eval(&mut engine).unwrap();
 
-    assert_eq!(result.shape(), &[1]);
+    assert!(result.shape().is_empty());
     let mut expected = 0.0;
     for i in 0..3 {
         expected += get_v2(&t, &[i, i, i]);
@@ -1439,7 +1434,7 @@ fn einsum_complex_trace() {
     let mut ts = einsum(&mut engine, &[&ta], "ii->").unwrap();
     let result = ts.eval(&mut engine).unwrap();
 
-    assert_eq!(result.shape(), &[1]);
+    assert!(result.shape().is_empty());
     let expected = get_c64(&a, &[0, 0]) + get_c64(&a, &[1, 1]);
     match result {
         Tensor::C64(inner) => {

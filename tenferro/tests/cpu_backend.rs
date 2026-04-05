@@ -237,7 +237,7 @@ fn test_strided_input_via_einsum() {
 
 #[test]
 fn test_vector_dot_product() {
-    // Inner product via dot_general: v[3] . w[3] -> scalar[1]
+    // Inner product via dot_general: v[3] . w[3] -> scalar[]
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let w = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
@@ -255,6 +255,7 @@ fn test_vector_dot_product() {
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
+    assert!(result.shape().is_empty());
     let data = get_f64_data(result);
     // 1*4 + 2*5 + 3*6 = 32
     assert_eq!(data, &[32.0]);

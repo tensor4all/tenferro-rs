@@ -80,17 +80,13 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &l)| l)
         .collect();
-    let mut new_shape: Vec<usize> = lv
+    let new_shape: Vec<usize> = lv
         .shape
         .iter()
         .enumerate()
         .filter(|(i, _)| !reduce_set.contains(i))
         .map(|(_, &s)| s)
         .collect();
-    // Runtime convention: scalar results have shape [1], not [].
-    if new_shape.is_empty() {
-        new_shape.push(1);
-    }
     let outputs = builder.add_op(
         Op::reduce_sum(reduce_axes, lv.shape.clone()),
         vec![lv.val.clone()],
@@ -387,29 +383,6 @@ fn outer_product<Op: GraphOp + SemiringOps>(
             shape: lhs.shape.clone(),
         };
     }
-
-    // Helper: reshape scalar [1] → [] before broadcast, since broadcast_in_dim
-    // requires dims.len() == tensor.rank() and scalars have no label dims.
-    let prepare_scalar =
-        |builder: &mut FragmentBuilder<Op>, lv: &LabeledVal<Op>| -> LabeledVal<Op> {
-            if lv.labels.is_empty() && lv.shape == [1] {
-                let outputs = builder.add_op(
-                    Op::reshape(lv.shape.clone(), vec![]),
-                    vec![lv.val.clone()],
-                    OpMode::Primal,
-                );
-                LabeledVal {
-                    val: ValRef::Local(outputs[0]),
-                    labels: vec![],
-                    shape: vec![],
-                }
-            } else {
-                lv.clone()
-            }
-        };
-
-    let lhs = prepare_scalar(builder, lhs);
-    let rhs = prepare_scalar(builder, rhs);
 
     // Broadcast both to combined shape, then Mul
     let lhs_dims: Vec<usize> = lhs

@@ -126,9 +126,6 @@ fn analyse_gemm<T>(
     out_shape.extend_from_slice(&batch_shapes);
     out_shape.extend_from_slice(&lhs_free_shapes);
     out_shape.extend_from_slice(&rhs_free_shapes);
-    if out_shape.is_empty() {
-        out_shape.push(1);
-    }
 
     let out_strides = col_major_strides(&out_shape);
     let nb = batch_shapes.len();

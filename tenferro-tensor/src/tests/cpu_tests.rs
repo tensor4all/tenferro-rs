@@ -278,6 +278,29 @@ fn test_add_mul() {
 }
 
 #[test]
+fn test_rank0_typed_tensor_behaves_like_scalar() {
+    let mut zeros = TypedTensor::<f64>::zeros(vec![]);
+    assert_eq!(zeros.shape, vec![]);
+    assert_eq!(zeros.n_elements(), 1);
+    assert_eq!(zeros.linear_offset(&[]), 0);
+    assert_eq!(zeros.get(&[]), &0.0);
+
+    *zeros.get_mut(&[]) = 2.5;
+    assert_eq!(zeros.host_data(), &[2.5]);
+
+    let ones = TypedTensor::<f64>::ones(vec![]);
+    assert_eq!(ones.shape, vec![]);
+    assert_eq!(ones.n_elements(), 1);
+    assert_eq!(ones.get(&[]), &1.0);
+
+    let scalar = TypedTensor::<f64>::from_vec(vec![], vec![7.0]);
+    assert_eq!(scalar.shape, vec![]);
+    assert_eq!(scalar.n_elements(), 1);
+    assert_eq!(scalar.linear_offset(&[]), 0);
+    assert_eq!(scalar.get(&[]), &7.0);
+}
+
+#[test]
 fn test_reduce_sum() {
     let t = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],
@@ -290,8 +313,8 @@ fn test_reduce_sum() {
     assert_eq!(get_f64(&r, &[2]), 11.0);
 
     let all = reduce_sum(&t, &[0, 1]);
-    assert_eq!(all.shape(), &[1]);
-    assert_eq!(get_f64(&all, &[0]), 21.0);
+    assert!(all.shape().is_empty());
+    assert_eq!(get_f64(&all, &[]), 21.0);
 }
 
 #[test]
@@ -308,8 +331,8 @@ fn test_reduce_prod() {
     assert_eq!(get_f64(&r, &[2]), 30.0);
 
     let all = reduce_prod(&t, &[0, 1]);
-    assert_eq!(all.shape(), &[1]);
-    assert_eq!(get_f64(&all, &[0]), 720.0);
+    assert!(all.shape().is_empty());
+    assert_eq!(get_f64(&all, &[]), 720.0);
 }
 
 #[test]
@@ -325,10 +348,18 @@ fn test_reduce_max_and_min() {
     assert_eq!(get_f64(&max_cols, &[1]), 4.0);
     assert_eq!(get_f64(&max_cols, &[2]), 6.0);
 
+    let max_all = reduce_max(&t, &[0, 1]);
+    assert!(max_all.shape().is_empty());
+    assert_eq!(get_f64(&max_all, &[]), 6.0);
+
     let min_rows = reduce_min(&t, &[1]);
     assert_eq!(min_rows.shape(), &[2]);
     assert_eq!(get_f64(&min_rows, &[0]), 1.0);
     assert_eq!(get_f64(&min_rows, &[1]), 2.0);
+
+    let min_all = reduce_min(&t, &[0, 1]);
+    assert!(min_all.shape().is_empty());
+    assert_eq!(get_f64(&min_all, &[]), 1.0);
 }
 
 #[test]
@@ -351,8 +382,8 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     assert_eq!(get_f64(&max, &[1]), 6.0);
 
     let min = backend.reduce_min(&t, &[0, 1]);
-    assert_eq!(min.shape(), &[1]);
-    assert_eq!(get_f64(&min, &[0]), 1.0);
+    assert!(min.shape().is_empty());
+    assert_eq!(get_f64(&min, &[]), 1.0);
 }
 
 #[test]
@@ -459,6 +490,27 @@ fn test_dot_general_matmul() {
 }
 
 #[test]
+fn test_dot_general_inner_product_returns_rank0_scalar() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]));
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![0],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 1,
+            rhs_rank: 1,
+        },
+    );
+    assert!(c.shape().is_empty());
+    assert_eq!(get_f64(&c, &[]), 32.0);
+}
+
+#[test]
 fn test_transpose() {
     let t = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],
@@ -476,8 +528,8 @@ fn test_transpose() {
 
 #[test]
 fn test_broadcast_in_dim() {
-    let scalar = Tensor::F64(TypedTensor::from_vec(vec![1], vec![5.0]));
-    let broadcast = broadcast_in_dim(&scalar, &[3], &[0]);
+    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
+    let broadcast = broadcast_in_dim(&scalar, &[3], &[]);
     assert_eq!(broadcast.shape(), &[3]);
     assert_eq!(get_f64(&broadcast, &[0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1]), 5.0);

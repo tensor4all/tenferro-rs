@@ -293,9 +293,6 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
         out_shape.extend_from_slice(&batch_shape);
         out_shape.extend_from_slice(&lhs_free_shape);
         out_shape.extend_from_slice(&rhs_free_shape);
-        if out_shape.is_empty() {
-            out_shape.push(1);
-        }
 
         let out_n: usize = out_shape.iter().product();
         let contract_n: usize = contract_shape.iter().product();

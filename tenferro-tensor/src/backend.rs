@@ -159,6 +159,14 @@ pub trait SemiringBackend<Alg: Semiring> {
             return input.clone();
         }
 
+        let output_shape: Vec<usize> = input
+            .shape
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !axes.contains(axis))
+            .map(|(_, &dim)| dim)
+            .collect();
+
         let strides = col_major_strides(&input.shape);
         let mut current =
             StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
@@ -176,6 +184,6 @@ pub trait SemiringBackend<Alg: Semiring> {
             )
             .expect("semiring reduce_sum");
         }
-        tensor_from_array(current)
+        TypedTensor::from_vec(output_shape, current.into_data())
     }
 }

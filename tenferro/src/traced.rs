@@ -112,7 +112,8 @@ impl TracedTensor {
     }
 
     pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
-        if self.shape.iter().product::<usize>() != 1 {
+        let n_elements: usize = self.shape.iter().product();
+        if n_elements != 1 {
             return Err(Error::NonScalarGrad {
                 shape: self.shape.clone(),
             });
@@ -235,9 +236,6 @@ impl TracedTensor {
         for &d in &rhs_free {
             out_shape.push(other.shape[d]);
         }
-        if out_shape.is_empty() {
-            out_shape.push(1);
-        }
 
         apply_binary(StdTensorOp::DotGeneral(config), self, other, out_shape)
     }
@@ -247,11 +245,6 @@ impl TracedTensor {
             .filter(|d| !axes.contains(d))
             .map(|d| self.shape[d])
             .collect();
-        let out_shape = if out_shape.is_empty() {
-            vec![1]
-        } else {
-            out_shape
-        };
         apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),

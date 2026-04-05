@@ -7,7 +7,7 @@ use tenferro_tensor::{
 };
 
 fn scalar_tensor(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(vec![1], vec![value]))
+    Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
 }
 
 fn scalar_value(tensor: &Tensor) -> f64 {
@@ -18,7 +18,7 @@ fn scalar_value(tensor: &Tensor) -> f64 {
 }
 
 fn typed_scalar(value: f64) -> TypedTensor<f64> {
-    TypedTensor::from_vec(vec![1], vec![value])
+    TypedTensor::from_vec(vec![], vec![value])
 }
 
 fn gather_config() -> GatherConfig {

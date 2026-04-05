@@ -433,7 +433,7 @@ impl Tensor {
     /// ```ignore
     /// use tenferro_tensor::{DType, Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec(vec![1], vec![1.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0]));
     /// assert_eq!(t.dtype(), DType::F64);
     /// ```
     pub fn dtype(&self) -> DType {

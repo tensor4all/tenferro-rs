@@ -5,8 +5,6 @@ use strided_kernel::{col_major_strides, reduce_axis, StridedArray};
 
 use crate::types::{dispatch_tensor, Tensor, TypedTensor};
 
-use super::tensor_from_array;
-
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> Tensor {
     dispatch_tensor!(input, t => typed_reduce_sum(t, axes))
 }
@@ -60,6 +58,14 @@ where
         return input.clone();
     }
 
+    let output_shape: Vec<usize> = input
+        .shape
+        .iter()
+        .enumerate()
+        .filter(|(axis, _)| !axes.contains(axis))
+        .map(|(_, &dim)| dim)
+        .collect();
+
     let strides = col_major_strides(&input.shape);
     let mut current =
         StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
@@ -72,7 +78,7 @@ where
             .unwrap_or_else(|err| panic!("{label}: {err}"));
     }
 
-    tensor_from_array(current)
+    TypedTensor::from_vec(output_shape, current.into_data())
 }
 
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> TypedTensor<T>
