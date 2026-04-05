@@ -3,7 +3,7 @@ use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::StableHloOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::SliceConfig;
+use tenferro_tensor::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn make_program(instructions: Vec<Instruction<StdTensorOp>>) -> CompiledProgram<StdTensorOp> {
     CompiledProgram {
@@ -146,4 +146,79 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         }
     ));
     assert!(matches!(exec.instructions[9].op, ExecOp::Triu { k: 1 }));
+}
+
+#[test]
+fn lower_to_stablehlo_and_compile_to_exec_wire_indexing_ops() {
+    let gather = GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+    let scatter = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let pad = PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![2],
+        interior_padding: vec![0],
+    };
+
+    let program = make_program(vec![
+        make_instr(StdTensorOp::Gather(gather.clone()), vec![0, 1], vec![3]),
+        make_instr(
+            StdTensorOp::Scatter(scatter.clone()),
+            vec![0, 1, 2],
+            vec![4],
+        ),
+        make_instr(
+            StdTensorOp::DynamicSlice {
+                slice_sizes: vec![2, 1],
+            },
+            vec![0, 1],
+            vec![5],
+        ),
+        make_instr(StdTensorOp::Pad(pad.clone()), vec![2], vec![6]),
+    ]);
+
+    let stablehlo = lower_to_stablehlo(&program);
+    assert!(matches!(
+        stablehlo.instructions[0].op,
+        StableHloOp::Gather(ref config) if config == &gather
+    ));
+    assert!(matches!(
+        stablehlo.instructions[1].op,
+        StableHloOp::Scatter(ref config) if config == &scatter
+    ));
+    assert!(matches!(
+        stablehlo.instructions[2].op,
+        StableHloOp::DynamicSlice { ref slice_sizes } if slice_sizes == &vec![2, 1]
+    ));
+    assert!(matches!(
+        stablehlo.instructions[3].op,
+        StableHloOp::Pad(ref config) if config == &pad
+    ));
+
+    let exec = compile_to_exec(&stablehlo);
+    assert!(matches!(
+        exec.instructions[0].op,
+        ExecOp::Gather(ref config) if config == &gather
+    ));
+    assert!(matches!(
+        exec.instructions[1].op,
+        ExecOp::Scatter(ref config) if config == &scatter
+    ));
+    assert!(matches!(
+        exec.instructions[2].op,
+        ExecOp::DynamicSlice { ref slice_sizes } if slice_sizes == &vec![2, 1]
+    ));
+    assert!(matches!(
+        exec.instructions[3].op,
+        ExecOp::Pad(ref config) if config == &pad
+    ));
 }

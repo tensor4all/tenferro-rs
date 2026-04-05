@@ -214,4 +214,59 @@ mod tests {
         let result = expand_ellipsis_in_operand("...ij", 0).unwrap();
         assert_eq!(result, "ij");
     }
+
+    #[test]
+    fn test_expand_ellipsis_rejects_operand_count_mismatch() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4]];
+        let err = expand_ellipsis_in_notation("...ij,...jk->...ik", &shapes).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("number of operands (1) does not match number of subscript specs (2)"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_rejects_multiple_ellipses_per_operand() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4, 5]];
+        let err = expand_ellipsis_in_notation("...i...j->ij", &shapes).unwrap_err();
+        assert!(err.to_string().contains("multiple ellipsis"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_rejects_invalid_output_dots() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4]];
+        let err = expand_ellipsis_in_notation("...ij->..j", &shapes).unwrap_err();
+        assert!(err.to_string().contains("invalid '.' character"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_handles_parenthesized_inputs() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4, 5], &[2, 3, 5, 6]];
+        let result = expand_ellipsis_in_notation("(...ij),(...jk)->...ik", &shapes).unwrap();
+
+        assert!(result.starts_with('\u{E000}'));
+        assert!(result.contains("ij,"));
+        assert!(result.ends_with("ik"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_rejects_invalid_notation_before_expansion() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4]];
+        let err = expand_ellipsis_in_notation("...ij", &shapes).unwrap_err();
+        assert!(err.to_string().contains("einsum notation"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_rejects_non_ellipsis_rank_mismatch() {
+        let shapes: Vec<&[usize]> = vec![&[2, 3, 4], &[3, 5, 7]];
+        let err = expand_ellipsis_in_notation("...ij,jk->...ik", &shapes).unwrap_err();
+        assert!(err.to_string().contains("explicit dimensions"));
+    }
+
+    #[test]
+    fn test_expand_ellipsis_in_operand_reports_private_use_overflow() {
+        let err = expand_ellipsis_in_operand("...", 0x110000usize).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to create ellipsis label character"));
+    }
 }

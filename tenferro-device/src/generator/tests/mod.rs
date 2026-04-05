@@ -90,3 +90,30 @@ fn generator_high_word_seed_and_integer_sampling_success_paths_are_covered() {
     let sample = lhs.sample_integer_i32(-3, 7).unwrap();
     assert!((-3..7).contains(&sample));
 }
+
+#[test]
+fn cpu_generators_are_deterministic_for_uniform_and_normal_sampling() {
+    let mut lhs = Generator::cpu(1234);
+    let mut rhs = Generator::cpu(1234);
+
+    assert_eq!(lhs.sample_uniform_f64(), rhs.sample_uniform_f64());
+    assert_eq!(lhs.sample_uniform_f64(), rhs.sample_uniform_f64());
+    assert_eq!(
+        lhs.sample_standard_normal_f64(),
+        rhs.sample_standard_normal_f64()
+    );
+    assert_eq!(
+        lhs.sample_standard_normal_f64(),
+        rhs.sample_standard_normal_f64()
+    );
+}
+
+#[test]
+fn with_default_generator_propagates_closure_errors() {
+    let err = with_default_generator(crate::LogicalMemorySpace::MainMemory, |_| {
+        Err::<(), _>(Error::InvalidArgument("sentinel".into()))
+    })
+    .unwrap_err();
+
+    assert!(err.to_string().contains("sentinel"));
+}

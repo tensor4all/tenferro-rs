@@ -11,18 +11,14 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 
 use crate::std_tensor_op::StdTensorOp;
 
-pub fn linearize(
+fn linearize_non_semiring(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-) -> Vec<Option<LocalValId>> {
-    match op {
-        StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
-        StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
-        StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
-        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+) -> Option<Vec<Option<LocalValId>>> {
+    Some(match op {
         StdTensorOp::Div => {
             elementwise_tier2::linearize_div(builder, primal_in, primal_out, tangent_in)
         }
@@ -81,22 +77,33 @@ pub fn linearize(
         StdTensorOp::Svd => linalg::linearize_svd(builder, primal_out, tangent_in),
         StdTensorOp::Qr => linalg::linearize_qr(builder, primal_out, tangent_in),
         StdTensorOp::Eigh => linalg::linearize_eigh(builder, primal_out, tangent_in),
-        _ => todo!("linearize not implemented for {:?}", op),
-    }
+        _ => return None,
+    })
 }
 
-pub fn transpose_rule(
+fn linearize_semiring(
+    op: &StdTensorOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+) -> Option<Vec<Option<LocalValId>>> {
+    Some(match op {
+        StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
+        StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
+        StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
+        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+        _ => return None,
+    })
+}
+
+fn transpose_non_semiring(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
-) -> Vec<Option<LocalValId>> {
-    match op {
-        StdTensorOp::Add => semiring::transpose_add(cotangent_out),
-        StdTensorOp::Mul => semiring::transpose_mul(builder, cotangent_out, inputs, mode),
-        StdTensorOp::Neg => semiring::transpose_neg(builder, cotangent_out),
-        StdTensorOp::Conj => semiring::transpose_conj(builder, cotangent_out),
+) -> Option<Vec<Option<LocalValId>>> {
+    Some(match op {
         StdTensorOp::Div => elementwise_tier2::transpose_div(builder, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sign => elementwise_tier2::transpose_sign(builder, cotangent_out, mode),
@@ -150,6 +157,62 @@ pub fn transpose_rule(
             *transpose_a,
             *unit_diagonal,
         ),
-        _ => todo!("transpose_rule not implemented for {:?}", op),
+        _ => return None,
+    })
+}
+
+fn transpose_semiring(
+    op: &StdTensorOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+) -> Option<Vec<Option<LocalValId>>> {
+    Some(match op {
+        StdTensorOp::Add => semiring::transpose_add(cotangent_out),
+        StdTensorOp::Mul => semiring::transpose_mul(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Neg => semiring::transpose_neg(builder, cotangent_out),
+        StdTensorOp::Conj => semiring::transpose_conj(builder, cotangent_out),
+        _ => return None,
+    })
+}
+
+fn todo_linearize(op: &StdTensorOp) -> ! {
+    todo!("linearize not implemented for {:?}", op)
+}
+
+fn todo_transpose_rule(op: &StdTensorOp) -> ! {
+    todo!("transpose_rule not implemented for {:?}", op)
+}
+
+pub fn linearize(
+    op: &StdTensorOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+) -> Vec<Option<LocalValId>> {
+    if let Some(result) = linearize_non_semiring(op, builder, primal_in, primal_out, tangent_in) {
+        return result;
     }
+    if let Some(result) = linearize_semiring(op, builder, primal_in, tangent_in) {
+        return result;
+    }
+    todo_linearize(op)
+}
+
+pub fn transpose_rule(
+    op: &StdTensorOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+) -> Vec<Option<LocalValId>> {
+    if let Some(result) = transpose_non_semiring(op, builder, cotangent_out, inputs, mode) {
+        return result;
+    }
+    if let Some(result) = transpose_semiring(op, builder, cotangent_out, inputs, mode) {
+        return result;
+    }
+    todo_transpose_rule(op)
 }

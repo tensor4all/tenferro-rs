@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
-    convert::TryFrom,
     f64::consts::TAU,
     sync::{Mutex, OnceLock},
 };
@@ -228,21 +227,16 @@ impl Generator {
         }
 
         let span = i64::from(high) - i64::from(low);
-        let span_u64 = u64::try_from(span).map_err(|_| {
-            Error::InvalidArgument(format!("integer sample span {span} does not fit into u64"))
-        })?;
+        let span_u64 = span as u64;
         let threshold = u64::MAX - (u64::MAX % span_u64);
 
         loop {
             let candidate = self.state.engine.next_u64();
             if candidate < threshold {
-                let value = i64::from(low)
-                    + i64::try_from(candidate % span_u64).map_err(|_| {
-                        Error::InvalidArgument("integer sample conversion overflow".into())
-                    })?;
-                return i32::try_from(value).map_err(|_| {
-                    Error::InvalidArgument(format!("integer sample {value} does not fit into i32"))
-                });
+                // `candidate % span_u64` is always in `[0, span)`, so adding it to `low`
+                // stays inside the validated half-open interval `[low, high)`.
+                let value = i64::from(low) + (candidate % span_u64) as i64;
+                return Ok(value as i32);
             }
         }
     }
