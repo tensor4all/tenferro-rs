@@ -1,3 +1,4 @@
+pub mod analytic;
 pub mod backend;
 pub mod elementwise;
 pub mod gemm;

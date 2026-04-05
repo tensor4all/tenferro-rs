@@ -6,7 +6,7 @@ use crate::config::{
 };
 use crate::{Buffer, Tensor, TypedTensor};
 
-fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
+pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     match &tensor.buffer {
         Buffer::Host(data) => {
             let strides = col_major_strides(&tensor.shape);
@@ -16,14 +16,14 @@ fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     }
 }
 
-fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T> {
+pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T> {
     let total: usize = shape.iter().product();
     let strides = col_major_strides(shape);
     StridedArray::from_parts(vec![fill; total], shape, &strides, 0)
         .expect("column-major output array")
 }
 
-fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
+pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
     TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
 }
 

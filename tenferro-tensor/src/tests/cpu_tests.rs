@@ -1,3 +1,5 @@
+use num_complex::Complex64;
+
 use crate::backend::TensorBackend;
 use crate::config::DotGeneralConfig;
 use crate::cpu::{
@@ -11,6 +13,25 @@ fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
         Tensor::F64(inner) => *inner.get(idx),
         _ => panic!("expected F64 tensor"),
     }
+}
+
+fn get_c64(t: &Tensor, idx: &[usize]) -> Complex64 {
+    match t {
+        Tensor::C64(inner) => *inner.get(idx),
+        _ => panic!("expected C64 tensor"),
+    }
+}
+
+fn assert_f64_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1.0e-12,
+        "expected {expected}, got {actual}"
+    );
+}
+
+fn assert_c64_close(actual: Complex64, expected: Complex64) {
+    assert_f64_close(actual.re, expected.re);
+    assert_f64_close(actual.im, expected.im);
 }
 
 #[test]
@@ -183,6 +204,89 @@ fn test_neg_and_conj() {
     let c = conj(&t);
     assert_eq!(get_f64(&c, &[0]), 3.0);
     assert_eq!(get_f64(&c, &[1]), -7.0);
+}
+
+#[test]
+fn test_cpu_backend_analytic_ops_real() {
+    let mut backend = CpuBackend::new();
+
+    let exp_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
+    let exp_out = backend.exp(&exp_input);
+    assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
+    assert_f64_close(get_f64(&exp_out, &[1]), std::f64::consts::E);
+
+    let log_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
+    let log_out = backend.log(&log_input);
+    assert_f64_close(get_f64(&log_out, &[0]), 0.0);
+    assert_f64_close(get_f64(&log_out, &[1]), 4.0_f64.ln());
+
+    let trig_input = Tensor::F64(TypedTensor::from_vec(
+        vec![2],
+        vec![0.0, std::f64::consts::FRAC_PI_2],
+    ));
+    let sin_out = backend.sin(&trig_input);
+    let cos_out = backend.cos(&trig_input);
+    assert_f64_close(get_f64(&sin_out, &[0]), 0.0);
+    assert_f64_close(get_f64(&sin_out, &[1]), 1.0);
+    assert_f64_close(get_f64(&cos_out, &[0]), 1.0);
+    assert_f64_close(get_f64(&cos_out, &[1]), 0.0);
+
+    let tanh_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
+    let tanh_out = backend.tanh(&tanh_input);
+    assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
+    assert_f64_close(get_f64(&tanh_out, &[1]), 1.0_f64.tanh());
+
+    let sqrt_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
+    let sqrt_out = backend.sqrt(&sqrt_input);
+    let rsqrt_out = backend.rsqrt(&sqrt_input);
+    assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
+    assert_f64_close(get_f64(&sqrt_out, &[1]), 2.0);
+    assert_f64_close(get_f64(&rsqrt_out, &[0]), 1.0);
+    assert_f64_close(get_f64(&rsqrt_out, &[1]), 0.5);
+
+    let expm1_out = backend.expm1(&exp_input);
+    let log1p_out = backend.log1p(&log_input);
+    assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
+    assert_f64_close(get_f64(&expm1_out, &[1]), 1.0_f64.exp_m1());
+    assert_f64_close(get_f64(&log1p_out, &[0]), 2.0_f64.ln());
+    assert_f64_close(get_f64(&log1p_out, &[1]), 5.0_f64.ln());
+
+    let pow_base = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 9.0]));
+    let pow_exp = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 0.5]));
+    let pow_out = backend.pow(&pow_base, &pow_exp);
+    assert_f64_close(get_f64(&pow_out, &[0]), 8.0);
+    assert_f64_close(get_f64(&pow_out, &[1]), 3.0);
+}
+
+#[test]
+fn test_cpu_backend_analytic_ops_complex() {
+    let mut backend = CpuBackend::new();
+
+    let exp_input = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 1.0)],
+    ));
+    let exp_out = backend.exp(&exp_input);
+    assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
+    assert_c64_close(get_c64(&exp_out, &[1]), Complex64::new(1.0, 1.0).exp());
+
+    let pow_base = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+    ));
+    let pow_exp = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(2.0, 0.0), Complex64::new(0.5, 0.25)],
+    ));
+    let pow_out = backend.pow(&pow_base, &pow_exp);
+    assert_c64_close(
+        get_c64(&pow_out, &[0]),
+        Complex64::new(1.0, 1.0).powc(Complex64::new(2.0, 0.0)),
+    );
+    assert_c64_close(
+        get_c64(&pow_out, &[1]),
+        Complex64::new(2.0, -1.0).powc(Complex64::new(0.5, 0.25)),
+    );
 }
 
 #[test]

@@ -15,7 +15,7 @@ fn assert_panics(label: &str, f: impl FnOnce()) {
 }
 
 #[test]
-fn cpu_backend_unimplemented_elementwise_and_reduction_ops_panic_explicitly() {
+fn cpu_backend_remaining_unimplemented_elementwise_and_reduction_ops_panic_explicitly() {
     let mut backend = CpuBackend::new();
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
@@ -43,36 +43,6 @@ fn cpu_backend_unimplemented_elementwise_and_reduction_ops_panic_explicitly() {
     });
     assert_panics("clamp", || {
         let _ = backend.clamp(&a, &b, &a);
-    });
-    assert_panics("exp", || {
-        let _ = backend.exp(&a);
-    });
-    assert_panics("log", || {
-        let _ = backend.log(&a);
-    });
-    assert_panics("sin", || {
-        let _ = backend.sin(&a);
-    });
-    assert_panics("cos", || {
-        let _ = backend.cos(&a);
-    });
-    assert_panics("tanh", || {
-        let _ = backend.tanh(&a);
-    });
-    assert_panics("sqrt", || {
-        let _ = backend.sqrt(&a);
-    });
-    assert_panics("rsqrt", || {
-        let _ = backend.rsqrt(&a);
-    });
-    assert_panics("pow", || {
-        let _ = backend.pow(&a, &b);
-    });
-    assert_panics("expm1", || {
-        let _ = backend.expm1(&a);
-    });
-    assert_panics("log1p", || {
-        let _ = backend.log1p(&a);
     });
     assert_panics("reduce_prod", || {
         let _ = backend.reduce_prod(&a, &[0]);

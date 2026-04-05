@@ -7,7 +7,7 @@ use crate::config::{
 use crate::types::{dispatch_binary, flat_to_multi};
 use crate::{Tensor, TypedTensor};
 
-use super::{elementwise, gemm, indexing, reduction, structural};
+use super::{analytic, elementwise, gemm, indexing, reduction, structural};
 
 /// CPU execution backend.
 ///
@@ -85,44 +85,44 @@ impl TensorBackend for CpuBackend {
         todo!("clamp")
     }
 
-    fn exp(&mut self, _input: &Tensor) -> Tensor {
-        todo!("exp")
+    fn exp(&mut self, input: &Tensor) -> Tensor {
+        analytic::exp(input)
     }
 
-    fn log(&mut self, _input: &Tensor) -> Tensor {
-        todo!("log")
+    fn log(&mut self, input: &Tensor) -> Tensor {
+        analytic::log(input)
     }
 
-    fn sin(&mut self, _input: &Tensor) -> Tensor {
-        todo!("sin")
+    fn sin(&mut self, input: &Tensor) -> Tensor {
+        analytic::sin(input)
     }
 
-    fn cos(&mut self, _input: &Tensor) -> Tensor {
-        todo!("cos")
+    fn cos(&mut self, input: &Tensor) -> Tensor {
+        analytic::cos(input)
     }
 
-    fn tanh(&mut self, _input: &Tensor) -> Tensor {
-        todo!("tanh")
+    fn tanh(&mut self, input: &Tensor) -> Tensor {
+        analytic::tanh(input)
     }
 
-    fn sqrt(&mut self, _input: &Tensor) -> Tensor {
-        todo!("sqrt")
+    fn sqrt(&mut self, input: &Tensor) -> Tensor {
+        analytic::sqrt(input)
     }
 
-    fn rsqrt(&mut self, _input: &Tensor) -> Tensor {
-        todo!("rsqrt")
+    fn rsqrt(&mut self, input: &Tensor) -> Tensor {
+        analytic::rsqrt(input)
     }
 
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
-        todo!("pow")
+    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+        analytic::pow(lhs, rhs)
     }
 
-    fn expm1(&mut self, _input: &Tensor) -> Tensor {
-        todo!("expm1")
+    fn expm1(&mut self, input: &Tensor) -> Tensor {
+        analytic::expm1(input)
     }
 
-    fn log1p(&mut self, _input: &Tensor) -> Tensor {
-        todo!("log1p")
+    fn log1p(&mut self, input: &Tensor) -> Tensor {
+        analytic::log1p(input)
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> Tensor {
