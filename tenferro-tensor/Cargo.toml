@@ -22,6 +22,7 @@ rocm = []
 [dependencies]
 num-traits.workspace = true
 num-complex.workspace = true
+rayon = "1"
 tenferro-algebra = { path = "../tenferro-algebra" }
 strided-kernel.workspace = true
 faer = { workspace = true, optional = true }
