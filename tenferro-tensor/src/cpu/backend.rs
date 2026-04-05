@@ -7,7 +7,7 @@ use crate::config::{
 use crate::types::{dispatch_binary, flat_to_multi};
 use crate::{Tensor, TypedTensor};
 
-use super::{analytic, elementwise, gemm, indexing, reduction, structural};
+use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural};
 
 /// CPU execution backend.
 ///
@@ -193,24 +193,39 @@ impl TensorBackend for CpuBackend {
         indexing::reverse(input, axes)
     }
 
-    fn cholesky(&mut self, _input: &Tensor) -> Tensor {
-        todo!("cholesky")
+    fn cholesky(&mut self, input: &Tensor) -> Tensor {
+        match input {
+            Tensor::F64(t) => Tensor::F64(linalg::cholesky(t)),
+            _ => todo!("cholesky: unsupported dtype"),
+        }
     }
 
-    fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
-        todo!("svd")
+    fn svd(&mut self, input: &Tensor) -> Vec<Tensor> {
+        match input {
+            Tensor::F64(t) => linalg::svd(t).into_iter().map(Tensor::F64).collect(),
+            _ => todo!("svd: unsupported dtype"),
+        }
     }
 
-    fn qr(&mut self, _input: &Tensor) -> Vec<Tensor> {
-        todo!("qr")
+    fn qr(&mut self, input: &Tensor) -> Vec<Tensor> {
+        match input {
+            Tensor::F64(t) => linalg::qr(t).into_iter().map(Tensor::F64).collect(),
+            _ => todo!("qr: unsupported dtype"),
+        }
     }
 
-    fn eigh(&mut self, _input: &Tensor) -> Vec<Tensor> {
-        todo!("eigh")
+    fn eigh(&mut self, input: &Tensor) -> Vec<Tensor> {
+        match input {
+            Tensor::F64(t) => linalg::eigh(t).into_iter().map(Tensor::F64).collect(),
+            _ => todo!("eigh: unsupported dtype"),
+        }
     }
 
-    fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> Tensor {
-        todo!("solve")
+    fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+        match (a, b) {
+            (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(linalg::solve(a, b)),
+            _ => todo!("solve: unsupported dtype"),
+        }
     }
 }
 
