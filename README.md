@@ -289,29 +289,40 @@ fn main() {
 
 ### Influences
 
-The API and internal architecture are strongly influenced by
+The API and internal architecture draw from both
+[JAX](https://github.com/jax-ml/jax) and
 [PyTorch / libtorch](https://github.com/pytorch/pytorch):
 
-- **Tensor type** — `Tensor<T>` with reference-counted storage, explicit
-  zero-copy `view`, and PyTorch-style `reshape` semantics mirrors `at::Tensor`
-  / `c10::Storage`.
-- **Plan-based execution** — The primitive family traits keep a
-  describe-plan-execute contract that follows the cuTENSOR / BLAS pattern used
-  by PyTorch's GPU backend.
-- **Automatic differentiation** — The public `Tensor` facade is backed by
-  `tidu::Value<DynTensor>`. Reverse-mode frontend helpers are exposed as
-  `grad` / `backward`, while downstream custom ops integrate through
-  `LinearizableOp` / `LinearizedOp` and implement `jvp` / `vjp` explicitly.
+**From JAX:**
+
+- **Graph-based AD** — All computation builds a lazy graph (`Fragment<StdTensorOp>`)
+  that is compiled to StableHLO-compatible IR, then evaluated. AD is a graph
+  transform: `tidu::differentiate` (JVP) and `tidu::transpose` (VJP) rewrite
+  the graph, sharing primal intermediates via `eval_all`.
+- **AD rule design** — `PrimitiveOp::linearize` and `transpose_rule` follow
+  JAX's JVP/transpose pattern. Linalg AD rules (SVD, Eigh, Cholesky) reference
+  JAX's implementations directly. Lorentzian broadening regularizes degenerate
+  singular values.
+- **StableHLO alignment** — The internal IR uses StableHLO op semantics as the
+  compilation cut point, enabling future XLA backend integration.
+- **Functional transforms** — `TracedTensor::grad`, `jvp`, `vjp` are lazy
+  graph transforms evaluated via `Engine::eval_all`.
+
+**From PyTorch:**
+
+- **Tensor type** — `Tensor` with type-erased dtype dispatch (F32/F64/C32/C64),
+  contiguous column-major storage, and placement tracking (CPU/GPU).
 - **Einsum** — Ported from Julia's
   [OMEinsum.jl](https://github.com/under-Peter/OMEinsum.jl); string notation
   (`"ij,jk->ik"`) is compatible with `torch.einsum`, with N-ary contraction
   tree optimization.
-- **Linear algebra** — `tenferro-linalg` mirrors `torch.linalg` (SVD, QR, LU,
-  eig/eigh, Cholesky, solve) with differentiable decompositions.
+- **Linear algebra** — SVD, QR, Cholesky, Eigh, Solve with differentiable
+  decompositions via faer (CPU) and LAPACK (optional).
 
-Key differences from PyTorch: column-major default layout with `(m, n, *)`
-batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
-dispatch, and algebra-parameterized primitive families enabling custom
+Key differences from JAX/PyTorch: column-major default layout with `(m, n, *)`
+trailing-batch convention (matching Julia/BLAS/LAPACK), compile-time generics
+(`TypedTensor<T>`) alongside runtime dtype dispatch (`Tensor` enum), and
+algebra-parameterized execution (`SemiringBackend<Alg>`) enabling custom
 semirings (e.g., tropical).
 
 ### Memory Layout Policy
