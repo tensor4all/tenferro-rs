@@ -1,5 +1,6 @@
 use faer::linalg::solvers::Solve;
 use faer::{diag::DiagRef, MatRef, Side};
+use num_complex::Complex64;
 
 use crate::{Buffer, TypedTensor};
 
@@ -58,6 +59,28 @@ fn vec_from_diag<T: Copy>(diag: DiagRef<'_, T>) -> Vec<T> {
     let mut data = Vec::with_capacity(col.nrows());
     for i in 0..col.nrows() {
         data.push(col[i]);
+    }
+    data
+}
+
+fn complex64_to_faer_slice(data: &[Complex64]) -> &[faer::c64] {
+    debug_assert_eq!(
+        std::mem::size_of::<Complex64>(),
+        std::mem::size_of::<faer::c64>()
+    );
+    debug_assert_eq!(
+        std::mem::align_of::<Complex64>(),
+        std::mem::align_of::<faer::c64>()
+    );
+
+    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<faer::c64>(), data.len()) }
+}
+
+fn complex_vec_from_real_diag(diag: DiagRef<'_, faer::c64>) -> Vec<Complex64> {
+    let col = diag.column_vector();
+    let mut data = Vec::with_capacity(col.nrows());
+    for i in 0..col.nrows() {
+        data.push(Complex64::new(col[i].re, 0.0));
     }
     data
 }
@@ -334,6 +357,92 @@ impl FaerLinalg for f64 {
         for i in 0..n {
             let diag = u_mat[(i, i)];
             assert!(diag.is_finite() && diag != 0.0, "solve: singular matrix");
+        }
+
+        let x = lu.solve(&b_mat);
+        tensor_from_mat(x.as_ref(), vec![n, nrhs], b)
+    }
+}
+
+impl FaerLinalg for Complex64 {
+    fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
+        let n = square_matrix_dim(input, "cholesky");
+        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
+        let chol = match mat.llt(Side::Lower) {
+            Ok(chol) => chol,
+            Err(_) => panic!("cholesky: matrix is not positive definite"),
+        };
+        tensor_from_mat(chol.L(), vec![n, n], input)
+    }
+
+    fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+        let (m, n) = matrix_dims(input, "svd");
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
+        let svd = match mat.thin_svd() {
+            Ok(svd) => svd,
+            Err(_) => panic!("svd: decomposition failed"),
+        };
+
+        let u = tensor_from_mat(svd.U(), vec![m, k], input);
+        let s = tensor_from_vec_with_template(vec![k], complex_vec_from_real_diag(svd.S()), input);
+
+        let v = svd.V();
+        let mut vt_data = Vec::with_capacity(k * n);
+        for j in 0..n {
+            for i in 0..k {
+                vt_data.push(v[(j, i)].conj());
+            }
+        }
+        let vt = tensor_from_vec_with_template(vec![k, n], vt_data, input);
+
+        vec![u, s, vt]
+    }
+
+    fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+        let (m, n) = matrix_dims(input, "qr");
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
+        let qr = mat.qr();
+
+        let q_mat = qr.compute_thin_Q();
+        let q = tensor_from_mat(q_mat.as_ref(), vec![m, k], input);
+        let r = tensor_from_mat(qr.thin_R(), vec![k, n], input);
+
+        vec![q, r]
+    }
+
+    fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+        let n = square_matrix_dim(input, "eigh");
+        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
+        let eig = match mat.self_adjoint_eigen(Side::Lower) {
+            Ok(eig) => eig,
+            Err(_) => panic!("eigh: decomposition failed"),
+        };
+
+        let values =
+            tensor_from_vec_with_template(vec![n], complex_vec_from_real_diag(eig.S()), input);
+        let vectors = tensor_from_mat(eig.U(), vec![n, n], input);
+
+        vec![values, vectors]
+    }
+
+    fn solve_2d(a: &TypedTensor<Self>, b: &TypedTensor<Self>) -> TypedTensor<Self> {
+        let n = square_matrix_dim(a, "solve");
+        let (b_rows, nrhs) = matrix_dims(b, "solve");
+        assert_eq!(b_rows, n, "solve: rhs row count mismatch");
+
+        let a_mat = MatRef::from_column_major_slice(complex64_to_faer_slice(a.host_data()), n, n);
+        let b_mat =
+            MatRef::from_column_major_slice(complex64_to_faer_slice(b.host_data()), n, nrhs);
+        let lu = a_mat.partial_piv_lu();
+        let u_mat = lu.U();
+        for i in 0..n {
+            let diag = u_mat[(i, i)];
+            assert!(
+                diag.re.is_finite() && diag.im.is_finite() && diag.norm_sqr() != 0.0,
+                "solve: singular matrix"
+            );
         }
 
         let x = lu.solve(&b_mat);
