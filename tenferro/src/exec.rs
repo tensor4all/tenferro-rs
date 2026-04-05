@@ -188,16 +188,22 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 backend.reduce_min(get(&slots, &inst.input_slots, 0), axes)
             }
             ExecOp::Cholesky => backend.cholesky(get(&slots, &inst.input_slots, 0)),
-            ExecOp::CustomCall { target } => match target.as_str() {
-                "svd" => backend.svd(get(&slots, &inst.input_slots, 0)).remove(0),
-                "qr" => backend.qr(get(&slots, &inst.input_slots, 0)).remove(0),
-                "eigh" => backend.eigh(get(&slots, &inst.input_slots, 0)).remove(0),
-                "solve" => backend.solve(
-                    get(&slots, &inst.input_slots, 0),
-                    get(&slots, &inst.input_slots, 1),
-                ),
-                _ => todo!("custom call target {target}"),
-            },
+            ExecOp::CustomCall { target } => {
+                let results: Vec<Tensor> = match target.as_str() {
+                    "svd" => backend.svd(get(&slots, &inst.input_slots, 0)),
+                    "qr" => backend.qr(get(&slots, &inst.input_slots, 0)),
+                    "eigh" => backend.eigh(get(&slots, &inst.input_slots, 0)),
+                    "solve" => vec![backend.solve(
+                        get(&slots, &inst.input_slots, 0),
+                        get(&slots, &inst.input_slots, 1),
+                    )],
+                    _ => todo!("custom call target {target}"),
+                };
+                for (i, tensor) in results.into_iter().enumerate() {
+                    slots[inst.output_slots[i]] = Some(tensor);
+                }
+                continue;
+            }
         };
         slots[inst.output_slots[0]] = Some(result);
     }

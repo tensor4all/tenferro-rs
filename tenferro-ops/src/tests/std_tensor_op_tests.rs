@@ -81,9 +81,17 @@ fn test_std_tensor_op_unimplemented_indexing_arity_panics() {
 }
 
 #[test]
-#[should_panic(expected = "n_outputs not yet implemented")]
-fn test_std_tensor_op_unimplemented_linalg_outputs_panics() {
-    let _ = StdTensorOp::Svd.n_outputs();
+fn test_std_tensor_op_linalg_input_output_counts() {
+    assert_eq!(StdTensorOp::Cholesky.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Cholesky.n_outputs(), 1);
+    assert_eq!(StdTensorOp::Svd.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Svd.n_outputs(), 3);
+    assert_eq!(StdTensorOp::Qr.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Qr.n_outputs(), 2);
+    assert_eq!(StdTensorOp::Eigh.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Eigh.n_outputs(), 2);
+    assert_eq!(StdTensorOp::Solve.n_inputs(), 2);
+    assert_eq!(StdTensorOp::Solve.n_outputs(), 1);
 }
 
 #[test]

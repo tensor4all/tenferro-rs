@@ -56,6 +56,19 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Pow => StableHloOp::Pow,
                 StdTensorOp::Expm1 => StableHloOp::Expm1,
                 StdTensorOp::Log1p => StableHloOp::Log1p,
+                StdTensorOp::Cholesky => StableHloOp::Cholesky,
+                StdTensorOp::Svd => StableHloOp::CustomCall {
+                    target: "svd".to_string(),
+                },
+                StdTensorOp::Qr => StableHloOp::CustomCall {
+                    target: "qr".to_string(),
+                },
+                StdTensorOp::Eigh => StableHloOp::CustomCall {
+                    target: "eigh".to_string(),
+                },
+                StdTensorOp::Solve => StableHloOp::CustomCall {
+                    target: "solve".to_string(),
+                },
                 _ => todo!("lower_to_stablehlo: unsupported op {:?}", instr.op),
             };
             StableHloInstruction {
@@ -175,6 +188,10 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Pow => ExecOp::Pow,
                 StableHloOp::Expm1 => ExecOp::Expm1,
                 StableHloOp::Log1p => ExecOp::Log1p,
+                StableHloOp::Cholesky => ExecOp::Cholesky,
+                StableHloOp::CustomCall { target } => ExecOp::CustomCall {
+                    target: target.clone(),
+                },
                 _ => todo!("compile_to_exec: unsupported op {:?}", instr.op),
             };
 

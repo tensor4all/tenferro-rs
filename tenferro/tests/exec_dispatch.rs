@@ -276,30 +276,6 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Cholesky, 1, "cholesky", 40.0),
         (
             ExecOp::CustomCall {
-                target: "svd".into(),
-            },
-            1,
-            "svd",
-            41.0,
-        ),
-        (
-            ExecOp::CustomCall {
-                target: "qr".into(),
-            },
-            1,
-            "qr",
-            42.0,
-        ),
-        (
-            ExecOp::CustomCall {
-                target: "eigh".into(),
-            },
-            1,
-            "eigh",
-            43.0,
-        ),
-        (
-            ExecOp::CustomCall {
                 target: "solve".into(),
             },
             2,
@@ -321,6 +297,73 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         assert_eq!(outputs.len(), 1);
         assert_eq!(scalar_value(&outputs[0]), expected_value);
     }
+}
+
+fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecProgram {
+    let output_slots: Vec<usize> = (n_inputs..n_inputs + n_outputs).collect();
+    ExecProgram {
+        instructions: vec![ExecInstruction {
+            op,
+            input_slots: (0..n_inputs).collect(),
+            output_slots: output_slots.clone(),
+            dtype: DType::F64,
+            last_use: vec![false; n_inputs],
+        }],
+        input_slots: (0..n_inputs).collect(),
+        output_slots,
+        n_slots: n_inputs + n_outputs,
+    }
+}
+
+#[test]
+fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
+    let mut backend = FakeTensorBackend::default();
+
+    // SVD: 1 input, 2 outputs (fake returns 2)
+    let program = multi_output_program(
+        ExecOp::CustomCall {
+            target: "svd".into(),
+        },
+        1,
+        2,
+    );
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]);
+    assert_eq!(backend.calls, vec!["svd"]);
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(scalar_value(&outputs[0]), 41.0);
+    assert_eq!(scalar_value(&outputs[1]), 41.5);
+
+    backend.calls.clear();
+
+    // QR: 1 input, 2 outputs
+    let program = multi_output_program(
+        ExecOp::CustomCall {
+            target: "qr".into(),
+        },
+        1,
+        2,
+    );
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]);
+    assert_eq!(backend.calls, vec!["qr"]);
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(scalar_value(&outputs[0]), 42.0);
+    assert_eq!(scalar_value(&outputs[1]), 42.5);
+
+    backend.calls.clear();
+
+    // Eigh: 1 input, 2 outputs
+    let program = multi_output_program(
+        ExecOp::CustomCall {
+            target: "eigh".into(),
+        },
+        1,
+        2,
+    );
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]);
+    assert_eq!(backend.calls, vec!["eigh"]);
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(scalar_value(&outputs[0]), 43.0);
+    assert_eq!(scalar_value(&outputs[1]), 43.5);
 }
 
 #[test]
