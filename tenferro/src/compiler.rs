@@ -20,14 +20,14 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Conj => StableHloOp::Conj,
                 StdTensorOp::DotGeneral(c) => StableHloOp::DotGeneral(c.clone()),
                 StdTensorOp::Transpose { perm } => StableHloOp::Transpose { perm: perm.clone() },
-                StdTensorOp::Reshape { shape } => StableHloOp::Reshape {
-                    shape: shape.clone(),
+                StdTensorOp::Reshape { to_shape, .. } => StableHloOp::Reshape {
+                    shape: to_shape.clone(),
                 },
                 StdTensorOp::BroadcastInDim { shape, dims } => StableHloOp::BroadcastInDim {
                     shape: shape.clone(),
                     dims: dims.clone(),
                 },
-                StdTensorOp::ReduceSum { axes } => StableHloOp::ReduceSum { axes: axes.clone() },
+                StdTensorOp::ReduceSum { axes, .. } => StableHloOp::ReduceSum { axes: axes.clone() },
                 StdTensorOp::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,

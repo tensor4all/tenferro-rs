@@ -174,6 +174,7 @@ impl TracedTensor {
         apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),
+                input_shape: self.shape.clone(),
             },
             self,
             out_shape,
@@ -183,7 +184,8 @@ impl TracedTensor {
     pub fn traced_reshape(&self, shape: &[usize]) -> TracedTensor {
         apply_unary(
             StdTensorOp::Reshape {
-                shape: shape.to_vec(),
+                from_shape: self.shape.clone(),
+                to_shape: shape.to_vec(),
             },
             self,
             shape.to_vec(),

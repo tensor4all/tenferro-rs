@@ -25,7 +25,14 @@ fn test_std_tensor_op_input_output_counts() {
         .n_inputs(),
         2
     );
-    assert_eq!(StdTensorOp::ReduceSum { axes: vec![0] }.n_inputs(), 1);
+    assert_eq!(
+        StdTensorOp::ReduceSum {
+            axes: vec![0],
+            input_shape: vec![2, 3],
+        }
+        .n_inputs(),
+        1
+    );
     assert_eq!(
         StdTensorOp::ExtractDiag {
             axis_a: 0,
@@ -167,11 +174,11 @@ fn test_semiring_input_key_clone_eq_and_hash_are_stable() {
 #[test]
 fn test_semiring_op_constructors_cover_all_supported_kinds() {
     assert_eq!(
-        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2]).kind,
+        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2], vec![2, 3, 4]).kind,
         SemiringOpKind::ReduceSum { axes: vec![0, 2] }
     );
     assert_eq!(
-        SemiringOp::<Standard<f64>>::reshape(vec![2, 3]).kind,
+        SemiringOp::<Standard<f64>>::reshape(vec![3, 2], vec![2, 3]).kind,
         SemiringOpKind::Reshape { shape: vec![2, 3] }
     );
     assert_eq!(

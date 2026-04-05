@@ -92,7 +92,7 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         new_shape.push(1);
     }
     let outputs = builder.add_op(
-        Op::reduce_sum(reduce_axes),
+        Op::reduce_sum(reduce_axes, lv.shape.clone()),
         vec![lv.val.clone()],
         OpMode::Primal,
     );
@@ -392,7 +392,11 @@ fn outer_product<Op: GraphOp + SemiringOps>(
                           lv: &LabeledVal<Op>|
      -> LabeledVal<Op> {
         if lv.labels.is_empty() && lv.shape == [1] {
-            let outputs = builder.add_op(Op::reshape(vec![]), vec![lv.val.clone()], OpMode::Primal);
+            let outputs = builder.add_op(
+                Op::reshape(lv.shape.clone(), vec![]),
+                vec![lv.val.clone()],
+                OpMode::Primal,
+            );
             LabeledVal {
                 val: ValRef::Local(outputs[0]),
                 labels: vec![],

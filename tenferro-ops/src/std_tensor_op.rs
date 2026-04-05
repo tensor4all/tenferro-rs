@@ -18,9 +18,15 @@ pub enum StdTensorOp {
     Conj,
     DotGeneral(DotGeneralConfig),
     Transpose { perm: Vec<usize> },
-    Reshape { shape: Vec<usize> },
+    Reshape {
+        from_shape: Vec<usize>,
+        to_shape: Vec<usize>,
+    },
     BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
-    ReduceSum { axes: Vec<usize> },
+    ReduceSum {
+        axes: Vec<usize>,
+        input_shape: Vec<usize>,
+    },
 
     // Tier 2: elementwise
     Div,
@@ -161,16 +167,19 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::DotGeneral(config)
     }
 
-    fn reduce_sum(axes: Vec<usize>) -> Self {
-        StdTensorOp::ReduceSum { axes }
+    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<usize>) -> Self {
+        StdTensorOp::ReduceSum { axes, input_shape }
     }
 
     fn transpose_op(perm: Vec<usize>) -> Self {
         StdTensorOp::Transpose { perm }
     }
 
-    fn reshape(shape: Vec<usize>) -> Self {
-        StdTensorOp::Reshape { shape }
+    fn reshape(from_shape: Vec<usize>, to_shape: Vec<usize>) -> Self {
+        StdTensorOp::Reshape {
+            from_shape,
+            to_shape,
+        }
     }
 
     fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
