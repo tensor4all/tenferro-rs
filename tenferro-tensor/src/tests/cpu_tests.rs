@@ -3,8 +3,8 @@ use num_complex::Complex64;
 use crate::backend::TensorBackend;
 use crate::config::{CompareDir, DotGeneralConfig};
 use crate::cpu::{
-    add, broadcast_in_dim, conj, embed_diagonal, extract_diagonal, mul, neg, reduce_sum, reshape,
-    transpose, CpuBackend,
+    add, broadcast_in_dim, conj, embed_diagonal, extract_diagonal, mul, neg, reduce_max,
+    reduce_min, reduce_prod, reduce_sum, reshape, transpose, CpuBackend,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -123,6 +123,67 @@ fn test_reduce_sum() {
     let all = reduce_sum(&t, &[0, 1]);
     assert_eq!(all.shape(), &[1]);
     assert_eq!(get_f64(&all, &[0]), 21.0);
+}
+
+#[test]
+fn test_reduce_prod() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let r = reduce_prod(&t, &[0]);
+    assert_eq!(r.shape(), &[3]);
+    assert_eq!(get_f64(&r, &[0]), 2.0);
+    assert_eq!(get_f64(&r, &[1]), 12.0);
+    assert_eq!(get_f64(&r, &[2]), 30.0);
+
+    let all = reduce_prod(&t, &[0, 1]);
+    assert_eq!(all.shape(), &[1]);
+    assert_eq!(get_f64(&all, &[0]), 720.0);
+}
+
+#[test]
+fn test_reduce_max_and_min() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let max_cols = reduce_max(&t, &[0]);
+    assert_eq!(max_cols.shape(), &[3]);
+    assert_eq!(get_f64(&max_cols, &[0]), 2.0);
+    assert_eq!(get_f64(&max_cols, &[1]), 4.0);
+    assert_eq!(get_f64(&max_cols, &[2]), 6.0);
+
+    let min_rows = reduce_min(&t, &[1]);
+    assert_eq!(min_rows.shape(), &[2]);
+    assert_eq!(get_f64(&min_rows, &[0]), 1.0);
+    assert_eq!(get_f64(&min_rows, &[1]), 2.0);
+}
+
+#[test]
+fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let prod = backend.reduce_prod(&t, &[0]);
+    assert_eq!(prod.shape(), &[3]);
+    assert_eq!(get_f64(&prod, &[0]), 2.0);
+    assert_eq!(get_f64(&prod, &[1]), 12.0);
+    assert_eq!(get_f64(&prod, &[2]), 30.0);
+
+    let max = backend.reduce_max(&t, &[1]);
+    assert_eq!(max.shape(), &[2]);
+    assert_eq!(get_f64(&max, &[0]), 5.0);
+    assert_eq!(get_f64(&max, &[1]), 6.0);
+
+    let min = backend.reduce_min(&t, &[0, 1]);
+    assert_eq!(min.shape(), &[1]);
+    assert_eq!(get_f64(&min, &[0]), 1.0);
 }
 
 #[test]
@@ -438,3 +499,42 @@ fn test_tier2_elementwise_ops_complex() {
     assert_c64_close(get_c64(&minimum, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&minimum, &[1]), Complex64::new(1.0, 0.0));
 }
+fn test_reduce_prod() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let r = reduce_prod(&t, &[0]);
+    assert_eq!(r.shape(), &[3]);
+    assert_eq!(get_f64(&r, &[0]), 2.0);
+    assert_eq!(get_f64(&r, &[1]), 12.0);
+    assert_eq!(get_f64(&r, &[2]), 30.0);
+
+    let all = reduce_prod(&t, &[0, 1]);
+    assert_eq!(all.shape(), &[1]);
+    assert_eq!(get_f64(&all, &[0]), 720.0);
+}
+
+#[test]
+fn test_reduce_max_and_min() {
+    let t = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let max_cols = reduce_max(&t, &[0]);
+    assert_eq!(max_cols.shape(), &[3]);
+    assert_eq!(get_f64(&max_cols, &[0]), 2.0);
+    assert_eq!(get_f64(&max_cols, &[1]), 4.0);
+    assert_eq!(get_f64(&max_cols, &[2]), 6.0);
+
+    let min_rows = reduce_min(&t, &[1]);
+    assert_eq!(min_rows.shape(), &[2]);
+    assert_eq!(get_f64(&min_rows, &[0]), 1.0);
+    assert_eq!(get_f64(&min_rows, &[1]), 2.0);
+}
+
+#[test]
+fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
+    let t = Tensor::F64(TypedTensor::from_vec(
