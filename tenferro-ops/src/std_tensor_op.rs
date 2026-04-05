@@ -129,22 +129,22 @@ impl PrimitiveOp for StdTensorOp {
 
     fn linearize(
         &self,
-        _builder: &mut FragmentBuilder<Self>,
-        _primal_in: &[GlobalValKey<Self>],
-        _primal_out: &[GlobalValKey<Self>],
-        _tangent_in: &[Option<LocalValId>],
+        builder: &mut FragmentBuilder<Self>,
+        primal_in: &[GlobalValKey<Self>],
+        primal_out: &[GlobalValKey<Self>],
+        tangent_in: &[Option<LocalValId>],
     ) -> Vec<Option<LocalValId>> {
-        todo!()
+        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in)
     }
 
     fn transpose_rule(
         &self,
-        _builder: &mut FragmentBuilder<Self>,
-        _cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<Self>],
-        _mode: &OpMode,
+        builder: &mut FragmentBuilder<Self>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<Self>],
+        mode: &OpMode,
     ) -> Vec<Option<LocalValId>> {
-        todo!()
+        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode)
     }
 }
 

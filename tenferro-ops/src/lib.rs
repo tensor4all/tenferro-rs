@@ -1,3 +1,4 @@
+pub mod ad;
 pub mod input_key;
 pub mod semiring_op;
 pub mod semiring_op_kind;
