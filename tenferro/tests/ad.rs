@@ -1,5 +1,3 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
-
 use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
@@ -62,7 +60,7 @@ fn grad_x_squared() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let y = x.traced_mul(&x);
     let loss = y.traced_reduce_sum(&[0]);
-    let grad = loss.grad(&x);
+    let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
     assert_close_slice(get_f64_data(&result), &[2.0, 4.0, 6.0]);
@@ -77,7 +75,7 @@ fn grad_matmul_sum() {
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
     let matmul = a.traced_dot_general(&b, matmul_config());
     let loss = matmul.traced_reduce_sum(&[0, 1]);
-    let grad = loss.grad(&a);
+    let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
@@ -112,7 +110,7 @@ fn grad_batched_matmul_sum() {
     let mut engine = Engine::new(CpuBackend::new());
     let product = einsum(&mut engine, &[&a, &b], "bij,bjk->bik").unwrap();
     let loss = product.traced_reduce_sum(&[0, 1, 2]);
-    let grad = loss.grad(&a);
+    let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
@@ -168,8 +166,7 @@ fn grad_nonscalar_errors() {
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
     let y = a.traced_dot_general(&b, matmul_config());
 
-    let result = catch_unwind(AssertUnwindSafe(|| y.grad(&a)));
-    assert!(result.is_err());
+    assert!(y.grad(&a).is_err());
 }
 
 #[test]
@@ -177,7 +174,7 @@ fn grad_broadcast_reduce() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let y = x.traced_broadcast_in_dim(&[3, 3], &[0]);
     let loss = y.traced_reduce_sum(&[0, 1]);
-    let grad = loss.grad(&x);
+    let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
     assert_close_slice(get_f64_data(&result), &[3.0, 3.0, 3.0]);
@@ -188,7 +185,7 @@ fn grad_reshape() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
     let y = x.traced_reshape(&[2, 2]);
     let loss = y.traced_reduce_sum(&[0, 1]);
-    let grad = loss.grad(&x);
+    let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
     assert_eq!(result.shape(), &[4]);
@@ -200,7 +197,7 @@ fn grad_transpose() {
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
     let y = a.traced_transpose(&[1, 0]);
     let loss = y.traced_reduce_sum(&[0, 1]);
-    let grad = loss.grad(&a);
+    let grad = loss.grad(&a).unwrap();
 
     let result = eval_tensor(grad);
     assert_eq!(result.shape(), &[2, 3]);

@@ -32,6 +32,10 @@ pub enum Error {
     #[error("missing input: {0}")]
     MissingInput(String),
 
+    /// Reverse-mode gradient requires a scalar output.
+    #[error("grad requires a scalar output, got shape {shape:?}")]
+    NonScalarGrad { shape: Vec<usize> },
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),

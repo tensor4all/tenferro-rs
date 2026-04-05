@@ -111,16 +111,16 @@ impl TracedTensor {
         Ok(self.data.as_ref().unwrap())
     }
 
-    pub fn grad(&self, wrt: &TracedTensor) -> TracedTensor {
-        assert!(
-            self.shape.iter().product::<usize>() == 1,
-            "grad requires a scalar output, got shape {:?}",
-            self.shape
-        );
+    pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
+        if self.shape.iter().product::<usize>() != 1 {
+            return Err(Error::NonScalarGrad {
+                shape: self.shape.clone(),
+            });
+        }
 
         let ones = ones_tensor(self.dtype, self.shape.clone());
         let seed = TracedTensor::from_tensor(ones);
-        self.vjp(wrt, &seed)
+        Ok(self.vjp(wrt, &seed))
     }
 
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
