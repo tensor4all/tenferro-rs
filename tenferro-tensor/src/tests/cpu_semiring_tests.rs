@@ -49,6 +49,8 @@ fn semiring_backend_batched_gemm_handles_batch_and_contract_dimensions() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![2],
             rhs_batch_dims: vec![2],
+            lhs_rank: 3,
+            rhs_rank: 3,
         },
     );
 

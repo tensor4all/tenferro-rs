@@ -195,20 +195,24 @@ fn transpose_matrix(
     out[0]
 }
 
-fn transpose_config_for_lhs(_config: &DotGeneralConfig) -> DotGeneralConfig {
+fn transpose_config_for_lhs(config: &DotGeneralConfig) -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: config.lhs_rank,
+        rhs_rank: config.rhs_rank,
     }
 }
 
-fn transpose_config_for_rhs(_config: &DotGeneralConfig) -> DotGeneralConfig {
+fn transpose_config_for_rhs(config: &DotGeneralConfig) -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: config.lhs_rank,
+        rhs_rank: config.rhs_rank,
     }
 }

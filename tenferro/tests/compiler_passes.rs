@@ -51,6 +51,8 @@ fn test_dot_dimension_sorter_sorts_contracting() {
         rhs_contracting_dims: vec![2, 1],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![0],
+        lhs_rank: 4,
+        rhs_rank: 3,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -75,6 +77,8 @@ fn test_dot_dimension_sorter_already_sorted() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config.clone()), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -100,6 +104,8 @@ fn test_dot_dimension_sorter_rhs_consecutive_unsorted() {
         rhs_contracting_dims: vec![3, 2],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 3,
+        rhs_rank: 4,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -132,6 +138,8 @@ fn test_reduction_simplification_noop() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![1, 2], vec![3]);
     let mut program = make_program(vec![reduce, dot], vec![0, 2], vec![3], 4);
@@ -175,6 +183,8 @@ fn test_transpose_folding_absorbs_transpose_on_lhs() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 1], vec![3]);
     let mut program = make_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -215,6 +225,8 @@ fn test_transpose_folding_absorbs_transpose_on_rhs() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![0, 2], vec![3]);
     let mut program = make_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -252,6 +264,8 @@ fn test_transpose_folding_unfoldable_batch_changed() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![0],
+        lhs_rank: 3,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 1], vec![3]);
     let mut program = make_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -282,6 +296,8 @@ fn test_transpose_folding_fixed_point() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 3], vec![4]);
     let mut program = make_program(vec![transpose_a, transpose_b, dot], vec![0, 1], vec![4], 5);
@@ -315,6 +331,8 @@ fn test_dot_decomposer_canonical_noop() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config.clone()), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -340,6 +358,8 @@ fn test_dot_decomposer_with_leading_batch() {
         rhs_contracting_dims: vec![1],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![0],
+        lhs_rank: 3,
+        rhs_rank: 2,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config.clone()), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -362,6 +382,8 @@ fn test_dot_decomposer_non_leading_batch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![1],
         rhs_batch_dims: vec![1],
+        lhs_rank: 3,
+        rhs_rank: 3,
     };
     let instr = make_instr(StableHloOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -402,6 +424,8 @@ fn test_full_pipeline_matmul() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![0, 1], vec![2]);
     let program = make_program(vec![dot], vec![0, 1], vec![2], 3);
@@ -440,6 +464,8 @@ fn test_full_pipeline_transpose_matmul() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 1], vec![3]);
     let program = make_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -479,6 +505,8 @@ fn test_full_pipeline_reduce_then_matmul() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     };
     let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 1], vec![3]);
     let program = make_program(vec![reduce, dot], vec![0, 1], vec![3], 4);

@@ -78,6 +78,8 @@ fn provider_inject_dot_general_uses_registered_blas() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
         },
     );
 

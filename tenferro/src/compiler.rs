@@ -392,6 +392,7 @@ pub fn dot_decomposer(program: &mut StableHloProgram) {
                     instr.input_slots[0],
                     &config.lhs_batch_dims,
                     &config.lhs_contracting_dims,
+                    config.lhs_rank,
                     true,
                     instr.dtype,
                     n_slots,
@@ -402,6 +403,7 @@ pub fn dot_decomposer(program: &mut StableHloProgram) {
                     instr.input_slots[1],
                     &config.rhs_batch_dims,
                     &config.rhs_contracting_dims,
+                    config.rhs_rank,
                     false,
                     instr.dtype,
                     n_slots,
@@ -416,6 +418,8 @@ pub fn dot_decomposer(program: &mut StableHloProgram) {
                     rhs_contracting_dims: rhs_new_config.0,
                     lhs_batch_dims: lhs_new_config.1,
                     rhs_batch_dims: rhs_new_config.1,
+                    lhs_rank: config.lhs_rank,
+                    rhs_rank: config.rhs_rank,
                 };
 
                 new_instructions.push(StableHloInstruction {
@@ -443,6 +447,7 @@ fn decompose_operand_transpose(
     input_slot: usize,
     batch_dims: &[usize],
     contracting_dims: &[usize],
+    rank: usize,
     is_lhs: bool,
     dtype: DType,
     mut n_slots: usize,
@@ -469,26 +474,6 @@ fn decompose_operand_transpose(
             n_slots,
         );
     }
-
-    // We need to figure out the rank from the dim indices. The rank is at least
-    // max(all referenced dims) + 1.
-    let max_dim = batch_dims
-        .iter()
-        .chain(contracting_dims.iter())
-        .copied()
-        .max()
-        .unwrap_or(0);
-    // We don't know the exact rank without shape info, but we can infer a
-    // lower bound. The actual rank may be higher (non-contracting dims beyond
-    // max_dim), but for correctness we need to know all dims. Since we don't
-    // have shape info, we can only build the permutation for known dims.
-    //
-    // For the single-contracting-dim case where we only have batch + 1
-    // contracting + some non-contracting dims, we'll compute the rank as
-    // max_dim + 1 (which works when rank == nb + num_non_contracting + 1).
-    //
-    // TODO: With proper shape tracking this would use the actual operand rank.
-    let rank = max_dim + 1;
 
     // Compute non-contracting dims.
     let mut is_batch_or_contracting = vec![false; rank];

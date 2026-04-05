@@ -10,6 +10,8 @@
 ///     rhs_contracting_dims: vec![0],
 ///     lhs_batch_dims: vec![],
 ///     rhs_batch_dims: vec![],
+///     lhs_rank: 2,
+///     rhs_rank: 2,
 /// };
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -18,6 +20,8 @@ pub struct DotGeneralConfig {
     pub rhs_contracting_dims: Vec<usize>,
     pub lhs_batch_dims: Vec<usize>,
     pub rhs_batch_dims: Vec<usize>,
+    pub lhs_rank: usize,
+    pub rhs_rank: usize,
 }
 
 /// Comparison direction.

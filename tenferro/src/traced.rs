@@ -215,14 +215,12 @@ impl TracedTensor {
         other: &TracedTensor,
         config: DotGeneralConfig,
     ) -> TracedTensor {
-        let lhs_rank = self.shape.len();
-        let rhs_rank = other.shape.len();
-        let lhs_free: Vec<usize> = (0..lhs_rank)
+        let lhs_free: Vec<usize> = (0..config.lhs_rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
             })
             .collect();
-        let rhs_free: Vec<usize> = (0..rhs_rank)
+        let rhs_free: Vec<usize> = (0..config.rhs_rank)
             .filter(|d| {
                 !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d)
             })

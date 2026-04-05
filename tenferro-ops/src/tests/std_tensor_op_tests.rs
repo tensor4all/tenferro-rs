@@ -23,6 +23,8 @@ fn test_std_tensor_op_input_output_counts() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
         })
         .n_inputs(),
         2
@@ -94,6 +96,8 @@ fn test_semiring_op_kind_counts() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
         })
         .n_inputs(),
         2
@@ -126,6 +130,8 @@ fn test_semiring_op_uses_algebra_marker_type() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
     });
 
     assert_eq!(add.n_inputs(), 2);
