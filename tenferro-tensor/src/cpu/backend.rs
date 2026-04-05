@@ -53,36 +53,36 @@ impl TensorBackend for CpuBackend {
         elementwise::conj(input)
     }
 
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
-        todo!("div")
+    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+        elementwise::div(lhs, rhs)
     }
 
-    fn abs(&mut self, _input: &Tensor) -> Tensor {
-        todo!("abs")
+    fn abs(&mut self, input: &Tensor) -> Tensor {
+        elementwise::abs(input)
     }
 
-    fn sign(&mut self, _input: &Tensor) -> Tensor {
-        todo!("sign")
+    fn sign(&mut self, input: &Tensor) -> Tensor {
+        elementwise::sign(input)
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
-        todo!("maximum")
+    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+        elementwise::maximum(lhs, rhs)
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
-        todo!("minimum")
+    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+        elementwise::minimum(lhs, rhs)
     }
 
-    fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Tensor {
-        todo!("compare")
+    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> Tensor {
+        elementwise::compare(lhs, rhs, dir)
     }
 
-    fn select(&mut self, _pred: &Tensor, _on_true: &Tensor, _on_false: &Tensor) -> Tensor {
-        todo!("select")
+    fn select(&mut self, pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> Tensor {
+        elementwise::select(pred, on_true, on_false)
     }
 
-    fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Tensor {
-        todo!("clamp")
+    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor {
+        elementwise::clamp(input, lower, upper)
     }
 
     fn exp(&mut self, input: &Tensor) -> Tensor {

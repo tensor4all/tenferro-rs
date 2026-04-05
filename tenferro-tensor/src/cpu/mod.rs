@@ -12,7 +12,9 @@ use strided_kernel::{col_major_strides, StridedArray, StridedView};
 use crate::{Buffer, TypedTensor};
 
 pub use backend::CpuBackend;
-pub use elementwise::{add, conj, mul, neg};
+pub use elementwise::{
+    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
+};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
 pub use structural::{broadcast_in_dim, embed_diagonal, extract_diagonal, reshape, transpose};
 

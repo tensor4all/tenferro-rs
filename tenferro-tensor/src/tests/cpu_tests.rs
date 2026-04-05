@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 
 use crate::backend::TensorBackend;
-use crate::config::DotGeneralConfig;
+use crate::config::{CompareDir, DotGeneralConfig};
 use crate::cpu::{
     add, broadcast_in_dim, conj, embed_diagonal, extract_diagonal, mul, neg, reduce_sum, reshape,
     transpose, CpuBackend,
@@ -332,4 +332,109 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
     let out = TensorBackend::add(&mut backend, &a, &b);
     assert_eq!(get_f64(&out, &[0]), 4.0);
     assert_eq!(get_f64(&out, &[1]), 6.0);
+}
+
+#[test]
+fn test_tier2_elementwise_ops_real() {
+    let lhs = Tensor::F64(TypedTensor::from_vec(vec![3], vec![8.0, -2.0, 9.0]));
+    let rhs = Tensor::F64(TypedTensor::from_vec(vec![3], vec![2.0, 5.0, 3.0]));
+    let pred = Tensor::F64(TypedTensor::from_vec(vec![3], vec![0.0, -1.0, 2.0]));
+    let on_true = Tensor::F64(TypedTensor::from_vec(vec![3], vec![10.0, 20.0, 30.0]));
+    let on_false = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let lower = Tensor::F64(TypedTensor::from_vec(vec![3], vec![-1.0, -1.0, 0.0]));
+    let upper = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 0.25, 4.0]));
+    let mut backend = CpuBackend::new();
+
+    let div = backend.div(&lhs, &rhs);
+    assert_eq!(get_f64(&div, &[0]), 4.0);
+    assert_eq!(get_f64(&div, &[1]), -0.4);
+    assert_eq!(get_f64(&div, &[2]), 3.0);
+
+    let abs = backend.abs(&lhs);
+    assert_eq!(get_f64(&abs, &[0]), 8.0);
+    assert_eq!(get_f64(&abs, &[1]), 2.0);
+    assert_eq!(get_f64(&abs, &[2]), 9.0);
+
+    let sign = backend.sign(&lhs);
+    assert_eq!(get_f64(&sign, &[0]), 1.0);
+    assert_eq!(get_f64(&sign, &[1]), -1.0);
+    assert_eq!(get_f64(&sign, &[2]), 1.0);
+
+    let maximum = backend.maximum(&lhs, &rhs);
+    assert_eq!(get_f64(&maximum, &[0]), 8.0);
+    assert_eq!(get_f64(&maximum, &[1]), 5.0);
+    assert_eq!(get_f64(&maximum, &[2]), 9.0);
+
+    let minimum = backend.minimum(&lhs, &rhs);
+    assert_eq!(get_f64(&minimum, &[0]), 2.0);
+    assert_eq!(get_f64(&minimum, &[1]), -2.0);
+    assert_eq!(get_f64(&minimum, &[2]), 3.0);
+
+    let eq = backend.compare(&lhs, &rhs, &CompareDir::Eq);
+    assert_eq!(get_f64(&eq, &[0]), 0.0);
+    assert_eq!(get_f64(&eq, &[1]), 0.0);
+    assert_eq!(get_f64(&eq, &[2]), 0.0);
+
+    let lt = backend.compare(&lhs, &rhs, &CompareDir::Lt);
+    assert_eq!(get_f64(&lt, &[0]), 0.0);
+    assert_eq!(get_f64(&lt, &[1]), 1.0);
+    assert_eq!(get_f64(&lt, &[2]), 0.0);
+
+    let le = backend.compare(&lhs, &rhs, &CompareDir::Le);
+    assert_eq!(get_f64(&le, &[0]), 0.0);
+    assert_eq!(get_f64(&le, &[1]), 1.0);
+    assert_eq!(get_f64(&le, &[2]), 0.0);
+
+    let gt = backend.compare(&lhs, &rhs, &CompareDir::Gt);
+    assert_eq!(get_f64(&gt, &[0]), 1.0);
+    assert_eq!(get_f64(&gt, &[1]), 0.0);
+    assert_eq!(get_f64(&gt, &[2]), 1.0);
+
+    let ge = backend.compare(&lhs, &rhs, &CompareDir::Ge);
+    assert_eq!(get_f64(&ge, &[0]), 1.0);
+    assert_eq!(get_f64(&ge, &[1]), 0.0);
+    assert_eq!(get_f64(&ge, &[2]), 1.0);
+
+    let select = backend.select(&pred, &on_true, &on_false);
+    assert_eq!(get_f64(&select, &[0]), 1.0);
+    assert_eq!(get_f64(&select, &[1]), 20.0);
+    assert_eq!(get_f64(&select, &[2]), 30.0);
+
+    let clamp = backend.clamp(&lhs, &lower, &upper);
+    assert_eq!(get_f64(&clamp, &[0]), 1.0);
+    assert_eq!(get_f64(&clamp, &[1]), -1.0);
+    assert_eq!(get_f64(&clamp, &[2]), 4.0);
+}
+
+#[test]
+fn test_tier2_elementwise_ops_complex() {
+    let input = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)],
+    ));
+    let lhs = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, 0.0)],
+    ));
+    let rhs = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 2.0)],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let abs = backend.abs(&input);
+    assert_c64_close(get_c64(&abs, &[0]), Complex64::new(5.0, 0.0));
+    assert_c64_close(get_c64(&abs, &[1]), Complex64::new(0.0, 0.0));
+
+    let sign = backend.sign(&input);
+    assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
+    assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
+
+    let maximum = backend.maximum(&lhs, &rhs);
+    assert_c64_close(get_c64(&maximum, &[0]), Complex64::new(3.0, 4.0));
+    assert_c64_close(get_c64(&maximum, &[1]), Complex64::new(0.0, 2.0));
+
+    let minimum = backend.minimum(&lhs, &rhs);
+    assert_c64_close(get_c64(&minimum, &[0]), Complex64::new(1.0, 0.0));
+    assert_c64_close(get_c64(&minimum, &[1]), Complex64::new(1.0, 0.0));
 }

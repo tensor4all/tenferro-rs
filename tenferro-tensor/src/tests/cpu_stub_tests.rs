@@ -1,115 +1,49 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::backend::TensorBackend;
-use crate::config::{CompareDir, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use crate::cpu::CpuBackend;
-use crate::types::{Tensor, TypedTensor};
+use crate::{Tensor, TypedTensor};
 
-fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+fn dummy() -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]))
 }
 
-fn assert_panics(label: &str, f: impl FnOnce()) {
-    let result = catch_unwind(AssertUnwindSafe(f));
-    assert!(result.is_err(), "{label} should panic until implemented");
+fn dummy2() -> (Tensor, Tensor) {
+    (dummy(), dummy())
 }
 
-#[test]
-fn cpu_backend_remaining_unimplemented_elementwise_and_reduction_ops_panic_explicitly() {
-    let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let b = f64_tensor(vec![2], vec![3.0, 4.0]);
-
-    assert_panics("div", || {
-        let _ = backend.div(&a, &b);
-    });
-    assert_panics("abs", || {
-        let _ = backend.abs(&a);
-    });
-    assert_panics("sign", || {
-        let _ = backend.sign(&a);
-    });
-    assert_panics("maximum", || {
-        let _ = backend.maximum(&a, &b);
-    });
-    assert_panics("minimum", || {
-        let _ = backend.minimum(&a, &b);
-    });
-    assert_panics("compare", || {
-        let _ = backend.compare(&a, &b, &CompareDir::Eq);
-    });
-    assert_panics("select", || {
-        let _ = backend.select(&a, &b, &a);
-    });
-    assert_panics("clamp", || {
-        let _ = backend.clamp(&a, &b, &a);
-    });
-    assert_panics("reduce_prod", || {
-        let _ = backend.reduce_prod(&a, &[0]);
-    });
-    assert_panics("reduce_max", || {
-        let _ = backend.reduce_max(&a, &[0]);
-    });
-    assert_panics("reduce_min", || {
-        let _ = backend.reduce_min(&a, &[0]);
-    });
-}
-
-#[test]
-fn cpu_backend_unimplemented_indexing_and_linalg_ops_panic_explicitly() {
-    let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2], vec![1.0, 2.0]);
-    let b = f64_tensor(vec![2], vec![3.0, 4.0]);
-
-    assert_panics("gather", || {
-        let _ = backend.gather(&a, &GatherConfig {});
-    });
-    assert_panics("scatter", || {
-        let _ = backend.scatter(&a, &b, &ScatterConfig {});
-    });
-    assert_panics("slice", || {
-        let _ = backend.slice(
-            &a,
-            &SliceConfig {
-                starts: vec![0],
-                limits: vec![1],
-                strides: vec![1],
-            },
+macro_rules! assert_panics {
+    ($name:expr, $body:expr) => {
+        let result = catch_unwind(AssertUnwindSafe($body));
+        assert!(
+            result.is_err(),
+            "{} should panic (not yet implemented)",
+            $name
         );
-    });
-    assert_panics("dynamic_slice", || {
-        let _ = backend.dynamic_slice(&a, &b);
-    });
-    assert_panics("pad", || {
-        let _ = backend.pad(&a, &PadConfig {});
-    });
-    assert_panics("concatenate", || {
-        let _ = backend.concatenate(&[&a, &b], 0);
-    });
-    assert_panics("reverse", || {
-        let _ = backend.reverse(&a, &[0]);
-    });
-    assert_panics("cholesky", || {
-        let _ = backend.cholesky(&a);
-    });
-    assert_panics("svd", || {
-        let _ = backend.svd(&a);
-    });
-    assert_panics("qr", || {
-        let _ = backend.qr(&a);
-    });
-    assert_panics("eigh", || {
-        let _ = backend.eigh(&a);
-    });
-    assert_panics("solve", || {
-        let _ = backend.solve(&a, &b);
-    });
+    };
 }
 
-#[cfg(feature = "cpu-faer")]
 #[test]
-fn cpu_faer_linalg_stub_panics_explicitly() {
-    assert_panics("faer_linalg::unavailable", || {
-        crate::cpu::linalg::faer_linalg::unavailable();
+fn cpu_backend_unimplemented_indexing_ops_panic_explicitly() {
+    let mut b = CpuBackend::new();
+    let d = dummy();
+    let (d1, d2) = dummy2();
+
+    assert_panics!("gather", || b.gather(&d, &GatherConfig {}));
+    assert_panics!("scatter", || b.scatter(&d1, &d2, &ScatterConfig {}));
+    assert_panics!("slice", || {
+        b.slice(
+            &d,
+            &SliceConfig {
+                starts: vec![],
+                limits: vec![],
+                strides: vec![],
+            },
+        )
     });
+    assert_panics!("dynamic_slice", || b.dynamic_slice(&d1, &d2));
+    assert_panics!("pad", || b.pad(&d, &PadConfig {}));
+    assert_panics!("concatenate", || b.concatenate(&[&d], 0));
+    assert_panics!("reverse", || b.reverse(&d, &[0]));
 }
