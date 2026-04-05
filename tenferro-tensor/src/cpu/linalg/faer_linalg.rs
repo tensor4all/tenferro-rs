@@ -62,6 +62,204 @@ fn vec_from_diag<T: Copy>(diag: DiagRef<'_, T>) -> Vec<T> {
     data
 }
 
+fn split_core_and_batch<'a, T>(
+    input: &'a TypedTensor<T>,
+    core_rank: usize,
+    op: &str,
+) -> (&'a [usize], &'a [usize]) {
+    assert!(
+        input.shape.len() >= core_rank,
+        "{op}: expected rank >= {core_rank}"
+    );
+    input.shape.split_at(core_rank)
+}
+
+fn batched_single<T, F>(input: &TypedTensor<T>, core_rank: usize, op: F) -> TypedTensor<T>
+where
+    T: Clone,
+    F: Fn(&TypedTensor<T>) -> TypedTensor<T>,
+{
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_single");
+    if batch_shape.is_empty() {
+        return op(input);
+    }
+
+    let slice_size: usize = core_shape.iter().product();
+    let batch_count: usize = batch_shape.iter().product();
+    assert!(
+        batch_count > 0,
+        "batched_single: zero-sized batch dims are unsupported"
+    );
+
+    let mut out_core_shape: Option<Vec<usize>> = None;
+    let mut out_data = Vec::new();
+
+    for batch_idx in 0..batch_count {
+        let start = batch_idx * slice_size;
+        let end = start + slice_size;
+        let batch_input = tensor_from_vec_with_template(
+            core_shape.to_vec(),
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let batch_output = op(&batch_input);
+
+        if let Some(expected_shape) = &out_core_shape {
+            assert_eq!(
+                batch_output.shape.as_slice(),
+                expected_shape.as_slice(),
+                "batched_single: output core shape mismatch across batches"
+            );
+        } else {
+            out_data.reserve(batch_output.n_elements() * batch_count);
+            out_core_shape = Some(batch_output.shape.clone());
+        }
+
+        out_data.extend_from_slice(batch_output.host_data());
+    }
+
+    let mut out_shape = out_core_shape.expect("batched_single: missing output shape");
+    out_shape.extend_from_slice(batch_shape);
+    tensor_from_vec_with_template(out_shape, out_data, input)
+}
+
+fn batched_multi<T, F>(input: &TypedTensor<T>, core_rank: usize, op: F) -> Vec<TypedTensor<T>>
+where
+    T: Clone,
+    F: Fn(&TypedTensor<T>) -> Vec<TypedTensor<T>>,
+{
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
+    if batch_shape.is_empty() {
+        return op(input);
+    }
+
+    let slice_size: usize = core_shape.iter().product();
+    let batch_count: usize = batch_shape.iter().product();
+    assert!(
+        batch_count > 0,
+        "batched_multi: zero-sized batch dims are unsupported"
+    );
+
+    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
+    let mut out_data: Vec<Vec<T>> = Vec::new();
+
+    for batch_idx in 0..batch_count {
+        let start = batch_idx * slice_size;
+        let end = start + slice_size;
+        let batch_input = tensor_from_vec_with_template(
+            core_shape.to_vec(),
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let batch_outputs = op(&batch_input);
+
+        if out_shapes.is_empty() {
+            out_shapes = batch_outputs
+                .iter()
+                .map(|tensor| tensor.shape.clone())
+                .collect();
+            out_data = batch_outputs
+                .iter()
+                .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
+                .collect();
+        } else {
+            assert_eq!(
+                batch_outputs.len(),
+                out_shapes.len(),
+                "batched_multi: output count mismatch across batches"
+            );
+        }
+
+        for (idx, batch_output) in batch_outputs.iter().enumerate() {
+            assert_eq!(
+                batch_output.shape.as_slice(),
+                out_shapes[idx].as_slice(),
+                "batched_multi: output core shape mismatch across batches"
+            );
+            out_data[idx].extend_from_slice(batch_output.host_data());
+        }
+    }
+
+    out_shapes
+        .into_iter()
+        .zip(out_data)
+        .map(|(mut out_shape, out_data)| {
+            out_shape.extend_from_slice(batch_shape);
+            tensor_from_vec_with_template(out_shape, out_data, input)
+        })
+        .collect()
+}
+
+fn batched_binary<T, F>(
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    core_rank_a: usize,
+    core_rank_b: usize,
+    op: F,
+) -> TypedTensor<T>
+where
+    T: Clone,
+    F: Fn(&TypedTensor<T>, &TypedTensor<T>) -> TypedTensor<T>,
+{
+    let (a_core_shape, a_batch_shape) = split_core_and_batch(a, core_rank_a, "batched_binary");
+    let (b_core_shape, b_batch_shape) = split_core_and_batch(b, core_rank_b, "batched_binary");
+    assert_eq!(
+        a_batch_shape, b_batch_shape,
+        "batched_binary: batch shape mismatch"
+    );
+
+    if a_batch_shape.is_empty() {
+        return op(a, b);
+    }
+
+    let a_slice_size: usize = a_core_shape.iter().product();
+    let b_slice_size: usize = b_core_shape.iter().product();
+    let batch_count: usize = a_batch_shape.iter().product();
+    assert!(
+        batch_count > 0,
+        "batched_binary: zero-sized batch dims are unsupported"
+    );
+
+    let mut out_core_shape: Option<Vec<usize>> = None;
+    let mut out_data = Vec::new();
+
+    for batch_idx in 0..batch_count {
+        let a_start = batch_idx * a_slice_size;
+        let a_end = a_start + a_slice_size;
+        let b_start = batch_idx * b_slice_size;
+        let b_end = b_start + b_slice_size;
+
+        let batch_a = tensor_from_vec_with_template(
+            a_core_shape.to_vec(),
+            a.host_data()[a_start..a_end].to_vec(),
+            a,
+        );
+        let batch_b = tensor_from_vec_with_template(
+            b_core_shape.to_vec(),
+            b.host_data()[b_start..b_end].to_vec(),
+            b,
+        );
+        let batch_output = op(&batch_a, &batch_b);
+
+        if let Some(expected_shape) = &out_core_shape {
+            assert_eq!(
+                batch_output.shape.as_slice(),
+                expected_shape.as_slice(),
+                "batched_binary: output core shape mismatch across batches"
+            );
+        } else {
+            out_data.reserve(batch_output.n_elements() * batch_count);
+            out_core_shape = Some(batch_output.shape.clone());
+        }
+
+        out_data.extend_from_slice(batch_output.host_data());
+    }
+
+    let mut out_shape = out_core_shape.expect("batched_binary: missing output shape");
+    out_shape.extend_from_slice(a_batch_shape);
+    tensor_from_vec_with_template(out_shape, out_data, b)
+}
+
 impl FaerLinalg for f64 {
     fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
         let n = square_matrix_dim(input, "cholesky");
@@ -144,21 +342,21 @@ impl FaerLinalg for f64 {
 }
 
 pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> {
-    T::cholesky_2d(input)
+    batched_single(input, 2, T::cholesky_2d)
 }
 
 pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    T::svd_2d(input)
+    batched_multi(input, 2, T::svd_2d)
 }
 
 pub(crate) fn qr<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    T::qr_2d(input)
+    batched_multi(input, 2, T::qr_2d)
 }
 
 pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    T::eigh_2d(input)
+    batched_multi(input, 2, T::eigh_2d)
 }
 
 pub(crate) fn solve<T: FaerLinalg>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> TypedTensor<T> {
-    T::solve_2d(a, b)
+    batched_binary(a, b, 2, 2, T::solve_2d)
 }
