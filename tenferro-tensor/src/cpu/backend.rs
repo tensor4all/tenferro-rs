@@ -213,6 +213,37 @@ impl TensorBackend for CpuBackend {
         }
     }
 
+    fn triangular_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Tensor {
+        match (a, b) {
+            (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(linalg::triangular_solve(
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => Tensor::C64(linalg::triangular_solve(
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )),
+            _ => todo!("triangular_solve: unsupported dtype"),
+        }
+    }
+
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor> {
         match input {
             Tensor::F64(t) => linalg::svd(t).into_iter().map(Tensor::F64).collect(),

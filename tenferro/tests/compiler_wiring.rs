@@ -9,8 +9,8 @@ fn make_program(instructions: Vec<Instruction<StdTensorOp>>) -> CompiledProgram<
     CompiledProgram {
         instructions,
         input_slots: vec![0, 1, 2],
-        output_slots: vec![3, 4, 5, 6, 7, 8],
-        n_slots: 9,
+        output_slots: vec![3, 4, 5, 6, 7, 8, 9],
+        n_slots: 10,
     }
 }
 
@@ -44,6 +44,16 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(StdTensorOp::Slice(slice.clone()), vec![0], vec![6]),
         make_instr(StdTensorOp::Reverse { axes: vec![0] }, vec![1], vec![7]),
         make_instr(StdTensorOp::Concatenate { axis: 0 }, vec![0, 1], vec![8]),
+        make_instr(
+            StdTensorOp::TriangularSolve {
+                left_side: true,
+                lower: true,
+                transpose_a: false,
+                unit_diagonal: false,
+            },
+            vec![0, 1],
+            vec![9],
+        ),
     ]);
 
     let stablehlo = lower_to_stablehlo(&program);
@@ -71,6 +81,15 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         stablehlo.instructions[5].op,
         StableHloOp::Concatenate { axis: 0 }
     ));
+    assert!(matches!(
+        stablehlo.instructions[6].op,
+        StableHloOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        }
+    ));
 
     let exec = compile_to_exec(&stablehlo);
     assert!(matches!(
@@ -96,5 +115,14 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
     assert!(matches!(
         exec.instructions[5].op,
         ExecOp::Concatenate { axis: 0 }
+    ));
+    assert!(matches!(
+        exec.instructions[6].op,
+        ExecOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        }
     ));
 }

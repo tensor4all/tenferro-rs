@@ -160,6 +160,26 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(StdTensorOp::Eigh.n_outputs(), 2);
     assert_eq!(StdTensorOp::Solve.n_inputs(), 2);
     assert_eq!(StdTensorOp::Solve.n_outputs(), 1);
+    assert_eq!(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        }
+        .n_inputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        }
+        .n_outputs(),
+        1
+    );
 }
 
 #[test]

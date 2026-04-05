@@ -936,6 +936,27 @@ fn test_batched_solve() {
 }
 
 #[test]
+fn test_triangular_solve_lower() {
+    let l_data = vec![2.0, 1.0, -0.5, 0.0, 3.0, 1.25, 0.0, 0.0, 1.5];
+    let b_data = vec![1.0, -2.0, 0.5];
+    let l = Tensor::F64(TypedTensor::from_vec(vec![3, 3], l_data.clone()));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![3, 1], b_data.clone()));
+
+    let mut backend = CpuBackend::new();
+    let x = backend.triangular_solve(&l, &b, true, true, false, false);
+
+    assert_eq!(x.shape(), &[3, 1]);
+    let x_data = match &x {
+        Tensor::F64(inner) => inner.host_data(),
+        _ => panic!("expected f64 tensor"),
+    };
+    let recon = matmul_f64(&l_data, x_data, 3, 3, 1);
+    for (actual, expected) in recon.iter().zip(b_data.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+#[test]
 fn test_batched_complex_solve() {
     let l0 = vec![
         Complex64::new(2.0, 0.0),

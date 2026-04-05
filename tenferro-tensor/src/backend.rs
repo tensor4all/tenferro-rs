@@ -90,6 +90,15 @@ pub trait TensorBackend {
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
 
     fn cholesky(&mut self, input: &Tensor) -> Tensor;
+    fn triangular_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Tensor;
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn qr(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn eigh(&mut self, input: &Tensor) -> Vec<Tensor>;

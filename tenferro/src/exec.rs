@@ -10,13 +10,28 @@ use tenferro_tensor::{
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
-    Permute { perm: Vec<usize> },
-    Reshape { shape: Vec<usize> },
-    BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    Permute {
+        perm: Vec<usize>,
+    },
+    Reshape {
+        shape: Vec<usize>,
+    },
+    BroadcastInDim {
+        shape: Vec<usize>,
+        dims: Vec<usize>,
+    },
     BatchedGemm(DotGeneralConfig),
-    ReduceSum { axes: Vec<usize> },
-    ExtractDiag { axis_a: usize, axis_b: usize },
-    EmbedDiag { axis_a: usize, axis_b: usize },
+    ReduceSum {
+        axes: Vec<usize>,
+    },
+    ExtractDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
+    EmbedDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
     Add,
     Multiply,
     Negate,
@@ -42,15 +57,35 @@ pub enum ExecOp {
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
-    DynamicSlice { slice_sizes: Vec<usize> },
+    DynamicSlice {
+        slice_sizes: Vec<usize>,
+    },
     Pad(PadConfig),
-    Concatenate { axis: usize },
-    Reverse { axes: Vec<usize> },
-    ReduceProd { axes: Vec<usize> },
-    ReduceMax { axes: Vec<usize> },
-    ReduceMin { axes: Vec<usize> },
+    Concatenate {
+        axis: usize,
+    },
+    Reverse {
+        axes: Vec<usize>,
+    },
+    ReduceProd {
+        axes: Vec<usize>,
+    },
+    ReduceMax {
+        axes: Vec<usize>,
+    },
+    ReduceMin {
+        axes: Vec<usize>,
+    },
     Cholesky,
-    CustomCall { target: String },
+    TriangularSolve {
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    },
+    CustomCall {
+        target: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -194,6 +229,19 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 backend.reduce_min(get(&slots, &inst.input_slots, 0), axes)
             }
             ExecOp::Cholesky => backend.cholesky(get(&slots, &inst.input_slots, 0)),
+            ExecOp::TriangularSolve {
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            } => backend.triangular_solve(
+                get(&slots, &inst.input_slots, 0),
+                get(&slots, &inst.input_slots, 1),
+                *left_side,
+                *lower,
+                *transpose_a,
+                *unit_diagonal,
+            ),
             ExecOp::CustomCall { target } => {
                 let results: Vec<Tensor> = match target.as_str() {
                     "svd" => backend.svd(get(&slots, &inst.input_slots, 0)),

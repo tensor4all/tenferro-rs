@@ -1,11 +1,19 @@
 use faer::linalg::solvers::Solve;
-use faer::{diag::DiagRef, MatRef, Side};
+use faer::{diag::DiagRef, MatMut, MatRef, Par, Side};
 use num_complex::Complex64;
 
 use crate::{Buffer, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone {
     fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self>;
+    fn triangular_solve_2d(
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> TypedTensor<Self>;
     fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
@@ -76,6 +84,19 @@ fn complex64_to_faer_slice(data: &[Complex64]) -> &[faer::c64] {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<faer::c64>(), data.len()) }
 }
 
+fn complex64_to_faer_slice_mut(data: &mut [Complex64]) -> &mut [faer::c64] {
+    debug_assert_eq!(
+        std::mem::size_of::<Complex64>(),
+        std::mem::size_of::<faer::c64>()
+    );
+    debug_assert_eq!(
+        std::mem::align_of::<Complex64>(),
+        std::mem::align_of::<faer::c64>()
+    );
+
+    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<faer::c64>(), data.len()) }
+}
+
 fn complex_vec_from_real_diag(diag: DiagRef<'_, faer::c64>) -> Vec<Complex64> {
     let col = diag.column_vector();
     let mut data = Vec::with_capacity(col.nrows());
@@ -95,6 +116,16 @@ fn split_core_and_batch<'a, T>(
         "{op}: expected rank >= {core_rank}"
     );
     input.shape.split_at(core_rank)
+}
+
+fn transpose_col_major_data<T: Copy>(data: &[T], rows: usize, cols: usize) -> Vec<T> {
+    let mut transposed = Vec::with_capacity(data.len());
+    for j in 0..rows {
+        for i in 0..cols {
+            transposed.push(data[j + i * rows]);
+        }
+    }
+    transposed
 }
 
 fn batched_single<T, F>(input: &TypedTensor<T>, core_rank: usize, op: F) -> TypedTensor<T>
@@ -294,6 +325,149 @@ impl FaerLinalg for f64 {
         tensor_from_mat(chol.L(), vec![n, n], input)
     }
 
+    fn triangular_solve_2d(
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> TypedTensor<Self> {
+        let n = square_matrix_dim(a, "triangular_solve");
+        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+        let a_mat = MatRef::from_column_major_slice(a.host_data(), n, n);
+
+        if left_side {
+            assert_eq!(b_rows, n, "triangular_solve: rhs row count mismatch");
+            let mut rhs_data = b.host_data().to_vec();
+            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
+            match (transpose_a, lower, unit_diagonal) {
+                (false, true, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+            }
+            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b)
+        } else {
+            assert_eq!(b_cols, n, "triangular_solve: rhs column count mismatch");
+            let nrhs = b_rows;
+            let mut rhs_transposed = transpose_col_major_data(b.host_data(), nrhs, n);
+            let rhs = MatMut::from_column_major_slice_mut(&mut rhs_transposed, n, nrhs);
+            match (transpose_a, lower, unit_diagonal) {
+                (false, true, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+            }
+            let result = transpose_col_major_data(&rhs_transposed, n, nrhs);
+            tensor_from_vec_with_template(vec![nrhs, n], result, b)
+        }
+    }
+
     fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
@@ -375,6 +549,157 @@ impl FaerLinalg for Complex64 {
         tensor_from_mat(chol.L(), vec![n, n], input)
     }
 
+    fn triangular_solve_2d(
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> TypedTensor<Self> {
+        let n = square_matrix_dim(a, "triangular_solve");
+        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+        let a_mat = MatRef::from_column_major_slice(complex64_to_faer_slice(a.host_data()), n, n);
+
+        if left_side {
+            assert_eq!(b_rows, n, "triangular_solve: rhs row count mismatch");
+            let mut rhs_data = b.host_data().to_vec();
+            let rhs = MatMut::from_column_major_slice_mut(
+                complex64_to_faer_slice_mut(&mut rhs_data),
+                n,
+                b_cols,
+            );
+            match (transpose_a, lower, unit_diagonal) {
+                (false, true, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+            }
+            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b)
+        } else {
+            assert_eq!(b_cols, n, "triangular_solve: rhs column count mismatch");
+            let nrhs = b_rows;
+            let mut rhs_transposed = transpose_col_major_data(b.host_data(), nrhs, n);
+            let rhs = MatMut::from_column_major_slice_mut(
+                complex64_to_faer_slice_mut(&mut rhs_transposed),
+                n,
+                nrhs,
+            );
+            match (transpose_a, lower, unit_diagonal) {
+                (false, true, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (false, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat.transpose(),
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, false) => {
+                    faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, true, true) => {
+                    faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, false) => {
+                    faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+                (true, false, true) => {
+                    faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
+                        a_mat,
+                        rhs,
+                        Par::Seq,
+                    );
+                }
+            }
+            let result = transpose_col_major_data(&rhs_transposed, n, nrhs);
+            tensor_from_vec_with_template(vec![nrhs, n], result, b)
+        }
+    }
+
     fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
@@ -452,6 +777,19 @@ impl FaerLinalg for Complex64 {
 
 pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> {
     batched_single(input, 2, T::cholesky_2d)
+}
+
+pub(crate) fn triangular_solve<T: FaerLinalg>(
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> TypedTensor<T> {
+    batched_binary(a, b, 2, 2, |a, b| {
+        T::triangular_solve_2d(a, b, left_side, lower, transpose_a, unit_diagonal)
+    })
 }
 
 pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {

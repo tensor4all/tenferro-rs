@@ -65,7 +65,6 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Pow => StableHloOp::Pow,
                 StdTensorOp::Expm1 => StableHloOp::Expm1,
                 StdTensorOp::Log1p => StableHloOp::Log1p,
-                StdTensorOp::Slice(config) => StableHloOp::Slice(config.clone()),
                 StdTensorOp::Concatenate { axis } => StableHloOp::Concatenate { axis: *axis },
                 StdTensorOp::Gather(config) => StableHloOp::Gather(config.clone()),
                 StdTensorOp::Scatter(config) => StableHloOp::Scatter(config.clone()),
@@ -76,6 +75,17 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Pad(config) => StableHloOp::Pad(config.clone()),
                 StdTensorOp::Reverse { axes } => StableHloOp::Reverse { axes: axes.clone() },
                 StdTensorOp::Cholesky => StableHloOp::Cholesky,
+                StdTensorOp::TriangularSolve {
+                    left_side,
+                    lower,
+                    transpose_a,
+                    unit_diagonal,
+                } => StableHloOp::TriangularSolve {
+                    left_side: *left_side,
+                    lower: *lower,
+                    transpose_a: *transpose_a,
+                    unit_diagonal: *unit_diagonal,
+                },
                 StdTensorOp::Svd => StableHloOp::CustomCall {
                     target: "svd".to_string(),
                 },
@@ -88,7 +98,6 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Solve => StableHloOp::CustomCall {
                     target: "solve".to_string(),
                 },
-                _ => todo!("lower_to_stablehlo: unsupported op {:?}", instr.op),
             };
             StableHloInstruction {
                 op,
@@ -210,7 +219,6 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Pow => ExecOp::Pow,
                 StableHloOp::Expm1 => ExecOp::Expm1,
                 StableHloOp::Log1p => ExecOp::Log1p,
-                StableHloOp::Slice(config) => ExecOp::Slice(config.clone()),
                 StableHloOp::Concatenate { axis } => ExecOp::Concatenate { axis: *axis },
                 StableHloOp::Gather(config) => ExecOp::Gather(config.clone()),
                 StableHloOp::Scatter(config) => ExecOp::Scatter(config.clone()),
@@ -221,10 +229,23 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Pad(config) => ExecOp::Pad(config.clone()),
                 StableHloOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },
                 StableHloOp::Cholesky => ExecOp::Cholesky,
+                StableHloOp::TriangularSolve {
+                    left_side,
+                    lower,
+                    transpose_a,
+                    unit_diagonal,
+                } => ExecOp::TriangularSolve {
+                    left_side: *left_side,
+                    lower: *lower,
+                    transpose_a: *transpose_a,
+                    unit_diagonal: *unit_diagonal,
+                },
                 StableHloOp::CustomCall { target } => ExecOp::CustomCall {
                     target: target.clone(),
                 },
-                _ => todo!("compile_to_exec: unsupported op {:?}", instr.op),
+                StableHloOp::GetTupleElement { .. } | StableHloOp::Constant => {
+                    todo!("compile_to_exec: unsupported op {:?}", instr.op)
+                }
             };
 
             let last_use = compute_last_use(

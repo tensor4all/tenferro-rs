@@ -174,6 +174,17 @@ macro_rules! impl_stub_backend {
             fn cholesky(&mut self, _input: &Tensor) -> Tensor {
                 todo!(concat!($label, " cholesky"))
             }
+            fn triangular_solve(
+                &mut self,
+                _a: &Tensor,
+                _b: &Tensor,
+                _left_side: bool,
+                _lower: bool,
+                _transpose_a: bool,
+                _unit_diagonal: bool,
+            ) -> Tensor {
+                todo!(concat!($label, " triangular_solve"))
+            }
             fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
                 todo!(concat!($label, " svd"))
             }

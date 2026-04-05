@@ -97,6 +97,12 @@ pub enum StdTensorOp {
     Qr,
     Eigh,
     Solve,
+    TriangularSolve {
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    },
 }
 
 impl GraphOp for StdTensorOp {
@@ -140,7 +146,7 @@ impl GraphOp for StdTensorOp {
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
             Self::Cholesky | Self::Svd | Self::Qr | Self::Eigh => 1,
-            Self::Solve => 2,
+            Self::Solve | Self::TriangularSolve { .. } => 2,
             _ => todo!("n_inputs not yet implemented for {:?}", self),
         }
     }
@@ -182,7 +188,7 @@ impl GraphOp for StdTensorOp {
             | Self::DynamicSlice { .. }
             | Self::Pad(_)
             | Self::Reverse { .. } => 1,
-            Self::Cholesky | Self::Solve => 1,
+            Self::Cholesky | Self::Solve | Self::TriangularSolve { .. } => 1,
             Self::Svd => 3,  // U, S, Vt
             Self::Qr => 2,   // Q, R
             Self::Eigh => 2, // eigenvalues, eigenvectors

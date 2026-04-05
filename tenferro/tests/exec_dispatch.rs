@@ -212,6 +212,17 @@ impl TensorBackend for FakeTensorBackend {
     fn cholesky(&mut self, _input: &Tensor) -> Tensor {
         self.result("cholesky", 40.0)
     }
+    fn triangular_solve(
+        &mut self,
+        _a: &Tensor,
+        _b: &Tensor,
+        _left_side: bool,
+        _lower: bool,
+        _transpose_a: bool,
+        _unit_diagonal: bool,
+    ) -> Tensor {
+        self.result("triangular_solve", 40.5)
+    }
     fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
         self.calls.push("svd");
         vec![scalar_tensor(41.0), scalar_tensor(41.5)]
@@ -324,6 +335,17 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::ReduceMax { axes: vec![0] }, 1, "reduce_max", 30.0),
         (ExecOp::ReduceMin { axes: vec![0] }, 1, "reduce_min", 31.0),
         (ExecOp::Cholesky, 1, "cholesky", 40.0),
+        (
+            ExecOp::TriangularSolve {
+                left_side: true,
+                lower: true,
+                transpose_a: false,
+                unit_diagonal: false,
+            },
+            2,
+            "triangular_solve",
+            40.5,
+        ),
         (
             ExecOp::CustomCall {
                 target: "solve".into(),
