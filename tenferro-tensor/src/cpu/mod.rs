@@ -15,6 +15,7 @@ pub use backend::CpuBackend;
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
 };
+pub use indexing::{dynamic_slice, gather, pad, scatter};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
 pub use structural::{broadcast_in_dim, embed_diagonal, extract_diagonal, reshape, transpose};
 

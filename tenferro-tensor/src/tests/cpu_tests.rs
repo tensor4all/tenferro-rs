@@ -1,10 +1,12 @@
 use num_complex::Complex64;
 
 use crate::backend::TensorBackend;
-use crate::config::{CompareDir, DotGeneralConfig, SliceConfig};
+use crate::config::{
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+};
 use crate::cpu::{
-    add, broadcast_in_dim, conj, embed_diagonal, extract_diagonal, mul, neg, reduce_max,
-    reduce_min, reduce_prod, reduce_sum, reshape, transpose, CpuBackend,
+    add, broadcast_in_dim, conj, dynamic_slice, embed_diagonal, extract_diagonal, gather, mul, neg,
+    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scatter, transpose, CpuBackend,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -180,6 +182,25 @@ fn batch_vector_c64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec
         out[i] = get_c64(t, &[i, batch_idx]);
     }
     out
+}
+
+fn simple_gather_config() -> GatherConfig {
+    GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    }
+}
+
+fn diagonal_scatter_config() -> ScatterConfig {
+    ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0, 1],
+        scatter_dims_to_operand_dims: vec![0, 1],
+        index_vector_dim: 1,
+    }
 }
 
 #[test]
@@ -1003,4 +1024,86 @@ fn test_complex_svd() {
     for (actual, expected) in recon.iter().zip(input_data.iter()) {
         assert_c64_close_tol(*actual, *expected, 1.0e-9);
     }
+}
+
+#[test]
+fn test_gather_1d_indices() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![3, 1], vec![0.0, 2.0, 4.0]));
+
+    let out = gather(&operand, &start_indices, &simple_gather_config());
+
+    assert_eq!(out.shape(), &[3]);
+    assert_eq!(get_f64(&out, &[0]), 10.0);
+    assert_eq!(get_f64(&out, &[1]), 30.0);
+    assert_eq!(get_f64(&out, &[2]), 50.0);
+}
+
+#[test]
+fn test_scatter_to_diagonal() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
+    let scatter_indices = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 2],
+        vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+    ));
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+
+    let out = scatter(
+        &operand,
+        &scatter_indices,
+        &updates,
+        &diagonal_scatter_config(),
+    );
+
+    assert_eq!(out.shape(), &[3, 3]);
+    assert_eq!(get_f64(&out, &[0, 0]), 5.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 6.0);
+    assert_eq!(get_f64(&out, &[2, 2]), 7.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 0.0);
+    assert_eq!(get_f64(&out, &[0, 2]), 0.0);
+}
+
+#[test]
+fn test_pad_adds_zero_edges() {
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let config = PadConfig {
+        edge_padding_low: vec![1, 1],
+        edge_padding_high: vec![1, 1],
+        interior_padding: vec![0, 0],
+    };
+
+    let out = pad(&input, &config);
+
+    assert_eq!(out.shape(), &[4, 5]);
+    assert_eq!(get_f64(&out, &[1, 1]), 1.0);
+    assert_eq!(get_f64(&out, &[2, 1]), 2.0);
+    assert_eq!(get_f64(&out, &[1, 2]), 3.0);
+    assert_eq!(get_f64(&out, &[2, 3]), 6.0);
+    assert_eq!(get_f64(&out, &[0, 0]), 0.0);
+    assert_eq!(get_f64(&out, &[3, 4]), 0.0);
+}
+
+#[test]
+fn test_dynamic_slice_clamps_starts() {
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![4, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+        ],
+    ));
+    let starts = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 3.0]));
+
+    let out = dynamic_slice(&input, &starts, &[2, 2]);
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(get_f64(&out, &[0, 0]), 11.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 12.0);
+    assert_eq!(get_f64(&out, &[0, 1]), 15.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 16.0);
 }

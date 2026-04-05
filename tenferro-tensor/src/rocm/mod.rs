@@ -134,12 +134,18 @@ macro_rules! impl_stub_backend {
             ) -> Tensor {
                 todo!(concat!($label, " dot_general"))
             }
-            fn gather(&mut self, _input: &Tensor, _config: &GatherConfig) -> Tensor {
+            fn gather(
+                &mut self,
+                _operand: &Tensor,
+                _start_indices: &Tensor,
+                _config: &GatherConfig,
+            ) -> Tensor {
                 todo!(concat!($label, " gather"))
             }
             fn scatter(
                 &mut self,
-                _input: &Tensor,
+                _operand: &Tensor,
+                _scatter_indices: &Tensor,
                 _updates: &Tensor,
                 _config: &ScatterConfig,
             ) -> Tensor {
@@ -148,7 +154,12 @@ macro_rules! impl_stub_backend {
             fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> Tensor {
                 todo!(concat!($label, " slice"))
             }
-            fn dynamic_slice(&mut self, _input: &Tensor, _starts: &Tensor) -> Tensor {
+            fn dynamic_slice(
+                &mut self,
+                _input: &Tensor,
+                _starts: &Tensor,
+                _slice_sizes: &[usize],
+            ) -> Tensor {
                 todo!(concat!($label, " dynamic_slice"))
             }
             fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> Tensor {

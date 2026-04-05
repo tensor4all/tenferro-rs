@@ -7,7 +7,7 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::GraphOp;
 use tenferro_algebra::Standard;
-use tenferro_tensor::{CompareDir, DotGeneralConfig};
+use tenferro_tensor::{CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig};
 
 use crate::input_key::TensorInputKey;
 
@@ -53,6 +53,43 @@ fn test_std_tensor_op_input_output_counts() {
         .n_inputs(),
         1
     );
+    assert_eq!(
+        StdTensorOp::Gather(GatherConfig {
+            offset_dims: vec![],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 1,
+            slice_sizes: vec![1],
+        })
+        .n_inputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::Scatter(ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        })
+        .n_inputs(),
+        3
+    );
+    assert_eq!(
+        StdTensorOp::DynamicSlice {
+            slice_sizes: vec![1]
+        }
+        .n_inputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![0],
+        })
+        .n_inputs(),
+        1
+    );
 
     assert_eq!(StdTensorOp::Add.n_outputs(), 1);
     assert_eq!(StdTensorOp::Neg.n_outputs(), 1);
@@ -72,12 +109,43 @@ fn test_std_tensor_op_input_output_counts() {
         .n_outputs(),
         1
     );
-}
-
-#[test]
-#[should_panic(expected = "n_inputs not yet implemented")]
-fn test_std_tensor_op_unimplemented_indexing_arity_panics() {
-    let _ = StdTensorOp::DynamicSlice.n_inputs();
+    assert_eq!(
+        StdTensorOp::Gather(GatherConfig {
+            offset_dims: vec![],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 1,
+            slice_sizes: vec![1],
+        })
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Scatter(ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        })
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::DynamicSlice {
+            slice_sizes: vec![1]
+        }
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![0],
+        })
+        .n_outputs(),
+        1
+    );
 }
 
 #[test]

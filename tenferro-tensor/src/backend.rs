@@ -74,10 +74,17 @@ pub trait TensorBackend {
 
     fn dot_general(&mut self, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor;
 
-    fn gather(&mut self, input: &Tensor, config: &GatherConfig) -> Tensor;
-    fn scatter(&mut self, input: &Tensor, updates: &Tensor, config: &ScatterConfig) -> Tensor;
+    fn gather(&mut self, operand: &Tensor, start_indices: &Tensor, config: &GatherConfig)
+        -> Tensor;
+    fn scatter(
+        &mut self,
+        operand: &Tensor,
+        scatter_indices: &Tensor,
+        updates: &Tensor,
+        config: &ScatterConfig,
+    ) -> Tensor;
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> Tensor;
-    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor) -> Tensor;
+    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor;
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> Tensor;
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> Tensor;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;

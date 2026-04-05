@@ -42,7 +42,7 @@ pub enum ExecOp {
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
-    DynamicSlice,
+    DynamicSlice { slice_sizes: Vec<usize> },
     Pad(PadConfig),
     Concatenate { axis: usize },
     Reverse { axes: Vec<usize> },
@@ -157,16 +157,22 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ),
             ExecOp::Expm1 => backend.expm1(get(&slots, &inst.input_slots, 0)),
             ExecOp::Log1p => backend.log1p(get(&slots, &inst.input_slots, 0)),
-            ExecOp::Gather(config) => backend.gather(get(&slots, &inst.input_slots, 0), config),
-            ExecOp::Scatter(config) => backend.scatter(
+            ExecOp::Gather(config) => backend.gather(
                 get(&slots, &inst.input_slots, 0),
                 get(&slots, &inst.input_slots, 1),
                 config,
             ),
-            ExecOp::Slice(config) => backend.slice(get(&slots, &inst.input_slots, 0), config),
-            ExecOp::DynamicSlice => backend.dynamic_slice(
+            ExecOp::Scatter(config) => backend.scatter(
                 get(&slots, &inst.input_slots, 0),
                 get(&slots, &inst.input_slots, 1),
+                get(&slots, &inst.input_slots, 2),
+                config,
+            ),
+            ExecOp::Slice(config) => backend.slice(get(&slots, &inst.input_slots, 0), config),
+            ExecOp::DynamicSlice { slice_sizes } => backend.dynamic_slice(
+                get(&slots, &inst.input_slots, 0),
+                get(&slots, &inst.input_slots, 1),
+                slice_sizes,
             ),
             ExecOp::Pad(config) => backend.pad(get(&slots, &inst.input_slots, 0), config),
             ExecOp::Concatenate { axis } => {

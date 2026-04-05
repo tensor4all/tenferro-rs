@@ -69,7 +69,9 @@ pub enum StdTensorOp {
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
-    DynamicSlice,
+    DynamicSlice {
+        slice_sizes: Vec<usize>,
+    },
     Pad(PadConfig),
     Concatenate {
         axis: usize,
@@ -104,7 +106,7 @@ impl GraphOp for StdTensorOp {
 
     fn n_inputs(&self) -> usize {
         match self {
-            Self::Add | Self::Mul | Self::DotGeneral(_) => 2,
+            Self::Add | Self::Mul | Self::DotGeneral(_) | Self::Gather(_) => 2,
             Self::Neg
             | Self::Conj
             | Self::Transpose { .. }
@@ -112,8 +114,18 @@ impl GraphOp for StdTensorOp {
             | Self::BroadcastInDim { .. }
             | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
-            | Self::EmbedDiag { .. } => 1,
-            Self::Div | Self::Maximum | Self::Minimum | Self::Pow => 2,
+            | Self::EmbedDiag { .. }
+            | Self::Slice(_)
+            | Self::Pad(_)
+            | Self::Reverse { .. } => 1,
+            Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
+            Self::Scatter(_) => 3,
+            Self::Concatenate { .. } => {
+                todo!(
+                    "n_inputs not yet implemented for variable-arity op {:?}",
+                    self
+                )
+            }
             Self::Abs
             | Self::Sign
             | Self::Exp
@@ -145,11 +157,21 @@ impl GraphOp for StdTensorOp {
             | Self::BroadcastInDim { .. }
             | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
-            | Self::EmbedDiag { .. } => 1,
+            | Self::EmbedDiag { .. }
+            | Self::Gather(_)
+            | Self::Scatter(_)
+            | Self::Slice(_)
+            | Self::DynamicSlice { .. }
+            | Self::Pad(_)
+            | Self::Reverse { .. } => 1,
             Self::Cholesky | Self::Solve => 1,
             Self::Svd => 3,  // U, S, Vt
             Self::Qr => 2,   // Q, R
             Self::Eigh => 2, // eigenvalues, eigenvectors
+            Self::Concatenate { .. } => todo!(
+                "n_outputs not yet implemented for variable-arity op {:?}",
+                self
+            ),
             _ => todo!("n_outputs not yet implemented for {:?}", self),
         }
     }

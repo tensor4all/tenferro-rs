@@ -165,20 +165,31 @@ impl TensorBackend for CpuBackend {
         dispatch_binary!(lhs, rhs, |a, b| gemm::dot_general(a, b, config))
     }
 
-    fn gather(&mut self, input: &Tensor, config: &GatherConfig) -> Tensor {
-        indexing::gather(input, config)
+    fn gather(
+        &mut self,
+        operand: &Tensor,
+        start_indices: &Tensor,
+        config: &GatherConfig,
+    ) -> Tensor {
+        indexing::gather(operand, start_indices, config)
     }
 
-    fn scatter(&mut self, input: &Tensor, updates: &Tensor, config: &ScatterConfig) -> Tensor {
-        indexing::scatter(input, updates, config)
+    fn scatter(
+        &mut self,
+        operand: &Tensor,
+        scatter_indices: &Tensor,
+        updates: &Tensor,
+        config: &ScatterConfig,
+    ) -> Tensor {
+        indexing::scatter(operand, scatter_indices, updates, config)
     }
 
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> Tensor {
         indexing::slice(input, config)
     }
 
-    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor) -> Tensor {
-        indexing::dynamic_slice(input, starts)
+    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor {
+        indexing::dynamic_slice(input, starts, slice_sizes)
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> Tensor {

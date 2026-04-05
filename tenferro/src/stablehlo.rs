@@ -40,7 +40,7 @@ pub enum StableHloOp {
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
-    DynamicSlice,
+    DynamicSlice { slice_sizes: Vec<usize> },
     Pad(PadConfig),
     Concatenate { axis: usize },
     Reverse { axes: Vec<usize> },

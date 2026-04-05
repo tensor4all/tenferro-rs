@@ -172,16 +172,32 @@ impl TensorBackend for FakeTensorBackend {
     fn dot_general(&mut self, _lhs: &Tensor, _rhs: &Tensor, _config: &DotGeneralConfig) -> Tensor {
         self.result("dot_general", 32.0)
     }
-    fn gather(&mut self, _input: &Tensor, _config: &GatherConfig) -> Tensor {
+    fn gather(
+        &mut self,
+        _operand: &Tensor,
+        _start_indices: &Tensor,
+        _config: &GatherConfig,
+    ) -> Tensor {
         self.result("gather", 33.0)
     }
-    fn scatter(&mut self, _input: &Tensor, _updates: &Tensor, _config: &ScatterConfig) -> Tensor {
+    fn scatter(
+        &mut self,
+        _operand: &Tensor,
+        _scatter_indices: &Tensor,
+        _updates: &Tensor,
+        _config: &ScatterConfig,
+    ) -> Tensor {
         self.result("scatter", 34.0)
     }
     fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> Tensor {
         self.result("slice", 35.0)
     }
-    fn dynamic_slice(&mut self, _input: &Tensor, _starts: &Tensor) -> Tensor {
+    fn dynamic_slice(
+        &mut self,
+        _input: &Tensor,
+        _starts: &Tensor,
+        _slice_sizes: &[usize],
+    ) -> Tensor {
         self.result("dynamic_slice", 36.0)
     }
     fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> Tensor {
@@ -281,8 +297,8 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Pow, 2, "pow", 20.0),
         (ExecOp::Expm1, 1, "expm1", 21.0),
         (ExecOp::Log1p, 1, "log1p", 22.0),
-        (ExecOp::Gather(gather_config()), 1, "gather", 33.0),
-        (ExecOp::Scatter(scatter_config()), 2, "scatter", 34.0),
+        (ExecOp::Gather(gather_config()), 2, "gather", 33.0),
+        (ExecOp::Scatter(scatter_config()), 3, "scatter", 34.0),
         (
             ExecOp::Slice(SliceConfig {
                 starts: vec![0],
@@ -293,7 +309,14 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "slice",
             35.0,
         ),
-        (ExecOp::DynamicSlice, 2, "dynamic_slice", 36.0),
+        (
+            ExecOp::DynamicSlice {
+                slice_sizes: vec![1],
+            },
+            2,
+            "dynamic_slice",
+            36.0,
+        ),
         (ExecOp::Pad(pad_config()), 1, "pad", 37.0),
         (ExecOp::Concatenate { axis: 0 }, 2, "concatenate", 38.0),
         (ExecOp::Reverse { axes: vec![0] }, 1, "reverse", 39.0),
