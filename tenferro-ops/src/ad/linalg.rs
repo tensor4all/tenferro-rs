@@ -104,11 +104,28 @@ pub fn linearize_svd(
     let safe_gap = fixed_add(builder, ValRef::Local(s_gap_sq), ValRef::Local(eps_sq));
     let f = fixed_div(builder, ValRef::Local(s_gap), ValRef::Local(safe_gap));
 
-    // TODO: add the complex dUdV diagonal correction and rectangular JAX correction terms.
+    let s_ones = one_like_fixed(builder, s.clone());
+    let s_sq = fixed_mul(builder, s.clone(), s.clone());
+    let s_eps_sq = fixed_scale(
+        builder,
+        ValRef::Local(s_ones),
+        F_MATRIX_EPS * F_MATRIX_EPS,
+    );
+    let safe_s_sq = fixed_add(builder, ValRef::Local(s_sq), ValRef::Local(s_eps_sq));
+    let s_inv = fixed_div(builder, s.clone(), ValRef::Local(safe_s_sq));
+    let s_inv_mat = embed_diag_fixed(builder, ValRef::Local(s_inv));
+
+    let ds_h = adjoint_2d_linear(builder, ds_mat);
+    let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
+    // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
+    let d_udv_diag = hadamard_fixed_linear(builder, ValRef::Local(s_inv_mat), anti_hermitian);
+    let d_udv_diag = linear_unary(builder, StdTensorOp::Scale { factor: 0.5 }, d_udv_diag);
+
     let dss = hadamard_fixed_linear(builder, ValRef::Local(s_col), ds_mat);
     let dss_h = adjoint_2d_linear(builder, dss);
     let du_inner_sum = linear_add(builder, dss, dss_h);
     let du_inner = hadamard_fixed_linear(builder, ValRef::Local(f), du_inner_sum);
+    let du_inner = linear_add(builder, du_inner, d_udv_diag);
     let du = matmul_linear(builder, u, ValRef::Local(du_inner), vec![false, true]);
 
     let sds = hadamard_fixed_linear(builder, ValRef::Local(s_row), ds_mat);
@@ -122,6 +139,11 @@ pub fn linearize_svd(
         vec![false, true],
     );
     let dvt = adjoint_2d_linear(builder, dv);
+
+    // TODO: add JAX's rectangular projection corrections once runtime matrix
+    // dimensions are available in this graph-level rule:
+    // dU += (dA V - U (U^H dA V)) / s
+    // dV += (dA^H U - V (V^H dA^H U)) / s
 
     vec![Some(du), Some(ds), Some(dvt)]
 }
