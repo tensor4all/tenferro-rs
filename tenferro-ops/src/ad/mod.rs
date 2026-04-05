@@ -2,6 +2,7 @@ mod analytic;
 mod contraction;
 mod diagonal;
 mod elementwise_tier2;
+mod linalg;
 mod semiring;
 mod structural;
 
@@ -56,6 +57,8 @@ pub fn linearize(
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::linearize_embed_diag(builder, tangent_in, *axis_a, *axis_b)
         }
+        StdTensorOp::Svd => linalg::linearize_svd(builder, primal_out, tangent_in),
+        StdTensorOp::Eigh => linalg::linearize_eigh(builder, primal_out, tangent_in),
         _ => todo!("linearize not implemented for {:?}", op),
     }
 }

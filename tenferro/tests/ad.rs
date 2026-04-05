@@ -1,9 +1,22 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use computegraph::compile::compile;
+use computegraph::fragment::{Fragment, FragmentBuilder};
+use computegraph::materialize::materialize_merge;
+use computegraph::resolve::resolve;
+use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use num_complex::Complex64;
+use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
+use tenferro::exec::eval_exec_ir;
 use tenferro::traced::TracedTensor;
+use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tidu::{differentiate, transpose};
 
 const TOL: f64 = 1e-6;
 
@@ -83,6 +96,133 @@ fn matmul_config() -> DotGeneralConfig {
         lhs_rank: 2,
         rhs_rank: 2,
     }
+}
+
+fn tensor_input_key(id: u64) -> TensorInputKey {
+    TensorInputKey::User { id }
+}
+
+fn eval_fragment_outputs(
+    roots: Vec<Arc<Fragment<StdTensorOp>>>,
+    outputs: &[GlobalValKey<StdTensorOp>],
+    inputs_map: &HashMap<TensorInputKey, Tensor>,
+) -> Vec<Tensor> {
+    let view = resolve(roots);
+    let graph = materialize_merge(&view, outputs);
+    let compiled = compile(&graph);
+    let stablehlo = lower_to_stablehlo(&compiled);
+    let exec = compile_to_exec(&stablehlo);
+    let inputs = graph
+        .inputs
+        .iter()
+        .map(|key| match key {
+            GlobalValKey::Input(k) => inputs_map.get(k).expect("missing tensor input").clone(),
+            _ => panic!("expected input key"),
+        })
+        .collect();
+    let mut backend = CpuBackend::new();
+    eval_exec_ir(&mut backend, &exec, inputs)
+}
+
+fn scalar_f64_tensor(value: f64) -> Tensor {
+    f64_tensor(vec![], vec![value])
+}
+
+fn build_svd_values_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(10_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0],
+            input_shape: vec![2],
+        },
+        vec![ValRef::Local(svd[1])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
+fn build_eigh_values_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(20_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0],
+            input_shape: vec![2],
+        },
+        vec![ValRef::Local(eigh[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
+fn grad_from_fragment(
+    fragment: Arc<Fragment<StdTensorOp>>,
+    loss_key: GlobalValKey<StdTensorOp>,
+    input_key: TensorInputKey,
+    input: Tensor,
+) -> Tensor {
+    let view = resolve(vec![fragment.clone()]);
+    let linear = differentiate(
+        &view,
+        std::slice::from_ref(&loss_key),
+        std::slice::from_ref(&input_key),
+        0,
+    );
+    let transposed = transpose(&linear);
+    let linear_fragment = Arc::new(linear.fragment);
+    let grad_key = transposed.tangent_outputs[0]
+        .map(|id| transposed.fragment.vals()[id].key.clone())
+        .expect("expected active gradient output");
+    let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key
+    {
+        GlobalValKey::Input(key) => key.clone(),
+        _ => panic!("expected cotangent input"),
+    };
+    let transposed_fragment = Arc::new(transposed.fragment);
+
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key, input);
+    inputs_map.insert(cotangent_input_key, scalar_f64_tensor(1.0));
+
+    eval_fragment_outputs(
+        vec![fragment, linear_fragment, transposed_fragment.clone()],
+        &[grad_key],
+        &inputs_map,
+    )
+    .into_iter()
+    .next()
+    .expect("gradient output")
+}
+
+fn sum_svd_values(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::svd(&mut backend, &input);
+    get_f64_data(&outputs[1]).iter().sum()
+}
+
+fn sum_eigh_values(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::eigh(&mut backend, &input);
+    get_f64_data(&outputs[0]).iter().sum()
 }
 
 fn assert_close_slice(actual: &[f64], expected: &[f64]) {
@@ -792,4 +932,48 @@ fn grad_log1p() {
         eval_scalar(x.traced_log1p().traced_reduce_sum(&[0]))
     };
     assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_svd_values_matches_finite_diff() {
+    let a_data = vec![3.0, -1.0, 0.5, 2.0];
+    let (fragment, input_key, loss_key) = build_svd_values_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected = finite_diff_scalar(sum_svd_values, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-5,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_eigh_values_matches_finite_diff() {
+    let a_data = vec![4.0, 1.0, 1.0, 2.0];
+    let (fragment, input_key, loss_key) = build_eigh_values_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected = finite_diff_scalar(sum_eigh_values, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-6,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
 }
