@@ -1,10 +1,13 @@
-use crate::semiring_op::SemiringOp;
+use crate::semiring_op::{SemiringInputKey, SemiringOp};
 use crate::semiring_op_kind::SemiringOpKind;
 use crate::semiring_ops::SemiringOps;
 use crate::std_tensor_op::StdTensorOp;
+use chainrules_core::PrimitiveOp;
+use computegraph::fragment::FragmentBuilder;
+use computegraph::types::OpMode;
 use computegraph::GraphOp;
 use tenferro_algebra::Standard;
-use tenferro_tensor::DotGeneralConfig;
+use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
 #[test]
 fn test_std_tensor_op_input_output_counts() {
@@ -42,6 +45,14 @@ fn test_std_tensor_op_input_output_counts() {
 
     assert_eq!(StdTensorOp::Add.n_outputs(), 1);
     assert_eq!(StdTensorOp::Neg.n_outputs(), 1);
+    assert_eq!(StdTensorOp::Compare(CompareDir::Eq).n_inputs(), 2);
+    assert_eq!(StdTensorOp::Select.n_inputs(), 3);
+    assert_eq!(StdTensorOp::Clamp.n_inputs(), 3);
+    assert_eq!(StdTensorOp::Div.n_inputs(), 2);
+    assert_eq!(StdTensorOp::Pow.n_inputs(), 2);
+    assert_eq!(StdTensorOp::Abs.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
     assert_eq!(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -50,6 +61,18 @@ fn test_std_tensor_op_input_output_counts() {
         .n_outputs(),
         1
     );
+}
+
+#[test]
+#[should_panic(expected = "n_inputs not yet implemented")]
+fn test_std_tensor_op_unimplemented_indexing_arity_panics() {
+    let _ = StdTensorOp::DynamicSlice.n_inputs();
+}
+
+#[test]
+#[should_panic(expected = "n_outputs not yet implemented")]
+fn test_std_tensor_op_unimplemented_linalg_outputs_panics() {
+    let _ = StdTensorOp::Svd.n_outputs();
 }
 
 #[test]
@@ -100,4 +123,90 @@ fn test_semiring_op_uses_algebra_marker_type() {
     assert_eq!(add.n_outputs(), 1);
     assert_eq!(gemm.n_inputs(), 2);
     assert_eq!(gemm.n_outputs(), 1);
+}
+
+#[test]
+fn test_semiring_op_clone_eq_hash_depend_only_on_kind() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let lhs = SemiringOp::<Standard<f64>>::transpose_op(vec![1, 0]);
+    let rhs = lhs.clone();
+
+    let mut lhs_hasher = DefaultHasher::new();
+    lhs.hash(&mut lhs_hasher);
+    let mut rhs_hasher = DefaultHasher::new();
+    rhs.hash(&mut rhs_hasher);
+
+    assert_eq!(lhs, rhs);
+    assert_eq!(lhs_hasher.finish(), rhs_hasher.finish());
+    assert_eq!(
+        format!("{lhs:?}"),
+        "SemiringOp { kind: Transpose { perm: [1, 0] } }"
+    );
+}
+
+#[test]
+fn test_semiring_input_key_clone_eq_and_hash_are_stable() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let lhs = SemiringInputKey { id: 11 };
+    let rhs = lhs.clone();
+
+    let mut lhs_hasher = DefaultHasher::new();
+    lhs.hash(&mut lhs_hasher);
+    let mut rhs_hasher = DefaultHasher::new();
+    rhs.hash(&mut rhs_hasher);
+
+    assert_eq!(lhs, rhs);
+    assert_eq!(lhs_hasher.finish(), rhs_hasher.finish());
+    assert!(format!("{lhs:?}").contains("SemiringInputKey"));
+}
+
+#[test]
+fn test_semiring_op_constructors_cover_all_supported_kinds() {
+    assert_eq!(
+        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2]).kind,
+        SemiringOpKind::ReduceSum { axes: vec![0, 2] }
+    );
+    assert_eq!(
+        SemiringOp::<Standard<f64>>::reshape(vec![2, 3]).kind,
+        SemiringOpKind::Reshape { shape: vec![2, 3] }
+    );
+    assert_eq!(
+        SemiringOp::<Standard<f64>>::broadcast_in_dim(vec![2, 3], vec![0]).kind,
+        SemiringOpKind::BroadcastInDim {
+            shape: vec![2, 3],
+            dims: vec![0]
+        }
+    );
+    assert_eq!(
+        SemiringOp::<Standard<f64>>::extract_diag(0, 1).kind,
+        SemiringOpKind::ExtractDiag {
+            axis_a: 0,
+            axis_b: 1
+        }
+    );
+    assert_eq!(
+        SemiringOp::<Standard<f64>>::embed_diag(0, 1).kind,
+        SemiringOpKind::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1
+        }
+    );
+}
+
+#[test]
+#[should_panic]
+fn test_std_tensor_op_linearize_is_explicitly_unimplemented() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let _ = StdTensorOp::add().linearize(&mut builder, &[], &[], &[]);
+}
+
+#[test]
+#[should_panic]
+fn test_std_tensor_op_transpose_rule_is_explicitly_unimplemented() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let _ = StdTensorOp::add().transpose_rule(&mut builder, &[], &[], &OpMode::Primal);
 }

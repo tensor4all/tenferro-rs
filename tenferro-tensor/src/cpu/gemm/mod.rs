@@ -298,3 +298,6 @@ where
         placement: lhs.placement.clone(),
     })
 }
+
+#[cfg(test)]
+mod tests;
