@@ -27,9 +27,9 @@ thiserror = "2"
 criterion = "0.5"
 serde = "1"
 serde_json = "1"
-chainrules-core = { path = "../chainrules-rs", package = "chainrules" }
-chainrules = { path = "../chainrules-rs" }
-tidu = { path = "../tidu-rs" }
+chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "ed7eeed", package = "chainrules" }
+chainrules = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "ed7eeed" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "b86715e" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }
@@ -47,13 +47,4 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = { path = "../computegraph-rs" }
-
-[patch."https://github.com/tensor4all/computegraph-rs.git"]
-computegraph = { path = "../computegraph-rs" }
-
-[patch."https://github.com/tensor4all/chainrules-rs"]
-chainrules = { path = "../chainrules-rs" }
-
-[patch."https://github.com/tensor4all/chainrules-rs.git"]
-chainrules = { path = "../chainrules-rs" }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "b361eac" }
