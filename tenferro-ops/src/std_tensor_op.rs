@@ -17,12 +17,17 @@ pub enum StdTensorOp {
     Neg,
     Conj,
     DotGeneral(DotGeneralConfig),
-    Transpose { perm: Vec<usize> },
+    Transpose {
+        perm: Vec<usize>,
+    },
     Reshape {
         from_shape: Vec<usize>,
         to_shape: Vec<usize>,
     },
-    BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> },
+    BroadcastInDim {
+        shape: Vec<usize>,
+        dims: Vec<usize>,
+    },
     ReduceSum {
         axes: Vec<usize>,
         input_shape: Vec<usize>,
@@ -51,8 +56,14 @@ pub enum StdTensorOp {
     Log1p,
 
     // Tier 1: diagonal extraction / embedding (AD-closed pair)
-    ExtractDiag { axis_a: usize, axis_b: usize },
-    EmbedDiag { axis_a: usize, axis_b: usize },
+    ExtractDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
+    EmbedDiag {
+        axis_a: usize,
+        axis_b: usize,
+    },
 
     // Tier 2: indexing
     Gather(GatherConfig),
@@ -60,13 +71,23 @@ pub enum StdTensorOp {
     Slice(SliceConfig),
     DynamicSlice,
     Pad(PadConfig),
-    Concatenate { axis: usize },
-    Reverse { axes: Vec<usize> },
+    Concatenate {
+        axis: usize,
+    },
+    Reverse {
+        axes: Vec<usize>,
+    },
 
     // Tier 2: reductions
-    ReduceProd { axes: Vec<usize> },
-    ReduceMax { axes: Vec<usize> },
-    ReduceMin { axes: Vec<usize> },
+    ReduceProd {
+        axes: Vec<usize>,
+    },
+    ReduceMax {
+        axes: Vec<usize>,
+    },
+    ReduceMin {
+        axes: Vec<usize>,
+    },
 
     // Linalg
     Cholesky,

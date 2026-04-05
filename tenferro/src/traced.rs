@@ -8,10 +8,10 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
-use tidu::{differentiate, transpose};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tidu::{differentiate, transpose};
 
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
 use super::engine::Engine;
@@ -362,10 +362,7 @@ fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
     }
 }
 
-fn linear_input_key(
-    fragment: &Fragment<StdTensorOp>,
-    local_id: LocalValId,
-) -> TensorInputKey {
+fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
     match &fragment.vals()[local_id].key {
         GlobalValKey::Input(key) => key.clone(),
         other => panic!("expected linear fragment input, got {:?}", other),

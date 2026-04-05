@@ -24,8 +24,8 @@
 //! let tree = ContractionTree::optimize(&subs, &[&[2, 3], &[3, 4]]).unwrap();
 //!
 //! let mut builder = FragmentBuilder::<StdTensorOp>::new();
-//! let a = builder.add_input(TensorInputKey { id: 0 });
-//! let b = builder.add_input(TensorInputKey { id: 1 });
+//! let a = builder.add_input(TensorInputKey::User { id: 0 });
+//! let b = builder.add_input(TensorInputKey::User { id: 1 });
 //!
 //! let result = build_einsum_fragment(
 //!     &mut builder,

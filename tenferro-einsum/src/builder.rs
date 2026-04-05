@@ -388,24 +388,23 @@ fn outer_product<Op: GraphOp + SemiringOps>(
 
     // Helper: reshape scalar [1] → [] before broadcast, since broadcast_in_dim
     // requires dims.len() == tensor.rank() and scalars have no label dims.
-    let prepare_scalar = |builder: &mut FragmentBuilder<Op>,
-                          lv: &LabeledVal<Op>|
-     -> LabeledVal<Op> {
-        if lv.labels.is_empty() && lv.shape == [1] {
-            let outputs = builder.add_op(
-                Op::reshape(lv.shape.clone(), vec![]),
-                vec![lv.val.clone()],
-                OpMode::Primal,
-            );
-            LabeledVal {
-                val: ValRef::Local(outputs[0]),
-                labels: vec![],
-                shape: vec![],
+    let prepare_scalar =
+        |builder: &mut FragmentBuilder<Op>, lv: &LabeledVal<Op>| -> LabeledVal<Op> {
+            if lv.labels.is_empty() && lv.shape == [1] {
+                let outputs = builder.add_op(
+                    Op::reshape(lv.shape.clone(), vec![]),
+                    vec![lv.val.clone()],
+                    OpMode::Primal,
+                );
+                LabeledVal {
+                    val: ValRef::Local(outputs[0]),
+                    labels: vec![],
+                    shape: vec![],
+                }
+            } else {
+                lv.clone()
             }
-        } else {
-            lv.clone()
-        }
-    };
+        };
 
     let lhs = prepare_scalar(builder, lhs);
     let rhs = prepare_scalar(builder, rhs);

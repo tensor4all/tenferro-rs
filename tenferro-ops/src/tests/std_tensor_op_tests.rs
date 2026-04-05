@@ -236,7 +236,8 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
         ValRef::External(GlobalValKey::Input(TensorInputKey::User { id: 11 })),
     ];
 
-    let result = StdTensorOp::add().transpose_rule(&mut builder, &[Some(ct)], &inputs, &OpMode::Primal);
+    let result =
+        StdTensorOp::add().transpose_rule(&mut builder, &[Some(ct)], &inputs, &OpMode::Primal);
 
     assert_eq!(result, vec![Some(ct), Some(ct)]);
     let fragment = builder.build();

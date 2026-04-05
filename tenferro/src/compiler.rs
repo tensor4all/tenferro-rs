@@ -27,7 +27,9 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     shape: shape.clone(),
                     dims: dims.clone(),
                 },
-                StdTensorOp::ReduceSum { axes, .. } => StableHloOp::ReduceSum { axes: axes.clone() },
+                StdTensorOp::ReduceSum { axes, .. } => {
+                    StableHloOp::ReduceSum { axes: axes.clone() }
+                }
                 StdTensorOp::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,

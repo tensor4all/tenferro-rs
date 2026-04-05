@@ -7,12 +7,7 @@ use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-6;
 
-fn finite_diff_scalar(
-    f: impl Fn(&[f64]) -> f64,
-    x: &[f64],
-    idx: usize,
-    h: f64,
-) -> f64 {
+fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], idx: usize, h: f64) -> f64 {
     let mut xp = x.to_vec();
     let mut xm = x.to_vec();
     xp[idx] += h;

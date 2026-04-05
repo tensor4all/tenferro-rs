@@ -9,7 +9,7 @@ use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
 
 fn input_key(id: u64) -> TensorInputKey {
-    TensorInputKey { id }
+    TensorInputKey::User { id }
 }
 
 fn make_tree(notation: &str, shapes: &[&[usize]]) -> ContractionTree {
