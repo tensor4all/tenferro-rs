@@ -156,6 +156,24 @@ impl GraphOp for StdTensorOp {
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
             | Self::ReduceSum { .. }
+            | Self::Div
+            | Self::Abs
+            | Self::Sign
+            | Self::Maximum
+            | Self::Minimum
+            | Self::Compare(_)
+            | Self::Select
+            | Self::Clamp
+            | Self::Exp
+            | Self::Log
+            | Self::Sin
+            | Self::Cos
+            | Self::Tanh
+            | Self::Sqrt
+            | Self::Rsqrt
+            | Self::Pow
+            | Self::Expm1
+            | Self::Log1p
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
             | Self::Gather(_)

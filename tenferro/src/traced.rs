@@ -203,12 +203,64 @@ impl TracedTensor {
         apply_binary(StdTensorOp::Mul, self, other, self.shape.clone())
     }
 
+    pub fn traced_div(&self, other: &TracedTensor) -> TracedTensor {
+        apply_binary(StdTensorOp::Div, self, other, self.shape.clone())
+    }
+
     pub fn traced_neg(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Neg, self, self.shape.clone())
     }
 
     pub fn traced_conj(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Conj, self, self.shape.clone())
+    }
+
+    pub fn traced_abs(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Abs, self, self.shape.clone())
+    }
+
+    pub fn traced_sign(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Sign, self, self.shape.clone())
+    }
+
+    pub fn traced_exp(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Exp, self, self.shape.clone())
+    }
+
+    pub fn traced_log(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Log, self, self.shape.clone())
+    }
+
+    pub fn traced_sin(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Sin, self, self.shape.clone())
+    }
+
+    pub fn traced_cos(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Cos, self, self.shape.clone())
+    }
+
+    pub fn traced_tanh(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Tanh, self, self.shape.clone())
+    }
+
+    pub fn traced_sqrt(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Sqrt, self, self.shape.clone())
+    }
+
+    pub fn traced_rsqrt(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Rsqrt, self, self.shape.clone())
+    }
+
+    pub fn traced_pow(&self, other: &TracedTensor) -> TracedTensor {
+        apply_binary(StdTensorOp::Pow, self, other, self.shape.clone())
+    }
+
+    pub fn traced_expm1(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Expm1, self, self.shape.clone())
+    }
+
+    pub fn traced_log1p(&self) -> TracedTensor {
+        apply_unary(StdTensorOp::Log1p, self, self.shape.clone())
     }
 
     pub fn traced_dot_general(

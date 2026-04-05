@@ -1,5 +1,7 @@
+mod analytic;
 mod contraction;
 mod diagonal;
+mod elementwise_tier2;
 mod semiring;
 mod structural;
 
@@ -12,7 +14,7 @@ pub fn linearize(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
-    _primal_out: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match op {
@@ -20,6 +22,21 @@ pub fn linearize(
         StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
         StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
         StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+        StdTensorOp::Div => {
+            elementwise_tier2::linearize_div(builder, primal_in, primal_out, tangent_in)
+        }
+        StdTensorOp::Abs => elementwise_tier2::linearize_abs(builder, primal_in, tangent_in),
+        StdTensorOp::Sign => elementwise_tier2::linearize_sign(builder, tangent_in),
+        StdTensorOp::Exp => analytic::linearize_exp(builder, primal_out, tangent_in),
+        StdTensorOp::Log => analytic::linearize_log(builder, primal_in, tangent_in),
+        StdTensorOp::Sin => analytic::linearize_sin(builder, primal_in, tangent_in),
+        StdTensorOp::Cos => analytic::linearize_cos(builder, primal_in, tangent_in),
+        StdTensorOp::Tanh => analytic::linearize_tanh(builder, primal_out, tangent_in),
+        StdTensorOp::Sqrt => analytic::linearize_sqrt(builder, primal_out, tangent_in),
+        StdTensorOp::Rsqrt => analytic::linearize_rsqrt(builder, primal_in, primal_out, tangent_in),
+        StdTensorOp::Pow => analytic::linearize_pow(builder, primal_in, primal_out, tangent_in),
+        StdTensorOp::Expm1 => analytic::linearize_expm1(builder, primal_out, tangent_in),
+        StdTensorOp::Log1p => analytic::linearize_log1p(builder, primal_in, tangent_in),
         StdTensorOp::DotGeneral(config) => {
             contraction::linearize_dot_general(builder, primal_in, tangent_in, config)
         }
@@ -55,6 +72,19 @@ pub fn transpose_rule(
         StdTensorOp::Mul => semiring::transpose_mul(builder, cotangent_out, inputs, mode),
         StdTensorOp::Neg => semiring::transpose_neg(builder, cotangent_out),
         StdTensorOp::Conj => semiring::transpose_conj(builder, cotangent_out),
+        StdTensorOp::Div => elementwise_tier2::transpose_div(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Sign => elementwise_tier2::transpose_sign(builder, cotangent_out, mode),
+        StdTensorOp::Exp => analytic::transpose_exp(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Log => analytic::transpose_log(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Sin => analytic::transpose_sin(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Cos => analytic::transpose_cos(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Tanh => analytic::transpose_tanh(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Sqrt => analytic::transpose_sqrt(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Rsqrt => analytic::transpose_rsqrt(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Pow => analytic::transpose_pow(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Expm1 => analytic::transpose_expm1(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Log1p => analytic::transpose_log1p(builder, cotangent_out, inputs, mode),
         StdTensorOp::DotGeneral(config) => {
             contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config)
         }

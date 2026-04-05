@@ -15,6 +15,34 @@ fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], idx: usize, h: f64) 
     (f(&xp) - f(&xm)) / (2.0 * h)
 }
 
+fn finite_diff_scalar_lhs(
+    f: impl Fn(&[f64], &[f64]) -> f64,
+    lhs: &[f64],
+    rhs: &[f64],
+    idx: usize,
+    h: f64,
+) -> f64 {
+    let mut lp = lhs.to_vec();
+    let mut lm = lhs.to_vec();
+    lp[idx] += h;
+    lm[idx] -= h;
+    (f(&lp, rhs) - f(&lm, rhs)) / (2.0 * h)
+}
+
+fn finite_diff_scalar_rhs(
+    f: impl Fn(&[f64], &[f64]) -> f64,
+    lhs: &[f64],
+    rhs: &[f64],
+    idx: usize,
+    h: f64,
+) -> f64 {
+    let mut rp = rhs.to_vec();
+    let mut rm = rhs.to_vec();
+    rp[idx] += h;
+    rm[idx] -= h;
+    (f(lhs, &rp) - f(lhs, &rm)) / (2.0 * h)
+}
+
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
@@ -73,6 +101,52 @@ fn assert_close_slice_c64(actual: &[Complex64], expected: &[Complex64]) {
         assert!(
             (*actual - *expected).norm() <= TOL,
             "index {index}: expected {expected:?}, got {actual:?}"
+        );
+    }
+}
+
+fn assert_grad_matches_finite_diff(actual: &[f64], base: &[f64], f: impl Fn(&[f64]) -> f64) {
+    assert_eq!(actual.len(), base.len());
+    for index in 0..base.len() {
+        let expected = finite_diff_scalar(&f, base, index, 1e-6);
+        assert!(
+            (actual[index] - expected).abs() <= TOL,
+            "index {index}: expected {expected}, got {}",
+            actual[index]
+        );
+    }
+}
+
+fn assert_grad_matches_finite_diff_lhs(
+    actual: &[f64],
+    lhs: &[f64],
+    rhs: &[f64],
+    f: &impl Fn(&[f64], &[f64]) -> f64,
+) {
+    assert_eq!(actual.len(), lhs.len());
+    for index in 0..lhs.len() {
+        let expected = finite_diff_scalar_lhs(&f, lhs, rhs, index, 1e-6);
+        assert!(
+            (actual[index] - expected).abs() <= TOL,
+            "lhs index {index}: expected {expected}, got {}",
+            actual[index]
+        );
+    }
+}
+
+fn assert_grad_matches_finite_diff_rhs(
+    actual: &[f64],
+    lhs: &[f64],
+    rhs: &[f64],
+    f: &impl Fn(&[f64], &[f64]) -> f64,
+) {
+    assert_eq!(actual.len(), rhs.len());
+    for index in 0..rhs.len() {
+        let expected = finite_diff_scalar_rhs(&f, lhs, rhs, index, 1e-6);
+        assert!(
+            (actual[index] - expected).abs() <= TOL,
+            "rhs index {index}: expected {expected}, got {}",
+            actual[index]
         );
     }
 }
@@ -433,4 +507,289 @@ fn grad_transpose() {
     let result = eval_tensor(grad);
     assert_eq!(result.shape(), &[2, 3]);
     assert_close_slice(get_f64_data(&result), &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn grad_exp() {
+    let x_data = vec![0.2, -0.7, 1.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_exp().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| x.exp()).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_exp().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_log() {
+    let x_data = vec![0.8, 1.5, 2.4];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_log().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| 1.0 / x).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_log().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_sin_cos() {
+    let x_data = vec![0.2, -0.7, 1.3];
+
+    let x_sin = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let sin_loss = x_sin.traced_sin().traced_reduce_sum(&[0]);
+    let sin_grad = sin_loss.grad(&x_sin).unwrap();
+    let sin_grad_tensor = eval_tensor(sin_grad);
+    let sin_grad_data = get_f64_data(&sin_grad_tensor);
+    let expected_sin: Vec<f64> = x_data.iter().map(|x| x.cos()).collect();
+    assert_close_slice(sin_grad_data, &expected_sin);
+
+    let f_sin = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_sin().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(sin_grad_data, &x_data, f_sin);
+
+    let x_cos = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let cos_loss = x_cos.traced_cos().traced_reduce_sum(&[0]);
+    let cos_grad = cos_loss.grad(&x_cos).unwrap();
+    let cos_grad_tensor = eval_tensor(cos_grad);
+    let cos_grad_data = get_f64_data(&cos_grad_tensor);
+    let expected_cos: Vec<f64> = x_data.iter().map(|x| -x.sin()).collect();
+    assert_close_slice(cos_grad_data, &expected_cos);
+
+    let f_cos = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_cos().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(cos_grad_data, &x_data, f_cos);
+}
+
+#[test]
+fn grad_div() {
+    let x_data = vec![1.2, -2.4, 3.6];
+    let y_data = vec![0.5, -1.5, 2.0];
+
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let y = TracedTensor::from_tensor(f64_tensor(vec![3], y_data.clone()));
+    let loss = x.traced_div(&y).traced_reduce_sum(&[0]);
+
+    let grad_x = loss.grad(&x).unwrap();
+    let grad_y = loss.grad(&y).unwrap();
+    let grad_x_tensor = eval_tensor(grad_x);
+    let grad_y_tensor = eval_tensor(grad_y);
+    let grad_x_data = get_f64_data(&grad_x_tensor);
+    let grad_y_data = get_f64_data(&grad_y_tensor);
+
+    let expected_x: Vec<f64> = y_data.iter().map(|y| 1.0 / y).collect();
+    let expected_y: Vec<f64> = x_data
+        .iter()
+        .zip(y_data.iter())
+        .map(|(x, y)| -x / (y * y))
+        .collect();
+    assert_close_slice(grad_x_data, &expected_x);
+    assert_close_slice(grad_y_data, &expected_y);
+
+    let f = |lhs: &[f64], rhs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
+        let y = TracedTensor::from_tensor(f64_tensor(vec![3], rhs.to_vec()));
+        eval_scalar(x.traced_div(&y).traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff_lhs(grad_x_data, &x_data, &y_data, &f);
+    assert_grad_matches_finite_diff_rhs(grad_y_data, &x_data, &y_data, &f);
+}
+
+#[test]
+fn grad_sqrt() {
+    let x_data = vec![0.8, 1.5, 3.2];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_sqrt().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| 0.5 / x.sqrt()).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_sqrt().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_tanh() {
+    let x_data = vec![0.2, -0.7, 1.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_tanh().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| 1.0 - x.tanh().powi(2)).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_tanh().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_pow() {
+    let x_data = vec![0.7, 1.3, 2.1];
+    let y_data = vec![2.0, 2.0, 2.0];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let y = TracedTensor::from_tensor(f64_tensor(vec![3], y_data.clone()));
+    let loss = x.traced_pow(&y).traced_reduce_sum(&[0]);
+
+    let grad_x = loss.grad(&x).unwrap();
+    let grad_x_tensor = eval_tensor(grad_x);
+    let grad_x_data = get_f64_data(&grad_x_tensor);
+    let expected_x: Vec<f64> = x_data.iter().map(|x| 2.0 * x).collect();
+    assert_close_slice(grad_x_data, &expected_x);
+
+    let f = |lhs: &[f64], rhs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
+        let y = TracedTensor::from_tensor(f64_tensor(vec![3], rhs.to_vec()));
+        eval_scalar(x.traced_pow(&y).traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff_lhs(grad_x_data, &x_data, &y_data, &f);
+}
+
+#[test]
+fn grad_pow_wrt_exponent() {
+    let x_data = vec![1.2, 1.8, 2.5];
+    let y_data = vec![0.5, 1.5, 2.0];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let y = TracedTensor::from_tensor(f64_tensor(vec![3], y_data.clone()));
+    let loss = x.traced_pow(&y).traced_reduce_sum(&[0]);
+
+    let grad_y = loss.grad(&y).unwrap();
+    let grad_y_tensor = eval_tensor(grad_y);
+    let grad_y_data = get_f64_data(&grad_y_tensor);
+    let expected_y: Vec<f64> = x_data
+        .iter()
+        .zip(y_data.iter())
+        .map(|(x, y)| x.ln() * x.powf(*y))
+        .collect();
+    assert_close_slice(grad_y_data, &expected_y);
+
+    let f = |lhs: &[f64], rhs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
+        let y = TracedTensor::from_tensor(f64_tensor(vec![3], rhs.to_vec()));
+        eval_scalar(x.traced_pow(&y).traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff_rhs(grad_y_data, &x_data, &y_data, &f);
+}
+
+#[test]
+fn grad_abs() {
+    let x_data = vec![-1.7, 0.8, 2.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_abs().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected = [-1.0, 1.0, 1.0];
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_abs().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_sign() {
+    let x_data = vec![-1.7, 0.8, 2.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_sign().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    assert_close_slice(grad_data, &[0.0, 0.0, 0.0]);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_sign().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_rsqrt() {
+    let x_data = vec![0.8, 1.5, 3.2];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_rsqrt().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| -0.5 / (x * x.sqrt())).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_rsqrt().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_expm1() {
+    let x_data = vec![0.2, -0.7, 1.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_expm1().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| x.exp()).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_expm1().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
+}
+
+#[test]
+fn grad_log1p() {
+    let x_data = vec![0.2, 0.7, 1.3];
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], x_data.clone()));
+    let loss = x.traced_log1p().traced_reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+
+    let grad_tensor = eval_tensor(grad);
+    let grad_data = get_f64_data(&grad_tensor);
+    let expected: Vec<f64> = x_data.iter().map(|x| 1.0 / (x + 1.0)).collect();
+    assert_close_slice(grad_data, &expected);
+
+    let f = |xs: &[f64]| {
+        let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
+        eval_scalar(x.traced_log1p().traced_reduce_sum(&[0]))
+    };
+    assert_grad_matches_finite_diff(grad_data, &x_data, f);
 }
