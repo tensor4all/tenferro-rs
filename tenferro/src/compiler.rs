@@ -89,13 +89,13 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     transpose_a: *transpose_a,
                     unit_diagonal: *unit_diagonal,
                 },
-                StdTensorOp::Svd => StableHloOp::CustomCall {
+                StdTensorOp::Svd { .. } => StableHloOp::CustomCall {
                     target: "svd".to_string(),
                 },
                 StdTensorOp::Qr => StableHloOp::CustomCall {
                     target: "qr".to_string(),
                 },
-                StdTensorOp::Eigh => StableHloOp::CustomCall {
+                StdTensorOp::Eigh { .. } => StableHloOp::CustomCall {
                     target: "eigh".to_string(),
                 },
                 StdTensorOp::Solve => StableHloOp::CustomCall {

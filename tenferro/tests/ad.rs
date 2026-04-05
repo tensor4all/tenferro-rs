@@ -234,7 +234,15 @@ fn build_svd_values_sum_fragment() -> (
     let input_key = tensor_input_key(10_000);
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let svd = builder.add_op(
+        StdTensorOp::Svd {
+            eps: 1.0e-12,
+            m: 2,
+            n: 2,
+        },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0],
@@ -250,15 +258,24 @@ fn build_svd_values_sum_fragment() -> (
 
 fn build_svd_values_real_sum_fragment(
     input_key: TensorInputKey,
-    singular_shape: Vec<usize>,
+    input_shape: Vec<usize>,
 ) -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
     GlobalValKey<StdTensorOp>,
 ) {
+    let singular_shape = vec![input_shape[0].min(input_shape[1])];
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let svd = builder.add_op(
+        StdTensorOp::Svd {
+            eps: 1.0e-12,
+            m: input_shape[0],
+            n: input_shape[1],
+        },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let loss = add_real_reduce_sum_loss(&mut builder, svd[1], singular_shape);
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
@@ -270,7 +287,7 @@ fn build_svd_values_real_sum_complex_fragment() -> (
     TensorInputKey,
     GlobalValKey<StdTensorOp>,
 ) {
-    build_svd_values_real_sum_fragment(tensor_input_key(12_000), vec![2])
+    build_svd_values_real_sum_fragment(tensor_input_key(12_000), vec![2, 2])
 }
 
 fn build_svd_values_real_sum_complex_3x3_fragment() -> (
@@ -278,7 +295,7 @@ fn build_svd_values_real_sum_complex_3x3_fragment() -> (
     TensorInputKey,
     GlobalValKey<StdTensorOp>,
 ) {
-    build_svd_values_real_sum_fragment(tensor_input_key(12_100), vec![3])
+    build_svd_values_real_sum_fragment(tensor_input_key(12_100), vec![3, 3])
 }
 
 fn build_svd_uv_product_fragment(
@@ -292,7 +309,15 @@ fn build_svd_uv_product_fragment(
 ) {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let svd = builder.add_op(
+        StdTensorOp::Svd {
+            eps: 1.0e-12,
+            m: product_shape[0],
+            n: product_shape[1],
+        },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let uv_product = builder.add_op(
         StdTensorOp::DotGeneral(matmul_config()),
         vec![ValRef::Local(svd[0]), ValRef::Local(svd[2])],
@@ -331,6 +356,55 @@ fn build_svd_uv_product_real_sum_complex_fragment() -> (
     build_svd_uv_product_fragment(tensor_input_key(15_100), vec![3, 3], true)
 }
 
+fn build_svd_reconstruction_sum_fragment(
+    input_key: TensorInputKey,
+    shape: Vec<usize>,
+    eps: f64,
+) -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let m = shape[0];
+    let n = shape[1];
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let svd = builder.add_op(
+        StdTensorOp::Svd { eps, m, n },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let diag_s = builder.add_op(
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        vec![ValRef::Local(svd[1])],
+        OpMode::Primal,
+    );
+    let us = builder.add_op(
+        StdTensorOp::DotGeneral(matmul_config()),
+        vec![ValRef::Local(svd[0]), ValRef::Local(diag_s[0])],
+        OpMode::Primal,
+    );
+    let reconstructed = builder.add_op(
+        StdTensorOp::DotGeneral(matmul_config()),
+        vec![ValRef::Local(us[0]), ValRef::Local(svd[2])],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![m, n],
+        },
+        vec![ValRef::Local(reconstructed[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
 fn build_eigh_values_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -339,7 +413,11 @@ fn build_eigh_values_sum_fragment() -> (
     let input_key = tensor_input_key(20_000);
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let eigh = builder.add_op(
+        StdTensorOp::Eigh { eps: 1.0e-12 },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0],
@@ -361,7 +439,11 @@ fn build_eigh_values_real_sum_complex_fragment() -> (
     let input_key = tensor_input_key(22_000);
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let eigh = builder.add_op(
+        StdTensorOp::Eigh { eps: 1.0e-12 },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let loss = add_real_reduce_sum_loss(&mut builder, eigh[0], vec![2]);
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
@@ -385,7 +467,11 @@ fn build_eigh_projector_fragment(
     let a = builder.add_input(input_key.clone());
     let weights = builder.add_input(weights_key.clone());
     let probe = builder.add_input(probe_key.clone());
-    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let eigh = builder.add_op(
+        StdTensorOp::Eigh { eps: 1.0e-12 },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
     let diag = builder.add_op(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -761,6 +847,17 @@ fn sum_svd_uv_product(data: &[f64]) -> f64 {
     let product =
         TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config());
     get_f64_data(&product).iter().sum()
+}
+
+fn sum_svd_reconstruction(data: &[f64], shape: [usize; 2]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(shape.to_vec(), data.to_vec());
+    let outputs = TensorBackend::svd(&mut backend, &input);
+    let diag_s = TensorBackend::embed_diagonal(&mut backend, &outputs[1], 0, 1);
+    let us = TensorBackend::dot_general(&mut backend, &outputs[0], &diag_s, &matmul_config());
+    let reconstructed =
+        TensorBackend::dot_general(&mut backend, &us, &outputs[2], &matmul_config());
+    get_f64_data(&reconstructed).iter().sum()
 }
 
 fn sum_eigh_values(data: &[f64]) -> f64 {
@@ -1720,6 +1817,81 @@ fn grad_svd_uv_product_matches_finite_diff() {
         let expected = finite_diff_scalar(sum_svd_uv_product, &a_data, index, 1e-6);
         assert!(
             (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_svd_rectangular_tall_matches_finite_diff() {
+    let shape = [4, 2];
+    let a_data = vec![3.0, -0.5, 1.2, 0.8, 0.7, 2.1, -1.4, 0.3];
+    let (fragment, input_key, loss_key) =
+        build_svd_reconstruction_sum_fragment(tensor_input_key(16_000), shape.to_vec(), 1.0e-12);
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(shape.to_vec(), a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected =
+            finite_diff_scalar(|xs| sum_svd_reconstruction(xs, shape), &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_svd_rectangular_wide_matches_finite_diff() {
+    let shape = [2, 4];
+    let a_data = vec![2.4, -0.6, 1.1, 0.5, -1.3, 0.9, 0.7, 1.8];
+    let (fragment, input_key, loss_key) =
+        build_svd_reconstruction_sum_fragment(tensor_input_key(16_100), shape.to_vec(), 1.0e-12);
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(shape.to_vec(), a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected =
+            finite_diff_scalar(|xs| sum_svd_reconstruction(xs, shape), &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_svd_custom_eps() {
+    let shape = [2, 2];
+    let a_data = vec![2.2, -0.4, 1.1, 0.8];
+    let (fragment, input_key, loss_key) =
+        build_svd_reconstruction_sum_fragment(tensor_input_key(16_200), shape.to_vec(), 1.0e-8);
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(shape.to_vec(), a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected =
+            finite_diff_scalar(|xs| sum_svd_reconstruction(xs, shape), &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-5,
             "index {index}: expected {expected}, got {}",
             grad_data[index]
         );

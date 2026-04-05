@@ -74,9 +74,11 @@ fn linearize_non_semiring(
             *unit_diagonal,
         ),
         StdTensorOp::Cholesky => linalg::linearize_cholesky(builder, primal_out, tangent_in),
-        StdTensorOp::Svd => linalg::linearize_svd(builder, primal_out, tangent_in),
+        StdTensorOp::Svd { eps, m, n } => {
+            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, *m, *n)
+        }
         StdTensorOp::Qr => linalg::linearize_qr(builder, primal_out, tangent_in),
-        StdTensorOp::Eigh => linalg::linearize_eigh(builder, primal_out, tangent_in),
+        StdTensorOp::Eigh { eps } => linalg::linearize_eigh(builder, primal_out, tangent_in, *eps),
         _ => return None,
     })
 }

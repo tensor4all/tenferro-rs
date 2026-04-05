@@ -233,12 +233,28 @@ fn test_std_tensor_op_input_output_counts() {
 fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(StdTensorOp::Cholesky.n_inputs(), 1);
     assert_eq!(StdTensorOp::Cholesky.n_outputs(), 1);
-    assert_eq!(StdTensorOp::Svd.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Svd.n_outputs(), 3);
+    assert_eq!(
+        StdTensorOp::Svd {
+            eps: 1.0e-12,
+            m: 2,
+            n: 2,
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Svd {
+            eps: 1.0e-12,
+            m: 2,
+            n: 2,
+        }
+        .n_outputs(),
+        3
+    );
     assert_eq!(StdTensorOp::Qr.n_inputs(), 1);
     assert_eq!(StdTensorOp::Qr.n_outputs(), 2);
-    assert_eq!(StdTensorOp::Eigh.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Eigh.n_outputs(), 2);
+    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_outputs(), 2);
     assert_eq!(StdTensorOp::Solve.n_inputs(), 2);
     assert_eq!(StdTensorOp::Solve.n_outputs(), 1);
     assert_eq!(
