@@ -30,6 +30,15 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::ReduceSum { axes, .. } => {
                     StableHloOp::ReduceSum { axes: axes.clone() }
                 }
+                StdTensorOp::ReduceProd { axes, .. } => {
+                    StableHloOp::ReduceProd { axes: axes.clone() }
+                }
+                StdTensorOp::ReduceMax { axes, .. } => {
+                    StableHloOp::ReduceMax { axes: axes.clone() }
+                }
+                StdTensorOp::ReduceMin { axes, .. } => {
+                    StableHloOp::ReduceMin { axes: axes.clone() }
+                }
                 StdTensorOp::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,
@@ -162,6 +171,9 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                     dims: dims.clone(),
                 },
                 StableHloOp::ReduceSum { axes } => ExecOp::ReduceSum { axes: axes.clone() },
+                StableHloOp::ReduceProd { axes } => ExecOp::ReduceProd { axes: axes.clone() },
+                StableHloOp::ReduceMax { axes } => ExecOp::ReduceMax { axes: axes.clone() },
+                StableHloOp::ReduceMin { axes } => ExecOp::ReduceMin { axes: axes.clone() },
                 StableHloOp::ExtractDiag { axis_a, axis_b } => ExecOp::ExtractDiag {
                     axis_a: *axis_a,
                     axis_b: *axis_b,
