@@ -14,13 +14,19 @@
 
 ## Rule Source Of Truth
 
-- Treat `frule` and `rrule` as the semantic source of truth for first-order AD.
-- `LinearizedOp::jvp` and `LinearizedOp::vjp` should be thin adapters to the existing `frule` and `rrule` by default.
+- `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` (in `tenferro-ops/src/ad/`)
+  are the semantic source of truth for first-order AD.
+- These are graph-level rules that emit ops into a `FragmentBuilder`.
+  `tidu::differentiate` calls `linearize`; `tidu::transpose` calls `transpose_rule`.
+- Reference JAX's implementations (`jax/_src/lax/lax.py`, `jax/_src/lax/linalg.py`)
+  when implementing new AD rules.
 
-## Linearized Seam Coverage
+## AD Rule Coverage
 
-- If `LinearizedOp::jvp` or `LinearizedOp::vjp` is not a thin delegation to the existing `frule` or `rrule`, add a focused seam test.
-- The seam test must exercise the runtime packaging that the rule-math tests do not cover, such as saved linearization, schema, optional tangents/cotangents, or multi-output packaging.
+- Every `linearize` / `transpose_rule` implementation must have a corresponding
+  finite-difference integration test that verifies numerical correctness.
+- For linalg ops, prefer oracle families with both Torch reference data and
+  finite-difference checks when available in `third_party/tensor-ad-oracles/`.
 
 ## No Ad Hoc Fixes
 
