@@ -9,6 +9,6 @@ publish.workspace = true
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor" }
 computegraph.workspace = true
-chainrules-core = { path = "../../chainrules-rs", package = "chainrules" }
+chainrules-core.workspace = true
 num-complex.workspace = true
 tenferro-algebra = { path = "../tenferro-algebra" }

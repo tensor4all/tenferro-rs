@@ -7,7 +7,7 @@ use crate::input_key::TensorInputKey;
 
 #[test]
 fn tensor_input_key_clone_eq_and_hash_are_stable() {
-    let lhs = TensorInputKey { id: 7 };
+    let lhs = TensorInputKey::User { id: 7 };
     let rhs = lhs.clone();
 
     let mut lhs_hasher = DefaultHasher::new();
@@ -21,8 +21,14 @@ fn tensor_input_key_clone_eq_and_hash_are_stable() {
 }
 
 #[test]
-#[should_panic]
-fn tensor_input_key_tangent_of_is_explicitly_unimplemented() {
-    let key = TensorInputKey { id: 3 };
-    let _ = key.tangent_of(42 as DiffPassId);
+fn tensor_input_key_tangent_of_derives_a_unique_key() {
+    let key = TensorInputKey::User { id: 3 };
+    let tangent = key.tangent_of(42 as DiffPassId);
+    assert_eq!(
+        tangent,
+        TensorInputKey::Tangent {
+            of: Box::new(TensorInputKey::User { id: 3 }),
+            pass: 42,
+        }
+    );
 }

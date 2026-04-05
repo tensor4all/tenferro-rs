@@ -1,12 +1,16 @@
 use chainrules_core::{ADKey, DiffPassId};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct TensorInputKey {
-    pub id: u64,
+pub enum TensorInputKey {
+    User { id: u64 },
+    Tangent { of: Box<TensorInputKey>, pass: DiffPassId },
 }
 
 impl ADKey for TensorInputKey {
-    fn tangent_of(&self, _pass: DiffPassId) -> Self {
-        todo!()
+    fn tangent_of(&self, pass: DiffPassId) -> Self {
+        TensorInputKey::Tangent {
+            of: Box::new(self.clone()),
+            pass,
+        }
     }
 }

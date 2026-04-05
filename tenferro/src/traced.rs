@@ -8,9 +8,10 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
+use tidu::{differentiate, transpose};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
 use super::engine::Engine;
@@ -18,11 +19,16 @@ use super::error::{Error, Result};
 use super::exec::eval_exec_ir;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
+static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 
 fn next_input_key() -> TensorInputKey {
-    TensorInputKey {
+    TensorInputKey::User {
         id: NEXT_INPUT_ID.fetch_add(1, Ordering::Relaxed),
     }
+}
+
+fn next_pass_id() -> u64 {
+    NEXT_DIFF_PASS_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct TracedTensor {
@@ -103,12 +109,83 @@ impl TracedTensor {
         Ok(self.data.as_ref().unwrap())
     }
 
-    pub fn grad(&self, _wrt: &TracedTensor) -> TracedTensor {
-        todo!()
+    pub fn grad(&self, wrt: &TracedTensor) -> TracedTensor {
+        assert!(
+            self.shape.iter().product::<usize>() == 1,
+            "grad requires a scalar output, got shape {:?}",
+            self.shape
+        );
+
+        let ones = ones_tensor(self.dtype, self.shape.clone());
+        let seed = TracedTensor::from_tensor(ones);
+        self.vjp(wrt, &seed)
     }
 
-    pub fn jvp(&self, _wrt: &TracedTensor, _tangent: &TracedTensor) -> TracedTensor {
-        todo!()
+    pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
+        let wrt_input_key = leaf_input_key(wrt);
+        let output_key = self.fragment.vals()[self.val].key.clone();
+        let view = resolve(vec![self.fragment.clone()]);
+        let linear = differentiate(
+            &view,
+            std::slice::from_ref(&output_key),
+            std::slice::from_ref(&wrt_input_key),
+            next_pass_id(),
+        );
+        let tangent_output = linear.tangent_outputs[0]
+            .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", wrt_input_key));
+        let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+
+        let mut inputs_map = (*self.inputs_map).clone();
+        inputs_map.insert(
+            tangent_input_key,
+            tangent
+                .data
+                .clone()
+                .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
+        );
+
+        TracedTensor {
+            shape: self.shape.clone(),
+            dtype: self.dtype,
+            fragment: Arc::new(linear.fragment),
+            val: tangent_output,
+            data: None,
+            inputs_map: Arc::new(inputs_map),
+        }
+    }
+
+    pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
+        let wrt_input_key = leaf_input_key(wrt);
+        let output_key = self.fragment.vals()[self.val].key.clone();
+        let view = resolve(vec![self.fragment.clone()]);
+        let linear = differentiate(
+            &view,
+            std::slice::from_ref(&output_key),
+            std::slice::from_ref(&wrt_input_key),
+            next_pass_id(),
+        );
+        let transposed = transpose(&linear);
+        let cotangent_output = transposed.tangent_outputs[0]
+            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", wrt_input_key));
+        let cotangent_input_key = linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
+
+        let mut inputs_map = (*self.inputs_map).clone();
+        inputs_map.insert(
+            cotangent_input_key,
+            cotangent
+                .data
+                .clone()
+                .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
+        );
+
+        TracedTensor {
+            shape: wrt.shape.clone(),
+            dtype: wrt.dtype,
+            fragment: Arc::new(transposed.fragment),
+            val: cotangent_output,
+            data: None,
+            inputs_map: Arc::new(inputs_map),
+        }
     }
 
     pub fn traced_add(&self, other: &TracedTensor) -> TracedTensor {
@@ -258,6 +335,32 @@ fn apply_binary(
         val: outputs[0],
         data: None,
         inputs_map: Arc::new(merged),
+    }
+}
+
+fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
+    match &tt.fragment.vals()[tt.val].key {
+        GlobalValKey::Input(key) => key.clone(),
+        other => panic!("expected traced leaf input, got {:?}", other),
+    }
+}
+
+fn linear_input_key(
+    fragment: &Fragment<StdTensorOp>,
+    local_id: LocalValId,
+) -> TensorInputKey {
+    match &fragment.vals()[local_id].key {
+        GlobalValKey::Input(key) => key.clone(),
+        other => panic!("expected linear fragment input, got {:?}", other),
+    }
+}
+
+fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+    match dtype {
+        DType::F32 => Tensor::F32(TypedTensor::ones(shape)),
+        DType::F64 => Tensor::F64(TypedTensor::ones(shape)),
+        DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
+        DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
     }
 }
 
