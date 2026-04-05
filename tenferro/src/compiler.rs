@@ -66,6 +66,7 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Expm1 => StableHloOp::Expm1,
                 StdTensorOp::Log1p => StableHloOp::Log1p,
                 StdTensorOp::Slice(config) => StableHloOp::Slice(config.clone()),
+                StdTensorOp::Concatenate { axis } => StableHloOp::Concatenate { axis: *axis },
                 StdTensorOp::Reverse { axes } => StableHloOp::Reverse { axes: axes.clone() },
                 StdTensorOp::Cholesky => StableHloOp::Cholesky,
                 StdTensorOp::Svd => StableHloOp::CustomCall {
@@ -203,6 +204,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Expm1 => ExecOp::Expm1,
                 StableHloOp::Log1p => ExecOp::Log1p,
                 StableHloOp::Slice(config) => ExecOp::Slice(config.clone()),
+                StableHloOp::Concatenate { axis } => ExecOp::Concatenate { axis: *axis },
                 StableHloOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },
                 StableHloOp::Cholesky => ExecOp::Cholesky,
                 StableHloOp::CustomCall { target } => ExecOp::CustomCall {

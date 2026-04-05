@@ -376,6 +376,34 @@ fn test_reverse_axis_zero() {
 }
 
 #[test]
+fn test_concatenate_axis_zero() {
+    let lhs = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let rhs = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 3],
+        vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+    ));
+    let mut backend = CpuBackend::new();
+    let out = backend.concatenate(&[&lhs, &rhs], 0);
+
+    assert_eq!(out.shape(), &[4, 3]);
+    assert_eq!(get_f64(&out, &[0, 0]), 1.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 2.0);
+    assert_eq!(get_f64(&out, &[2, 0]), 7.0);
+    assert_eq!(get_f64(&out, &[3, 0]), 8.0);
+    assert_eq!(get_f64(&out, &[0, 1]), 3.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 4.0);
+    assert_eq!(get_f64(&out, &[2, 1]), 9.0);
+    assert_eq!(get_f64(&out, &[3, 1]), 10.0);
+    assert_eq!(get_f64(&out, &[0, 2]), 5.0);
+    assert_eq!(get_f64(&out, &[1, 2]), 6.0);
+    assert_eq!(get_f64(&out, &[2, 2]), 11.0);
+    assert_eq!(get_f64(&out, &[3, 2]), 12.0);
+}
+
+#[test]
 fn test_dot_general_matmul() {
     let a = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],

@@ -34,5 +34,4 @@ fn cpu_backend_unimplemented_indexing_ops_panic_explicitly() {
     assert_panics!("scatter", || b.scatter(&d1, &d2, &ScatterConfig {}));
     assert_panics!("dynamic_slice", || b.dynamic_slice(&d1, &d2));
     assert_panics!("pad", || b.pad(&d, &PadConfig {}));
-    assert_panics!("concatenate", || b.concatenate(&[&d], 0));
 }

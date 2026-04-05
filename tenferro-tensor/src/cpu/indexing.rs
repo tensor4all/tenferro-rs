@@ -1,6 +1,46 @@
 use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use crate::types::{dispatch_tensor, flat_to_multi, Tensor, TypedTensor};
 
+trait TensorAsTyped<T> {
+    fn as_typed(&self) -> Option<&TypedTensor<T>>;
+}
+
+impl TensorAsTyped<f32> for Tensor {
+    fn as_typed(&self) -> Option<&TypedTensor<f32>> {
+        match self {
+            Tensor::F32(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
+impl TensorAsTyped<f64> for Tensor {
+    fn as_typed(&self) -> Option<&TypedTensor<f64>> {
+        match self {
+            Tensor::F64(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
+impl TensorAsTyped<num_complex::Complex<f32>> for Tensor {
+    fn as_typed(&self) -> Option<&TypedTensor<num_complex::Complex<f32>>> {
+        match self {
+            Tensor::C32(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
+impl TensorAsTyped<num_complex::Complex<f64>> for Tensor {
+    fn as_typed(&self) -> Option<&TypedTensor<num_complex::Complex<f64>>> {
+        match self {
+            Tensor::C64(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
 pub fn gather(_input: &Tensor, _config: &GatherConfig) -> Tensor {
     todo!("gather")
 }
@@ -21,8 +61,12 @@ pub fn pad(_input: &Tensor, _config: &PadConfig) -> Tensor {
     todo!("pad")
 }
 
-pub fn concatenate(_inputs: &[&Tensor], _axis: usize) -> Tensor {
-    todo!("concatenate")
+pub fn concatenate(inputs: &[&Tensor], axis: usize) -> Tensor {
+    let first = inputs
+        .first()
+        .copied()
+        .expect("concatenate requires at least one input");
+    dispatch_tensor!(first, tensor => typed_concatenate_from_dyn_inputs(tensor, inputs, axis))
 }
 
 pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
@@ -62,6 +106,88 @@ fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) ->
             in_idx[axis] = config.starts[axis] + out_idx[axis] * config.strides[axis];
         }
         out_data.push(*input.get(&in_idx));
+    }
+
+    TypedTensor::from_vec(out_shape, out_data)
+}
+
+fn typed_concatenate_from_dyn_inputs<T>(
+    _first: &TypedTensor<T>,
+    inputs: &[&Tensor],
+    axis: usize,
+) -> TypedTensor<T>
+where
+    T: Copy + Clone,
+    Tensor: TensorAsTyped<T>,
+{
+    let typed_inputs = collect_typed_inputs(inputs);
+    typed_concatenate(&typed_inputs, axis)
+}
+
+fn collect_typed_inputs<'a, T>(inputs: &[&'a Tensor]) -> Vec<&'a TypedTensor<T>>
+where
+    Tensor: TensorAsTyped<T>,
+{
+    inputs
+        .iter()
+        .map(|tensor| {
+            TensorAsTyped::<T>::as_typed(*tensor)
+                .expect("concatenate: dtype mismatch across inputs")
+        })
+        .collect()
+}
+
+fn typed_concatenate<T: Copy + Clone>(inputs: &[&TypedTensor<T>], axis: usize) -> TypedTensor<T> {
+    let first = inputs[0];
+    let rank = first.shape.len();
+    assert!(axis < rank, "concatenate: axis out of bounds");
+
+    let mut out_shape = first.shape.clone();
+    let mut axis_extent = 0usize;
+    for input in inputs {
+        assert_eq!(input.shape.len(), rank, "concatenate: rank mismatch");
+        for dim in 0..rank {
+            if dim == axis {
+                axis_extent += input.shape[dim];
+            } else {
+                assert_eq!(
+                    input.shape[dim], first.shape[dim],
+                    "concatenate: non-concat dimensions must match"
+                );
+            }
+        }
+    }
+    out_shape[axis] = axis_extent;
+
+    let segment_ends: Vec<usize> = inputs
+        .iter()
+        .scan(0usize, |sum, input| {
+            *sum += input.shape[axis];
+            Some(*sum)
+        })
+        .collect();
+
+    let out_len: usize = out_shape.iter().product();
+    let mut out_data = Vec::with_capacity(out_len);
+    let mut out_idx = vec![0usize; rank];
+    let mut in_idx = vec![0usize; rank];
+
+    for flat in 0..out_len {
+        flat_to_multi(flat, &out_shape, &mut out_idx);
+        let concat_idx = out_idx[axis];
+        let input_pos = segment_ends
+            .iter()
+            .position(|&end| concat_idx < end)
+            .expect("concatenate: output index must map to an input");
+        let axis_base = if input_pos == 0 {
+            0
+        } else {
+            segment_ends[input_pos - 1]
+        };
+
+        in_idx.copy_from_slice(&out_idx);
+        in_idx[axis] -= axis_base;
+        out_data.push(*inputs[input_pos].get(&in_idx));
     }
 
     TypedTensor::from_vec(out_shape, out_data)
