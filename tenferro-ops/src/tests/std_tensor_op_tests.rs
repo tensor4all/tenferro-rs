@@ -4,10 +4,12 @@ use crate::semiring_ops::SemiringOps;
 use crate::std_tensor_op::StdTensorOp;
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
-use computegraph::types::OpMode;
+use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::GraphOp;
 use tenferro_algebra::Standard;
 use tenferro_tensor::{CompareDir, DotGeneralConfig};
+
+use crate::input_key::TensorInputKey;
 
 #[test]
 fn test_std_tensor_op_input_output_counts() {
@@ -205,15 +207,38 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
 }
 
 #[test]
-#[should_panic]
-fn test_std_tensor_op_linearize_is_explicitly_unimplemented() {
+fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let _ = StdTensorOp::add().linearize(&mut builder, &[], &[], &[]);
+    let dx = builder.add_input(TensorInputKey::User { id: 1 });
+    let dy = builder.add_input(TensorInputKey::User { id: 2 });
+
+    let result = StdTensorOp::add().linearize(&mut builder, &[], &[], &[Some(dx), Some(dy)]);
+
+    assert_eq!(result.len(), 1);
+    assert!(result[0].is_some());
+    let fragment = builder.build();
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
+    assert_eq!(
+        fragment.ops()[0].mode,
+        OpMode::Linear {
+            active_mask: vec![true, true],
+        }
+    );
 }
 
 #[test]
-#[should_panic]
-fn test_std_tensor_op_transpose_rule_is_explicitly_unimplemented() {
+fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let _ = StdTensorOp::add().transpose_rule(&mut builder, &[], &[], &OpMode::Primal);
+    let ct = builder.add_input(TensorInputKey::User { id: 3 });
+    let inputs = vec![
+        ValRef::External(GlobalValKey::Input(TensorInputKey::User { id: 10 })),
+        ValRef::External(GlobalValKey::Input(TensorInputKey::User { id: 11 })),
+    ];
+
+    let result = StdTensorOp::add().transpose_rule(&mut builder, &[Some(ct)], &inputs, &OpMode::Primal);
+
+    assert_eq!(result, vec![Some(ct), Some(ct)]);
+    let fragment = builder.build();
+    assert!(fragment.ops().is_empty());
 }

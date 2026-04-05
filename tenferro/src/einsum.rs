@@ -403,6 +403,7 @@ fn build_traced_from_tree(
                 val: result_local,
                 data: None,
                 inputs_map: Arc::new(merged),
+                extra_roots: Vec::new(),
             }
         }
         ValRef::External(_) => {
@@ -417,6 +418,7 @@ fn build_traced_from_tree(
                         val: inputs[i].val,
                         data: inputs[i].data.clone(),
                         inputs_map: inputs[i].inputs_map.clone(),
+                        extra_roots: inputs[i].extra_roots.clone(),
                     };
                 }
             }

@@ -133,12 +133,27 @@ pub fn transpose_reduce_sum(
             let kept_dims = (0..input_shape.len())
                 .filter(|dim| !axes.contains(dim))
                 .collect::<Vec<_>>();
+            let cotangent = if kept_dims.is_empty() {
+                let scalar = builder.add_op(
+                    StdTensorOp::Reshape {
+                        from_shape: vec![1],
+                        to_shape: vec![],
+                    },
+                    vec![ValRef::Local(ct)],
+                    OpMode::Linear {
+                        active_mask: vec![true],
+                    },
+                );
+                ValRef::Local(scalar[0])
+            } else {
+                ValRef::Local(ct)
+            };
             let out = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape: input_shape.clone(),
                     dims: kept_dims,
                 },
-                vec![ValRef::Local(ct)],
+                vec![cotangent],
                 OpMode::Linear {
                     active_mask: vec![true],
                 },

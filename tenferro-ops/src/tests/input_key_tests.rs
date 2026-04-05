@@ -17,7 +17,7 @@ fn tensor_input_key_clone_eq_and_hash_are_stable() {
 
     assert_eq!(lhs, rhs);
     assert_eq!(lhs_hasher.finish(), rhs_hasher.finish());
-    assert!(format!("{lhs:?}").contains("TensorInputKey"));
+    assert_eq!(format!("{lhs:?}"), "User { id: 7 }");
 }
 
 #[test]

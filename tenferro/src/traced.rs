@@ -38,6 +38,7 @@ pub struct TracedTensor {
     pub val: LocalValId,
     pub data: Option<Tensor>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Tensor>>,
+    pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
 }
 
 impl TracedTensor {
@@ -61,6 +62,7 @@ impl TracedTensor {
             val,
             data: Some(tensor),
             inputs_map: Arc::new(map),
+            extra_roots: Vec::new(),
         }
     }
 
@@ -71,7 +73,7 @@ impl TracedTensor {
 
         let output_key = self.fragment.vals()[self.val].key.clone();
 
-        let view = resolve(vec![self.fragment.clone()]);
+        let view = resolve(self.resolve_roots());
         let graph = materialize_merge(&view, &[output_key]);
         let compiled = compile(&graph);
 
@@ -151,6 +153,7 @@ impl TracedTensor {
             val: tangent_output,
             data: None,
             inputs_map: Arc::new(inputs_map),
+            extra_roots: vec![self.fragment.clone()],
         }
     }
 
@@ -165,9 +168,11 @@ impl TracedTensor {
             next_pass_id(),
         );
         let transposed = transpose(&linear);
+        let linear_fragment = Arc::new(linear.fragment);
         let cotangent_output = transposed.tangent_outputs[0]
             .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", wrt_input_key));
-        let cotangent_input_key = linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
+        let cotangent_input_key =
+            linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
         inputs_map.insert(
@@ -185,6 +190,7 @@ impl TracedTensor {
             val: cotangent_output,
             data: None,
             inputs_map: Arc::new(inputs_map),
+            extra_roots: vec![self.fragment.clone(), linear_fragment],
         }
     }
 
@@ -307,6 +313,7 @@ fn apply_unary(op: StdTensorOp, input: &TracedTensor, out_shape: Vec<usize>) -> 
         val: outputs[0],
         data: None,
         inputs_map: input.inputs_map.clone(),
+        extra_roots: Vec::new(),
     }
 }
 
@@ -335,6 +342,16 @@ fn apply_binary(
         val: outputs[0],
         data: None,
         inputs_map: Arc::new(merged),
+        extra_roots: Vec::new(),
+    }
+}
+
+impl TracedTensor {
+    fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
+        let mut roots = Vec::with_capacity(1 + self.extra_roots.len());
+        roots.push(self.fragment.clone());
+        roots.extend(self.extra_roots.iter().cloned());
+        roots
     }
 }
 
@@ -373,7 +390,7 @@ pub fn eval_all<B: TensorBackend>(
     let mut all_inputs: HashMap<TensorInputKey, Tensor> = HashMap::new();
 
     for tt in outputs.iter() {
-        all_fragments.push(tt.fragment.clone());
+        all_fragments.extend(tt.resolve_roots());
         output_keys.push(tt.fragment.vals()[tt.val].key.clone());
         all_inputs.extend(tt.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
