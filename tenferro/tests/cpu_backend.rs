@@ -318,3 +318,21 @@ fn test_buffer_pool_best_fit() {
     assert_eq!(reused.len(), 150); // resized to requested size
     assert_eq!(pool.len(), 2); // two buffers left
 }
+
+#[test]
+fn buffer_pool_reclaims_intermediate_buffers() {
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let ta = TracedTensor::from_tensor(a);
+    let tb = TracedTensor::from_tensor(b);
+    let tc = TracedTensor::from_tensor(c);
+    let mut out = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il").unwrap();
+
+    let result = out.eval(&mut engine).unwrap();
+
+    assert_eq!(get_f64_data(result), &[517.0, 766.0, 625.0, 926.0]);
+    assert!(engine.buffer_pool_len() > 0);
+}

@@ -1,10 +1,11 @@
+use super::buffer_pool::BufferPool;
 use tenferro_algebra::Semiring;
 use tenferro_tensor::cpu::structural::{
     typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
     typed_transpose,
 };
 use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SemiringBackend,
+    Buffer, CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SemiringBackend,
     SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
@@ -122,6 +123,7 @@ pub fn eval_exec_ir<B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
+    pool: &mut BufferPool,
 ) -> Vec<Tensor> {
     let mut slots: Vec<Option<Tensor>> = vec![None; program.n_slots];
     for (i, tensor) in inputs.into_iter().enumerate() {
@@ -268,10 +270,12 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 for (i, tensor) in results.into_iter().enumerate() {
                     slots[inst.output_slots[i]] = Some(tensor);
                 }
+                reclaim_last_use_inputs(&mut slots, inst, pool);
                 continue;
             }
         };
         slots[inst.output_slots[0]] = Some(result);
+        reclaim_last_use_inputs(&mut slots, inst, pool);
     }
 
     program
@@ -279,6 +283,46 @@ pub fn eval_exec_ir<B: TensorBackend>(
         .iter()
         .map(|&slot| slots[slot].take().expect("missing output slot"))
         .collect()
+}
+
+fn reclaim_last_use_inputs(
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    pool: &mut BufferPool,
+) {
+    for (i, &is_last) in inst.last_use.iter().enumerate() {
+        if is_last {
+            if let Some(tensor) = slots[inst.input_slots[i]].take() {
+                reclaim_tensor_buffer(tensor, pool);
+            }
+        }
+    }
+}
+
+fn reclaim_tensor_buffer(tensor: Tensor, pool: &mut BufferPool) {
+    let bytes = match tensor {
+        Tensor::F64(t) => extract_host_bytes(t),
+        Tensor::F32(t) => extract_host_bytes(t),
+        Tensor::C64(t) => extract_host_bytes(t),
+        Tensor::C32(t) => extract_host_bytes(t),
+    };
+
+    if let Some(buf) = bytes {
+        pool.return_buffer(buf);
+    }
+}
+
+fn extract_host_bytes<T>(typed: TypedTensor<T>) -> Option<Vec<u8>> {
+    match typed.buffer {
+        Buffer::Host(data) => {
+            let mut data = std::mem::ManuallyDrop::new(data);
+            let ptr = data.as_mut_ptr() as *mut u8;
+            let len = data.len() * std::mem::size_of::<T>();
+            let cap = data.capacity() * std::mem::size_of::<T>();
+            Some(unsafe { Vec::from_raw_parts(ptr, len, cap) })
+        }
+        Buffer::Backend(_) => None,
+    }
 }
 
 pub fn eval_semiring_ir<B, Alg>(
