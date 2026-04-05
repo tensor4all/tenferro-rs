@@ -294,6 +294,30 @@ impl TracedTensor {
             out_shape,
         )
     }
+
+    pub fn traced_extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
+        assert!(
+            axis_a < self.shape.len() && axis_b < self.shape.len() && axis_a != axis_b,
+            "extract_diag: invalid axes"
+        );
+        let out_shape = self
+            .shape
+            .iter()
+            .enumerate()
+            .filter_map(|(axis, &dim)| (axis != axis_b).then_some(dim))
+            .collect();
+        apply_unary(StdTensorOp::ExtractDiag { axis_a, axis_b }, self, out_shape)
+    }
+
+    pub fn traced_embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
+        assert!(
+            axis_a < self.shape.len() && axis_b <= self.shape.len(),
+            "embed_diag: invalid axes"
+        );
+        let mut out_shape = self.shape.clone();
+        out_shape.insert(axis_b, self.shape[axis_a]);
+        apply_unary(StdTensorOp::EmbedDiag { axis_a, axis_b }, self, out_shape)
+    }
 }
 
 fn apply_unary(op: StdTensorOp, input: &TracedTensor, out_shape: Vec<usize>) -> TracedTensor {
