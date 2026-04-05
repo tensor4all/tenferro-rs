@@ -150,6 +150,33 @@ fn build_svd_values_sum_fragment() -> (
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
+fn build_svd_uv_product_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(15_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let svd = builder.add_op(StdTensorOp::Svd, vec![ValRef::Local(a)], OpMode::Primal);
+    let uv_product = builder.add_op(
+        StdTensorOp::DotGeneral(matmul_config()),
+        vec![ValRef::Local(svd[0]), ValRef::Local(svd[2])],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![2, 2],
+        },
+        vec![ValRef::Local(uv_product[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
 fn build_eigh_values_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -172,11 +199,136 @@ fn build_eigh_values_sum_fragment() -> (
     (Arc::new(builder.build()), input_key, loss_key)
 }
 
-fn grad_from_fragment(
+fn build_eigh_projector_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(25_000);
+    let weights_key = tensor_input_key(25_001);
+    let probe_key = tensor_input_key(25_002);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let weights = builder.add_input(weights_key.clone());
+    let probe = builder.add_input(probe_key.clone());
+    let eigh = builder.add_op(StdTensorOp::Eigh, vec![ValRef::Local(a)], OpMode::Primal);
+    let diag = builder.add_op(
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        vec![ValRef::Local(weights)],
+        OpMode::Primal,
+    );
+    let weighted_vectors = builder.add_op(
+        StdTensorOp::DotGeneral(matmul_config()),
+        vec![ValRef::Local(eigh[1]), ValRef::Local(diag[0])],
+        OpMode::Primal,
+    );
+    let vt = builder.add_op(
+        StdTensorOp::Transpose { perm: vec![1, 0] },
+        vec![ValRef::Local(eigh[1])],
+        OpMode::Primal,
+    );
+    let projector = builder.add_op(
+        StdTensorOp::DotGeneral(matmul_config()),
+        vec![ValRef::Local(weighted_vectors[0]), ValRef::Local(vt[0])],
+        OpMode::Primal,
+    );
+    let weighted = builder.add_op(
+        StdTensorOp::Mul,
+        vec![ValRef::Local(projector[0]), ValRef::Local(probe)],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![2, 2],
+        },
+        vec![ValRef::Local(weighted[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (
+        Arc::new(builder.build()),
+        input_key,
+        weights_key,
+        probe_key,
+        loss_key,
+    )
+}
+
+fn build_solve_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let a_key = tensor_input_key(30_000);
+    let b_key = tensor_input_key(30_001);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(a_key.clone());
+    let b = builder.add_input(b_key.clone());
+    let solve = builder.add_op(
+        StdTensorOp::Solve,
+        vec![ValRef::Local(a), ValRef::Local(b)],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![2, 1],
+        },
+        vec![ValRef::Local(solve[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), a_key, b_key, loss_key)
+}
+
+fn build_triangular_solve_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let a_key = tensor_input_key(35_000);
+    let b_key = tensor_input_key(35_001);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(a_key.clone());
+    let b = builder.add_input(b_key.clone());
+    let solve = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+        vec![ValRef::Local(a), ValRef::Local(b)],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: vec![0, 1],
+            input_shape: vec![2, 1],
+        },
+        vec![ValRef::Local(solve[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), a_key, b_key, loss_key)
+}
+
+fn grad_from_fragment_with_inputs(
     fragment: Arc<Fragment<StdTensorOp>>,
     loss_key: GlobalValKey<StdTensorOp>,
     input_key: TensorInputKey,
-    input: Tensor,
+    mut inputs_map: HashMap<TensorInputKey, Tensor>,
 ) -> Tensor {
     let view = resolve(vec![fragment.clone()]);
     let linear = differentiate(
@@ -197,8 +349,6 @@ fn grad_from_fragment(
     };
     let transposed_fragment = Arc::new(transposed.fragment);
 
-    let mut inputs_map = HashMap::new();
-    inputs_map.insert(input_key, input);
     inputs_map.insert(cotangent_input_key, scalar_f64_tensor(1.0));
 
     eval_fragment_outputs(
@@ -211,6 +361,17 @@ fn grad_from_fragment(
     .expect("gradient output")
 }
 
+fn grad_from_fragment(
+    fragment: Arc<Fragment<StdTensorOp>>,
+    loss_key: GlobalValKey<StdTensorOp>,
+    input_key: TensorInputKey,
+    input: Tensor,
+) -> Tensor {
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key.clone(), input);
+    grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map)
+}
+
 fn sum_svd_values(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
@@ -218,11 +379,63 @@ fn sum_svd_values(data: &[f64]) -> f64 {
     get_f64_data(&outputs[1]).iter().sum()
 }
 
+fn sum_svd_uv_product(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::svd(&mut backend, &input);
+    let product =
+        TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config());
+    get_f64_data(&product).iter().sum()
+}
+
 fn sum_eigh_values(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
     let outputs = TensorBackend::eigh(&mut backend, &input);
     get_f64_data(&outputs[0]).iter().sum()
+}
+
+fn sum_eigh_projector(data: &[f64], weights: &[f64], probe: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::eigh(&mut backend, &input);
+    let diag =
+        TensorBackend::embed_diagonal(&mut backend, &f64_tensor(vec![2], weights.to_vec()), 0, 1);
+    let weighted_vectors =
+        TensorBackend::dot_general(&mut backend, &outputs[1], &diag, &matmul_config());
+    let vt = TensorBackend::transpose(&mut backend, &outputs[1], &[1, 0]);
+    let projector =
+        TensorBackend::dot_general(&mut backend, &weighted_vectors, &vt, &matmul_config());
+    let weighted = TensorBackend::mul(
+        &mut backend,
+        &projector,
+        &f64_tensor(vec![2, 2], probe.to_vec()),
+    );
+    get_f64_data(&weighted).iter().sum()
+}
+
+fn sum_solve(a: &[f64], b: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let a_tensor = f64_tensor(vec![2, 2], a.to_vec());
+    let b_tensor = f64_tensor(vec![2, 1], b.to_vec());
+    let out = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor);
+    get_f64_data(&out).iter().sum()
+}
+
+fn sum_triangular_solve(a: &[f64], b: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let a_tensor = f64_tensor(vec![2, 2], a.to_vec());
+    let b_tensor = f64_tensor(vec![2, 1], b.to_vec());
+    let out = TensorBackend::triangular_solve(
+        &mut backend,
+        &a_tensor,
+        &b_tensor,
+        true,
+        true,
+        false,
+        false,
+    );
+    get_f64_data(&out).iter().sum()
 }
 
 fn assert_close_slice(actual: &[f64], expected: &[f64]) {
@@ -957,6 +1170,28 @@ fn grad_svd_values_matches_finite_diff() {
 }
 
 #[test]
+fn grad_svd_uv_product_matches_finite_diff() {
+    let a_data = vec![4.0, 0.75, 1.25, 2.5];
+    let (fragment, input_key, loss_key) = build_svd_uv_product_sum_fragment();
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+    let grad_data = get_f64_data(&grad);
+
+    for index in 0..a_data.len() {
+        let expected = finite_diff_scalar(sum_svd_uv_product, &a_data, index, 1e-6);
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
 fn grad_eigh_values_matches_finite_diff() {
     let a_data = vec![4.0, 1.0, 1.0, 2.0];
     let (fragment, input_key, loss_key) = build_eigh_values_sum_fragment();
@@ -976,4 +1211,75 @@ fn grad_eigh_values_matches_finite_diff() {
             grad_data[index]
         );
     }
+}
+
+#[test]
+fn grad_eigh_projector_matches_finite_diff() {
+    let a_data = vec![5.0, 1.5, 1.5, 2.0];
+    let weights_data = vec![0.8, -0.3];
+    let probe_data = vec![1.2, -0.4, 0.6, 0.9];
+    let (fragment, input_key, weights_key, probe_key, loss_key) =
+        build_eigh_projector_sum_fragment();
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key.clone(), f64_tensor(vec![2, 2], a_data.clone()));
+    inputs_map.insert(weights_key, f64_tensor(vec![2], weights_data.clone()));
+    inputs_map.insert(probe_key, f64_tensor(vec![2, 2], probe_data.clone()));
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    let grad_data = get_f64_data(&grad);
+
+    // `eigh` reads the lower triangle, so compare only the represented degrees of freedom.
+    for index in [0usize, 1, 3] {
+        let expected = finite_diff_scalar(
+            |xs| sum_eigh_projector(xs, &weights_data, &probe_data),
+            &a_data,
+            index,
+            1e-6,
+        );
+        assert!(
+            (grad_data[index] - expected).abs() <= 1e-4,
+            "index {index}: expected {expected}, got {}",
+            grad_data[index]
+        );
+    }
+}
+
+#[test]
+fn grad_solve_matches_finite_diff() {
+    let a_data = vec![4.0, 1.0, 0.5, 3.0];
+    let b_data = vec![1.5, -2.0];
+    let (fragment, a_key, b_key, loss_key) = build_solve_sum_fragment();
+
+    let mut a_inputs = HashMap::new();
+    a_inputs.insert(a_key.clone(), f64_tensor(vec![2, 2], a_data.clone()));
+    a_inputs.insert(b_key.clone(), f64_tensor(vec![2, 1], b_data.clone()));
+    let grad_a =
+        grad_from_fragment_with_inputs(fragment.clone(), loss_key.clone(), a_key, a_inputs);
+    let grad_a_data = get_f64_data(&grad_a);
+
+    let mut b_inputs = HashMap::new();
+    b_inputs.insert(
+        tensor_input_key(30_000),
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+    b_inputs.insert(b_key.clone(), f64_tensor(vec![2, 1], b_data.clone()));
+    let grad_b = grad_from_fragment_with_inputs(fragment, loss_key, b_key, b_inputs);
+    let grad_b_data = get_f64_data(&grad_b);
+
+    assert_grad_matches_finite_diff_lhs(grad_a_data, &a_data, &b_data, &sum_solve);
+    assert_grad_matches_finite_diff_rhs(grad_b_data, &a_data, &b_data, &sum_solve);
+}
+
+#[test]
+fn grad_triangular_solve_rhs_matches_finite_diff() {
+    let a_data = vec![2.0, -1.0, 0.0, 3.0];
+    let b_data = vec![1.0, 4.0];
+    let (fragment, a_key, b_key, loss_key) = build_triangular_solve_sum_fragment();
+
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(a_key, f64_tensor(vec![2, 2], a_data.clone()));
+    inputs_map.insert(b_key.clone(), f64_tensor(vec![2, 1], b_data.clone()));
+    let grad_b = grad_from_fragment_with_inputs(fragment, loss_key, b_key, inputs_map);
+    let grad_b_data = get_f64_data(&grad_b);
+
+    assert_grad_matches_finite_diff_rhs(grad_b_data, &a_data, &b_data, &sum_triangular_solve);
 }

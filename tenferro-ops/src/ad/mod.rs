@@ -57,7 +57,26 @@ pub fn linearize(
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::linearize_embed_diag(builder, tangent_in, *axis_a, *axis_b)
         }
+        StdTensorOp::Solve => linalg::linearize_solve(builder, primal_in, primal_out, tangent_in),
+        StdTensorOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        } => linalg::linearize_triangular_solve(
+            builder,
+            primal_in,
+            tangent_in,
+            *left_side,
+            *lower,
+            *transpose_a,
+            *unit_diagonal,
+        ),
+        // TODO: implement the JAX cholesky_jvp_rule once lower-triangular projection is available.
+        StdTensorOp::Cholesky => todo!("linearize not implemented for {:?}", op),
         StdTensorOp::Svd => linalg::linearize_svd(builder, primal_out, tangent_in),
+        // TODO: implement the JAX qr_jvp_rule once triangular-part primitives are available.
+        StdTensorOp::Qr => todo!("linearize not implemented for {:?}", op),
         StdTensorOp::Eigh => linalg::linearize_eigh(builder, primal_out, tangent_in),
         _ => todo!("linearize not implemented for {:?}", op),
     }
@@ -107,6 +126,22 @@ pub fn transpose_rule(
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::transpose_embed_diag(builder, cotangent_out, *axis_a, *axis_b)
         }
+        StdTensorOp::Solve => linalg::transpose_solve(builder, cotangent_out, inputs, mode),
+        StdTensorOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        } => linalg::transpose_triangular_solve(
+            builder,
+            cotangent_out,
+            inputs,
+            mode,
+            *left_side,
+            *lower,
+            *transpose_a,
+            *unit_diagonal,
+        ),
         _ => todo!("transpose_rule not implemented for {:?}", op),
     }
 }
