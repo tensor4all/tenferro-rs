@@ -42,13 +42,51 @@ pub enum CompareDir {
     Ge,
 }
 
-/// Gather configuration placeholder.
+/// StableHLO gather dimension configuration.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::GatherConfig;
+///
+/// let config = GatherConfig {
+///     offset_dims: vec![],
+///     collapsed_slice_dims: vec![0],
+///     start_index_map: vec![0],
+///     index_vector_dim: 1,
+///     slice_sizes: vec![1],
+/// };
+/// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct GatherConfig {}
+pub struct GatherConfig {
+    pub offset_dims: Vec<usize>,
+    pub collapsed_slice_dims: Vec<usize>,
+    pub start_index_map: Vec<usize>,
+    pub index_vector_dim: usize,
+    pub slice_sizes: Vec<usize>,
+}
 
-/// Scatter configuration placeholder.
+/// StableHLO scatter dimension configuration.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::ScatterConfig;
+///
+/// let config = ScatterConfig {
+///     update_window_dims: vec![],
+///     inserted_window_dims: vec![0],
+///     scatter_dims_to_operand_dims: vec![0],
+///     index_vector_dim: 1,
+/// };
+/// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct ScatterConfig {}
+pub struct ScatterConfig {
+    pub update_window_dims: Vec<usize>,
+    pub inserted_window_dims: Vec<usize>,
+    pub scatter_dims_to_operand_dims: Vec<usize>,
+    pub index_vector_dim: usize,
+}
 
 /// Slice configuration.
 ///
@@ -70,6 +108,22 @@ pub struct SliceConfig {
     pub strides: Vec<usize>,
 }
 
-/// Pad configuration placeholder.
+/// StableHLO pad configuration.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::PadConfig;
+///
+/// let config = PadConfig {
+///     edge_padding_low: vec![1, 1],
+///     edge_padding_high: vec![1, 1],
+///     interior_padding: vec![0, 0],
+/// };
+/// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct PadConfig {}
+pub struct PadConfig {
+    pub edge_padding_low: Vec<i64>,
+    pub edge_padding_high: Vec<i64>,
+    pub interior_padding: Vec<i64>,
+}

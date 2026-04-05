@@ -21,6 +21,33 @@ fn typed_scalar(value: f64) -> TypedTensor<f64> {
     TypedTensor::from_vec(vec![1], vec![value])
 }
 
+fn gather_config() -> GatherConfig {
+    GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    }
+}
+
+fn scatter_config() -> ScatterConfig {
+    ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    }
+}
+
+fn pad_config() -> PadConfig {
+    PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![1],
+        interior_padding: vec![0],
+    }
+}
+
 fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
     ExecProgram {
         instructions: vec![ExecInstruction {
@@ -254,8 +281,8 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Pow, 2, "pow", 20.0),
         (ExecOp::Expm1, 1, "expm1", 21.0),
         (ExecOp::Log1p, 1, "log1p", 22.0),
-        (ExecOp::Gather(GatherConfig {}), 1, "gather", 33.0),
-        (ExecOp::Scatter(ScatterConfig {}), 2, "scatter", 34.0),
+        (ExecOp::Gather(gather_config()), 1, "gather", 33.0),
+        (ExecOp::Scatter(scatter_config()), 2, "scatter", 34.0),
         (
             ExecOp::Slice(SliceConfig {
                 starts: vec![0],
@@ -267,7 +294,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             35.0,
         ),
         (ExecOp::DynamicSlice, 2, "dynamic_slice", 36.0),
-        (ExecOp::Pad(PadConfig {}), 1, "pad", 37.0),
+        (ExecOp::Pad(pad_config()), 1, "pad", 37.0),
         (ExecOp::Concatenate { axis: 0 }, 2, "concatenate", 38.0),
         (ExecOp::Reverse { axes: vec![0] }, 1, "reverse", 39.0),
         (ExecOp::ReduceProd { axes: vec![0] }, 1, "reduce_prod", 29.0),
