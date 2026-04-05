@@ -84,6 +84,12 @@ Keep source files **small and focused** — one logical concern per file. Use **
 
 When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
 
+### Test Coverage Target
+
+Every source file should have **90%+ line coverage**. When adding new code,
+add tests that cover the new paths. When modifying existing code, check
+coverage for the modified file and add tests if below 90%.
+
 ### Unit Test Organization
 
 For Rust modules, keep production source files focused on production code.
@@ -172,6 +178,7 @@ cargo test test_name
 cargo fmt --check
 
 # Coverage check (per-file thresholds)
+# Target: 90%+ line coverage per file. Files below 90% should have tests added.
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
