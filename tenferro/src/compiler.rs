@@ -65,6 +65,7 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Pow => StableHloOp::Pow,
                 StdTensorOp::Expm1 => StableHloOp::Expm1,
                 StdTensorOp::Log1p => StableHloOp::Log1p,
+                StdTensorOp::Slice(config) => StableHloOp::Slice(config.clone()),
                 StdTensorOp::Cholesky => StableHloOp::Cholesky,
                 StdTensorOp::Svd => StableHloOp::CustomCall {
                     target: "svd".to_string(),
@@ -200,6 +201,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Pow => ExecOp::Pow,
                 StableHloOp::Expm1 => ExecOp::Expm1,
                 StableHloOp::Log1p => ExecOp::Log1p,
+                StableHloOp::Slice(config) => ExecOp::Slice(config.clone()),
                 StableHloOp::Cholesky => ExecOp::Cholesky,
                 StableHloOp::CustomCall { target } => ExecOp::CustomCall {
                     target: target.clone(),

@@ -1,7 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::backend::TensorBackend;
-use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use crate::config::{GatherConfig, PadConfig, ScatterConfig};
 use crate::cpu::CpuBackend;
 use crate::{Tensor, TypedTensor};
 
@@ -32,16 +32,6 @@ fn cpu_backend_unimplemented_indexing_ops_panic_explicitly() {
 
     assert_panics!("gather", || b.gather(&d, &GatherConfig {}));
     assert_panics!("scatter", || b.scatter(&d1, &d2, &ScatterConfig {}));
-    assert_panics!("slice", || {
-        b.slice(
-            &d,
-            &SliceConfig {
-                starts: vec![],
-                limits: vec![],
-                strides: vec![],
-            },
-        )
-    });
     assert_panics!("dynamic_slice", || b.dynamic_slice(&d1, &d2));
     assert_panics!("pad", || b.pad(&d, &PadConfig {}));
     assert_panics!("concatenate", || b.concatenate(&[&d], 0));

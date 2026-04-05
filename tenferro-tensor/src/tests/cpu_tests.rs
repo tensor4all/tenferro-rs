@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 
 use crate::backend::TensorBackend;
-use crate::config::{CompareDir, DotGeneralConfig};
+use crate::config::{CompareDir, DotGeneralConfig, SliceConfig};
 use crate::cpu::{
     add, broadcast_in_dim, conj, embed_diagonal, extract_diagonal, mul, neg, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reshape, transpose, CpuBackend,
@@ -332,6 +332,29 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     let min = backend.reduce_min(&t, &[0, 1]);
     assert_eq!(min.shape(), &[1]);
     assert_eq!(get_f64(&min, &[0]), 1.0);
+}
+
+#[test]
+fn test_slice() {
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![4, 4],
+        (1..=16).map(|value| value as f64).collect(),
+    ));
+    let mut backend = CpuBackend::new();
+    let out = backend.slice(
+        &input,
+        &SliceConfig {
+            starts: vec![1, 1],
+            limits: vec![3, 3],
+            strides: vec![1, 1],
+        },
+    );
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(get_f64(&out, &[0, 0]), 6.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 7.0);
+    assert_eq!(get_f64(&out, &[0, 1]), 10.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 11.0);
 }
 
 #[test]
