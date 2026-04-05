@@ -29,9 +29,134 @@ fn assert_f64_close(actual: f64, expected: f64) {
     );
 }
 
+fn assert_f64_close_tol(actual: f64, expected: f64, tol: f64) {
+    assert!(
+        (actual - expected).abs() < tol,
+        "expected {expected}, got {actual}, tol={tol}"
+    );
+}
+
 fn assert_c64_close(actual: Complex64, expected: Complex64) {
     assert_f64_close(actual.re, expected.re);
     assert_f64_close(actual.im, expected.im);
+}
+
+fn assert_c64_close_tol(actual: Complex64, expected: Complex64, tol: f64) {
+    assert_f64_close_tol(actual.re, expected.re, tol);
+    assert_f64_close_tol(actual.im, expected.im, tol);
+}
+
+fn col_major_index(rows: usize, row: usize, col: usize) -> usize {
+    row + col * rows
+}
+
+fn transpose_f64(mat: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    let mut out = vec![0.0; rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            out[col_major_index(cols, j, i)] = mat[col_major_index(rows, i, j)];
+        }
+    }
+    out
+}
+
+fn conjugate_transpose_c64(mat: &[Complex64], rows: usize, cols: usize) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            out[col_major_index(cols, j, i)] = mat[col_major_index(rows, i, j)].conj();
+        }
+    }
+    out
+}
+
+fn matmul_f64(lhs: &[f64], rhs: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {
+    let mut out = vec![0.0; m * n];
+    for j in 0..n {
+        for p in 0..k {
+            let rhs_pj = rhs[col_major_index(k, p, j)];
+            for i in 0..m {
+                out[col_major_index(m, i, j)] += lhs[col_major_index(m, i, p)] * rhs_pj;
+            }
+        }
+    }
+    out
+}
+
+fn matmul_c64(
+    lhs: &[Complex64],
+    rhs: &[Complex64],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); m * n];
+    for j in 0..n {
+        for p in 0..k {
+            let rhs_pj = rhs[col_major_index(k, p, j)];
+            for i in 0..m {
+                out[col_major_index(m, i, j)] += lhs[col_major_index(m, i, p)] * rhs_pj;
+            }
+        }
+    }
+    out
+}
+
+fn diag_f64(values: &[f64]) -> Vec<f64> {
+    let mut out = vec![0.0; values.len() * values.len()];
+    for (i, value) in values.iter().enumerate() {
+        out[col_major_index(values.len(), i, i)] = *value;
+    }
+    out
+}
+
+fn diag_c64(values: &[Complex64]) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); values.len() * values.len()];
+    for (i, value) in values.iter().enumerate() {
+        out[col_major_index(values.len(), i, i)] = *value;
+    }
+    out
+}
+
+fn batch_matrix_f64_from_tensor(
+    t: &Tensor,
+    rows: usize,
+    cols: usize,
+    batch_idx: usize,
+) -> Vec<f64> {
+    let mut out = vec![0.0; rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            out[col_major_index(rows, i, j)] = get_f64(t, &[i, j, batch_idx]);
+        }
+    }
+    out
+}
+
+fn batch_vector_f64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec<f64> {
+    let mut out = vec![0.0; len];
+    for i in 0..len {
+        out[i] = get_f64(t, &[i, batch_idx]);
+    }
+    out
+}
+
+fn matrix_c64_from_tensor(t: &Tensor, rows: usize, cols: usize) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            out[col_major_index(rows, i, j)] = get_c64(t, &[i, j]);
+        }
+    }
+    out
+}
+
+fn vector_c64_from_tensor(t: &Tensor, len: usize) -> Vec<Complex64> {
+    let mut out = vec![Complex64::new(0.0, 0.0); len];
+    for i in 0..len {
+        out[i] = get_c64(t, &[i]);
+    }
+    out
 }
 
 #[test]
@@ -498,4 +623,139 @@ fn test_tier2_elementwise_ops_complex() {
     let minimum = backend.minimum(&lhs, &rhs);
     assert_c64_close(get_c64(&minimum, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&minimum, &[1]), Complex64::new(1.0, 0.0));
+}
+
+#[test]
+fn test_batched_cholesky() {
+    let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
+    let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
+    let a0 = matmul_f64(&l0, &transpose_f64(&l0, 3, 3), 3, 3, 3);
+    let a1 = matmul_f64(&l1, &transpose_f64(&l1, 3, 3), 3, 3, 3);
+
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 3, 2],
+        a0.iter().chain(a1.iter()).copied().collect(),
+    ));
+    let mut backend = CpuBackend::new();
+    let out = backend.cholesky(&input);
+
+    assert_eq!(out.shape(), &[3, 3, 2]);
+    for batch_idx in 0..2 {
+        let l = batch_matrix_f64_from_tensor(&out, 3, 3, batch_idx);
+        let recon = matmul_f64(&l, &transpose_f64(&l, 3, 3), 3, 3, 3);
+        let expected = batch_matrix_f64_from_tensor(&input, 3, 3, batch_idx);
+        for (actual, expected) in recon.iter().zip(expected.iter()) {
+            assert_f64_close_tol(*actual, *expected, 1.0e-10);
+        }
+    }
+}
+
+#[test]
+fn test_batched_svd() {
+    let a0 = vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0, 2.0, 1.5, 2.0, 0.0, 1.0, -0.5];
+    let a1 = vec![
+        2.0, -1.0, 0.5, 3.0, -0.25, 1.5, -2.0, 0.75, 1.0, 2.5, -1.0, 4.0,
+    ];
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![4, 3, 2],
+        a0.iter().chain(a1.iter()).copied().collect(),
+    ));
+    let mut backend = CpuBackend::new();
+    let out = backend.svd(&input);
+
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0].shape(), &[4, 3, 2]);
+    assert_eq!(out[1].shape(), &[3, 2]);
+    assert_eq!(out[2].shape(), &[3, 3, 2]);
+
+    for batch_idx in 0..2 {
+        let u = batch_matrix_f64_from_tensor(&out[0], 4, 3, batch_idx);
+        let s = batch_vector_f64_from_tensor(&out[1], 3, batch_idx);
+        let vt = batch_matrix_f64_from_tensor(&out[2], 3, 3, batch_idx);
+        let recon = matmul_f64(&matmul_f64(&u, &diag_f64(&s), 4, 3, 3), &vt, 4, 3, 3);
+        let expected = batch_matrix_f64_from_tensor(&input, 4, 3, batch_idx);
+        for (actual, expected) in recon.iter().zip(expected.iter()) {
+            assert_f64_close_tol(*actual, *expected, 1.0e-9);
+        }
+    }
+}
+
+#[test]
+fn test_batched_solve() {
+    let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
+    let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
+    let a0 = matmul_f64(&l0, &transpose_f64(&l0, 3, 3), 3, 3, 3);
+    let a1 = matmul_f64(&l1, &transpose_f64(&l1, 3, 3), 3, 3, 3);
+    let a = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 3, 2],
+        a0.iter().chain(a1.iter()).copied().collect(),
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 1, 2],
+        vec![1.0, 2.0, 3.0, -1.0, 4.0, 0.5],
+    ));
+
+    let mut backend = CpuBackend::new();
+    let x = backend.solve(&a, &b);
+
+    assert_eq!(x.shape(), &[3, 1, 2]);
+    for batch_idx in 0..2 {
+        let a_batch = batch_matrix_f64_from_tensor(&a, 3, 3, batch_idx);
+        let x_batch = batch_matrix_f64_from_tensor(&x, 3, 1, batch_idx);
+        let recon = matmul_f64(&a_batch, &x_batch, 3, 3, 1);
+        let expected = batch_matrix_f64_from_tensor(&b, 3, 1, batch_idx);
+        for (actual, expected) in recon.iter().zip(expected.iter()) {
+            assert_f64_close_tol(*actual, *expected, 1.0e-10);
+        }
+    }
+}
+
+#[test]
+fn test_complex_cholesky() {
+    let l = vec![
+        Complex64::new(2.0, 0.0),
+        Complex64::new(1.0, -1.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.5, 0.0),
+    ];
+    let a = matmul_c64(&l, &conjugate_transpose_c64(&l, 2, 2), 2, 2, 2);
+    let input = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a.clone()));
+
+    let mut backend = CpuBackend::new();
+    let out = backend.cholesky(&input);
+
+    assert_eq!(out.shape(), &[2, 2]);
+    let l_out = matrix_c64_from_tensor(&out, 2, 2);
+    let recon = matmul_c64(&l_out, &conjugate_transpose_c64(&l_out, 2, 2), 2, 2, 2);
+    for (actual, expected) in recon.iter().zip(a.iter()) {
+        assert_c64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+#[test]
+fn test_complex_svd() {
+    let input_data = vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(-1.0, 2.0),
+        Complex64::new(0.5, -1.0),
+        Complex64::new(-0.25, 1.5),
+        Complex64::new(3.0, 0.75),
+    ];
+    let input = Tensor::C64(TypedTensor::from_vec(vec![3, 2], input_data.clone()));
+    let mut backend = CpuBackend::new();
+    let out = backend.svd(&input);
+
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0].shape(), &[3, 2]);
+    assert_eq!(out[1].shape(), &[2]);
+    assert_eq!(out[2].shape(), &[2, 2]);
+
+    let u = matrix_c64_from_tensor(&out[0], 3, 2);
+    let s = vector_c64_from_tensor(&out[1], 2);
+    let vt = matrix_c64_from_tensor(&out[2], 2, 2);
+    let recon = matmul_c64(&matmul_c64(&u, &diag_c64(&s), 3, 2, 2), &vt, 3, 2, 2);
+    for (actual, expected) in recon.iter().zip(input_data.iter()) {
+        assert_c64_close_tol(*actual, *expected, 1.0e-9);
+    }
 }
