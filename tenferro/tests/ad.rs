@@ -213,9 +213,10 @@ fn add_real_reduce_sum_loss(
         vec![ValRef::Local(input), ValRef::Local(conjugated[0])],
         OpMode::Primal,
     );
+    let half = builder.add_op(StdTensorOp::constant_f64(0.5), vec![], OpMode::Primal);
     let scaled = builder.add_op(
-        StdTensorOp::Scale { factor: 0.5 },
-        vec![ValRef::Local(summed[0])],
+        StdTensorOp::Mul,
+        vec![ValRef::Local(half[0]), ValRef::Local(summed[0])],
         OpMode::Primal,
     );
     builder.add_op(

@@ -179,11 +179,6 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Div.n_inputs(), 2);
     assert_eq!(StdTensorOp::Pow.n_inputs(), 2);
     assert_eq!(StdTensorOp::Abs.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Scale { factor: 0.5 }.n_inputs(), 1);
-    assert_eq!(
-        StdTensorOp::ScaleComplex { re: 0.5, im: -1.0 }.n_inputs(),
-        1
-    );
     assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
     assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
     assert_eq!(StdTensorOp::constant_f64(1.0).n_outputs(), 1);
@@ -554,7 +549,7 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
 }
 
 #[test]
-fn test_std_tensor_op_hash_covers_remaining_variants_and_normalizes_zero_scale() {
+fn test_std_tensor_op_hash_covers_remaining_variants() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -600,12 +595,6 @@ fn test_std_tensor_op_hash_covers_remaining_variants_and_normalizes_zero_scale()
         op.hash(&mut hasher);
         assert_ne!(hasher.finish(), 0, "unexpected zero hash for {op:?}");
     }
-
-    let mut neg_zero = DefaultHasher::new();
-    StdTensorOp::Scale { factor: -0.0 }.hash(&mut neg_zero);
-    let mut pos_zero = DefaultHasher::new();
-    StdTensorOp::Scale { factor: 0.0 }.hash(&mut pos_zero);
-    assert_eq!(neg_zero.finish(), pos_zero.finish());
 
     let mut lhs = DefaultHasher::new();
     StdTensorOp::constant_f64(1.25).hash(&mut lhs);
@@ -753,31 +742,6 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
     assert_eq!(sign_fragment.ops()[0].op, StdTensorOp::Neg);
     assert_eq!(sign_fragment.ops()[1].op, StdTensorOp::Add);
 
-    let (scale_none_result, scale_none_fragment) =
-        run_linearize_case(StdTensorOp::Scale { factor: -2.0 }, 0, 0, &[false]);
-    assert_eq!(scale_none_result, vec![None]);
-    assert!(scale_none_fragment.ops().is_empty());
-
-    let (scale_result, scale_fragment) =
-        run_linearize_case(StdTensorOp::Scale { factor: 0.25 }, 0, 0, &[true]);
-    assert!(scale_result[0].is_some());
-    assert_eq!(
-        scale_fragment.ops()[0].op,
-        StdTensorOp::Scale { factor: 0.25 }
-    );
-
-    let (scale_complex_result, scale_complex_fragment) = run_linearize_case(
-        StdTensorOp::ScaleComplex { re: 0.25, im: -0.5 },
-        0,
-        0,
-        &[true],
-    );
-    assert!(scale_complex_result[0].is_some());
-    assert_eq!(
-        scale_complex_fragment.ops()[0].op,
-        StdTensorOp::ScaleComplex { re: 0.25, im: -0.5 }
-    );
-
     let (transpose_div_result, _, transpose_div_fragment) =
         run_transpose_case(StdTensorOp::Div, 2, &[false, true], true);
     assert_eq!(transpose_div_result[0], None);
@@ -815,48 +779,6 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
     assert!(transpose_abs_result[0].is_some());
     assert_eq!(transpose_abs_fragment.ops()[0].op, StdTensorOp::Sign);
     assert_eq!(transpose_abs_fragment.ops()[1].op, StdTensorOp::Mul);
-
-    let (transpose_scale_result, _, transpose_scale_fragment) =
-        run_transpose_case(StdTensorOp::Scale { factor: -3.0 }, 1, &[true], true);
-    assert!(transpose_scale_result[0].is_some());
-    assert_eq!(
-        transpose_scale_fragment.ops()[0].op,
-        StdTensorOp::Scale { factor: -3.0 }
-    );
-
-    let (transpose_scale_complex_result, _, transpose_scale_complex_fragment) = run_transpose_case(
-        StdTensorOp::ScaleComplex { re: 1.5, im: -2.0 },
-        1,
-        &[true],
-        true,
-    );
-    assert!(transpose_scale_complex_result[0].is_some());
-    assert_eq!(
-        transpose_scale_complex_fragment.ops()[0].op,
-        StdTensorOp::ScaleComplex { re: 1.5, im: 2.0 }
-    );
-
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let cotangent = builder.add_input(tensor_input_key(922));
-    let scale_primal_mode = StdTensorOp::Scale { factor: 1.5 }.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &external_inputs(923, 1),
-        &OpMode::Primal,
-    );
-    assert_eq!(scale_primal_mode, vec![None]);
-    assert!(builder.build().ops().is_empty());
-
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let cotangent = builder.add_input(tensor_input_key(924));
-    let scale_complex_primal_mode = StdTensorOp::ScaleComplex { re: 1.5, im: 0.25 }.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &external_inputs(925, 1),
-        &OpMode::Primal,
-    );
-    assert_eq!(scale_complex_primal_mode, vec![None]);
-    assert!(builder.build().ops().is_empty());
 }
 
 #[test]

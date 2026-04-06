@@ -32,14 +32,6 @@ pub(crate) trait Tier2Elem: Copy + Clone + One + Zero {
     fn is_nonzero(self) -> bool;
 }
 
-pub(crate) trait ScaleElem: Copy + Clone + Zero + Mul<Output = Self> {
-    fn from_factor(factor: f64) -> Self;
-}
-
-pub(crate) trait ScaleComplexElem: Copy + Clone + Zero + Mul<Output = Self> {
-    fn from_complex_factor(re: f64, im: f64) -> Self;
-}
-
 macro_rules! impl_tier2_elem_real {
     ($ty:ty) => {
         impl Tier2Elem for $ty {
@@ -151,48 +143,63 @@ impl_tier2_elem_real!(f64);
 impl_tier2_elem_complex!(f32);
 impl_tier2_elem_complex!(f64);
 
-impl ScaleElem for f32 {
-    fn from_factor(factor: f64) -> Self {
-        factor as f32
-    }
-}
-
-impl ScaleElem for f64 {
-    fn from_factor(factor: f64) -> Self {
-        factor
-    }
-}
-
-impl ScaleElem for Complex<f32> {
-    fn from_factor(factor: f64) -> Self {
-        Self::new(factor as f32, 0.0)
-    }
-}
-
-impl ScaleElem for Complex<f64> {
-    fn from_factor(factor: f64) -> Self {
-        Self::new(factor, 0.0)
-    }
-}
-
-impl ScaleComplexElem for Complex<f32> {
-    fn from_complex_factor(re: f64, im: f64) -> Self {
-        Self::new(re as f32, im as f32)
-    }
-}
-
-impl ScaleComplexElem for Complex<f64> {
-    fn from_complex_factor(re: f64, im: f64) -> Self {
-        Self::new(re, im)
-    }
+fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
+where
+    T: Copy + Clone + Zero,
+{
+    TypedTensor::from_vec(vec![], vec![Complex::new(scalar, T::zero())])
 }
 
 pub fn add(lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    dispatch_binary!(lhs, rhs, |a, b| typed_add(a, b))
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Tensor::F32(typed_add(a, b)),
+        (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(typed_add(a, b)),
+        (Tensor::C32(a), Tensor::C32(b)) => Tensor::C32(typed_add(a, b)),
+        (Tensor::C64(a), Tensor::C64(b)) => Tensor::C64(typed_add(a, b)),
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Tensor::C32(typed_add(&scalar, b))
+        }
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Tensor::C32(typed_add(a, &scalar))
+        }
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Tensor::C64(typed_add(&scalar, b))
+        }
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Tensor::C64(typed_add(a, &scalar))
+        }
+        _ => panic!("dtype mismatch in binary op"),
+    }
 }
 
 pub fn mul(lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    dispatch_binary!(lhs, rhs, |a, b| typed_mul(a, b))
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Tensor::F32(typed_mul(a, b)),
+        (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(typed_mul(a, b)),
+        (Tensor::C32(a), Tensor::C32(b)) => Tensor::C32(typed_mul(a, b)),
+        (Tensor::C64(a), Tensor::C64(b)) => Tensor::C64(typed_mul(a, b)),
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Tensor::C32(typed_mul(&scalar, b))
+        }
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Tensor::C32(typed_mul(a, &scalar))
+        }
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Tensor::C64(typed_mul(&scalar, b))
+        }
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Tensor::C64(typed_mul(a, &scalar))
+        }
+        _ => panic!("dtype mismatch in binary op"),
+    }
 }
 
 pub fn div(lhs: &Tensor, rhs: &Tensor) -> Tensor {
@@ -235,48 +242,62 @@ pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor {
     dispatch_ternary!(input, lower, upper, |x, lo, hi| typed_clamp(x, lo, hi))
 }
 
-pub fn scale(input: &Tensor, factor: f64) -> Tensor {
-    dispatch_tensor!(input, t => typed_scale(t, factor))
-}
-
-pub fn scale_complex(input: &Tensor, re: f64, im: f64) -> Tensor {
-    match input {
-        Tensor::C32(t) => Tensor::C32(typed_scale_complex(t, re, im)),
-        Tensor::C64(t) => Tensor::C64(typed_scale_complex(t, re, im)),
-        _ => panic!("scale_complex: input must have complex dtype"),
-    }
-}
-
 pub fn typed_add<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
 where
     T: Copy + Clone + Zero + Add<Output = T>,
 {
-    assert_eq!(lhs.shape, rhs.shape, "add: shape mismatch");
-    let mut out = typed_array(&lhs.shape, T::zero());
-    zip_map2_into(
-        &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
-        |x, y| x + y,
-    )
-    .expect("typed_add");
-    tensor_from_array(out)
+    if lhs.shape == rhs.shape {
+        let mut out = typed_array(&lhs.shape, T::zero());
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view(lhs),
+            &typed_view(rhs),
+            |x, y| x + y,
+        )
+        .expect("typed_add");
+        tensor_from_array(out)
+    } else if lhs.shape.is_empty() {
+        let scalar = lhs.host_data()[0];
+        let mut out = typed_array(&rhs.shape, T::zero());
+        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar + x).expect("scalar_add");
+        tensor_from_array(out)
+    } else if rhs.shape.is_empty() {
+        let scalar = rhs.host_data()[0];
+        let mut out = typed_array(&lhs.shape, T::zero());
+        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x + scalar).expect("scalar_add");
+        tensor_from_array(out)
+    } else {
+        panic!("add: shape mismatch {:?} vs {:?}", lhs.shape, rhs.shape);
+    }
 }
 
 pub fn typed_mul<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
 where
     T: Copy + Clone + Zero + Mul<Output = T>,
 {
-    assert_eq!(lhs.shape, rhs.shape, "mul: shape mismatch");
-    let mut out = typed_array(&lhs.shape, T::zero());
-    zip_map2_into(
-        &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
-        |x, y| x * y,
-    )
-    .expect("typed_mul");
-    tensor_from_array(out)
+    if lhs.shape == rhs.shape {
+        let mut out = typed_array(&lhs.shape, T::zero());
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view(lhs),
+            &typed_view(rhs),
+            |x, y| x * y,
+        )
+        .expect("typed_mul");
+        tensor_from_array(out)
+    } else if lhs.shape.is_empty() {
+        let scalar = lhs.host_data()[0];
+        let mut out = typed_array(&rhs.shape, T::zero());
+        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar * x).expect("scalar_mul");
+        tensor_from_array(out)
+    } else if rhs.shape.is_empty() {
+        let scalar = rhs.host_data()[0];
+        let mut out = typed_array(&lhs.shape, T::zero());
+        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x * scalar).expect("scalar_mul");
+        tensor_from_array(out)
+    } else {
+        panic!("mul: shape mismatch {:?} vs {:?}", lhs.shape, rhs.shape);
+    }
 }
 
 pub fn typed_div<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
@@ -301,26 +322,6 @@ where
 {
     let mut out = typed_array(&input.shape, T::zero());
     map_into(&mut out.view_mut(), &typed_view(input), |x| -x).expect("typed_neg");
-    tensor_from_array(out)
-}
-
-pub(crate) fn typed_scale<T>(input: &TypedTensor<T>, factor: f64) -> TypedTensor<T>
-where
-    T: ScaleElem,
-{
-    let factor = T::from_factor(factor);
-    let mut out = typed_array(&input.shape, T::zero());
-    map_into(&mut out.view_mut(), &typed_view(input), |x| x * factor).expect("typed_scale");
-    tensor_from_array(out)
-}
-
-pub(crate) fn typed_scale_complex<T>(input: &TypedTensor<T>, re: f64, im: f64) -> TypedTensor<T>
-where
-    T: ScaleComplexElem,
-{
-    let factor = T::from_complex_factor(re, im);
-    let mut out = typed_array(&input.shape, T::zero());
-    map_into(&mut out.view_mut(), &typed_view(input), |x| x * factor).expect("typed_scale_complex");
     tensor_from_array(out)
 }
 

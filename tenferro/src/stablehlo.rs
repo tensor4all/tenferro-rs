@@ -50,13 +50,6 @@ pub enum StableHloOp {
     Compare(CompareDir),
     Select,
     Clamp,
-    Scale {
-        factor: f64,
-    },
-    ScaleComplex {
-        re: f64,
-        im: f64,
-    },
     // Tier 2 analytic
     Exp,
     Log,

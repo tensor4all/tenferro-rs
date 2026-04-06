@@ -24,12 +24,6 @@ fn linearize_non_semiring(
         }
         StdTensorOp::Abs => elementwise_tier2::linearize_abs(builder, primal_in, tangent_in),
         StdTensorOp::Sign => elementwise_tier2::linearize_sign(builder, tangent_in),
-        StdTensorOp::Scale { factor } => {
-            elementwise_tier2::linearize_scale(builder, tangent_in, *factor)
-        }
-        StdTensorOp::ScaleComplex { re, im } => {
-            elementwise_tier2::linearize_scale_complex(builder, tangent_in, *re, *im)
-        }
         StdTensorOp::Constant { .. } => vec![None],
         StdTensorOp::Exp => analytic::linearize_exp(builder, primal_out, tangent_in),
         StdTensorOp::Log => analytic::linearize_log(builder, primal_in, tangent_in),
@@ -113,12 +107,6 @@ fn transpose_non_semiring(
         StdTensorOp::Div => elementwise_tier2::transpose_div(builder, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sign => elementwise_tier2::transpose_sign(builder, cotangent_out, mode),
-        StdTensorOp::Scale { factor } => {
-            elementwise_tier2::transpose_scale(builder, cotangent_out, mode, *factor)
-        }
-        StdTensorOp::ScaleComplex { re, im } => {
-            elementwise_tier2::transpose_scale_complex(builder, cotangent_out, mode, *re, *im)
-        }
         StdTensorOp::Constant { .. } => vec![],
         StdTensorOp::Exp => analytic::transpose_exp(builder, cotangent_out, inputs, mode),
         StdTensorOp::Log => analytic::transpose_log(builder, cotangent_out, inputs, mode),

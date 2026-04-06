@@ -49,13 +49,6 @@ pub enum StdTensorOp {
     Compare(CompareDir),
     Select,
     Clamp,
-    Scale {
-        factor: f64,
-    },
-    ScaleComplex {
-        re: f64,
-        im: f64,
-    },
 
     // Tier 2: analytic
     Exp,
@@ -265,11 +258,6 @@ impl Hash for StdTensorOp {
                 input_shape.hash(state);
             }
             Self::Compare(dir) => dir.hash(state),
-            Self::Scale { factor } => hash_f64(*factor, state),
-            Self::ScaleComplex { re, im } => {
-                hash_f64(*re, state);
-                hash_f64(*im, state);
-            }
             Self::ExtractDiag { axis_a, axis_b } | Self::EmbedDiag { axis_a, axis_b } => {
                 axis_a.hash(state);
                 axis_b.hash(state);
@@ -337,8 +325,6 @@ impl GraphOp for StdTensorOp {
             }
             Self::Abs
             | Self::Sign
-            | Self::Scale { .. }
-            | Self::ScaleComplex { .. }
             | Self::Exp
             | Self::Log
             | Self::Sin
@@ -370,8 +356,6 @@ impl GraphOp for StdTensorOp {
             | Self::Div
             | Self::Abs
             | Self::Sign
-            | Self::Scale { .. }
-            | Self::ScaleComplex { .. }
             | Self::Maximum
             | Self::Minimum
             | Self::Compare(_)
