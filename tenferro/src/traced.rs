@@ -295,6 +295,9 @@ impl TracedTensor {
                 .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
         );
 
+        let mut extra_roots = vec![self.fragment.clone()];
+        extra_roots.extend(self.extra_roots.iter().cloned());
+
         TracedTensor {
             shape: self.shape.clone(),
             dtype: self.dtype,
@@ -302,7 +305,7 @@ impl TracedTensor {
             val: tangent_output,
             data: None,
             inputs_map: Arc::new(inputs_map),
-            extra_roots: vec![self.fragment.clone()],
+            extra_roots,
         }
     }
 
@@ -332,6 +335,9 @@ impl TracedTensor {
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
 
+        let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
+        extra_roots.extend(self.extra_roots.iter().cloned());
+
         TracedTensor {
             shape: wrt.shape.clone(),
             dtype: wrt.dtype,
@@ -339,7 +345,7 @@ impl TracedTensor {
             val: cotangent_output,
             data: None,
             inputs_map: Arc::new(inputs_map),
-            extra_roots: vec![self.fragment.clone(), linear_fragment],
+            extra_roots,
         }
     }
 

@@ -390,8 +390,10 @@ fn build_traced_from_tree(
             let fragment = Arc::new(builder.build());
 
             let mut merged = HashMap::new();
+            let mut extra_roots = Vec::new();
             for input in inputs {
                 merged.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+                extra_roots.extend(input.extra_roots.iter().cloned());
             }
 
             TracedTensor {
@@ -401,7 +403,7 @@ fn build_traced_from_tree(
                 val: result_local,
                 data: None,
                 inputs_map: Arc::new(merged),
-                extra_roots: Vec::new(),
+                extra_roots,
             }
         }
         ValRef::External(_) => {

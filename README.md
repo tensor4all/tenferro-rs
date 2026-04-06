@@ -92,12 +92,34 @@ fn main() {
 
 ## Design Notes
 
-- `Tensor` is the concrete dense runtime value.
-- `TracedTensor` is the lazy graph-aware wrapper used for standard-algebra
-  computation and AD.
-- Public einsum uses the free function `tenferro::einsum::einsum(...)`.
-- Multi-output linalg operations are free functions such as `tenferro::svd(...)`
-  and `tenferro::qr(...)`.
+All operations on `TracedTensor` are lazy: they build a computation graph
+instead of executing immediately. Evaluation happens only when `eval()` is
+called, at which point the graph is compiled, optimized, and dispatched to
+a backend (currently CPU via faer/BLAS).
+
+The API naming largely follows PyTorch (`solve`, `triangular_solve`, `eigh`,
+etc.), while the AD backend draws on ideas from JAX's trace-and-lower
+architecture and ChainRules.jl's derivative contract. The key original contributions are:
+
+- **Primitive-agnostic AD engine.** The stack is split into four
+  independent layers — `computegraph` (graph IR), `chainrules-core` (AD
+  trait contract), `tidu` (differentiate/transpose transforms), and
+  `tenferro` (concrete tensor primitives). The AD engine knows nothing
+  about specific operations; adding a new differentiable op only requires
+  implementing a trait, with no changes to the AD infrastructure itself.
+- **Semiring-generic graph execution.** The same graph infrastructure
+  supports custom algebras beyond standard arithmetic. For example,
+  tropical semiring einsum can be executed on the same graph IR without
+  AD, while user-defined numeric types can opt into AD by implementing
+  the `PrimitiveOp` trait.
+
+Key types:
+
+- `Tensor` — concrete dense runtime value (col-major storage).
+- `TracedTensor` — lazy graph-aware wrapper for computation and AD.
+- `Engine` — holds backend + compile cache; triggers evaluation.
+- Public einsum: `tenferro::einsum::einsum(...)`.
+- Multi-output linalg: free functions `tenferro::svd(...)`, `tenferro::qr(...)`, etc.
 
 See [`docs/design/`](docs/design/) for local design notes and
 `../tensor4all-meta/docs/design-v2/` for the current v2 planning documents.

@@ -65,6 +65,7 @@ fn linearize_non_semiring(
         } => linalg::linearize_triangular_solve(
             builder,
             primal_in,
+            primal_out,
             tangent_in,
             *left_side,
             *lower,

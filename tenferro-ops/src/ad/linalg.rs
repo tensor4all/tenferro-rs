@@ -31,30 +31,83 @@ pub fn linearize_solve(
 pub fn linearize_triangular_solve(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     left_side: bool,
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> Vec<Option<LocalValId>> {
-    match tangent_in[1] {
-        Some(db) => {
-            let out = builder.add_op(
-                StdTensorOp::TriangularSolve {
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                },
-                vec![ValRef::External(primal_in[0].clone()), ValRef::Local(db)],
-                OpMode::Linear {
-                    active_mask: vec![false, true],
-                },
-            );
-            vec![Some(out[0])]
-        }
-        None => vec![None],
+    // Equation: op(A) @ X = B  (left_side=true)
+    //       or  X @ op(A) = B  (left_side=false)
+    // where op = identity (transpose_a=false) or transpose (transpose_a=true).
+    //
+    // Linearize: op(A) @ dX = dB - d(op(A)) @ X  (left_side=true)
+    //        or  dX @ op(A) = dB - X @ d(op(A))  (left_side=false)
+    //
+    // When tangent_in[0] (dA) is present, we compute the correction:
+    //   -d(op(A)) @ X  or  -X @ d(op(A))
+    let rhs_tangent = triangular_solve_rhs_tangent(
+        builder,
+        primal_out,
+        tangent_in,
+        left_side,
+        transpose_a,
+    );
+    let Some(rhs_tangent) = rhs_tangent else {
+        return vec![None];
+    };
+
+    let out = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        },
+        vec![
+            ValRef::External(primal_in[0].clone()),
+            ValRef::Local(rhs_tangent),
+        ],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
+fn triangular_solve_rhs_tangent(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    left_side: bool,
+    transpose_a: bool,
+) -> Option<LocalValId> {
+    let mut rhs_tangent = tangent_in[1];
+
+    if let Some(da) = tangent_in[0] {
+        // d(op(A)) = op(dA)
+        let d_op_a = if transpose_a {
+            adjoint_2d_linear(builder, da)
+        } else {
+            da
+        };
+
+        // Correction = d(op(A)) @ X  or  X @ d(op(A))
+        let x = ValRef::External(primal_out[0].clone());
+        let correction = if left_side {
+            matmul_linear(builder, ValRef::Local(d_op_a), x, vec![true, false])
+        } else {
+            matmul_linear(builder, x, ValRef::Local(d_op_a), vec![false, true])
+        };
+        let neg_correction = linear_neg(builder, correction);
+        rhs_tangent = Some(match rhs_tangent {
+            Some(db) => linear_add(builder, db, neg_correction),
+            None => neg_correction,
+        });
     }
+
+    rhs_tangent
 }
 
 pub fn linearize_svd(
