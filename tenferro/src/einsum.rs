@@ -1,8 +1,8 @@
 //! N-ary einsum with configurable contraction strategy.
 //!
-//! This module provides free functions [`einsum`] and [`einsum_with`] that
-//! replace `TracedTensor::traced_einsum`. They build a lazy computation
-//! graph; call `.eval(&mut engine)` on the result to trigger execution.
+//! This module provides free functions [`einsum`] and [`einsum_with`]. They
+//! build a lazy computation graph; call `.eval(&mut engine)` on the result to
+//! trigger execution.
 //!
 //! # Quick start
 //!
@@ -364,8 +364,6 @@ fn walk_nested(
 }
 
 /// Build a [`TracedTensor`] from a contraction tree and inputs.
-///
-/// This is the core logic previously in `TracedTensor::traced_einsum`.
 fn build_traced_from_tree(
     inputs: &[&TracedTensor],
     subscripts: &Subscripts,

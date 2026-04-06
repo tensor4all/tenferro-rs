@@ -23,10 +23,14 @@ pub mod einsum;
 pub mod engine;
 pub mod error;
 pub mod exec;
+mod linalg_api;
 pub mod stablehlo;
 pub mod traced;
 
 pub use engine::Engine;
+pub use linalg_api::{
+    cholesky, eigh, eigh_with_eps, qr, solve, svd, svd_with_eps, triangular_solve,
+};
 pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 pub use traced::TracedTensor;
@@ -49,7 +53,7 @@ pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
         lhs_rank: a.shape.len(),
         rhs_rank: b.shape.len(),
     };
-    a.traced_dot_general(b, config)
+    a.dot_general(b, config)
 }
 
 /// Elementwise power helper.
@@ -60,5 +64,5 @@ pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 /// let y = tenferro::pow(&base, &exp);
 /// ```
 pub fn pow(base: &TracedTensor, exp: &TracedTensor) -> TracedTensor {
-    base.traced_pow(exp)
+    base.pow(exp)
 }

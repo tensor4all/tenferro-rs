@@ -45,7 +45,7 @@ impl std::ops::Add for &TracedTensor {
     type Output = TracedTensor;
 
     fn add(self, rhs: &TracedTensor) -> TracedTensor {
-        self.traced_add(rhs)
+        TracedTensor::add(self, rhs)
     }
 }
 
@@ -53,7 +53,7 @@ impl std::ops::Mul for &TracedTensor {
     type Output = TracedTensor;
 
     fn mul(self, rhs: &TracedTensor) -> TracedTensor {
-        self.traced_mul(rhs)
+        TracedTensor::mul(self, rhs)
     }
 }
 
@@ -61,7 +61,7 @@ impl std::ops::Neg for &TracedTensor {
     type Output = TracedTensor;
 
     fn neg(self) -> TracedTensor {
-        self.traced_neg()
+        TracedTensor::neg(self)
     }
 }
 
@@ -69,7 +69,7 @@ impl std::ops::Div for &TracedTensor {
     type Output = TracedTensor;
 
     fn div(self, rhs: &TracedTensor) -> TracedTensor {
-        self.traced_div(rhs)
+        TracedTensor::div(self, rhs)
     }
 }
 
@@ -164,7 +164,7 @@ impl TracedTensor {
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(vec![self.fragment.clone()]);
+        let view = resolve(self.resolve_roots());
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -198,7 +198,7 @@ impl TracedTensor {
     pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(vec![self.fragment.clone()]);
+        let view = resolve(self.resolve_roots());
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -232,79 +232,213 @@ impl TracedTensor {
         }
     }
 
-    pub fn traced_add(&self, other: &TracedTensor) -> TracedTensor {
+    /// Elementwise addition.
+    ///
+    /// Prefer using the `+` operator when it reads naturally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.add(&z);
+    /// let y2 = &x + &z;
+    /// ```
+    pub fn add(&self, other: &TracedTensor) -> TracedTensor {
         apply_binary(StdTensorOp::Add, self, other, self.shape.clone())
     }
 
-    pub fn traced_mul(&self, other: &TracedTensor) -> TracedTensor {
+    /// Elementwise multiplication.
+    ///
+    /// Prefer using the `*` operator when it reads naturally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.mul(&z);
+    /// let y2 = &x * &z;
+    /// ```
+    pub fn mul(&self, other: &TracedTensor) -> TracedTensor {
         apply_binary(StdTensorOp::Mul, self, other, self.shape.clone())
     }
 
-    pub fn traced_div(&self, other: &TracedTensor) -> TracedTensor {
+    /// Elementwise division.
+    ///
+    /// Prefer using the `/` operator when it reads naturally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.div(&z);
+    /// let y2 = &x / &z;
+    /// ```
+    pub fn div(&self, other: &TracedTensor) -> TracedTensor {
         apply_binary(StdTensorOp::Div, self, other, self.shape.clone())
     }
 
-    pub fn traced_neg(&self) -> TracedTensor {
+    /// Elementwise negation.
+    ///
+    /// Prefer using the unary `-` operator when it reads naturally.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.neg();
+    /// let y2 = -&x;
+    /// ```
+    pub fn neg(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Neg, self, self.shape.clone())
     }
 
-    pub fn traced_conj(&self) -> TracedTensor {
+    /// Elementwise complex conjugate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.conj();
+    /// ```
+    pub fn conj(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Conj, self, self.shape.clone())
     }
 
-    pub fn traced_abs(&self) -> TracedTensor {
+    /// Elementwise absolute value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.abs();
+    /// ```
+    pub fn abs(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Abs, self, self.shape.clone())
     }
 
-    pub fn traced_sign(&self) -> TracedTensor {
+    /// Elementwise sign.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sign();
+    /// ```
+    pub fn sign(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Sign, self, self.shape.clone())
     }
 
-    pub fn traced_exp(&self) -> TracedTensor {
+    /// Elementwise exponential.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.exp();
+    /// ```
+    pub fn exp(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Exp, self, self.shape.clone())
     }
 
-    pub fn traced_log(&self) -> TracedTensor {
+    /// Elementwise natural logarithm.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.log();
+    /// ```
+    pub fn log(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Log, self, self.shape.clone())
     }
 
-    pub fn traced_sin(&self) -> TracedTensor {
+    /// Elementwise sine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sin();
+    /// ```
+    pub fn sin(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Sin, self, self.shape.clone())
     }
 
-    pub fn traced_cos(&self) -> TracedTensor {
+    /// Elementwise cosine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.cos();
+    /// ```
+    pub fn cos(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Cos, self, self.shape.clone())
     }
 
-    pub fn traced_tanh(&self) -> TracedTensor {
+    /// Elementwise hyperbolic tangent.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.tanh();
+    /// ```
+    pub fn tanh(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Tanh, self, self.shape.clone())
     }
 
-    pub fn traced_sqrt(&self) -> TracedTensor {
+    /// Elementwise square root.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.sqrt();
+    /// ```
+    pub fn sqrt(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Sqrt, self, self.shape.clone())
     }
 
-    pub fn traced_rsqrt(&self) -> TracedTensor {
+    /// Elementwise reciprocal square root.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.rsqrt();
+    /// ```
+    pub fn rsqrt(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Rsqrt, self, self.shape.clone())
     }
 
-    pub fn traced_pow(&self, other: &TracedTensor) -> TracedTensor {
+    /// Elementwise power.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = base.pow(&exp);
+    /// ```
+    pub fn pow(&self, other: &TracedTensor) -> TracedTensor {
         apply_binary(StdTensorOp::Pow, self, other, self.shape.clone())
     }
 
-    pub fn traced_expm1(&self) -> TracedTensor {
+    /// Elementwise `exp(x) - 1`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.expm1();
+    /// ```
+    pub fn expm1(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Expm1, self, self.shape.clone())
     }
 
-    pub fn traced_log1p(&self) -> TracedTensor {
+    /// Elementwise `log(1 + x)`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.log1p();
+    /// ```
+    pub fn log1p(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Log1p, self, self.shape.clone())
     }
 
-    pub fn traced_dot_general(
-        &self,
-        other: &TracedTensor,
-        config: DotGeneralConfig,
-    ) -> TracedTensor {
+    /// Generalized tensor contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = a.dot_general(&b, config);
+    /// ```
+    pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
         let lhs_free: Vec<usize> = (0..config.lhs_rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
@@ -329,7 +463,15 @@ impl TracedTensor {
         apply_binary(StdTensorOp::DotGeneral(config), self, other, out_shape)
     }
 
-    pub fn traced_reduce_sum(&self, axes: &[usize]) -> TracedTensor {
+    /// Sum over the given axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_sum(&[0]);
+    /// let y2 = x.sum(&[0]);
+    /// ```
+    pub fn reduce_sum(&self, axes: &[usize]) -> TracedTensor {
         let out_shape: Vec<usize> = (0..self.shape.len())
             .filter(|d| !axes.contains(d))
             .map(|d| self.shape[d])
@@ -344,7 +486,14 @@ impl TracedTensor {
         )
     }
 
-    pub fn traced_reshape(&self, shape: &[usize]) -> TracedTensor {
+    /// Reshape without changing element order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reshape(&[2, 2]);
+    /// ```
+    pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
         apply_unary(
             StdTensorOp::Reshape {
                 from_shape: self.shape.clone(),
@@ -355,7 +504,15 @@ impl TracedTensor {
         )
     }
 
-    pub fn traced_broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
+    /// Broadcast into a larger shape with explicit dimension placement.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.broadcast_in_dim(&[2, 3], &[1]);
+    /// let y2 = x.broadcast(&[2, 3], &[1]);
+    /// ```
+    pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
         apply_unary(
             StdTensorOp::BroadcastInDim {
                 shape: shape.to_vec(),
@@ -366,7 +523,14 @@ impl TracedTensor {
         )
     }
 
-    pub fn traced_transpose(&self, perm: &[usize]) -> TracedTensor {
+    /// Permute tensor axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.transpose(&[1, 0]);
+    /// ```
+    pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
         let out_shape: Vec<usize> = perm.iter().map(|&p| self.shape[p]).collect();
         apply_unary(
             StdTensorOp::Transpose {
@@ -377,7 +541,14 @@ impl TracedTensor {
         )
     }
 
-    pub fn traced_extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
+    /// Extract the diagonal along two axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.extract_diag(0, 1);
+    /// ```
+    pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
         assert!(
             axis_a < self.shape.len() && axis_b < self.shape.len() && axis_a != axis_b,
             "extract_diag: invalid axes"
@@ -391,7 +562,14 @@ impl TracedTensor {
         apply_unary(StdTensorOp::ExtractDiag { axis_a, axis_b }, self, out_shape)
     }
 
-    pub fn traced_embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
+    /// Embed a vector or lower-rank tensor along a diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.embed_diag(0, 1);
+    /// ```
+    pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
         assert!(
             axis_a < self.shape.len() && axis_b <= self.shape.len(),
             "embed_diag: invalid axes"
@@ -401,128 +579,7 @@ impl TracedTensor {
         apply_unary(StdTensorOp::EmbedDiag { axis_a, axis_b }, self, out_shape)
     }
 
-    /// Alias for [`Self::traced_exp`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.exp();
-    /// ```
-    pub fn exp(&self) -> TracedTensor {
-        self.traced_exp()
-    }
-
-    /// Alias for [`Self::traced_log`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.log();
-    /// ```
-    pub fn log(&self) -> TracedTensor {
-        self.traced_log()
-    }
-
-    /// Alias for [`Self::traced_sin`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.sin();
-    /// ```
-    pub fn sin(&self) -> TracedTensor {
-        self.traced_sin()
-    }
-
-    /// Alias for [`Self::traced_cos`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.cos();
-    /// ```
-    pub fn cos(&self) -> TracedTensor {
-        self.traced_cos()
-    }
-
-    /// Alias for [`Self::traced_tanh`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.tanh();
-    /// ```
-    pub fn tanh(&self) -> TracedTensor {
-        self.traced_tanh()
-    }
-
-    /// Alias for [`Self::traced_sqrt`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.sqrt();
-    /// ```
-    pub fn sqrt(&self) -> TracedTensor {
-        self.traced_sqrt()
-    }
-
-    /// Alias for [`Self::traced_conj`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.conj();
-    /// ```
-    pub fn conj(&self) -> TracedTensor {
-        self.traced_conj()
-    }
-
-    /// Alias for [`Self::traced_abs`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.abs();
-    /// ```
-    pub fn abs(&self) -> TracedTensor {
-        self.traced_abs()
-    }
-
-    /// Alias for [`Self::traced_sign`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.sign();
-    /// ```
-    pub fn sign(&self) -> TracedTensor {
-        self.traced_sign()
-    }
-
-    /// Alias for [`Self::traced_reshape`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.reshape(&[2, 2]);
-    /// ```
-    pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
-        self.traced_reshape(shape)
-    }
-
-    /// Alias for [`Self::traced_transpose`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let y = x.transpose(&[1, 0]);
-    /// ```
-    pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
-        self.traced_transpose(perm)
-    }
-
-    /// Alias for [`Self::traced_reduce_sum`].
+    /// Alias for [`Self::reduce_sum`].
     ///
     /// # Examples
     ///
@@ -530,10 +587,10 @@ impl TracedTensor {
     /// let y = x.sum(&[0]);
     /// ```
     pub fn sum(&self, axes: &[usize]) -> TracedTensor {
-        self.traced_reduce_sum(axes)
+        self.reduce_sum(axes)
     }
 
-    /// Alias for [`Self::traced_broadcast_in_dim`].
+    /// Alias for [`Self::broadcast_in_dim`].
     ///
     /// # Examples
     ///
@@ -541,11 +598,15 @@ impl TracedTensor {
     /// let y = x.broadcast(&[2, 3], &[1]);
     /// ```
     pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
-        self.traced_broadcast_in_dim(shape, dims)
+        self.broadcast_in_dim(shape, dims)
     }
 }
 
-fn apply_unary(op: StdTensorOp, input: &TracedTensor, out_shape: Vec<usize>) -> TracedTensor {
+pub(crate) fn apply_unary(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    out_shape: Vec<usize>,
+) -> TracedTensor {
     let mut builder = FragmentBuilder::new();
     builder.add_parent(input.fragment.clone());
     let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
@@ -560,11 +621,11 @@ fn apply_unary(op: StdTensorOp, input: &TracedTensor, out_shape: Vec<usize>) -> 
         val: outputs[0],
         data: None,
         inputs_map: input.inputs_map.clone(),
-        extra_roots: Vec::new(),
+        extra_roots: input.extra_roots.clone(),
     }
 }
 
-fn apply_binary(
+pub(crate) fn apply_binary(
     op: StdTensorOp,
     lhs: &TracedTensor,
     rhs: &TracedTensor,
@@ -581,6 +642,8 @@ fn apply_binary(
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let mut extra_roots = lhs.extra_roots.clone();
+    extra_roots.extend(rhs.extra_roots.iter().cloned());
 
     TracedTensor {
         shape: out_shape,
@@ -589,8 +652,40 @@ fn apply_binary(
         val: outputs[0],
         data: None,
         inputs_map: Arc::new(merged),
-        extra_roots: Vec::new(),
+        extra_roots,
     }
+}
+
+pub(crate) fn apply_multi_output(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    output_shapes: Vec<Vec<usize>>,
+) -> Vec<TracedTensor> {
+    let mut builder = FragmentBuilder::new();
+    builder.add_parent(input.fragment.clone());
+    let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
+    let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    assert_eq!(
+        outputs.len(),
+        output_shapes.len(),
+        "apply_multi_output: output count must match output_shapes"
+    );
+
+    outputs
+        .iter()
+        .zip(output_shapes)
+        .map(|(&val, shape)| TracedTensor {
+            shape,
+            dtype: input.dtype,
+            fragment: fragment.clone(),
+            val,
+            data: None,
+            inputs_map: input.inputs_map.clone(),
+            extra_roots: input.extra_roots.clone(),
+        })
+        .collect()
 }
 
 impl TracedTensor {

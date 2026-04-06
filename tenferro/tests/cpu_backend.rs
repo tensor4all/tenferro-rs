@@ -52,7 +52,7 @@ fn test_faer_gemm_basic_f64() {
         lhs_rank: 2,
         rhs_rank: 2,
     };
-    let mut tc = ta.traced_dot_general(&tb, config);
+    let mut tc = ta.dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -76,7 +76,7 @@ fn test_faer_gemm_basic_f32() {
         lhs_rank: 2,
         rhs_rank: 2,
     };
-    let mut tc = ta.traced_dot_general(&tb, config);
+    let mut tc = ta.dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -108,7 +108,7 @@ fn test_faer_gemm_identity() {
         lhs_rank: 2,
         rhs_rank: 2,
     };
-    let mut tc = ta.traced_dot_general(&ti, config);
+    let mut tc = ta.dot_general(&ti, config);
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -151,7 +151,7 @@ fn test_batched_gemm() {
         lhs_rank: 3,
         rhs_rank: 3,
     };
-    let mut tc = ta.traced_dot_general(&tb, config);
+    let mut tc = ta.dot_general(&tb, config);
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -251,7 +251,7 @@ fn test_vector_dot_product() {
         lhs_rank: 1,
         rhs_rank: 1,
     };
-    let mut tc = tv.traced_dot_general(&tw, config);
+    let mut tc = tv.dot_general(&tw, config);
 
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
