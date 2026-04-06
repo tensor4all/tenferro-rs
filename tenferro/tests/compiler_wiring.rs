@@ -3,7 +3,7 @@ use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::StableHloOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn make_program(instructions: Vec<Instruction<StdTensorOp>>) -> CompiledProgram<StdTensorOp> {
     CompiledProgram {
@@ -220,5 +220,46 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_indexing_ops() {
     assert!(matches!(
         exec.instructions[3].op,
         ExecOp::Pad(ref config) if config == &pad
+    ));
+}
+
+#[test]
+fn lower_to_stablehlo_and_compile_to_exec_wire_constant_and_scale_complex_ops() {
+    let program = CompiledProgram {
+        instructions: vec![
+            make_instr(StdTensorOp::constant_f64(2.5), vec![], vec![1]),
+            make_instr(
+                StdTensorOp::ScaleComplex { re: 1.0, im: -2.0 },
+                vec![0],
+                vec![2],
+            ),
+        ],
+        input_slots: vec![0],
+        output_slots: vec![1, 2],
+        n_slots: 3,
+    };
+
+    let stablehlo = lower_to_stablehlo(&program);
+    assert!(matches!(
+        stablehlo.instructions[0].op,
+        StableHloOp::Constant { dtype: DType::F64, ref bytes }
+            if bytes == &2.5_f64.to_le_bytes().to_vec()
+    ));
+    assert!(stablehlo.instructions[0].input_slots.is_empty());
+    assert!(matches!(
+        stablehlo.instructions[1].op,
+        StableHloOp::ScaleComplex { re, im } if re == 1.0 && im == -2.0
+    ));
+
+    let exec = compile_to_exec(&stablehlo);
+    assert!(matches!(
+        exec.instructions[0].op,
+        ExecOp::Constant { dtype: DType::F64, ref bytes }
+            if bytes == &2.5_f64.to_le_bytes().to_vec()
+    ));
+    assert!(exec.instructions[0].input_slots.is_empty());
+    assert!(matches!(
+        exec.instructions[1].op,
+        ExecOp::ScaleComplex { re, im } if re == 1.0 && im == -2.0
     ));
 }

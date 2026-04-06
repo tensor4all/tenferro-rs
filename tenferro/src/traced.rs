@@ -350,7 +350,8 @@ impl TracedTensor {
 
     /// Scale by a complex scalar: `y = factor * x`.
     ///
-    /// For real scaling, prefer [`scale_real`](Self::scale_real).
+    /// This currently supports complex tensors only. For real scaling, prefer
+    /// [`scale_real`](Self::scale_real).
     ///
     /// # Examples
     ///
@@ -359,19 +360,20 @@ impl TracedTensor {
     /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
     /// ```
     pub fn scale_complex(&self, factor: num_complex::Complex64) -> TracedTensor {
-        // Emit two Scale ops: real part and imaginary part
-        // scale_complex(a + bi, x) = a*x + b*i*x
-        // For simplicity, decompose into: Scale(factor.re) + Scale(factor.im) * Conj trick
-        // Actually, simplest: use Mul with a broadcast constant
-        // But we don't have constant creation.
-        // Use Scale for real part, then if im != 0, use Conj + Scale + Add
-        // TODO: This is a workaround. A proper ComplexScale op would be cleaner.
-        if factor.im == 0.0 {
-            self.scale_real(factor.re)
-        } else {
-            // For now, only support pure real or pure imaginary
-            // General complex scale needs a dedicated op or constant tensor creation
-            todo!("general complex scale requires ComplexScale op or constant tensor creation")
+        match self.dtype {
+            DType::C32 | DType::C64 => apply_unary(
+                StdTensorOp::ScaleComplex {
+                    re: factor.re,
+                    im: factor.im,
+                },
+                self,
+                self.shape.clone(),
+            ),
+            DType::F32 | DType::F64 => {
+                panic!(
+                    "scale_complex only supports complex tensors; use scale_real for real tensors"
+                )
+            }
         }
     }
 

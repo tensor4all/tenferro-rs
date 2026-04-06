@@ -20,6 +20,10 @@ pub enum StableHloOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Constant {
+        dtype: DType,
+        bytes: Vec<u8>,
+    },
     ReduceSum {
         axes: Vec<usize>,
     },
@@ -48,6 +52,10 @@ pub enum StableHloOp {
     Clamp,
     Scale {
         factor: f64,
+    },
+    ScaleComplex {
+        re: f64,
+        im: f64,
     },
     // Tier 2 analytic
     Exp,
@@ -100,8 +108,6 @@ pub enum StableHloOp {
     GetTupleElement {
         index: usize,
     },
-    // Constant (from Fragment input nodes)
-    Constant,
 }
 
 #[derive(Clone, Debug)]

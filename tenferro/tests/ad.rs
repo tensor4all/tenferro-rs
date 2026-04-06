@@ -1429,6 +1429,27 @@ fn grad_conj_sum_complex() {
 }
 
 #[test]
+fn scale_complex_eval_and_grad_complex_sum() {
+    let factor = Complex64::new(0.5, -1.5);
+    let x = TracedTensor::from_tensor(c64_tensor(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+    ));
+
+    let y = x.scale_complex(factor);
+    let y_eval = eval_tensor(y);
+    assert_close_slice_c64(
+        get_c64_data(&y_eval),
+        &[Complex64::new(3.5, -0.5), Complex64::new(-0.75, 4.75)],
+    );
+
+    let loss = x.scale_complex(factor).reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+    let grad_eval = eval_tensor(grad);
+    assert_close_slice_c64(get_c64_data(&grad_eval), &[factor.conj(), factor.conj()]);
+}
+
+#[test]
 fn vjp_matmul() {
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));

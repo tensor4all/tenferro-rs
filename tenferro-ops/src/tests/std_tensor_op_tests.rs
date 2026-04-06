@@ -6,9 +6,12 @@ use chainrules_core::PrimitiveOp;
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
+use num_complex::{Complex32, Complex64};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tenferro_algebra::Standard;
-use tenferro_tensor::{CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig};
+use tenferro_tensor::{
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+};
 
 use crate::input_key::TensorInputKey;
 
@@ -113,6 +116,7 @@ fn test_std_tensor_op_input_output_counts() {
         .n_inputs(),
         1
     );
+    assert_eq!(StdTensorOp::constant_f64(1.0).n_inputs(), 0);
     assert_eq!(
         StdTensorOp::ExtractDiag {
             axis_a: 0,
@@ -176,8 +180,13 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Pow.n_inputs(), 2);
     assert_eq!(StdTensorOp::Abs.n_inputs(), 1);
     assert_eq!(StdTensorOp::Scale { factor: 0.5 }.n_inputs(), 1);
+    assert_eq!(
+        StdTensorOp::ScaleComplex { re: 0.5, im: -1.0 }.n_inputs(),
+        1
+    );
     assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
     assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
+    assert_eq!(StdTensorOp::constant_f64(1.0).n_outputs(), 1);
     assert_eq!(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -597,6 +606,54 @@ fn test_std_tensor_op_hash_covers_remaining_variants_and_normalizes_zero_scale()
     let mut pos_zero = DefaultHasher::new();
     StdTensorOp::Scale { factor: 0.0 }.hash(&mut pos_zero);
     assert_eq!(neg_zero.finish(), pos_zero.finish());
+
+    let mut lhs = DefaultHasher::new();
+    StdTensorOp::constant_f64(1.25).hash(&mut lhs);
+    let mut rhs = DefaultHasher::new();
+    StdTensorOp::constant_f64(1.25).hash(&mut rhs);
+    assert_eq!(lhs.finish(), rhs.finish());
+}
+
+#[test]
+fn test_std_tensor_op_constant_constructors_encode_expected_bytes() {
+    assert_eq!(
+        StdTensorOp::constant_f64(1.25),
+        StdTensorOp::Constant {
+            dtype: DType::F64,
+            bytes: 1.25_f64.to_le_bytes().to_vec(),
+        }
+    );
+    assert_eq!(
+        StdTensorOp::constant_f32(1.25),
+        StdTensorOp::Constant {
+            dtype: DType::F32,
+            bytes: 1.25_f32.to_le_bytes().to_vec(),
+        }
+    );
+
+    let c64 = Complex64::new(1.0, -2.0);
+    let mut c64_bytes = Vec::new();
+    c64_bytes.extend_from_slice(&c64.re.to_le_bytes());
+    c64_bytes.extend_from_slice(&c64.im.to_le_bytes());
+    assert_eq!(
+        StdTensorOp::constant_c64(c64),
+        StdTensorOp::Constant {
+            dtype: DType::C64,
+            bytes: c64_bytes,
+        }
+    );
+
+    let c32 = Complex32::new(1.0, -2.0);
+    let mut c32_bytes = Vec::new();
+    c32_bytes.extend_from_slice(&c32.re.to_le_bytes());
+    c32_bytes.extend_from_slice(&c32.im.to_le_bytes());
+    assert_eq!(
+        StdTensorOp::constant_c32(c32),
+        StdTensorOp::Constant {
+            dtype: DType::C32,
+            bytes: c32_bytes,
+        }
+    );
 }
 
 #[test]
@@ -627,6 +684,11 @@ fn test_std_tensor_op_linearize_none_tangent_paths_return_none() {
     let (result, fragment) = run_linearize_case(StdTensorOp::Pow, 2, 1, &[false, false]);
     assert_eq!(result, vec![None]);
     assert!(fragment.ops().is_empty());
+
+    let (constant_result, constant_fragment) =
+        run_linearize_case(StdTensorOp::constant_f64(1.0), 0, 0, &[]);
+    assert_eq!(constant_result, vec![None]);
+    assert!(constant_fragment.ops().is_empty());
 }
 
 #[test]
@@ -704,6 +766,18 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
         StdTensorOp::Scale { factor: 0.25 }
     );
 
+    let (scale_complex_result, scale_complex_fragment) = run_linearize_case(
+        StdTensorOp::ScaleComplex { re: 0.25, im: -0.5 },
+        0,
+        0,
+        &[true],
+    );
+    assert!(scale_complex_result[0].is_some());
+    assert_eq!(
+        scale_complex_fragment.ops()[0].op,
+        StdTensorOp::ScaleComplex { re: 0.25, im: -0.5 }
+    );
+
     let (transpose_div_result, _, transpose_div_fragment) =
         run_transpose_case(StdTensorOp::Div, 2, &[false, true], true);
     assert_eq!(transpose_div_result[0], None);
@@ -750,6 +824,18 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
         StdTensorOp::Scale { factor: -3.0 }
     );
 
+    let (transpose_scale_complex_result, _, transpose_scale_complex_fragment) = run_transpose_case(
+        StdTensorOp::ScaleComplex { re: 1.5, im: -2.0 },
+        1,
+        &[true],
+        true,
+    );
+    assert!(transpose_scale_complex_result[0].is_some());
+    assert_eq!(
+        transpose_scale_complex_fragment.ops()[0].op,
+        StdTensorOp::ScaleComplex { re: 1.5, im: 2.0 }
+    );
+
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let cotangent = builder.add_input(tensor_input_key(922));
     let scale_primal_mode = StdTensorOp::Scale { factor: 1.5 }.transpose_rule(
@@ -760,6 +846,24 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
     );
     assert_eq!(scale_primal_mode, vec![None]);
     assert!(builder.build().ops().is_empty());
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let cotangent = builder.add_input(tensor_input_key(924));
+    let scale_complex_primal_mode = StdTensorOp::ScaleComplex { re: 1.5, im: 0.25 }.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &external_inputs(925, 1),
+        &OpMode::Primal,
+    );
+    assert_eq!(scale_complex_primal_mode, vec![None]);
+    assert!(builder.build().ops().is_empty());
+}
+
+#[test]
+fn test_std_tensor_op_constant_transpose_rule_has_no_inputs_or_ops() {
+    let (result, _, fragment) = run_transpose_case(StdTensorOp::constant_f64(1.0), 0, &[], true);
+    assert!(result.is_empty());
+    assert!(fragment.ops().is_empty());
 }
 
 #[test]

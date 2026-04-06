@@ -170,6 +170,10 @@ impl TensorBackend for CpuBackend {
         self.install(|| elementwise::scale(input, factor))
     }
 
+    fn scale_complex(&mut self, input: &Tensor, re: f64, im: f64) -> Tensor {
+        self.install(|| elementwise::scale_complex(input, re, im))
+    }
+
     fn exp(&mut self, input: &Tensor) -> Tensor {
         self.install(|| analytic::exp(input))
     }

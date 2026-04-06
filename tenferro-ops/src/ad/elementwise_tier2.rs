@@ -186,6 +186,27 @@ pub fn linearize_scale(
     }
 }
 
+pub fn linearize_scale_complex(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    re: f64,
+    im: f64,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::ScaleComplex { re, im },
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
 pub fn transpose_div(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
@@ -274,6 +295,31 @@ pub fn transpose_scale(
         Some(ct) => {
             let out = builder.add_op(
                 StdTensorOp::Scale { factor },
+                vec![ValRef::Local(ct)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn transpose_scale_complex(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    mode: &OpMode,
+    re: f64,
+    im: f64,
+) -> Vec<Option<LocalValId>> {
+    if !unary_is_active(mode) {
+        return vec![None];
+    }
+    match cotangent_out[0] {
+        Some(ct) => {
+            let out = builder.add_op(
+                StdTensorOp::ScaleComplex { re, im: -im },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
                     active_mask: vec![true],

@@ -9,8 +9,8 @@ use crate::config::{
 };
 use crate::cpu::{
     add, broadcast_in_dim, conj, dynamic_slice, embed_diagonal, extract_diagonal, gather, mul, neg,
-    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scatter, transpose, tril, triu,
-    CpuBackend,
+    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scale_complex, scatter,
+    transpose, tril, triu, CpuBackend,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -321,6 +321,25 @@ fn test_add_mul() {
     assert_eq!(get_f64(&prod, &[1, 0]), 40.0);
     assert_eq!(get_f64(&prod, &[0, 1]), 90.0);
     assert_eq!(get_f64(&prod, &[1, 1]), 160.0);
+}
+
+#[test]
+fn test_scale_complex() {
+    let input = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+    ));
+    let output = scale_complex(&input, 2.0, -1.0);
+
+    assert_c64_close(get_c64(&output, &[0]), Complex64::new(4.0, 3.0));
+    assert_c64_close(get_c64(&output, &[1]), Complex64::new(-5.5, 4.0));
+}
+
+#[test]
+fn test_scale_complex_rejects_real_inputs() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![1], vec![2.0]));
+    let result = catch_unwind(AssertUnwindSafe(|| scale_complex(&input, 1.0, 1.0)));
+    assert!(result.is_err());
 }
 
 #[test]

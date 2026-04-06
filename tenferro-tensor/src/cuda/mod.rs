@@ -57,6 +57,9 @@ macro_rules! impl_stub_backend {
             fn scale(&mut self, _input: &Tensor, _factor: f64) -> Tensor {
                 todo!(concat!($label, " scale"))
             }
+            fn scale_complex(&mut self, _input: &Tensor, _re: f64, _im: f64) -> Tensor {
+                todo!(concat!($label, " scale_complex"))
+            }
             fn exp(&mut self, _input: &Tensor) -> Tensor {
                 todo!(concat!($label, " exp"))
             }
