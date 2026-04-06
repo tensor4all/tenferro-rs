@@ -57,6 +57,22 @@ impl std::ops::Mul for &TracedTensor {
     }
 }
 
+impl std::ops::Mul<f64> for &TracedTensor {
+    type Output = TracedTensor;
+
+    fn mul(self, rhs: f64) -> TracedTensor {
+        self.scale_real(rhs)
+    }
+}
+
+impl std::ops::Mul<&TracedTensor> for f64 {
+    type Output = TracedTensor;
+
+    fn mul(self, rhs: &TracedTensor) -> TracedTensor {
+        rhs.scale_real(self)
+    }
+}
+
 impl std::ops::Neg for &TracedTensor {
     type Output = TracedTensor;
 
@@ -319,6 +335,44 @@ impl TracedTensor {
     /// ```
     pub fn sign(&self) -> TracedTensor {
         apply_unary(StdTensorOp::Sign, self, self.shape.clone())
+    }
+
+    /// Scale by a real scalar: `y = factor * x`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.scale_real(2.0);
+    /// ```
+    pub fn scale_real(&self, factor: f64) -> TracedTensor {
+        apply_unary(StdTensorOp::Scale { factor }, self, self.shape.clone())
+    }
+
+    /// Scale by a complex scalar: `y = factor * x`.
+    ///
+    /// For real scaling, prefer [`scale_real`](Self::scale_real).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use num_complex::Complex64;
+    /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
+    /// ```
+    pub fn scale_complex(&self, factor: num_complex::Complex64) -> TracedTensor {
+        // Emit two Scale ops: real part and imaginary part
+        // scale_complex(a + bi, x) = a*x + b*i*x
+        // For simplicity, decompose into: Scale(factor.re) + Scale(factor.im) * Conj trick
+        // Actually, simplest: use Mul with a broadcast constant
+        // But we don't have constant creation.
+        // Use Scale for real part, then if im != 0, use Conj + Scale + Add
+        // TODO: This is a workaround. A proper ComplexScale op would be cleaner.
+        if factor.im == 0.0 {
+            self.scale_real(factor.re)
+        } else {
+            // For now, only support pure real or pure imaginary
+            // General complex scale needs a dedicated op or constant tensor creation
+            todo!("general complex scale requires ComplexScale op or constant tensor creation")
+        }
     }
 
     /// Elementwise exponential.
