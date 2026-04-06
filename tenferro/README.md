@@ -1,143 +1,55 @@
 # tenferro
 
-AD-aware tensor interface layer on top of `tenferro-rs`.
+Traced tensor frontend for the `tenferro-rs` v2 workspace.
 
-## Status
+`tenferro` is the main user-facing crate for standard dense numeric computation.
+It owns the lazy graph surface (`TracedTensor`), the execution engine
+(`Engine<B>`), StableHLO-style lowering, execution-IR compilation, public
+einsum helpers, public multi-output linalg helpers, and first-order AD entry
+points.
 
-The current public surface is intentionally narrow:
+## Public Surface
 
-- Dynamic tensor frontend:
-  - `Tensor`
-  - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
-- Reverse-mode helpers:
-  - `Tensor::with_requires_grad`
-  - `Tensor::grad`
-  - `Tensor::backward`
-  - free `grad(...)` / `backward(...)`
-- Public JVP transform:
-  - `jvp(...)`
-  - `JvpResult` with `outputs` and `output_tangents`
-- Direct tensor methods:
-  - elementwise/reduction: `add`, `exp`, `sum`
-  - tensor contraction: `einsum`
-  - linalg: `solve`, `solve_triangular`, `det`, `inv`, `slogdet`, `cholesky`,
-    `lstsq`, `lu`, `norm`, `vector_norm`, `matrix_norm`, `qr`, `svd`, `eig`,
-    `eigh`, `pinv`, `matrix_exp`
-- Runtime control:
-  - `RuntimeContext`
-  - `set_default_runtime`
-  - `with_default_runtime`
-  - `runtime::with_runtime`
+- `TracedTensor`
+- `Engine`
+- `einsum::einsum` and `einsum::einsum_with`
+- free linalg helpers such as `svd`, `qr`, `eigh`, `solve`, `cholesky`, and
+  `triangular_solve`
+- `TracedTensor::grad`, `TracedTensor::jvp`, `TracedTensor::vjp`
+- re-exported dense runtime types from `tenferro-tensor`:
+  `Tensor`, `TypedTensor`, `DType`, `CpuBackend`
 
-`Tensor` is a public façade over `tidu::Value<DynTensor>`. Reverse-mode graph
-state lives in the `Value` carrier; `tenferro` does not keep a second legacy
-carrier layer.
-
-The public `jvp(...)` transform is a small forward-mode seam for the currently
-wired tensor methods. It returns both the primal outputs and optional output
-tangents in `JvpResult`. It is not a public dual-builder API, and it does not
-promise higher-order forward-mode or HVP support.
-
-## Tensor AD coverage
-
-### Public `Tensor` methods wired into `jvp(...)`
-
-| Operation | Public `Tensor` entrypoint | JVP dtypes |
-|-----------|----------------------------|------------|
-| add | `Tensor::add` | real + complex |
-| exp | `Tensor::exp` | real + complex |
-| sum | `Tensor::sum` | real + complex |
-| einsum | `Tensor::einsum` | real + complex |
-| solve | `Tensor::solve` | real + complex |
-| solve_triangular | `Tensor::solve_triangular` | real + complex |
-| det | `Tensor::det` | real + complex |
-| inv | `Tensor::inv` | real + complex |
-| slogdet | `Tensor::slogdet` | real + complex |
-| cholesky | `Tensor::cholesky` | real + complex |
-| lstsq | `Tensor::lstsq` | real only |
-| lu | `Tensor::lu` | real + complex |
-| norm | `Tensor::norm` | real + complex, current slice: whole-tensor `NormKind`; complex inputs currently support `Fro` and rank-1 `Lp(2)` |
-| vector_norm | `Tensor::vector_norm` | real + complex, current slice: rank-1 with `dim=None`, `keepdim=false`, `ord=P(2)` |
-| matrix_norm | `Tensor::matrix_norm` | real + complex, current slice: rank-2 with `dim=None` or `(0, 1)`, `keepdim=false`, `ord=Fro` |
-| qr | `Tensor::qr` | real + complex |
-| svd | `Tensor::svd` | real + complex |
-| eig | `Tensor::eig` | real input, complex outputs |
-| eigh | `Tensor::eigh` | real + complex Hermitian input |
-| pinv | `Tensor::pinv` | real + complex |
-| matrix_exp | `Tensor::matrix_exp` | real + complex |
-
-At the current `Tensor` seam, all operations with internal first-order
-`frule/rrule` coverage are exposed on the public dynamic AD surface.
-
-## Runtime-backed operations
-
-`add`, `exp`, and `sum` work directly on the dynamic carrier.
-
-Operations that dispatch into tenferro runtimes must run under an installed
-runtime:
-
-- `Tensor::einsum`
-- `Tensor::solve`
-- `Tensor::solve_triangular`
-- `Tensor::det`
-- `Tensor::inv`
-- `Tensor::slogdet`
-- `Tensor::cholesky`
-- `Tensor::lstsq`
-- `Tensor::lu`
-- `Tensor::norm`
-- `Tensor::vector_norm`
-- `Tensor::matrix_norm`
-- `Tensor::qr`
-- `Tensor::svd`
-- `Tensor::eig`
-- `Tensor::eigh`
-- `Tensor::pinv`
-- `Tensor::matrix_exp`
-
-Install a default runtime with `set_default_runtime(...)` or use
-`runtime::with_runtime(...)` for an explicit scoped call.
+## Example
 
 ```rust
-use tenferro::{jvp, Tensor};
+use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
 
-let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])?;
-let result = jvp(
-    |inputs| {
-        let y = inputs[0].add(&inputs[0])?.exp()?.sum()?;
-        Ok(vec![y])
-    },
-    &[x],
-    &[Some(Tensor::from_slice(&[1.0_f64, 0.0], &[2])?)],
-)?;
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
 
-assert_eq!(result.outputs.len(), 1);
-assert_eq!(result.output_tangents.len(), 1);
-# Ok::<(), tenferro::Error>(())
+fn main() {
+    let a = TracedTensor::from_tensor(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let b = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 2],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
+    let out = c.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+}
 ```
 
-## Custom downstream operations
+## Notes
 
-Downstream crates that need custom differentiable operations should implement:
-
-- `LinearizableOp<DynTensor>`
-- `LinearizedOp<DynTensor>`
-
-The intended seam is `primal + linearize + jvp/vjp`.
-
-## Development
-
-```bash
-cargo fmt --all
-cargo clippy --workspace
-cargo test --release -p tenferro
-```
-
-## License
-
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](./LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](./LICENSE-MIT))
-
-at your option.
+- `Tensor` is the concrete dense runtime value at graph boundaries.
+- `TracedTensor` is the graph-aware lazy wrapper.
+- GPU support is partial and experimental.
+- The crate no longer exposes the older runtime-installation and dynamic-carrier
+  API family.

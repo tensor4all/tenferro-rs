@@ -57,7 +57,8 @@ impl Subscripts {
     ///
     /// Parentheses in the notation are accepted but stripped during parsing.
     /// To respect parenthesized contraction order, use [`crate::NestedEinsum::parse`]
-    /// or pass the parenthesized string directly to [`crate::einsum`].
+    /// or pass the parenthesized string to the higher-level
+    /// `tenferro::einsum::einsum_with` helper.
     ///
     /// # Examples
     ///

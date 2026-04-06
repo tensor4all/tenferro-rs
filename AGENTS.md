@@ -34,11 +34,11 @@ Every public type, trait, and function **must** include minimal but sufficient u
 ## Project Overview
 
 **tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates). It provides:
-- Dense tensor types with CPU/GPU support
-- Family-based primitive execution protocol (`TensorSemiringCore/FastPath`, `TensorScalarPrims`, `TensorAnalyticPrims`)
+- Dense tensor types with CPU/GPU placement metadata
+- Graph-based traced execution via `TracedTensor` + `Engine`
 - High-level einsum with N-ary contraction tree optimization
-- Automatic differentiation (VJP/JVP) [future]
-- C FFI for Julia/Python integration (`tenferro-capi`)
+- First-order automatic differentiation (VJP/JVP) for the standard dense numeric path
+- StableHLO-style lowering plus an execution IR for backend dispatch
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits
@@ -163,7 +163,7 @@ If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting auto
 cargo build
 
 # Build a specific crate
-cargo build -p tenferro-prims
+cargo build -p tenferro
 
 # Run all tests
 cargo test
@@ -182,14 +182,9 @@ cargo fmt --check
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
-# Run benchmarks
-cargo bench
-
-# Run a specific benchmark
-cargo bench -p tenferro-prims -- contraction
-
-# Run benchmarks with native CPU features
-RUSTFLAGS="-C target-cpu=native" cargo bench
+# Build rustdoc and docs site inputs
+cargo doc --workspace --no-deps
+python3 scripts/check-docs-site.py
 ```
 
 ## CPU Kernel Implementation Rules
@@ -297,21 +292,17 @@ for_each_index(&dims, |idx| {
 ### Layered Design
 
 ```
-Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: exposes einsum + SVD with AD rules (f64, stateless rrule/frule)
-Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
-         tenferro-linalg       — Public/composite tensor linalg, result shaping, linalg AD rules
-Layer 3: tenferro-prims        — Semiring/scalar/analytic execution families
-                                 (TensorSemiringCore/FastPath, TensorScalarPrims, TensorAnalyticPrims)
-         tenferro-linalg-prims — Backend-facing factorization/solve/eigensolver kernel contracts
-Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
-                                 impl Differentiable for Tensor<T>
+Layer 4: tenferro             — Public traced frontend: Engine, TracedTensor, lowering, execution,
+                                einsum/linalg convenience APIs, VJP/JVP
+Layer 3: tenferro-einsum      — High-level einsum syntax, contraction planning, fragment builder
+         tenferro-ops         — Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rules
+Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
+                                CUDA/ROCm backend stubs, execution kernels
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
          tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
          tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
          tenferro-device       — Device enum, Error/Result types
-Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
-         GPU backends          — cuTENSOR / hipTensor via tenferro-device vtable [future]
 
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
@@ -319,11 +310,10 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 `chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
 of any tensor type. `chainrules` provides engine-independent scalar AD rules,
 and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
-`Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
-Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
-AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
-`tenferro-linalg` owns linalg AD functions (`svd_rrule`, `svd_frule`, etc.),
-while `tenferro-linalg-prims` owns only backend-facing execution contracts.
+`tenferro-tensor` owns the concrete dense runtime value types and backend
+execution surface. `tenferro-ops/src/ad/` is the semantic source of truth for
+first-order AD rules. `tenferro` owns traced graph construction, lowering, and
+public evaluation APIs.
 
 ## AI Workflow Scripts
 
@@ -356,29 +346,23 @@ tenferro-device (← strided-view for StridedError, ← thiserror)
 tenferro-algebra (← strided-traits)
     │  HasAlgebra trait (UX sugar), Semiring trait, Standard<T> typed algebra
     │
-    ├────────────────────┐
-    ↓                    ↓
-tenferro-device  tenferro-tensor
-    │              (← strided-view,
-    │               ← strided-traits,
-    │               ← num-traits,
-    │               ← chainrules-core)
-    │               impl Differentiable for Tensor<T>
-    │                    │
-    └────────┬───────────┘
-             ├───────────────┐
-             ↓               ↓
-        tenferro-prims   tenferro-linalg-prims
-          (← strided-view,
-           ← strided-traits,
-           ← tenferro-tensor)
-             │               │
-             ▼               ▼
-        tenferro-einsum
-          (← strided-traits, ← tidu)
-        tenferro-linalg
-          (← strided-traits, ← chainrules-core, ← tenferro-linalg-prims)
-               ↓
-          tenferro-capi
-              (← tenferro-tensor, ← tenferro-einsum, ← tenferro-linalg, ← tenferro-device)
+    ↓
+tenferro-tensor
+    (← strided-kernel,
+     ← strided-traits,
+     ← num-traits)
+         │
+         ▼
+tenferro-ops
+    (← computegraph,
+     ← tidu,
+     ← tenferro-tensor)
+         │
+         ▼
+tenferro-einsum
+    (← omeco, ← tenferro-ops)
+         │
+         ▼
+tenferro
+    (← computegraph, ← tidu, ← tenferro-einsum, ← tenferro-ops, ← tenferro-tensor)
 ```
