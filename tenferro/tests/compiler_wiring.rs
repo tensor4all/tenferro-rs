@@ -1,4 +1,5 @@
 use computegraph::compile::{CompiledProgram, Instruction};
+use num_complex::Complex64;
 use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::StableHloOp;
@@ -45,7 +46,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(StdTensorOp::Reverse { axes: vec![0] }, vec![1], vec![7]),
         make_instr(StdTensorOp::Concatenate { axis: 0 }, vec![0, 1], vec![8]),
         make_instr(StdTensorOp::Tril { k: -1 }, vec![2], vec![9]),
-        make_instr(StdTensorOp::Scale { factor: 0.5 }, vec![0], vec![10]),
+        make_instr(StdTensorOp::Mul, vec![0, 1], vec![10]),
         make_instr(
             StdTensorOp::TriangularSolve {
                 left_side: true,
@@ -90,7 +91,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
     ));
     assert!(matches!(
         stablehlo.instructions[7].op,
-        StableHloOp::Scale { factor } if factor == 0.5
+        StableHloOp::Multiply
     ));
     assert!(matches!(
         stablehlo.instructions[8].op,
@@ -132,10 +133,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         ExecOp::Concatenate { axis: 0 }
     ));
     assert!(matches!(exec.instructions[6].op, ExecOp::Tril { k: -1 }));
-    assert!(matches!(
-        exec.instructions[7].op,
-        ExecOp::Scale { factor } if factor == 0.5
-    ));
+    assert!(matches!(exec.instructions[7].op, ExecOp::Multiply));
     assert!(matches!(
         exec.instructions[8].op,
         ExecOp::TriangularSolve {
@@ -224,17 +222,18 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_indexing_ops() {
 }
 
 #[test]
-fn lower_to_stablehlo_and_compile_to_exec_wire_constant_and_scale_complex_ops() {
+fn lower_to_stablehlo_and_compile_to_exec_wire_constant_ops() {
+    let complex = Complex64::new(1.0, -2.0);
+    let mut complex_bytes = Vec::new();
+    complex_bytes.extend_from_slice(&complex.re.to_le_bytes());
+    complex_bytes.extend_from_slice(&complex.im.to_le_bytes());
+
     let program = CompiledProgram {
         instructions: vec![
             make_instr(StdTensorOp::constant_f64(2.5), vec![], vec![1]),
-            make_instr(
-                StdTensorOp::ScaleComplex { re: 1.0, im: -2.0 },
-                vec![0],
-                vec![2],
-            ),
+            make_instr(StdTensorOp::constant_c64(complex), vec![], vec![2]),
         ],
-        input_slots: vec![0],
+        input_slots: vec![],
         output_slots: vec![1, 2],
         n_slots: 3,
     };
@@ -248,7 +247,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_constant_and_scale_complex_ops() 
     assert!(stablehlo.instructions[0].input_slots.is_empty());
     assert!(matches!(
         stablehlo.instructions[1].op,
-        StableHloOp::ScaleComplex { re, im } if re == 1.0 && im == -2.0
+        StableHloOp::Constant { dtype: DType::C64, ref bytes } if bytes == &complex_bytes
     ));
 
     let exec = compile_to_exec(&stablehlo);
@@ -260,6 +259,6 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_constant_and_scale_complex_ops() 
     assert!(exec.instructions[0].input_slots.is_empty());
     assert!(matches!(
         exec.instructions[1].op,
-        ExecOp::ScaleComplex { re, im } if re == 1.0 && im == -2.0
+        ExecOp::Constant { dtype: DType::C64, ref bytes } if bytes == &complex_bytes
     ));
 }

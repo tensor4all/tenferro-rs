@@ -9,8 +9,8 @@ use crate::config::{
 };
 use crate::cpu::{
     add, broadcast_in_dim, conj, dynamic_slice, embed_diagonal, extract_diagonal, gather, mul, neg,
-    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scale_complex, scatter,
-    transpose, tril, triu, CpuBackend,
+    pad, reduce_max, reduce_min, reduce_prod, reduce_sum, reshape, scatter, transpose, tril, triu,
+    CpuBackend,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -324,22 +324,64 @@ fn test_add_mul() {
 }
 
 #[test]
-fn test_scale_complex() {
-    let input = Tensor::C64(TypedTensor::from_vec(
-        vec![2],
-        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
-    ));
-    let output = scale_complex(&input, 2.0, -1.0);
+fn test_add_mul_rank0_broadcast() {
+    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
+    let tensor = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
 
-    assert_c64_close(get_c64(&output, &[0]), Complex64::new(4.0, 3.0));
-    assert_c64_close(get_c64(&output, &[1]), Complex64::new(-5.5, 4.0));
+    let scalar_plus_tensor = add(&scalar, &tensor);
+    let tensor_plus_scalar = add(&tensor, &scalar);
+    let scalar_times_tensor = mul(&scalar, &tensor);
+    let tensor_times_scalar = mul(&tensor, &scalar);
+
+    for actual in [&scalar_plus_tensor, &tensor_plus_scalar] {
+        assert_eq!(actual.shape(), &[2, 2]);
+        assert_eq!(get_f64(actual, &[0, 0]), 3.0);
+        assert_eq!(get_f64(actual, &[1, 0]), 4.0);
+        assert_eq!(get_f64(actual, &[0, 1]), 5.0);
+        assert_eq!(get_f64(actual, &[1, 1]), 6.0);
+    }
+
+    for actual in [&scalar_times_tensor, &tensor_times_scalar] {
+        assert_eq!(actual.shape(), &[2, 2]);
+        assert_eq!(get_f64(actual, &[0, 0]), 2.0);
+        assert_eq!(get_f64(actual, &[1, 0]), 4.0);
+        assert_eq!(get_f64(actual, &[0, 1]), 6.0);
+        assert_eq!(get_f64(actual, &[1, 1]), 8.0);
+    }
 }
 
 #[test]
-fn test_scale_complex_rejects_real_inputs() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![1], vec![2.0]));
-    let result = catch_unwind(AssertUnwindSafe(|| scale_complex(&input, 1.0, 1.0)));
-    assert!(result.is_err());
+fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
+    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
+    let tensor = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+    ));
+
+    let scalar_times_tensor = mul(&scalar, &tensor);
+    let tensor_times_scalar = mul(&tensor, &scalar);
+
+    for actual in [&scalar_times_tensor, &tensor_times_scalar] {
+        assert_eq!(actual.shape(), &[2]);
+        assert_c64_close(get_c64(actual, &[0]), Complex64::new(2.0, 4.0));
+        assert_c64_close(get_c64(actual, &[1]), Complex64::new(-6.0, 1.0));
+    }
+}
+
+#[test]
+fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
+    let scalar = Tensor::C64(TypedTensor::from_vec(
+        vec![],
+        vec![Complex64::new(2.0, -1.0)],
+    ));
+    let tensor = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+    ));
+    let output = mul(&scalar, &tensor);
+
+    assert_c64_close(get_c64(&output, &[0]), Complex64::new(4.0, 3.0));
+    assert_c64_close(get_c64(&output, &[1]), Complex64::new(-5.5, 4.0));
 }
 
 #[test]

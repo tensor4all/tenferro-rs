@@ -56,13 +56,6 @@ pub enum ExecOp {
     Compare(CompareDir),
     Select,
     Clamp,
-    Scale {
-        factor: f64,
-    },
-    ScaleComplex {
-        re: f64,
-        im: f64,
-    },
     Exp,
     Log,
     Sin,
@@ -202,10 +195,6 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 get(&slots, &inst.input_slots, 1),
                 get(&slots, &inst.input_slots, 2),
             ),
-            ExecOp::Scale { factor } => backend.scale(get(&slots, &inst.input_slots, 0), *factor),
-            ExecOp::ScaleComplex { re, im } => {
-                backend.scale_complex(get(&slots, &inst.input_slots, 0), *re, *im)
-            }
             ExecOp::Exp => backend.exp(get(&slots, &inst.input_slots, 0)),
             ExecOp::Log => backend.log(get(&slots, &inst.input_slots, 0)),
             ExecOp::Sin => backend.sin(get(&slots, &inst.input_slots, 0)),

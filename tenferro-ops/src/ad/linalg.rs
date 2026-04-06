@@ -113,7 +113,7 @@ pub fn linearize_svd(
     let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
     // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
     let d_udv_diag = hadamard_fixed_linear(builder, ValRef::Local(s_inv_mat), anti_hermitian);
-    let d_udv_diag = linear_unary(builder, StdTensorOp::Scale { factor: 0.5 }, d_udv_diag);
+    let d_udv_diag = linear_scale(builder, d_udv_diag, 0.5);
 
     let dss = hadamard_fixed_linear(builder, ValRef::Local(s_dim), ds_mat);
     let dss_h = adjoint_2d_linear(builder, dss);
@@ -269,13 +269,7 @@ pub fn linearize_cholesky(
         },
     )[0];
     let diag_s = extract_diag_linear(builder, s);
-    let half_diag = builder.add_op(
-        StdTensorOp::Scale { factor: 0.5 },
-        vec![ValRef::Local(diag_s)],
-        OpMode::Linear {
-            active_mask: vec![true],
-        },
-    )[0];
+    let half_diag = linear_scale(builder, diag_s, 0.5);
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     let phi_s = linear_add(builder, strict_lower, half_diag_mat);
     let dl = matmul_linear(builder, l, ValRef::Local(phi_s), vec![false, true]);
@@ -327,7 +321,7 @@ pub fn linearize_qr(
         },
     )[0];
     let sym_diag = extract_diag_linear(builder, sym);
-    let half_sym_diag = linear_unary(builder, StdTensorOp::Scale { factor: 0.5 }, sym_diag);
+    let half_sym_diag = linear_scale(builder, sym_diag, 0.5);
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -504,7 +498,12 @@ fn fixed_scale(
     input: ValRef<StdTensorOp>,
     factor: f64,
 ) -> LocalValId {
-    fixed_unary(builder, StdTensorOp::Scale { factor }, input)
+    let constant = builder.add_op(StdTensorOp::constant_f64(factor), vec![], OpMode::Primal);
+    builder.add_op(
+        StdTensorOp::Mul,
+        vec![ValRef::Local(constant[0]), input],
+        OpMode::Primal,
+    )[0]
 }
 
 fn broadcast_in_dim_fixed(
@@ -535,6 +534,21 @@ fn linear_add(
 
 fn linear_neg(builder: &mut FragmentBuilder<StdTensorOp>, input: LocalValId) -> LocalValId {
     linear_unary(builder, StdTensorOp::Neg, input)
+}
+
+fn linear_scale(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    factor: f64,
+) -> LocalValId {
+    let constant = builder.add_op(StdTensorOp::constant_f64(factor), vec![], OpMode::Primal);
+    builder.add_op(
+        StdTensorOp::Mul,
+        vec![ValRef::Local(constant[0]), ValRef::Local(input)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0]
 }
 
 fn linear_sub(
@@ -668,13 +682,7 @@ fn self_adjoint_from_lower_linear(
     let diag = extract_diag_linear(builder, input);
     let diag_h = linear_unary(builder, StdTensorOp::Conj, diag);
     let diag_sum = linear_add(builder, diag, diag_h);
-    let real_diag = builder.add_op(
-        StdTensorOp::Scale { factor: 0.5 },
-        vec![ValRef::Local(diag_sum)],
-        OpMode::Linear {
-            active_mask: vec![true],
-        },
-    )[0];
+    let real_diag = linear_scale(builder, diag_sum, 0.5);
     let diag_mat = embed_diag_linear(builder, real_diag);
     linear_add(builder, offdiag, diag_mat)
 }

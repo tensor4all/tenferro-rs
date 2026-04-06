@@ -61,10 +61,6 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Compare(dir) => StableHloOp::Compare(dir.clone()),
                 StdTensorOp::Select => StableHloOp::Select,
                 StdTensorOp::Clamp => StableHloOp::Clamp,
-                StdTensorOp::Scale { factor } => StableHloOp::Scale { factor: *factor },
-                StdTensorOp::ScaleComplex { re, im } => {
-                    StableHloOp::ScaleComplex { re: *re, im: *im }
-                }
                 StdTensorOp::Exp => StableHloOp::Exp,
                 StdTensorOp::Log => StableHloOp::Log,
                 StdTensorOp::Sin => StableHloOp::Sin,
@@ -225,8 +221,6 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Compare(dir) => ExecOp::Compare(dir.clone()),
                 StableHloOp::Select => ExecOp::Select,
                 StableHloOp::Clamp => ExecOp::Clamp,
-                StableHloOp::Scale { factor } => ExecOp::Scale { factor: *factor },
-                StableHloOp::ScaleComplex { re, im } => ExecOp::ScaleComplex { re: *re, im: *im },
                 StableHloOp::Constant { dtype, bytes } => ExecOp::Constant {
                     dtype: *dtype,
                     bytes: bytes.clone(),
