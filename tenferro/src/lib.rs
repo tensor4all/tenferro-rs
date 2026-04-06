@@ -56,7 +56,7 @@ pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
     a.dot_general(b, config)
 }
 
-/// Elementwise power helper.
+/// Elementwise power helper with NumPy-style broadcasting.
 ///
 /// # Examples
 ///

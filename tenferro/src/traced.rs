@@ -31,6 +31,7 @@ fn next_pass_id() -> u64 {
     NEXT_DIFF_PASS_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+#[derive(Clone)]
 pub struct TracedTensor {
     pub shape: Vec<usize>,
     pub dtype: DType,
@@ -39,6 +40,93 @@ pub struct TracedTensor {
     pub data: Option<Tensor>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Tensor>>,
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
+}
+
+/// Compute a broadcast output shape following NumPy rules.
+///
+/// Returns `None` when the two shapes are incompatible.
+fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
+    let rank = a.len().max(b.len());
+    let mut result = Vec::with_capacity(rank);
+    for index in 0..rank {
+        let a_dim = if index < rank - a.len() {
+            1
+        } else {
+            a[index - (rank - a.len())]
+        };
+        let b_dim = if index < rank - b.len() {
+            1
+        } else {
+            b[index - (rank - b.len())]
+        };
+        if a_dim == b_dim {
+            result.push(a_dim);
+        } else if a_dim == 1 {
+            result.push(b_dim);
+        } else if b_dim == 1 {
+            result.push(a_dim);
+        } else {
+            return None;
+        }
+    }
+    Some(result)
+}
+
+/// Broadcast a traced tensor to `target_shape`.
+///
+/// Expanding singleton axes are first reshaped away so the existing
+/// `BroadcastInDim` transpose rule reduces them correctly during VJP.
+fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
+    if tensor.shape == target_shape {
+        return tensor.clone();
+    }
+
+    assert!(
+        tensor.shape.len() <= target_shape.len(),
+        "cannot broadcast higher-rank shape {:?} to {:?}",
+        tensor.shape,
+        target_shape
+    );
+
+    let rank_diff = target_shape.len() - tensor.shape.len();
+    let mut source_shape = Vec::with_capacity(tensor.shape.len());
+    let mut dims = Vec::with_capacity(tensor.shape.len());
+    for (src_axis, &src_dim) in tensor.shape.iter().enumerate() {
+        let dst_axis = src_axis + rank_diff;
+        let dst_dim = target_shape[dst_axis];
+        assert!(
+            src_dim == dst_dim || src_dim == 1,
+            "cannot broadcast shape {:?} to {:?}",
+            tensor.shape,
+            target_shape
+        );
+        if src_dim == 1 && dst_dim != 1 {
+            continue;
+        }
+        source_shape.push(src_dim);
+        dims.push(dst_axis);
+    }
+
+    let source = if source_shape == tensor.shape {
+        tensor.clone()
+    } else {
+        tensor.reshape(&source_shape)
+    };
+    source.broadcast_in_dim(target_shape, &dims)
+}
+
+/// Broadcast two tensors to a common shape.
+fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
+    if a.shape == b.shape {
+        return (a.clone(), b.clone());
+    }
+    let target = broadcast_shape(&a.shape, &b.shape).unwrap_or_else(|| {
+        panic!(
+            "incompatible shapes for broadcast: {:?} and {:?}",
+            a.shape, b.shape
+        )
+    });
+    (broadcast_to(a, &target), broadcast_to(b, &target))
 }
 
 impl std::ops::Add for &TracedTensor {
@@ -248,7 +336,7 @@ impl TracedTensor {
         }
     }
 
-    /// Elementwise addition.
+    /// Elementwise addition with NumPy-style broadcasting.
     ///
     /// Prefer using the `+` operator when it reads naturally.
     ///
@@ -259,10 +347,11 @@ impl TracedTensor {
     /// let y2 = &x + &z;
     /// ```
     pub fn add(&self, other: &TracedTensor) -> TracedTensor {
-        apply_binary(StdTensorOp::Add, self, other, self.shape.clone())
+        let (lhs, rhs) = broadcast_binary(self, other);
+        apply_binary(StdTensorOp::Add, &lhs, &rhs, lhs.shape.clone())
     }
 
-    /// Elementwise multiplication.
+    /// Elementwise multiplication with NumPy-style broadcasting.
     ///
     /// Prefer using the `*` operator when it reads naturally.
     ///
@@ -273,10 +362,11 @@ impl TracedTensor {
     /// let y2 = &x * &z;
     /// ```
     pub fn mul(&self, other: &TracedTensor) -> TracedTensor {
-        apply_binary(StdTensorOp::Mul, self, other, self.shape.clone())
+        let (lhs, rhs) = broadcast_binary(self, other);
+        apply_binary(StdTensorOp::Mul, &lhs, &rhs, lhs.shape.clone())
     }
 
-    /// Elementwise division.
+    /// Elementwise division with NumPy-style broadcasting.
     ///
     /// Prefer using the `/` operator when it reads naturally.
     ///
@@ -287,7 +377,8 @@ impl TracedTensor {
     /// let y2 = &x / &z;
     /// ```
     pub fn div(&self, other: &TracedTensor) -> TracedTensor {
-        apply_binary(StdTensorOp::Div, self, other, self.shape.clone())
+        let (lhs, rhs) = broadcast_binary(self, other);
+        apply_binary(StdTensorOp::Div, &lhs, &rhs, lhs.shape.clone())
     }
 
     /// Elementwise negation.
@@ -454,7 +545,7 @@ impl TracedTensor {
         apply_unary(StdTensorOp::Rsqrt, self, self.shape.clone())
     }
 
-    /// Elementwise power.
+    /// Elementwise power with NumPy-style broadcasting.
     ///
     /// # Examples
     ///
@@ -462,7 +553,8 @@ impl TracedTensor {
     /// let y = base.pow(&exp);
     /// ```
     pub fn pow(&self, other: &TracedTensor) -> TracedTensor {
-        apply_binary(StdTensorOp::Pow, self, other, self.shape.clone())
+        let (lhs, rhs) = broadcast_binary(self, other);
+        apply_binary(StdTensorOp::Pow, &lhs, &rhs, lhs.shape.clone())
     }
 
     /// Elementwise `exp(x) - 1`.

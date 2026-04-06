@@ -1494,6 +1494,17 @@ fn grad_broadcast_reduce() {
 }
 
 #[test]
+fn grad_broadcast_add_singleton_lhs() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![1], vec![1.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let loss = (&a + &b).sum(&[0]);
+    let grad = loss.grad(&a).unwrap();
+
+    let result = eval_tensor(grad);
+    assert_close_slice(get_f64_data(&result), &[3.0]);
+}
+
+#[test]
 fn grad_reshape() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
     let y = x.reshape(&[2, 2]);

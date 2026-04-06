@@ -1,4 +1,5 @@
 use tenferro::engine::Engine;
+use tenferro::pow;
 use tenferro::traced::{eval_all, TracedTensor};
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
@@ -27,6 +28,19 @@ fn test_add() {
 }
 
 #[test]
+fn test_add_broadcast_scalar_plus_vector() {
+    let scalar = f64_tensor(vec![], vec![1.0]);
+    let vector = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
+    let ta = TracedTensor::from_tensor(scalar);
+    let tb = TracedTensor::from_tensor(vector);
+    let mut tc = &ta + &tb;
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = tc.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3]);
+    assert_eq!(get_f64_data(result), &[2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn test_mul() {
     let a = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
@@ -36,6 +50,45 @@ fn test_mul() {
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[4.0, 10.0, 18.0]);
+}
+
+#[test]
+fn test_mul_broadcast_column_times_row() {
+    let column = f64_tensor(vec![3, 1], vec![1.0, 2.0, 3.0]);
+    let row = f64_tensor(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]);
+    let ta = TracedTensor::from_tensor(column);
+    let tb = TracedTensor::from_tensor(row);
+    let mut tc = &ta * &tb;
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = tc.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3, 4]);
+    assert_eq!(
+        get_f64_data(result),
+        &[10.0, 20.0, 30.0, 20.0, 40.0, 60.0, 30.0, 60.0, 90.0, 40.0, 80.0, 120.0]
+    );
+}
+
+#[test]
+fn test_div_broadcast_vector_by_scalar() {
+    let vector = f64_tensor(vec![3], vec![2.0, 4.0, 8.0]);
+    let scalar = f64_tensor(vec![], vec![2.0]);
+    let ta = TracedTensor::from_tensor(vector);
+    let tb = TracedTensor::from_tensor(scalar);
+    let mut tc = &ta / &tb;
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = tc.eval(&mut engine).unwrap();
+    assert_eq!(get_f64_data(result), &[1.0, 2.0, 4.0]);
+}
+
+#[test]
+fn test_pow_broadcast_vector_with_scalar_exponent() {
+    let base = TracedTensor::from_tensor(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
+    let exp = TracedTensor::from_tensor(f64_tensor(vec![], vec![2.0]));
+    let mut out = pow(&base, &exp);
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = out.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3]);
+    assert_eq!(get_f64_data(result), &[4.0, 9.0, 16.0]);
 }
 
 #[test]
