@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::buffer_pool::BufferPool;
 use super::exec::ExecProgram;
+use tenferro_einsum::ContractionTree;
 use tenferro_tensor::TensorBackend;
 
 /// Cache key derived from the compiled graph topology.
@@ -52,6 +54,7 @@ pub struct Engine<B: TensorBackend> {
     pub(crate) backend: B,
     pub(crate) compile_cache: HashMap<CacheKey, ExecProgram>,
     pub(crate) buffer_pool: BufferPool,
+    pub(crate) einsum_cache: HashMap<(String, Vec<Vec<usize>>), Arc<ContractionTree>>,
 }
 
 impl<B: TensorBackend> Engine<B> {
@@ -70,6 +73,7 @@ impl<B: TensorBackend> Engine<B> {
             backend,
             compile_cache: HashMap::new(),
             buffer_pool: BufferPool::new(),
+            einsum_cache: HashMap::new(),
         }
     }
 
@@ -85,6 +89,20 @@ impl<B: TensorBackend> Engine<B> {
     /// ```
     pub fn buffer_pool_len(&self) -> usize {
         self.buffer_pool.len()
+    }
+
+    /// Number of cached einsum contraction trees currently retained by the engine.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// assert_eq!(engine.einsum_cache_len(), 0);
+    /// ```
+    pub fn einsum_cache_len(&self) -> usize {
+        self.einsum_cache.len()
     }
 
     /// Look up a cached ExecProgram, or cache and return the given one.

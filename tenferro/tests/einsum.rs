@@ -249,6 +249,47 @@ fn einsum_matmul() {
 }
 
 #[test]
+fn einsum_cache_reuses_contraction_path() {
+    let mut engine = Engine::new(CpuBackend::new());
+
+    let a = TracedTensor::from_tensor(f64_tensor(vec![3, 4], (1..=12).map(|x| x as f64).collect()));
+    let b = TracedTensor::from_tensor(f64_tensor(
+        vec![4, 5],
+        (1..=20).map(|x| (x * 2) as f64).collect(),
+    ));
+
+    let c1 = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
+    assert_eq!(c1.shape, vec![3, 5]);
+    assert_eq!(engine.einsum_cache_len(), 1);
+
+    let a2 = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 4],
+        (21..=32).map(|x| x as f64).collect(),
+    ));
+    let b2 = TracedTensor::from_tensor(f64_tensor(
+        vec![4, 5],
+        (41..=60).map(|x| x as f64).collect(),
+    ));
+
+    let c2 = einsum(&mut engine, &[&a2, &b2], "ij,jk->ik").unwrap();
+    assert_eq!(c2.shape, vec![3, 5]);
+    assert_eq!(engine.einsum_cache_len(), 1);
+
+    let a3 = TracedTensor::from_tensor(f64_tensor(
+        vec![5, 6],
+        (1..=30).map(|x| (x as f64) / 10.0).collect(),
+    ));
+    let b3 = TracedTensor::from_tensor(f64_tensor(
+        vec![6, 7],
+        (1..=42).map(|x| (x as f64) / 5.0).collect(),
+    ));
+
+    let c3 = einsum(&mut engine, &[&a3, &b3], "ij,jk->ik").unwrap();
+    assert_eq!(c3.shape, vec![5, 7]);
+    assert_eq!(engine.einsum_cache_len(), 2);
+}
+
+#[test]
 fn einsum_outer_product() {
     // "i,j->ij"
     let u = f64_tensor(vec![2], vec![1.0, 2.0]);

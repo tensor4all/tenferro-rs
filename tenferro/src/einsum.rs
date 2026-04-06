@@ -242,14 +242,38 @@ pub fn einsum_with<B: TensorBackend>(
     subscripts: &str,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
-    let _ = engine;
     let subs =
         Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| t.shape.clone()).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
 
-    let tree = resolve_strategy(optimize, &subs, &shape_refs)?;
-    Ok(build_traced_from_tree(inputs, &subs, &tree, &shapes))
+    match optimize {
+        // Reuse TreeSA results for repeated calls with the same equation and input shapes.
+        EinsumOptimize::Auto(opts) => {
+            let cache_key = (subscripts.to_string(), shapes.clone());
+            let tree = if let Some(cached) = engine.einsum_cache.get(&cache_key) {
+                cached.clone()
+            } else {
+                let tree = Arc::new(resolve_strategy(
+                    EinsumOptimize::Auto(opts),
+                    &subs,
+                    &shape_refs,
+                )?);
+                engine.einsum_cache.insert(cache_key, tree.clone());
+                tree
+            };
+            Ok(build_traced_from_tree(
+                inputs,
+                &subs,
+                tree.as_ref(),
+                &shapes,
+            ))
+        }
+        optimize => {
+            let tree = resolve_strategy(optimize, &subs, &shape_refs)?;
+            Ok(build_traced_from_tree(inputs, &subs, &tree, &shapes))
+        }
+    }
 }
 
 /// Resolve an [`EinsumOptimize`] strategy to a [`ContractionTree`].

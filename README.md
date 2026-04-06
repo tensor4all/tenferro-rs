@@ -120,6 +120,5 @@ Key types:
 - `Engine` — holds backend + compile cache; triggers evaluation.
 - Public einsum: `tenferro::einsum::einsum(...)`.
 - Multi-output linalg: free functions `tenferro::svd(...)`, `tenferro::qr(...)`, etc.
-
 See [`docs/design/`](docs/design/) for local design notes and
 `../tensor4all-meta/docs/design-v2/` for the current v2 planning documents.
