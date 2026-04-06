@@ -8,6 +8,7 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
+use num_complex::{Complex32, Complex64};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
@@ -127,6 +128,12 @@ fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, Traced
         )
     });
     (broadcast_to(a, &target), broadcast_to(b, &target))
+}
+
+fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
+    let scalar = apply_nullary(op, vec![], input.dtype);
+    let factor = broadcast_to(&scalar, &input.shape);
+    apply_binary(StdTensorOp::Mul, input, &factor, input.shape.clone())
 }
 
 impl std::ops::Add for &TracedTensor {
@@ -436,7 +443,13 @@ impl TracedTensor {
     /// let y = x.scale_real(2.0);
     /// ```
     pub fn scale_real(&self, factor: f64) -> TracedTensor {
-        apply_unary(StdTensorOp::Scale { factor }, self, self.shape.clone())
+        let op = match self.dtype {
+            DType::F64 => StdTensorOp::constant_f64(factor),
+            DType::F32 => StdTensorOp::constant_f32(factor as f32),
+            DType::C64 => StdTensorOp::constant_c64(Complex64::new(factor, 0.0)),
+            DType::C32 => StdTensorOp::constant_c32(Complex32::new(factor as f32, 0.0)),
+        };
+        scale_with_constant(self, op)
     }
 
     /// Scale by a complex scalar: `y = factor * x`.
@@ -450,15 +463,12 @@ impl TracedTensor {
     /// use num_complex::Complex64;
     /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
     /// ```
-    pub fn scale_complex(&self, factor: num_complex::Complex64) -> TracedTensor {
+    pub fn scale_complex(&self, factor: Complex64) -> TracedTensor {
         match self.dtype {
-            DType::C32 | DType::C64 => apply_unary(
-                StdTensorOp::ScaleComplex {
-                    re: factor.re,
-                    im: factor.im,
-                },
+            DType::C64 => scale_with_constant(self, StdTensorOp::constant_c64(factor)),
+            DType::C32 => scale_with_constant(
                 self,
-                self.shape.clone(),
+                StdTensorOp::constant_c32(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
             DType::F32 | DType::F64 => {
                 panic!(
@@ -770,6 +780,23 @@ pub(crate) fn apply_unary(
         data: None,
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
+    }
+}
+
+pub(crate) fn apply_nullary(op: StdTensorOp, shape: Vec<usize>, dtype: DType) -> TracedTensor {
+    let mut builder = FragmentBuilder::new();
+    let outputs = builder.add_op(op, vec![], OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+
+    TracedTensor {
+        shape,
+        dtype,
+        fragment,
+        val: outputs[0],
+        data: None,
+        inputs_map: Arc::new(HashMap::new()),
+        extra_roots: Vec::new(),
     }
 }
 

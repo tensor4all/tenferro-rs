@@ -1429,6 +1429,20 @@ fn grad_conj_sum_complex() {
 }
 
 #[test]
+fn scale_real_eval_and_grad_sum() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+
+    let y = x.scale_real(2.0);
+    let y_eval = eval_tensor(y);
+    assert_close_slice(get_f64_data(&y_eval), &[2.0, 4.0, 6.0]);
+
+    let loss = x.scale_real(2.0).reduce_sum(&[0]);
+    let grad = loss.grad(&x).unwrap();
+    let grad_eval = eval_tensor(grad);
+    assert_close_slice(get_f64_data(&grad_eval), &[2.0, 2.0, 2.0]);
+}
+
+#[test]
 fn scale_complex_eval_and_grad_complex_sum() {
     let factor = Complex64::new(0.5, -1.5);
     let x = TracedTensor::from_tensor(c64_tensor(

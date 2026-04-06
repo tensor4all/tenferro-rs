@@ -81,6 +81,24 @@ fn test_div_broadcast_vector_by_scalar() {
 }
 
 #[test]
+fn test_scale_real() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let mut y = x.scale_real(2.0);
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(get_f64_data(result), &[2.0, 4.0, 6.0]);
+}
+
+#[test]
+fn test_scale_real_operator_overload() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let mut y = &x * 3.0;
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(get_f64_data(result), &[3.0, 6.0, 9.0]);
+}
+
+#[test]
 fn test_pow_broadcast_vector_with_scalar_exponent() {
     let base = TracedTensor::from_tensor(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
     let exp = TracedTensor::from_tensor(f64_tensor(vec![], vec![2.0]));
