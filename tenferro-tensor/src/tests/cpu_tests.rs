@@ -618,6 +618,56 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
 }
 
 #[test]
+fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+    );
+
+    assert_eq!(c.shape(), &[0, 0]);
+    match c {
+        Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
+        _ => panic!("expected F64 tensor"),
+    }
+}
+
+#[test]
+fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 0], Vec::new()));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 3], Vec::new()));
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+    );
+
+    assert_eq!(c.shape(), &[2, 3]);
+    match c {
+        Tensor::F64(inner) => assert_eq!(inner.host_data(), &[0.0; 6]),
+        _ => panic!("expected F64 tensor"),
+    }
+}
+
+#[test]
 fn test_transpose() {
     let t = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],
@@ -684,6 +734,25 @@ fn test_triu_3x3() {
         },
         &[1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0]
     );
+}
+
+#[test]
+fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
+    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2, 0], Vec::new()));
+
+    let lower = tril(&t, 0);
+    assert_eq!(lower.shape(), &[2, 2, 0]);
+    match lower {
+        Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
+        _ => panic!("expected f64 tensor"),
+    }
+
+    let upper = triu(&t, 0);
+    assert_eq!(upper.shape(), &[2, 2, 0]);
+    match upper {
+        Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
+        _ => panic!("expected f64 tensor"),
+    }
 }
 
 #[test]

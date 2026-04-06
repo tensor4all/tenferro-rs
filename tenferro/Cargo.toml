@@ -35,3 +35,5 @@ tenferro-algebra = { path = "../tenferro-algebra" }
 
 [dev-dependencies]
 tenferro-algebra = { path = "../tenferro-algebra" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

@@ -80,12 +80,13 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 },
                 StdTensorOp::Pad(config) => StableHloOp::Pad(config.clone()),
                 StdTensorOp::Reverse { axes } => StableHloOp::Reverse { axes: axes.clone() },
-                StdTensorOp::Cholesky => StableHloOp::Cholesky,
+                StdTensorOp::Cholesky { .. } => StableHloOp::Cholesky,
                 StdTensorOp::TriangularSolve {
                     left_side,
                     lower,
                     transpose_a,
                     unit_diagonal,
+                    ..
                 } => StableHloOp::TriangularSolve {
                     left_side: *left_side,
                     lower: *lower,
@@ -95,13 +96,13 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Svd { .. } => StableHloOp::CustomCall {
                     target: "svd".to_string(),
                 },
-                StdTensorOp::Qr => StableHloOp::CustomCall {
+                StdTensorOp::Qr { .. } => StableHloOp::CustomCall {
                     target: "qr".to_string(),
                 },
                 StdTensorOp::Eigh { .. } => StableHloOp::CustomCall {
                     target: "eigh".to_string(),
                 },
-                StdTensorOp::Solve => StableHloOp::CustomCall {
+                StdTensorOp::Solve { .. } => StableHloOp::CustomCall {
                     target: "solve".to_string(),
                 },
             };

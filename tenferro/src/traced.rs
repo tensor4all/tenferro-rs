@@ -272,7 +272,35 @@ impl TracedTensor {
         Ok(self.vjp(wrt, &seed))
     }
 
+    /// Like [`grad`](Self::grad) but returns `None` when the scalar output does
+    /// not depend on `wrt`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let maybe_dx = loss.try_grad(&x)?;
+    /// ```
+    pub fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
+        let n_elements: usize = self.shape.iter().product();
+        if n_elements != 1 {
+            return Err(Error::NonScalarGrad {
+                shape: self.shape.clone(),
+            });
+        }
+
+        let ones = ones_tensor(self.dtype, self.shape.clone());
+        let seed = TracedTensor::from_tensor(ones);
+        Ok(self.try_vjp(wrt, &seed))
+    }
+
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
+        self.try_jvp(wrt, tangent)
+            .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
+    }
+
+    /// Like [`jvp`](Self::jvp) but returns `None` when the output does not
+    /// depend on `wrt` (i.e. the tangent is structurally zero).
+    pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let view = resolve(self.resolve_roots());
@@ -282,8 +310,7 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
         );
-        let tangent_output = linear.tangent_outputs[0]
-            .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", wrt_input_key));
+        let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
@@ -298,7 +325,7 @@ impl TracedTensor {
         let mut extra_roots = vec![self.fragment.clone()];
         extra_roots.extend(self.extra_roots.iter().cloned());
 
-        TracedTensor {
+        Some(TracedTensor {
             shape: self.shape.clone(),
             dtype: self.dtype,
             fragment: Arc::new(linear.fragment),
@@ -306,10 +333,15 @@ impl TracedTensor {
             data: None,
             inputs_map: Arc::new(inputs_map),
             extra_roots,
-        }
+        })
     }
 
     pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
+        self.try_vjp(wrt, cotangent)
+            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)))
+    }
+
+    fn try_vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let view = resolve(self.resolve_roots());
@@ -321,8 +353,7 @@ impl TracedTensor {
         );
         let transposed = transpose(&linear);
         let linear_fragment = Arc::new(linear.fragment);
-        let cotangent_output = transposed.tangent_outputs[0]
-            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", wrt_input_key));
+        let cotangent_output = transposed.tangent_outputs[0]?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
 
@@ -338,7 +369,7 @@ impl TracedTensor {
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
         extra_roots.extend(self.extra_roots.iter().cloned());
 
-        TracedTensor {
+        Some(TracedTensor {
             shape: wrt.shape.clone(),
             dtype: wrt.dtype,
             fragment: Arc::new(transposed.fragment),
@@ -346,7 +377,7 @@ impl TracedTensor {
             data: None,
             inputs_map: Arc::new(inputs_map),
             extra_roots,
-        }
+        })
     }
 
     /// Elementwise addition with NumPy-style broadcasting.

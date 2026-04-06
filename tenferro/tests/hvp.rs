@@ -317,7 +317,11 @@ fn hvp_for_qr_diag_r_sq() {
     };
     let gp = grad_at(ap);
     let gm = grad_at(am);
-    let fd: Vec<f64> = gp.iter().zip(&gm).map(|(a, b)| (a - b) / (2.0 * h)).collect();
+    let fd: Vec<f64> = gp
+        .iter()
+        .zip(&gm)
+        .map(|(a, b)| (a - b) / (2.0 * h))
+        .collect();
 
     assert_close(hv_val, &fd, 1e-3);
 }

@@ -235,13 +235,24 @@ fn test_std_tensor_op_input_output_counts() {
 
 #[test]
 fn test_std_tensor_op_linalg_input_output_counts() {
-    assert_eq!(StdTensorOp::Cholesky.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Cholesky.n_outputs(), 1);
+    assert_eq!(
+        StdTensorOp::Cholesky {
+            input_shape: vec![2, 2],
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Cholesky {
+            input_shape: vec![2, 2],
+        }
+        .n_outputs(),
+        1
+    );
     assert_eq!(
         StdTensorOp::Svd {
             eps: 1.0e-12,
-            m: 2,
-            n: 2,
+            input_shape: vec![2, 2],
         }
         .n_inputs(),
         1
@@ -249,24 +260,65 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Svd {
             eps: 1.0e-12,
-            m: 2,
-            n: 2,
+            input_shape: vec![2, 2],
         }
         .n_outputs(),
         3
     );
-    assert_eq!(StdTensorOp::Qr.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Qr.n_outputs(), 2);
-    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_outputs(), 2);
-    assert_eq!(StdTensorOp::Solve.n_inputs(), 2);
-    assert_eq!(StdTensorOp::Solve.n_outputs(), 1);
+    assert_eq!(
+        StdTensorOp::Qr {
+            input_shape: vec![2, 2]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Qr {
+            input_shape: vec![2, 2]
+        }
+        .n_outputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::Eigh {
+            eps: 1.0e-12,
+            input_shape: vec![2, 2],
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Eigh {
+            eps: 1.0e-12,
+            input_shape: vec![2, 2],
+        }
+        .n_outputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::Solve {
+            lhs_shape: vec![2, 2],
+            rhs_shape: vec![2, 1],
+        }
+        .n_inputs(),
+        2
+    );
+    assert_eq!(
+        StdTensorOp::Solve {
+            lhs_shape: vec![2, 2],
+            rhs_shape: vec![2, 1],
+        }
+        .n_outputs(),
+        1
+    );
     assert_eq!(
         StdTensorOp::TriangularSolve {
             left_side: true,
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
+            lhs_shape: vec![2, 2],
+            rhs_shape: vec![2, 1],
         }
         .n_inputs(),
         2
@@ -277,6 +329,8 @@ fn test_std_tensor_op_linalg_input_output_counts() {
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
+            lhs_shape: vec![2, 2],
+            rhs_shape: vec![2, 1],
         }
         .n_outputs(),
         1

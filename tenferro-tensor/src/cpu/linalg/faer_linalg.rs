@@ -776,6 +776,9 @@ impl FaerLinalg for Complex64 {
 }
 
 pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> {
+    if has_zero_dim(&input.shape) {
+        return tensor_from_vec_with_template(input.shape.clone(), Vec::new(), input);
+    }
     batched_single(input, 2, T::cholesky_2d)
 }
 
@@ -787,23 +790,102 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> TypedTensor<T> {
+    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+    }
     batched_binary(a, b, 2, 2, |a, b| {
         T::triangular_solve_2d(a, b, left_side, lower, transpose_a, unit_diagonal)
     })
 }
 
 pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    if has_zero_dim(&input.shape) {
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
+        let m = matrix_shape[0];
+        let n = matrix_shape[1];
+        let k = m.min(n);
+        return vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                vector_with_batch_shape(k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(k, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+        ];
+    }
     batched_multi(input, 2, T::svd_2d)
 }
 
 pub(crate) fn qr<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    if has_zero_dim(&input.shape) {
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr");
+        let m = matrix_shape[0];
+        let n = matrix_shape[1];
+        let k = m.min(n);
+        return vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(k, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+        ];
+    }
     batched_multi(input, 2, T::qr_2d)
 }
 
 pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    if has_zero_dim(&input.shape) {
+        let n = input.shape[0];
+        let batch_shape = &input.shape[2..];
+        return vec![
+            tensor_from_vec_with_template(
+                vector_with_batch_shape(n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+        ];
+    }
     batched_multi(input, 2, T::eigh_2d)
 }
 
 pub(crate) fn solve<T: FaerLinalg>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> TypedTensor<T> {
+    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+    }
     batched_binary(a, b, 2, 2, T::solve_2d)
+}
+
+fn has_zero_dim(shape: &[usize]) -> bool {
+    shape.contains(&0)
+}
+
+fn matrix_with_batch_shape(rows: usize, cols: usize, batch_shape: &[usize]) -> Vec<usize> {
+    let mut shape = vec![rows, cols];
+    shape.extend_from_slice(batch_shape);
+    shape
+}
+
+fn vector_with_batch_shape(len: usize, batch_shape: &[usize]) -> Vec<usize> {
+    let mut shape = vec![len];
+    shape.extend_from_slice(batch_shape);
+    shape
 }
