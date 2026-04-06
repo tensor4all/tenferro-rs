@@ -104,9 +104,15 @@ pub enum StdTensorOp {
 
     // Linalg
     Cholesky,
-    Svd,
+    Svd {
+        eps: f64,
+        m: usize,
+        n: usize,
+    },
     Qr,
-    Eigh,
+    Eigh {
+        eps: f64,
+    },
     Solve,
     TriangularSolve {
         left_side: bool,
@@ -143,11 +149,17 @@ impl Hash for StdTensorOp {
             | Self::Pow
             | Self::Expm1
             | Self::Log1p
-            | Self::Cholesky
-            | Self::Svd
             | Self::Qr
-            | Self::Eigh
+            | Self::Cholesky
             | Self::Solve => {}
+            Self::Svd { eps, m, n } => {
+                hash_f64(*eps, state);
+                m.hash(state);
+                n.hash(state);
+            }
+            Self::Eigh { eps } => {
+                hash_f64(*eps, state);
+            }
             Self::DotGeneral(config) => config.hash(state),
             Self::Transpose { perm } => perm.hash(state),
             Self::Reshape {
@@ -245,7 +257,7 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky | Self::Svd | Self::Qr | Self::Eigh => 1,
+            Self::Cholesky | Self::Svd { .. } | Self::Qr | Self::Eigh { .. } => 1,
             Self::Solve | Self::TriangularSolve { .. } => 2,
             _ => todo!("n_inputs not yet implemented for {:?}", self),
         }
@@ -292,9 +304,9 @@ impl GraphOp for StdTensorOp {
             | Self::Pad(_)
             | Self::Reverse { .. } => 1,
             Self::Cholesky | Self::Solve | Self::TriangularSolve { .. } => 1,
-            Self::Svd => 3,  // U, S, Vt
-            Self::Qr => 2,   // Q, R
-            Self::Eigh => 2, // eigenvalues, eigenvectors
+            Self::Svd { .. } => 3,  // U, S, Vt
+            Self::Qr => 2,          // Q, R
+            Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
             Self::Concatenate { .. } => todo!(
                 "n_outputs not yet implemented for variable-arity op {:?}",
                 self

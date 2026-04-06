@@ -4,8 +4,6 @@ use tenferro_tensor::DotGeneralConfig;
 
 use crate::std_tensor_op::StdTensorOp;
 
-const F_MATRIX_EPS: f64 = 1.0e-12;
-
 pub fn linearize_solve(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
@@ -63,17 +61,21 @@ pub fn linearize_svd(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    eps: f64,
+    m: usize,
+    n: usize,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None];
     };
 
+    let k = m.min(n);
     let u = ValRef::External(primal_out[0].clone());
     let s = ValRef::External(primal_out[1].clone());
     let vt = ValRef::External(primal_out[2].clone());
 
     let uh = adjoint_2d_fixed(builder, u.clone());
-    let v = adjoint_2d_fixed(builder, vt);
+    let v = adjoint_2d_fixed(builder, vt.clone());
     let tmp = matmul_linear(
         builder,
         ValRef::Local(uh),
@@ -90,23 +92,19 @@ pub fn linearize_svd(
 
     let diag_s = embed_diag_fixed(builder, s.clone());
     let ones_mat = one_like_fixed(builder, ValRef::Local(diag_s));
-    let s_col = matmul_fixed(builder, ValRef::Local(diag_s), ValRef::Local(ones_mat));
-    let s_row = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_s));
-    let s_sum = fixed_add(builder, ValRef::Local(s_col), ValRef::Local(s_row));
-    let s_diff = fixed_sub(builder, ValRef::Local(s_col), ValRef::Local(s_row));
+    let s_dim = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_s));
+    let s_dim_t = matmul_fixed(builder, ValRef::Local(diag_s), ValRef::Local(ones_mat));
+    let s_sum = fixed_add(builder, ValRef::Local(s_dim), ValRef::Local(s_dim_t));
+    let s_diff = fixed_sub(builder, ValRef::Local(s_dim), ValRef::Local(s_dim_t));
     let s_gap = fixed_mul(builder, ValRef::Local(s_sum), ValRef::Local(s_diff));
     let s_gap_sq = fixed_mul(builder, ValRef::Local(s_gap), ValRef::Local(s_gap));
-    let eps_sq = fixed_scale(
-        builder,
-        ValRef::Local(ones_mat),
-        F_MATRIX_EPS * F_MATRIX_EPS,
-    );
+    let eps_sq = fixed_scale(builder, ValRef::Local(ones_mat), eps * eps);
     let safe_gap = fixed_add(builder, ValRef::Local(s_gap_sq), ValRef::Local(eps_sq));
     let f = fixed_div(builder, ValRef::Local(s_gap), ValRef::Local(safe_gap));
 
     let s_ones = one_like_fixed(builder, s.clone());
     let s_sq = fixed_mul(builder, s.clone(), s.clone());
-    let s_eps_sq = fixed_scale(builder, ValRef::Local(s_ones), F_MATRIX_EPS * F_MATRIX_EPS);
+    let s_eps_sq = fixed_scale(builder, ValRef::Local(s_ones), eps * eps);
     let safe_s_sq = fixed_add(builder, ValRef::Local(s_sq), ValRef::Local(s_eps_sq));
     let s_inv = fixed_div(builder, s.clone(), ValRef::Local(safe_s_sq));
     let s_inv_mat = embed_diag_fixed(builder, ValRef::Local(s_inv));
@@ -117,29 +115,71 @@ pub fn linearize_svd(
     let d_udv_diag = hadamard_fixed_linear(builder, ValRef::Local(s_inv_mat), anti_hermitian);
     let d_udv_diag = linear_unary(builder, StdTensorOp::Scale { factor: 0.5 }, d_udv_diag);
 
-    let dss = hadamard_fixed_linear(builder, ValRef::Local(s_col), ds_mat);
+    let dss = hadamard_fixed_linear(builder, ValRef::Local(s_dim), ds_mat);
     let dss_h = adjoint_2d_linear(builder, dss);
     let du_inner_sum = linear_add(builder, dss, dss_h);
     let du_inner = hadamard_fixed_linear(builder, ValRef::Local(f), du_inner_sum);
     let du_inner = linear_add(builder, du_inner, d_udv_diag);
-    let du = matmul_linear(builder, u, ValRef::Local(du_inner), vec![false, true]);
+    let mut du = matmul_linear(
+        builder,
+        u.clone(),
+        ValRef::Local(du_inner),
+        vec![false, true],
+    );
 
-    let sds = hadamard_fixed_linear(builder, ValRef::Local(s_row), ds_mat);
+    let sds = hadamard_fixed_linear(builder, ValRef::Local(s_dim_t), ds_mat);
     let sds_h = adjoint_2d_linear(builder, sds);
     let dv_inner_sum = linear_add(builder, sds, sds_h);
     let dv_inner = hadamard_fixed_linear(builder, ValRef::Local(f), dv_inner_sum);
-    let dv = matmul_linear(
+    let mut dv = matmul_linear(
         builder,
         ValRef::Local(v),
         ValRef::Local(dv_inner),
         vec![false, true],
     );
-    let dvt = adjoint_2d_linear(builder, dv);
 
-    // TODO: add JAX's rectangular projection corrections once runtime matrix
-    // dimensions are available in this graph-level rule:
-    // dU += (dA V - U (U^H dA V)) / s
-    // dV += (dA^H U - V (V^H dA^H U)) / s
+    if m > n {
+        let d_av = matmul_linear(
+            builder,
+            ValRef::Local(da),
+            ValRef::Local(v),
+            vec![true, false],
+        );
+        let ut_d_av = matmul_linear(
+            builder,
+            ValRef::Local(uh),
+            ValRef::Local(d_av),
+            vec![false, true],
+        );
+        let u_ut_d_av = matmul_linear(
+            builder,
+            u.clone(),
+            ValRef::Local(ut_d_av),
+            vec![false, true],
+        );
+        let proj = linear_sub(builder, d_av, u_ut_d_av);
+        let s_broadcast = broadcast_in_dim_fixed(builder, s.clone(), vec![m, k], vec![1]);
+        let correction = linear_div_fixed(builder, proj, ValRef::Local(s_broadcast));
+        du = linear_add(builder, du, correction);
+    }
+
+    if n > m {
+        let da_h = adjoint_2d_linear(builder, da);
+        let d_ahu = matmul_linear(builder, ValRef::Local(da_h), u.clone(), vec![true, false]);
+        let vt_d_ahu = matmul_linear(builder, vt.clone(), ValRef::Local(d_ahu), vec![false, true]);
+        let v_vt_d_ahu = matmul_linear(
+            builder,
+            ValRef::Local(v),
+            ValRef::Local(vt_d_ahu),
+            vec![false, true],
+        );
+        let proj = linear_sub(builder, d_ahu, v_vt_d_ahu);
+        let s_broadcast = broadcast_in_dim_fixed(builder, s.clone(), vec![n, k], vec![1]);
+        let correction = linear_div_fixed(builder, proj, ValRef::Local(s_broadcast));
+        dv = linear_add(builder, dv, correction);
+    }
+
+    let dvt = adjoint_2d_linear(builder, dv);
 
     vec![Some(du), Some(ds), Some(dvt)]
 }
@@ -148,6 +188,7 @@ pub fn linearize_eigh(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    eps: f64,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
@@ -173,11 +214,7 @@ pub fn linearize_eigh(
     let w_row = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_w));
     let diff = fixed_sub(builder, ValRef::Local(w_row), ValRef::Local(w_col));
     let diff_sq = fixed_mul(builder, ValRef::Local(diff), ValRef::Local(diff));
-    let eps_sq = fixed_scale(
-        builder,
-        ValRef::Local(ones_mat),
-        F_MATRIX_EPS * F_MATRIX_EPS,
-    );
+    let eps_sq = fixed_scale(builder, ValRef::Local(ones_mat), eps * eps);
     let safe_diff = fixed_add(builder, ValRef::Local(diff_sq), ValRef::Local(eps_sq));
     let f = fixed_div(builder, ValRef::Local(diff), ValRef::Local(safe_diff));
     let fm = hadamard_fixed_linear(builder, ValRef::Local(f), projected);
@@ -470,6 +507,15 @@ fn fixed_scale(
     fixed_unary(builder, StdTensorOp::Scale { factor }, input)
 }
 
+fn broadcast_in_dim_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: ValRef<StdTensorOp>,
+    shape: Vec<usize>,
+    dims: Vec<usize>,
+) -> LocalValId {
+    fixed_unary(builder, StdTensorOp::BroadcastInDim { shape, dims }, input)
+}
+
 fn fixed_sub(
     builder: &mut FragmentBuilder<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
@@ -498,6 +544,20 @@ fn linear_sub(
 ) -> LocalValId {
     let neg_rhs = linear_neg(builder, rhs);
     linear_add(builder, lhs, neg_rhs)
+}
+
+fn linear_div_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lhs: LocalValId,
+    rhs: ValRef<StdTensorOp>,
+) -> LocalValId {
+    builder.add_op(
+        StdTensorOp::Div,
+        vec![ValRef::Local(lhs), rhs],
+        OpMode::Linear {
+            active_mask: vec![true, false],
+        },
+    )[0]
 }
 
 fn hadamard_fixed_linear(
