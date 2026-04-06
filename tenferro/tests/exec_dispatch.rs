@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tenferro::buffer_pool::BufferPool;
 use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_algebra::Standard;
@@ -15,6 +16,13 @@ fn scalar_value(tensor: &Tensor) -> f64 {
     match tensor {
         Tensor::F64(inner) => inner.host_data()[0],
         other => panic!("expected scalar f64 tensor, got {other:?}"),
+    }
+}
+
+fn scalar_c64_value(tensor: &Tensor) -> Complex64 {
+    match tensor {
+        Tensor::C64(inner) => inner.host_data()[0],
+        other => panic!("expected scalar c64 tensor, got {other:?}"),
     }
 }
 
@@ -115,6 +123,9 @@ impl TensorBackend for FakeTensorBackend {
     }
     fn scale(&mut self, _input: &Tensor, _factor: f64) -> Tensor {
         self.result("scale", 12.5)
+    }
+    fn scale_complex(&mut self, _input: &Tensor, _re: f64, _im: f64) -> Tensor {
+        self.result("scale_complex", 12.75)
     }
     fn exp(&mut self, _input: &Tensor) -> Tensor {
         self.result("exp", 13.0)
@@ -311,6 +322,12 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::Select, 3, "select", 11.0),
         (ExecOp::Clamp, 3, "clamp", 12.0),
         (ExecOp::Scale { factor: 0.5 }, 1, "scale", 12.5),
+        (
+            ExecOp::ScaleComplex { re: 0.5, im: -1.0 },
+            1,
+            "scale_complex",
+            12.75,
+        ),
         (ExecOp::Exp, 1, "exp", 13.0),
         (ExecOp::Log, 1, "log", 14.0),
         (ExecOp::Sin, 1, "sin", 15.0),
@@ -383,6 +400,64 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         assert_eq!(outputs.len(), 1);
         assert_eq!(scalar_value(&outputs[0]), expected_value);
     }
+}
+
+#[test]
+fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
+    let mut backend = FakeTensorBackend::default();
+    let mut pool = BufferPool::new();
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::Constant {
+                dtype: DType::F64,
+                bytes: 2.5_f64.to_le_bytes().to_vec(),
+            },
+            input_slots: vec![],
+            output_slots: vec![0],
+            dtype: DType::F64,
+            last_use: vec![],
+        }],
+        input_slots: vec![],
+        output_slots: vec![0],
+        n_slots: 1,
+    };
+
+    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool);
+
+    assert!(backend.calls.is_empty());
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_value(&outputs[0]), 2.5);
+}
+
+#[test]
+fn eval_exec_ir_materializes_complex_constants() {
+    let mut backend = FakeTensorBackend::default();
+    let mut pool = BufferPool::new();
+    let value = Complex64::new(1.5, -2.0);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&value.re.to_le_bytes());
+    bytes.extend_from_slice(&value.im.to_le_bytes());
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::Constant {
+                dtype: DType::C64,
+                bytes,
+            },
+            input_slots: vec![],
+            output_slots: vec![0],
+            dtype: DType::C64,
+            last_use: vec![],
+        }],
+        input_slots: vec![],
+        output_slots: vec![0],
+        n_slots: 1,
+    };
+
+    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool);
+
+    assert!(backend.calls.is_empty());
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_c64_value(&outputs[0]), value);
 }
 
 fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecProgram {

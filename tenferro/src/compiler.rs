@@ -27,6 +27,10 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     shape: shape.clone(),
                     dims: dims.clone(),
                 },
+                StdTensorOp::Constant { dtype, bytes } => StableHloOp::Constant {
+                    dtype: *dtype,
+                    bytes: bytes.clone(),
+                },
                 StdTensorOp::ReduceSum { axes, .. } => {
                     StableHloOp::ReduceSum { axes: axes.clone() }
                 }
@@ -58,6 +62,9 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Select => StableHloOp::Select,
                 StdTensorOp::Clamp => StableHloOp::Clamp,
                 StdTensorOp::Scale { factor } => StableHloOp::Scale { factor: *factor },
+                StdTensorOp::ScaleComplex { re, im } => {
+                    StableHloOp::ScaleComplex { re: *re, im: *im }
+                }
                 StdTensorOp::Exp => StableHloOp::Exp,
                 StdTensorOp::Log => StableHloOp::Log,
                 StdTensorOp::Sin => StableHloOp::Sin,
@@ -102,11 +109,15 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     target: "solve".to_string(),
                 },
             };
+            let dtype = match &instr.op {
+                StdTensorOp::Constant { dtype, .. } => *dtype,
+                _ => DType::F64,
+            };
             StableHloInstruction {
                 op,
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
-                dtype: DType::F64,
+                dtype,
             }
         })
         .collect();
@@ -215,6 +226,11 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Select => ExecOp::Select,
                 StableHloOp::Clamp => ExecOp::Clamp,
                 StableHloOp::Scale { factor } => ExecOp::Scale { factor: *factor },
+                StableHloOp::ScaleComplex { re, im } => ExecOp::ScaleComplex { re: *re, im: *im },
+                StableHloOp::Constant { dtype, bytes } => ExecOp::Constant {
+                    dtype: *dtype,
+                    bytes: bytes.clone(),
+                },
                 StableHloOp::Exp => ExecOp::Exp,
                 StableHloOp::Log => ExecOp::Log,
                 StableHloOp::Sin => ExecOp::Sin,
@@ -249,7 +265,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::CustomCall { target } => ExecOp::CustomCall {
                     target: target.clone(),
                 },
-                StableHloOp::GetTupleElement { .. } | StableHloOp::Constant => {
+                StableHloOp::GetTupleElement { .. } => {
                     todo!("compile_to_exec: unsupported op {:?}", instr.op)
                 }
             };

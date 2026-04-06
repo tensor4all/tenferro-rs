@@ -13,7 +13,8 @@ use crate::{Buffer, TypedTensor};
 
 pub use backend::CpuBackend;
 pub use elementwise::{
-    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, scale, select, sign,
+    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, scale, scale_complex, select,
+    sign,
 };
 pub use indexing::{dynamic_slice, gather, pad, scatter};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};

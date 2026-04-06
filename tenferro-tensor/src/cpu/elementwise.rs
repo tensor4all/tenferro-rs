@@ -36,6 +36,10 @@ pub(crate) trait ScaleElem: Copy + Clone + Zero + Mul<Output = Self> {
     fn from_factor(factor: f64) -> Self;
 }
 
+pub(crate) trait ScaleComplexElem: Copy + Clone + Zero + Mul<Output = Self> {
+    fn from_complex_factor(re: f64, im: f64) -> Self;
+}
+
 macro_rules! impl_tier2_elem_real {
     ($ty:ty) => {
         impl Tier2Elem for $ty {
@@ -171,6 +175,18 @@ impl ScaleElem for Complex<f64> {
     }
 }
 
+impl ScaleComplexElem for Complex<f32> {
+    fn from_complex_factor(re: f64, im: f64) -> Self {
+        Self::new(re as f32, im as f32)
+    }
+}
+
+impl ScaleComplexElem for Complex<f64> {
+    fn from_complex_factor(re: f64, im: f64) -> Self {
+        Self::new(re, im)
+    }
+}
+
 pub fn add(lhs: &Tensor, rhs: &Tensor) -> Tensor {
     dispatch_binary!(lhs, rhs, |a, b| typed_add(a, b))
 }
@@ -221,6 +237,14 @@ pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor {
 
 pub fn scale(input: &Tensor, factor: f64) -> Tensor {
     dispatch_tensor!(input, t => typed_scale(t, factor))
+}
+
+pub fn scale_complex(input: &Tensor, re: f64, im: f64) -> Tensor {
+    match input {
+        Tensor::C32(t) => Tensor::C32(typed_scale_complex(t, re, im)),
+        Tensor::C64(t) => Tensor::C64(typed_scale_complex(t, re, im)),
+        _ => panic!("scale_complex: input must have complex dtype"),
+    }
 }
 
 pub fn typed_add<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
@@ -287,6 +311,16 @@ where
     let factor = T::from_factor(factor);
     let mut out = typed_array(&input.shape, T::zero());
     map_into(&mut out.view_mut(), &typed_view(input), |x| x * factor).expect("typed_scale");
+    tensor_from_array(out)
+}
+
+pub(crate) fn typed_scale_complex<T>(input: &TypedTensor<T>, re: f64, im: f64) -> TypedTensor<T>
+where
+    T: ScaleComplexElem,
+{
+    let factor = T::from_complex_factor(re, im);
+    let mut out = typed_array(&input.shape, T::zero());
+    map_into(&mut out.view_mut(), &typed_view(input), |x| x * factor).expect("typed_scale_complex");
     tensor_from_array(out)
 }
 

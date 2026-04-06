@@ -4,11 +4,12 @@ use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
+use num_complex::{Complex32, Complex64};
 
 use crate::input_key::TensorInputKey;
 use crate::semiring_ops::SemiringOps;
 use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +31,10 @@ pub enum StdTensorOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Constant {
+        dtype: DType,
+        bytes: Vec<u8>,
+    },
     ReduceSum {
         axes: Vec<usize>,
         input_shape: Vec<usize>,
@@ -46,6 +51,10 @@ pub enum StdTensorOp {
     Clamp,
     Scale {
         factor: f64,
+    },
+    ScaleComplex {
+        re: f64,
+        im: f64,
     },
 
     // Tier 2: analytic
@@ -122,6 +131,80 @@ pub enum StdTensorOp {
     },
 }
 
+impl StdTensorOp {
+    /// Create an `f64` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_f64(1.5);
+    /// ```
+    pub fn constant_f64(value: f64) -> Self {
+        Self::Constant {
+            dtype: DType::F64,
+            bytes: value.to_le_bytes().to_vec(),
+        }
+    }
+
+    /// Create an `f32` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_f32(1.5_f32);
+    /// ```
+    pub fn constant_f32(value: f32) -> Self {
+        Self::Constant {
+            dtype: DType::F32,
+            bytes: value.to_le_bytes().to_vec(),
+        }
+    }
+
+    /// Create a `Complex64` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_c64(Complex64::new(1.0, -2.0));
+    /// ```
+    pub fn constant_c64(value: Complex64) -> Self {
+        let mut bytes = Vec::with_capacity(16);
+        bytes.extend_from_slice(&value.re.to_le_bytes());
+        bytes.extend_from_slice(&value.im.to_le_bytes());
+        Self::Constant {
+            dtype: DType::C64,
+            bytes,
+        }
+    }
+
+    /// Create a `Complex32` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex32;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_c32(Complex32::new(1.0, -2.0));
+    /// ```
+    pub fn constant_c32(value: Complex32) -> Self {
+        let mut bytes = Vec::with_capacity(8);
+        bytes.extend_from_slice(&value.re.to_le_bytes());
+        bytes.extend_from_slice(&value.im.to_le_bytes());
+        Self::Constant {
+            dtype: DType::C32,
+            bytes,
+        }
+    }
+}
+
 impl Eq for StdTensorOp {}
 
 impl Hash for StdTensorOp {
@@ -173,12 +256,20 @@ impl Hash for StdTensorOp {
                 shape.hash(state);
                 dims.hash(state);
             }
+            Self::Constant { dtype, bytes } => {
+                dtype.hash(state);
+                bytes.hash(state);
+            }
             Self::ReduceSum { axes, input_shape } => {
                 axes.hash(state);
                 input_shape.hash(state);
             }
             Self::Compare(dir) => dir.hash(state),
             Self::Scale { factor } => hash_f64(*factor, state),
+            Self::ScaleComplex { re, im } => {
+                hash_f64(*re, state);
+                hash_f64(*im, state);
+            }
             Self::ExtractDiag { axis_a, axis_b } | Self::EmbedDiag { axis_a, axis_b } => {
                 axis_a.hash(state);
                 axis_b.hash(state);
@@ -236,6 +327,7 @@ impl GraphOp for StdTensorOp {
             | Self::Pad(_)
             | Self::Reverse { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
+            Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
             Self::Concatenate { .. } => {
                 todo!(
@@ -246,6 +338,7 @@ impl GraphOp for StdTensorOp {
             Self::Abs
             | Self::Sign
             | Self::Scale { .. }
+            | Self::ScaleComplex { .. }
             | Self::Exp
             | Self::Log
             | Self::Sin
@@ -278,11 +371,13 @@ impl GraphOp for StdTensorOp {
             | Self::Abs
             | Self::Sign
             | Self::Scale { .. }
+            | Self::ScaleComplex { .. }
             | Self::Maximum
             | Self::Minimum
             | Self::Compare(_)
             | Self::Select
             | Self::Clamp
+            | Self::Constant { .. }
             | Self::Exp
             | Self::Log
             | Self::Sin

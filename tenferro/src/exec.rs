@@ -1,12 +1,13 @@
 use super::buffer_pool::BufferPool;
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Semiring;
 use tenferro_tensor::cpu::structural::{
     typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
     typed_transpose,
 };
 use tenferro_tensor::{
-    Buffer, CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SemiringBackend,
-    SliceConfig, Tensor, TensorBackend, TypedTensor,
+    Buffer, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    SemiringBackend, SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
 #[derive(Clone, Debug)]
@@ -20,6 +21,10 @@ pub enum ExecOp {
     BroadcastInDim {
         shape: Vec<usize>,
         dims: Vec<usize>,
+    },
+    Constant {
+        dtype: DType,
+        bytes: Vec<u8>,
     },
     BatchedGemm(DotGeneralConfig),
     ReduceSum {
@@ -53,6 +58,10 @@ pub enum ExecOp {
     Clamp,
     Scale {
         factor: f64,
+    },
+    ScaleComplex {
+        re: f64,
+        im: f64,
     },
     Exp,
     Log,
@@ -137,6 +146,7 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ExecOp::BroadcastInDim { shape, dims } => {
                 backend.broadcast_in_dim(get(&slots, &inst.input_slots, 0), shape, dims)
             }
+            ExecOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
             ExecOp::BatchedGemm(config) => backend.dot_general(
                 get(&slots, &inst.input_slots, 0),
                 get(&slots, &inst.input_slots, 1),
@@ -193,6 +203,9 @@ pub fn eval_exec_ir<B: TensorBackend>(
                 get(&slots, &inst.input_slots, 2),
             ),
             ExecOp::Scale { factor } => backend.scale(get(&slots, &inst.input_slots, 0), *factor),
+            ExecOp::ScaleComplex { re, im } => {
+                backend.scale_complex(get(&slots, &inst.input_slots, 0), *re, *im)
+            }
             ExecOp::Exp => backend.exp(get(&slots, &inst.input_slots, 0)),
             ExecOp::Log => backend.log(get(&slots, &inst.input_slots, 0)),
             ExecOp::Sin => backend.sin(get(&slots, &inst.input_slots, 0)),
@@ -283,6 +296,53 @@ pub fn eval_exec_ir<B: TensorBackend>(
         .iter()
         .map(|&slot| slots[slot].take().expect("missing output slot"))
         .collect()
+}
+
+fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
+    match dtype {
+        DType::F64 => Tensor::F64(TypedTensor::from_vec(
+            vec![],
+            vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
+        )),
+        DType::F32 => Tensor::F32(TypedTensor::from_vec(
+            vec![],
+            vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
+        )),
+        DType::C64 => {
+            let data = exact_bytes::<16>(dtype, bytes);
+            let mut re_bytes = [0u8; 8];
+            let mut im_bytes = [0u8; 8];
+            re_bytes.copy_from_slice(&data[..8]);
+            im_bytes.copy_from_slice(&data[8..]);
+            let re = f64::from_le_bytes(re_bytes);
+            let im = f64::from_le_bytes(im_bytes);
+            Tensor::C64(TypedTensor::from_vec(vec![], vec![Complex64::new(re, im)]))
+        }
+        DType::C32 => {
+            let data = exact_bytes::<8>(dtype, bytes);
+            let mut re_bytes = [0u8; 4];
+            let mut im_bytes = [0u8; 4];
+            re_bytes.copy_from_slice(&data[..4]);
+            im_bytes.copy_from_slice(&data[4..]);
+            let re = f32::from_le_bytes(re_bytes);
+            let im = f32::from_le_bytes(im_bytes);
+            Tensor::C32(TypedTensor::from_vec(vec![], vec![Complex32::new(re, im)]))
+        }
+    }
+}
+
+fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
+    if bytes.len() != N {
+        panic!(
+            "constant {:?} expected {} bytes, got {}",
+            dtype,
+            N,
+            bytes.len()
+        );
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(bytes);
+    out
 }
 
 fn reclaim_last_use_inputs(

@@ -78,9 +78,10 @@ fn eval_real_c64_scalar(traced: TracedTensor) -> f64 {
     value.re
 }
 
-fn traced_real_scalar(input: &TracedTensor) -> TracedTensor {
+fn real_scalar(input: &TracedTensor) -> TracedTensor {
     let half = TracedTensor::from_tensor(c64_tensor(vec![], vec![Complex64::new(0.5, 0.0)]));
-    input.traced_add(&input.traced_conj()).traced_mul(&half)
+    let real_part = &input.conj() + input;
+    &real_part * &half
 }
 
 fn col_major_index(rows: usize, i: usize, j: usize) -> usize {
@@ -158,7 +159,7 @@ fn grad_einsum_matmul_real() {
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
-    let grad_a = y.traced_reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
 
     let grad_a_tensor = eval_tensor(grad_a);
     let grad_a_data = get_f64_data(&grad_a_tensor);
@@ -168,7 +169,7 @@ fn grad_einsum_matmul_real() {
         let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
-        eval_scalar(y.traced_reduce_sum(&[0, 1]))
+        eval_scalar(y.reduce_sum(&[0, 1]))
     };
     assert_grad_matches_finite_diff(grad_a_data, &a_data, f);
 }
@@ -203,8 +204,8 @@ fn grad_einsum_matmul_complex() {
     let b = TracedTensor::from_tensor(c64_tensor(vec![2, 2], b_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
-    let norm_sq = y.traced_conj().traced_mul(&y).traced_reduce_sum(&[0, 1]);
-    let loss = traced_real_scalar(&norm_sq);
+    let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
+    let loss = real_scalar(&norm_sq);
     let grad_a = loss.grad(&a).unwrap();
 
     let grad_a_tensor = eval_tensor(grad_a);
@@ -215,8 +216,8 @@ fn grad_einsum_matmul_complex() {
         let b = TracedTensor::from_tensor(c64_tensor(vec![2, 2], b_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
-        let norm_sq = y.traced_conj().traced_mul(&y).traced_reduce_sum(&[0, 1]);
-        eval_real_c64_scalar(traced_real_scalar(&norm_sq))
+        let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
+        eval_real_c64_scalar(real_scalar(&norm_sq))
     };
     assert_grad_matches_complex_finite_diff(grad_a_data, &a_data, f);
 }
@@ -266,7 +267,7 @@ fn grad_einsum_three_way() {
     let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
-    let grad_a = y.traced_reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
 
     let grad_a_tensor = eval_tensor(grad_a);
     let grad_a_data = get_f64_data(&grad_a_tensor);
@@ -277,7 +278,7 @@ fn grad_einsum_three_way() {
         let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
-        eval_scalar(y.traced_reduce_sum(&[0, 1]))
+        eval_scalar(y.reduce_sum(&[0, 1]))
     };
     assert_grad_matches_finite_diff(grad_a_data, &a_data, f);
 }
