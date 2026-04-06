@@ -32,3 +32,12 @@
 
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
+
+## Public API Convention
+
+- **Unary single-output ops**: methods on `TracedTensor` (e.g., `x.exp()`, `x.reshape(shape)`)
+- **Binary single-output ops**: operator overloads where natural (`&a + &b`, `&a * &b`), methods otherwise (`a.dot_general(&b, config)`)
+- **Multi-output ops**: free functions (e.g., `svd(&a)`, `qr(&a)`, `eigh(&a)`)
+- **Linalg ops**: free functions (e.g., `solve(&a, &b)`, `cholesky(&a)`)
+- **Einsum**: free function `einsum(engine, inputs, subscripts)`
+- No `traced_` prefix on methods. `TracedTensor` methods are inherently traced.
