@@ -1,6 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use tenferro_tensor::DotGeneralConfig;
+use tenferro_tensor::{DotGeneralConfig, PadConfig};
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -9,14 +9,19 @@ pub fn linearize_solve(
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
-    let rhs_tangent = solve_rhs_tangent(builder, primal_out, tangent_in);
+    let rhs_tangent = solve_rhs_tangent(builder, primal_out, tangent_in, lhs_shape, rhs_shape);
     let Some(rhs_tangent) = rhs_tangent else {
         return vec![None];
     };
 
     let out = builder.add_op(
-        StdTensorOp::Solve,
+        StdTensorOp::Solve {
+            lhs_shape: lhs_shape.to_vec(),
+            rhs_shape: rhs_shape.to_vec(),
+        },
         vec![
             ValRef::External(primal_in[0].clone()),
             ValRef::Local(rhs_tangent),
@@ -31,30 +36,97 @@ pub fn linearize_solve(
 pub fn linearize_triangular_solve(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     left_side: bool,
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
-    match tangent_in[1] {
-        Some(db) => {
-            let out = builder.add_op(
-                StdTensorOp::TriangularSolve {
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                },
-                vec![ValRef::External(primal_in[0].clone()), ValRef::Local(db)],
-                OpMode::Linear {
-                    active_mask: vec![false, true],
-                },
-            );
-            vec![Some(out[0])]
-        }
-        None => vec![None],
+    // Equation: op(A) @ X = B  (left_side=true)
+    //       or  X @ op(A) = B  (left_side=false)
+    // where op = identity (transpose_a=false) or transpose (transpose_a=true).
+    //
+    // Linearize: op(A) @ dX = dB - d(op(A)) @ X  (left_side=true)
+    //        or  dX @ op(A) = dB - X @ d(op(A))  (left_side=false)
+    //
+    // When tangent_in[0] (dA) is present, we compute the correction:
+    //   -d(op(A)) @ X  or  -X @ d(op(A))
+    let rhs_tangent = triangular_solve_rhs_tangent(
+        builder,
+        primal_out,
+        tangent_in,
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+        lhs_shape,
+        rhs_shape,
+    );
+    let Some(rhs_tangent) = rhs_tangent else {
+        return vec![None];
+    };
+
+    let out = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+            lhs_shape: lhs_shape.to_vec(),
+            rhs_shape: rhs_shape.to_vec(),
+        },
+        vec![
+            ValRef::External(primal_in[0].clone()),
+            ValRef::Local(rhs_tangent),
+        ],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
+fn triangular_solve_rhs_tangent(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+) -> Option<LocalValId> {
+    let mut rhs_tangent = tangent_in[1];
+    let rank = shared_matrix_rank(lhs_shape, rhs_shape, "triangular_solve_rhs_tangent");
+
+    if let Some(da) = tangent_in[0] {
+        let da = project_triangular_operand_linear(builder, da, lower, unit_diagonal);
+        // d(op(A)) = op(dA), with op = identity or transpose.
+        let d_op_a = if transpose_a {
+            transpose_matrix_linear(builder, da, rank)
+        } else {
+            da
+        };
+
+        // Correction = d(op(A)) @ X  or  X @ d(op(A))
+        let x = ValRef::External(primal_out[0].clone());
+        let correction = if left_side {
+            matmul_linear(builder, ValRef::Local(d_op_a), x, vec![true, false], rank)
+        } else {
+            matmul_linear(builder, x, ValRef::Local(d_op_a), vec![false, true], rank)
+        };
+        let neg_correction = linear_neg(builder, correction);
+        rhs_tangent = Some(match rhs_tangent {
+            Some(db) => linear_add(builder, db, neg_correction),
+            None => neg_correction,
+        });
     }
+
+    rhs_tangent
 }
 
 pub fn linearize_svd(
@@ -62,38 +134,51 @@ pub fn linearize_svd(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    m: usize,
-    n: usize,
+    input_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None];
     };
 
+    let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
+    let matrix_rank = input_shape.len();
     let k = m.min(n);
     let u = ValRef::External(primal_out[0].clone());
     let s = ValRef::External(primal_out[1].clone());
     let vt = ValRef::External(primal_out[2].clone());
 
-    let uh = adjoint_2d_fixed(builder, u.clone());
-    let v = adjoint_2d_fixed(builder, vt.clone());
+    let uh = adjoint_matrix_fixed(builder, u.clone(), matrix_rank);
+    let v = adjoint_matrix_fixed(builder, vt.clone(), matrix_rank);
     let tmp = matmul_linear(
         builder,
         ValRef::Local(uh),
         ValRef::Local(da),
         vec![false, true],
+        matrix_rank,
     );
     let ds_mat = matmul_linear(
         builder,
         ValRef::Local(tmp),
         ValRef::Local(v),
         vec![true, false],
+        matrix_rank,
     );
     let ds = extract_diag_linear(builder, ds_mat);
 
     let diag_s = embed_diag_fixed(builder, s.clone());
     let ones_mat = one_like_fixed(builder, ValRef::Local(diag_s));
-    let s_dim = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_s));
-    let s_dim_t = matmul_fixed(builder, ValRef::Local(diag_s), ValRef::Local(ones_mat));
+    let s_dim = matmul_fixed(
+        builder,
+        ValRef::Local(ones_mat),
+        ValRef::Local(diag_s),
+        matrix_rank,
+    );
+    let s_dim_t = matmul_fixed(
+        builder,
+        ValRef::Local(diag_s),
+        ValRef::Local(ones_mat),
+        matrix_rank,
+    );
     let s_sum = fixed_add(builder, ValRef::Local(s_dim), ValRef::Local(s_dim_t));
     let s_diff = fixed_sub(builder, ValRef::Local(s_dim), ValRef::Local(s_dim_t));
     let s_gap = fixed_mul(builder, ValRef::Local(s_sum), ValRef::Local(s_diff));
@@ -109,14 +194,14 @@ pub fn linearize_svd(
     let s_inv = fixed_div(builder, s.clone(), ValRef::Local(safe_s_sq));
     let s_inv_mat = embed_diag_fixed(builder, ValRef::Local(s_inv));
 
-    let ds_h = adjoint_2d_linear(builder, ds_mat);
+    let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank);
     let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
     // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
     let d_udv_diag = hadamard_fixed_linear(builder, ValRef::Local(s_inv_mat), anti_hermitian);
     let d_udv_diag = linear_scale(builder, d_udv_diag, 0.5);
 
     let dss = hadamard_fixed_linear(builder, ValRef::Local(s_dim), ds_mat);
-    let dss_h = adjoint_2d_linear(builder, dss);
+    let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank);
     let du_inner_sum = linear_add(builder, dss, dss_h);
     let du_inner = hadamard_fixed_linear(builder, ValRef::Local(f), du_inner_sum);
     let du_inner = linear_add(builder, du_inner, d_udv_diag);
@@ -125,10 +210,11 @@ pub fn linearize_svd(
         u.clone(),
         ValRef::Local(du_inner),
         vec![false, true],
+        matrix_rank,
     );
 
     let sds = hadamard_fixed_linear(builder, ValRef::Local(s_dim_t), ds_mat);
-    let sds_h = adjoint_2d_linear(builder, sds);
+    let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank);
     let dv_inner_sum = linear_add(builder, sds, sds_h);
     let dv_inner = hadamard_fixed_linear(builder, ValRef::Local(f), dv_inner_sum);
     let mut dv = matmul_linear(
@@ -136,6 +222,7 @@ pub fn linearize_svd(
         ValRef::Local(v),
         ValRef::Local(dv_inner),
         vec![false, true],
+        matrix_rank,
     );
 
     if m > n {
@@ -144,42 +231,68 @@ pub fn linearize_svd(
             ValRef::Local(da),
             ValRef::Local(v),
             vec![true, false],
+            matrix_rank,
         );
         let ut_d_av = matmul_linear(
             builder,
             ValRef::Local(uh),
             ValRef::Local(d_av),
             vec![false, true],
+            matrix_rank,
         );
         let u_ut_d_av = matmul_linear(
             builder,
             u.clone(),
             ValRef::Local(ut_d_av),
             vec![false, true],
+            matrix_rank,
         );
         let proj = linear_sub(builder, d_av, u_ut_d_av);
-        let s_broadcast = broadcast_in_dim_fixed(builder, s.clone(), vec![m, k], vec![1]);
+        let s_broadcast = broadcast_in_dim_fixed(
+            builder,
+            s.clone(),
+            matrix_shape(m, k, batch_shape),
+            vector_to_matrix_broadcast_dims(batch_shape.len()),
+        );
         let correction = linear_div_fixed(builder, proj, ValRef::Local(s_broadcast));
         du = linear_add(builder, du, correction);
     }
 
     if n > m {
-        let da_h = adjoint_2d_linear(builder, da);
-        let d_ahu = matmul_linear(builder, ValRef::Local(da_h), u.clone(), vec![true, false]);
-        let vt_d_ahu = matmul_linear(builder, vt.clone(), ValRef::Local(d_ahu), vec![false, true]);
+        let da_h = adjoint_matrix_linear(builder, da, matrix_rank);
+        let d_ahu = matmul_linear(
+            builder,
+            ValRef::Local(da_h),
+            u.clone(),
+            vec![true, false],
+            matrix_rank,
+        );
+        let vt_d_ahu = matmul_linear(
+            builder,
+            vt.clone(),
+            ValRef::Local(d_ahu),
+            vec![false, true],
+            matrix_rank,
+        );
         let v_vt_d_ahu = matmul_linear(
             builder,
             ValRef::Local(v),
             ValRef::Local(vt_d_ahu),
             vec![false, true],
+            matrix_rank,
         );
         let proj = linear_sub(builder, d_ahu, v_vt_d_ahu);
-        let s_broadcast = broadcast_in_dim_fixed(builder, s.clone(), vec![n, k], vec![1]);
+        let s_broadcast = broadcast_in_dim_fixed(
+            builder,
+            s.clone(),
+            matrix_shape(n, k, batch_shape),
+            vector_to_matrix_broadcast_dims(batch_shape.len()),
+        );
         let correction = linear_div_fixed(builder, proj, ValRef::Local(s_broadcast));
         dv = linear_add(builder, dv, correction);
     }
 
-    let dvt = adjoint_2d_linear(builder, dv);
+    let dvt = adjoint_matrix_linear(builder, dv, matrix_rank);
 
     vec![Some(du), Some(ds), Some(dvt)]
 }
@@ -189,36 +302,61 @@ pub fn linearize_eigh(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
+    input_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let matrix_rank = input_shape.len();
     let w = ValRef::External(primal_out[0].clone());
     let v = ValRef::External(primal_out[1].clone());
-    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da);
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
 
-    let vh = adjoint_2d_fixed(builder, v.clone());
+    let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank);
     let tmp = matmul_linear(
         builder,
         ValRef::Local(vh),
         ValRef::Local(da_self_adjoint),
         vec![false, true],
+        matrix_rank,
     );
-    let projected = matmul_linear(builder, ValRef::Local(tmp), v.clone(), vec![true, false]);
+    let projected = matmul_linear(
+        builder,
+        ValRef::Local(tmp),
+        v.clone(),
+        vec![true, false],
+        matrix_rank,
+    );
     let dw = extract_diag_linear(builder, projected);
 
     let diag_w = embed_diag_fixed(builder, w.clone());
     let ones_mat = one_like_fixed(builder, ValRef::Local(diag_w));
-    let w_col = matmul_fixed(builder, ValRef::Local(diag_w), ValRef::Local(ones_mat));
-    let w_row = matmul_fixed(builder, ValRef::Local(ones_mat), ValRef::Local(diag_w));
+    let w_col = matmul_fixed(
+        builder,
+        ValRef::Local(diag_w),
+        ValRef::Local(ones_mat),
+        matrix_rank,
+    );
+    let w_row = matmul_fixed(
+        builder,
+        ValRef::Local(ones_mat),
+        ValRef::Local(diag_w),
+        matrix_rank,
+    );
     let diff = fixed_sub(builder, ValRef::Local(w_row), ValRef::Local(w_col));
     let diff_sq = fixed_mul(builder, ValRef::Local(diff), ValRef::Local(diff));
     let eps_sq = fixed_scale(builder, ValRef::Local(ones_mat), eps * eps);
     let safe_diff = fixed_add(builder, ValRef::Local(diff_sq), ValRef::Local(eps_sq));
     let f = fixed_div(builder, ValRef::Local(diff), ValRef::Local(safe_diff));
     let fm = hadamard_fixed_linear(builder, ValRef::Local(f), projected);
-    let dv = matmul_linear(builder, v, ValRef::Local(fm), vec![false, true]);
+    let dv = matmul_linear(
+        builder,
+        v,
+        ValRef::Local(fm),
+        vec![false, true],
+        matrix_rank,
+    );
 
     vec![Some(dw), Some(dv)]
 }
@@ -227,13 +365,15 @@ pub fn linearize_cholesky(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    input_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None];
     };
 
+    let matrix_rank = input_shape.len();
     let l = ValRef::External(primal_out[0].clone());
-    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da);
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
     let l_conj = fixed_unary(builder, StdTensorOp::Conj, l.clone());
 
     let tmp = builder.add_op(
@@ -242,6 +382,8 @@ pub fn linearize_cholesky(
             lower: true,
             transpose_a: true,
             unit_diagonal: false,
+            lhs_shape: input_shape.to_vec(),
+            rhs_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(l_conj), ValRef::Local(da_self_adjoint)],
         OpMode::Linear {
@@ -254,6 +396,8 @@ pub fn linearize_cholesky(
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
+            lhs_shape: input_shape.to_vec(),
+            rhs_shape: input_shape.to_vec(),
         },
         vec![l.clone(), ValRef::Local(tmp)],
         OpMode::Linear {
@@ -272,7 +416,13 @@ pub fn linearize_cholesky(
     let half_diag = linear_scale(builder, diag_s, 0.5);
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     let phi_s = linear_add(builder, strict_lower, half_diag_mat);
-    let dl = matmul_linear(builder, l, ValRef::Local(phi_s), vec![false, true]);
+    let dl = matmul_linear(
+        builder,
+        l,
+        ValRef::Local(phi_s),
+        vec![false, true],
+        matrix_rank,
+    );
 
     vec![Some(dl)]
 }
@@ -281,37 +431,181 @@ pub fn linearize_qr(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    input_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
+    let k = m.min(n);
+    let matrix_rank = input_shape.len();
+    let r_shape = matrix_shape(k, n, batch_shape);
+    let da_h_shape = matrix_shape(n, m, batch_shape);
     let q = ValRef::External(primal_out[0].clone());
     let r = ValRef::External(primal_out[1].clone());
 
-    let r_h = adjoint_2d_fixed(builder, r.clone());
-    let da_h = adjoint_2d_linear(builder, da);
+    if n > m {
+        let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank);
+        let leading_selector =
+            leading_column_selector_fixed(builder, m, n, batch_shape, r.clone(), input_shape);
+        let leading_selector_t =
+            transpose_matrix_fixed(builder, ValRef::Local(leading_selector), matrix_rank);
+        let da_leading = matmul_linear(
+            builder,
+            ValRef::Local(da),
+            ValRef::Local(leading_selector_t),
+            vec![true, false],
+            matrix_rank,
+        );
+        let r_leading = matmul_fixed(
+            builder,
+            r.clone(),
+            ValRef::Local(leading_selector_t),
+            matrix_rank,
+        );
+        let square_shape = matrix_shape(m, m, batch_shape);
+        let r_leading_h = adjoint_matrix_fixed(builder, ValRef::Local(r_leading), matrix_rank);
+        let da_leading_h = adjoint_matrix_linear(builder, da_leading, matrix_rank);
+        let dx_rinv_h = builder.add_op(
+            StdTensorOp::TriangularSolve {
+                left_side: true,
+                lower: true,
+                transpose_a: false,
+                unit_diagonal: false,
+                lhs_shape: square_shape.clone(),
+                rhs_shape: square_shape.clone(),
+            },
+            vec![ValRef::Local(r_leading_h), ValRef::Local(da_leading_h)],
+            OpMode::Linear {
+                active_mask: vec![false, true],
+            },
+        )[0];
+        let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank);
+        let qt_dx_rinv = matmul_linear(
+            builder,
+            ValRef::Local(qh),
+            ValRef::Local(dx_rinv),
+            vec![false, true],
+            matrix_rank,
+        );
+        let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank);
+        let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
+        let upper = builder.add_op(
+            StdTensorOp::Triu { k: 1 },
+            vec![ValRef::Local(sym)],
+            OpMode::Linear {
+                active_mask: vec![true],
+            },
+        )[0];
+        let sym_diag = extract_diag_linear(builder, sym);
+        let half_sym_diag = linear_scale(builder, sym_diag, 0.5);
+        let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
+        let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
+
+        let q_dr_leading_hat = matmul_linear(
+            builder,
+            q.clone(),
+            ValRef::Local(dr_leading_hat),
+            vec![false, true],
+            matrix_rank,
+        );
+        let dq = linear_sub(builder, dx_rinv, q_dr_leading_hat);
+        let dr_leading = matmul_linear(
+            builder,
+            ValRef::Local(dr_leading_hat),
+            ValRef::Local(r_leading),
+            vec![true, false],
+            matrix_rank,
+        );
+        let mut dr = matmul_linear(
+            builder,
+            ValRef::Local(dr_leading),
+            ValRef::Local(leading_selector),
+            vec![true, false],
+            matrix_rank,
+        );
+
+        let trailing_cols = n - m;
+        if trailing_cols > 0 {
+            let trailing_selector = trailing_column_selector_fixed(
+                builder,
+                m,
+                trailing_cols,
+                batch_shape,
+                r.clone(),
+                input_shape,
+            );
+            let trailing_selector_t =
+                transpose_matrix_fixed(builder, ValRef::Local(trailing_selector), matrix_rank);
+            let da_trailing = matmul_linear(
+                builder,
+                ValRef::Local(da),
+                ValRef::Local(trailing_selector_t),
+                vec![true, false],
+                matrix_rank,
+            );
+            let r_trailing = matmul_fixed(
+                builder,
+                r.clone(),
+                ValRef::Local(trailing_selector_t),
+                matrix_rank,
+            );
+            let qt_da_trailing = matmul_linear(
+                builder,
+                ValRef::Local(qh),
+                ValRef::Local(da_trailing),
+                vec![false, true],
+                matrix_rank,
+            );
+            let omega = linear_sub(builder, qt_dx_rinv, dr_leading_hat);
+            let omega_r_trailing = matmul_linear(
+                builder,
+                ValRef::Local(omega),
+                ValRef::Local(r_trailing),
+                vec![true, false],
+                matrix_rank,
+            );
+            let dr_trailing = linear_sub(builder, qt_da_trailing, omega_r_trailing);
+            let dr_trailing_full = matmul_linear(
+                builder,
+                ValRef::Local(dr_trailing),
+                ValRef::Local(trailing_selector),
+                vec![true, false],
+                matrix_rank,
+            );
+            dr = linear_add(builder, dr, dr_trailing_full);
+        }
+
+        return vec![Some(dq), Some(dr)];
+    }
+
+    let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank);
+    let da_h = adjoint_matrix_linear(builder, da, matrix_rank);
     let dx_rinv_h = builder.add_op(
         StdTensorOp::TriangularSolve {
             left_side: true,
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
+            lhs_shape: r_shape,
+            rhs_shape: da_h_shape,
         },
         vec![ValRef::Local(r_h), ValRef::Local(da_h)],
         OpMode::Linear {
             active_mask: vec![false, true],
         },
     )[0];
-    let dx_rinv = adjoint_2d_linear(builder, dx_rinv_h);
-    let qh = adjoint_2d_fixed(builder, q.clone());
+    let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank);
+    let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank);
     let qt_dx_rinv = matmul_linear(
         builder,
         ValRef::Local(qh),
         ValRef::Local(dx_rinv),
         vec![false, true],
+        matrix_rank,
     );
-    let qt_dx_rinv_h = adjoint_2d_linear(builder, qt_dx_rinv);
+    let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank);
     let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
     let upper = builder.add_op(
         StdTensorOp::Triu { k: 1 },
@@ -325,9 +619,21 @@ pub fn linearize_qr(
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 
-    let q_dr_hat = matmul_linear(builder, q.clone(), ValRef::Local(dr_hat), vec![false, true]);
+    let q_dr_hat = matmul_linear(
+        builder,
+        q.clone(),
+        ValRef::Local(dr_hat),
+        vec![false, true],
+        matrix_rank,
+    );
     let dq = linear_sub(builder, dx_rinv, q_dr_hat);
-    let dr = matmul_linear(builder, ValRef::Local(dr_hat), r, vec![true, false]);
+    let dr = matmul_linear(
+        builder,
+        ValRef::Local(dr_hat),
+        r,
+        vec![true, false],
+        matrix_rank,
+    );
 
     vec![Some(dq), Some(dr)]
 }
@@ -337,6 +643,8 @@ pub fn transpose_solve(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -347,9 +655,12 @@ pub fn transpose_solve(
 
     let mut result = vec![None, None];
     if active_mask[1] {
-        let a_h = adjoint_2d_fixed(builder, inputs[0].clone());
+        let a_h = adjoint_matrix_fixed(builder, inputs[0].clone(), lhs_shape.len());
         let out = builder.add_op(
-            StdTensorOp::Solve,
+            StdTensorOp::Solve {
+                lhs_shape: lhs_shape.to_vec(),
+                rhs_shape: rhs_shape.to_vec(),
+            },
             vec![ValRef::Local(a_h), ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
@@ -370,6 +681,8 @@ pub fn transpose_triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -387,6 +700,8 @@ pub fn transpose_triangular_solve(
                 lower,
                 transpose_a: !transpose_a,
                 unit_diagonal,
+                lhs_shape: lhs_shape.to_vec(),
+                rhs_shape: rhs_shape.to_vec(),
             },
             vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
             OpMode::Linear {
@@ -403,8 +718,11 @@ fn solve_rhs_tangent(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
 ) -> Option<LocalValId> {
     let mut rhs_tangent = tangent_in[1];
+    let rank = shared_matrix_rank(lhs_shape, rhs_shape, "solve_rhs_tangent");
 
     if let Some(da) = tangent_in[0] {
         let dax = matmul_linear(
@@ -412,6 +730,7 @@ fn solve_rhs_tangent(
             ValRef::Local(da),
             ValRef::External(primal_out[0].clone()),
             vec![true, false],
+            rank,
         );
         let neg_dax = linear_neg(builder, dax);
         rhs_tangent = Some(match rhs_tangent {
@@ -513,6 +832,40 @@ fn broadcast_in_dim_fixed(
     dims: Vec<usize>,
 ) -> LocalValId {
     fixed_unary(builder, StdTensorOp::BroadcastInDim { shape, dims }, input)
+}
+
+fn reduce_sum_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: ValRef<StdTensorOp>,
+    input_shape: &[usize],
+    axes: Vec<usize>,
+) -> LocalValId {
+    fixed_unary(
+        builder,
+        StdTensorOp::ReduceSum {
+            axes,
+            input_shape: input_shape.to_vec(),
+        },
+        input,
+    )
+}
+
+fn pad_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: ValRef<StdTensorOp>,
+    rank: usize,
+    edge_padding_low: Vec<i64>,
+    edge_padding_high: Vec<i64>,
+) -> LocalValId {
+    fixed_unary(
+        builder,
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low,
+            edge_padding_high,
+            interior_padding: vec![0; rank],
+        }),
+        input,
+    )
 }
 
 fn fixed_sub(
@@ -639,25 +992,39 @@ fn embed_diag_fixed(
     )
 }
 
-fn transpose_2d_fixed(
+fn transpose_matrix_fixed(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: ValRef<StdTensorOp>,
+    rank: usize,
 ) -> LocalValId {
-    fixed_unary(builder, StdTensorOp::Transpose { perm: vec![1, 0] }, input)
+    fixed_unary(
+        builder,
+        StdTensorOp::Transpose {
+            perm: matrix_transpose_perm(rank),
+        },
+        input,
+    )
 }
 
-fn adjoint_2d_fixed(
+fn adjoint_matrix_fixed(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: ValRef<StdTensorOp>,
+    rank: usize,
 ) -> LocalValId {
     let conjugated = fixed_unary(builder, StdTensorOp::Conj, input);
-    transpose_2d_fixed(builder, ValRef::Local(conjugated))
+    transpose_matrix_fixed(builder, ValRef::Local(conjugated), rank)
 }
 
-fn adjoint_2d_linear(builder: &mut FragmentBuilder<StdTensorOp>, input: LocalValId) -> LocalValId {
+fn adjoint_matrix_linear(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    rank: usize,
+) -> LocalValId {
     let conjugated = linear_unary(builder, StdTensorOp::Conj, input);
     builder.add_op(
-        StdTensorOp::Transpose { perm: vec![1, 0] },
+        StdTensorOp::Transpose {
+            perm: matrix_transpose_perm(rank),
+        },
         vec![ValRef::Local(conjugated)],
         OpMode::Linear {
             active_mask: vec![true],
@@ -665,9 +1032,44 @@ fn adjoint_2d_linear(builder: &mut FragmentBuilder<StdTensorOp>, input: LocalVal
     )[0]
 }
 
+fn transpose_matrix_linear(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    rank: usize,
+) -> LocalValId {
+    builder.add_op(
+        StdTensorOp::Transpose {
+            perm: matrix_transpose_perm(rank),
+        },
+        vec![ValRef::Local(input)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0]
+}
+
+fn project_triangular_operand_linear(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    lower: bool,
+    unit_diagonal: bool,
+) -> LocalValId {
+    let op = if lower {
+        StdTensorOp::Tril {
+            k: if unit_diagonal { -1 } else { 0 },
+        }
+    } else {
+        StdTensorOp::Triu {
+            k: if unit_diagonal { 1 } else { 0 },
+        }
+    };
+    linear_unary(builder, op, input)
+}
+
 fn self_adjoint_from_lower_linear(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: LocalValId,
+    rank: usize,
 ) -> LocalValId {
     let strict_lower = builder.add_op(
         StdTensorOp::Tril { k: -1 },
@@ -676,7 +1078,7 @@ fn self_adjoint_from_lower_linear(
             active_mask: vec![true],
         },
     )[0];
-    let strict_lower_h = adjoint_2d_linear(builder, strict_lower);
+    let strict_lower_h = adjoint_matrix_linear(builder, strict_lower, rank);
     let offdiag = linear_add(builder, strict_lower, strict_lower_h);
 
     let diag = extract_diag_linear(builder, input);
@@ -691,12 +1093,14 @@ fn matmul_fixed(
     builder: &mut FragmentBuilder<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
+    rank: usize,
 ) -> LocalValId {
-    builder.add_op(
-        StdTensorOp::DotGeneral(matrix_multiply_config()),
+    let out = builder.add_op(
+        StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
         vec![lhs, rhs],
         OpMode::Primal,
-    )[0]
+    )[0];
+    transpose_matmul_output_fixed(builder, out, rank)
 }
 
 fn matmul_linear(
@@ -704,21 +1108,203 @@ fn matmul_linear(
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
     active_mask: Vec<bool>,
+    rank: usize,
 ) -> LocalValId {
-    builder.add_op(
-        StdTensorOp::DotGeneral(matrix_multiply_config()),
+    let out = builder.add_op(
+        StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
         vec![lhs, rhs],
         OpMode::Linear { active_mask },
-    )[0]
+    )[0];
+    transpose_matmul_output_linear(builder, out, rank)
 }
 
-fn matrix_multiply_config() -> DotGeneralConfig {
+fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
+    assert!(rank >= 2, "matrix_multiply_config expects rank >= 2");
+    let batch_dims: Vec<usize> = (2..rank).collect();
     DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
+        lhs_batch_dims: batch_dims.clone(),
+        rhs_batch_dims: batch_dims,
+        lhs_rank: rank,
+        rhs_rank: rank,
     }
+}
+
+fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
+    assert!(rank >= 2, "matrix_transpose_perm expects rank >= 2");
+    let mut perm: Vec<usize> = (0..rank).collect();
+    perm.swap(0, 1);
+    perm
+}
+
+fn matrix_shape_parts<'a>(shape: &'a [usize], op: &str) -> (usize, usize, &'a [usize]) {
+    assert!(shape.len() >= 2, "{op}: expected rank >= 2");
+    (shape[0], shape[1], &shape[2..])
+}
+
+fn shared_matrix_rank(lhs_shape: &[usize], rhs_shape: &[usize], op: &str) -> usize {
+    assert!(
+        lhs_shape.len() >= 2 && rhs_shape.len() >= 2,
+        "{op}: expected matrix operands"
+    );
+    assert_eq!(
+        lhs_shape.len(),
+        rhs_shape.len(),
+        "{op}: rank mismatch between lhs and rhs"
+    );
+    assert_eq!(
+        &lhs_shape[2..],
+        &rhs_shape[2..],
+        "{op}: batch shape mismatch between lhs and rhs"
+    );
+    lhs_shape.len()
+}
+
+fn matrix_shape(rows: usize, cols: usize, batch_shape: &[usize]) -> Vec<usize> {
+    let mut shape = vec![rows, cols];
+    shape.extend_from_slice(batch_shape);
+    shape
+}
+
+fn vector_shape(len: usize, batch_shape: &[usize]) -> Vec<usize> {
+    let mut shape = vec![len];
+    shape.extend_from_slice(batch_shape);
+    shape
+}
+
+fn vector_to_matrix_broadcast_dims(batch_ndim: usize) -> Vec<usize> {
+    let mut dims = Vec::with_capacity(1 + batch_ndim);
+    dims.push(1);
+    dims.extend(2..(2 + batch_ndim));
+    dims
+}
+
+fn leading_column_selector_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    leading_cols: usize,
+    total_cols: usize,
+    batch_shape: &[usize],
+    anchor: ValRef<StdTensorOp>,
+    anchor_shape: &[usize],
+) -> LocalValId {
+    let eye = identity_matrix_fixed(builder, leading_cols, batch_shape, anchor, anchor_shape);
+    let rank = 2 + batch_shape.len();
+    pad_fixed(
+        builder,
+        ValRef::Local(eye),
+        rank,
+        vec![0; rank],
+        pad_vec(rank, 1, (total_cols - leading_cols) as i64),
+    )
+}
+
+fn trailing_column_selector_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    leading_cols: usize,
+    trailing_cols: usize,
+    batch_shape: &[usize],
+    anchor: ValRef<StdTensorOp>,
+    anchor_shape: &[usize],
+) -> LocalValId {
+    let eye = identity_matrix_fixed(builder, trailing_cols, batch_shape, anchor, anchor_shape);
+    let rank = 2 + batch_shape.len();
+    pad_fixed(
+        builder,
+        ValRef::Local(eye),
+        rank,
+        pad_vec(rank, 1, leading_cols as i64),
+        vec![0; rank],
+    )
+}
+
+fn identity_matrix_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    size: usize,
+    batch_shape: &[usize],
+    anchor: ValRef<StdTensorOp>,
+    anchor_shape: &[usize],
+) -> LocalValId {
+    let one_scalar = scalar_one_fixed(builder, anchor, anchor_shape);
+    let ones = broadcast_in_dim_fixed(
+        builder,
+        ValRef::Local(one_scalar),
+        vector_shape(size, batch_shape),
+        vec![],
+    );
+    embed_diag_fixed(builder, ValRef::Local(ones))
+}
+
+fn scalar_one_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    anchor: ValRef<StdTensorOp>,
+    anchor_shape: &[usize],
+) -> LocalValId {
+    let zero = fixed_sub(builder, anchor.clone(), anchor);
+    let zero_scalar = if anchor_shape.is_empty() {
+        zero
+    } else {
+        reduce_sum_fixed(
+            builder,
+            ValRef::Local(zero),
+            anchor_shape,
+            (0..anchor_shape.len()).collect(),
+        )
+    };
+    fixed_unary(builder, StdTensorOp::Exp, ValRef::Local(zero_scalar))
+}
+
+fn pad_vec(rank: usize, axis: usize, amount: i64) -> Vec<i64> {
+    let mut padding = vec![0; rank];
+    padding[axis] = amount;
+    padding
+}
+
+fn transpose_matmul_output_fixed(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    rank: usize,
+) -> LocalValId {
+    if rank <= 2 {
+        return input;
+    }
+    fixed_unary(
+        builder,
+        StdTensorOp::Transpose {
+            perm: matmul_output_perm(rank),
+        },
+        ValRef::Local(input),
+    )
+}
+
+fn transpose_matmul_output_linear(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    input: LocalValId,
+    rank: usize,
+) -> LocalValId {
+    if rank <= 2 {
+        return input;
+    }
+    builder.add_op(
+        StdTensorOp::Transpose {
+            perm: matmul_output_perm(rank),
+        },
+        vec![ValRef::Local(input)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0]
+}
+
+fn matmul_output_perm(rank: usize) -> Vec<usize> {
+    assert!(rank >= 2, "matmul_output_perm expects rank >= 2");
+    if rank == 2 {
+        return vec![0, 1];
+    }
+    let batch_ndim = rank - 2;
+    let mut perm = Vec::with_capacity(rank);
+    perm.push(batch_ndim);
+    perm.push(batch_ndim + 1);
+    perm.extend(0..batch_ndim);
+    perm
 }

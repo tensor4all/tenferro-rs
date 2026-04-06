@@ -53,6 +53,8 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
                 lower: true,
                 transpose_a: false,
                 unit_diagonal: false,
+                lhs_shape: vec![2, 2],
+                rhs_shape: vec![2, 1],
             },
             vec![0, 1],
             vec![11],

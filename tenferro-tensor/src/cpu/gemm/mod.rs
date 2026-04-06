@@ -145,10 +145,10 @@ fn analyse_gemm<T>(
     let (_, c_bs) = try_fuse_dims(out_b_shapes, out_b_strides)?;
 
     Some(GemmDims {
-        m: m.max(1),
-        n: n.max(1),
-        k: k.max(1),
-        batch_total: batch_total.max(1),
+        m,
+        n,
+        k,
+        batch_total,
         a_rs,
         #[cfg(feature = "cpu-faer")]
         a_cs,
@@ -188,6 +188,15 @@ where
     T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
+    let out_n: usize = dims.out_shape.iter().product();
+    if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        return Some(TypedTensor {
+            buffer: Buffer::Host(vec![T::zero(); out_n]),
+            shape: dims.out_shape,
+            placement: lhs.placement.clone(),
+        });
+    }
+
     let a_data = match &lhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
@@ -197,7 +206,6 @@ where
         Buffer::Backend(_) => return None,
     };
 
-    let out_n: usize = dims.out_shape.iter().product();
     let mut out_data = vec![T::zero(); out_n];
     let c_ptr = out_data.as_mut_ptr();
 
@@ -255,6 +263,15 @@ where
     T: BlasGemm + Copy + Clone + Zero + One,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
+    let out_n: usize = dims.out_shape.iter().product();
+    if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        return Some(TypedTensor {
+            buffer: Buffer::Host(vec![T::zero(); out_n]),
+            shape: dims.out_shape,
+            placement: lhs.placement.clone(),
+        });
+    }
+
     if dims.a_rs != 1 || dims.b_rs != 1 || dims.c_rs != 1 {
         return None;
     }

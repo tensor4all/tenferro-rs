@@ -56,27 +56,44 @@ fn linearize_non_semiring(
         }
         StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
-        StdTensorOp::Solve => linalg::linearize_solve(builder, primal_in, primal_out, tangent_in),
+        StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+        StdTensorOp::Solve {
+            lhs_shape,
+            rhs_shape,
+        } => linalg::linearize_solve(
+            builder, primal_in, primal_out, tangent_in, lhs_shape, rhs_shape,
+        ),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
+            lhs_shape,
+            rhs_shape,
         } => linalg::linearize_triangular_solve(
             builder,
             primal_in,
+            primal_out,
             tangent_in,
             *left_side,
             *lower,
             *transpose_a,
             *unit_diagonal,
+            lhs_shape,
+            rhs_shape,
         ),
-        StdTensorOp::Cholesky => linalg::linearize_cholesky(builder, primal_out, tangent_in),
-        StdTensorOp::Svd { eps, m, n } => {
-            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, *m, *n)
+        StdTensorOp::Cholesky { input_shape } => {
+            linalg::linearize_cholesky(builder, primal_out, tangent_in, input_shape)
         }
-        StdTensorOp::Qr => linalg::linearize_qr(builder, primal_out, tangent_in),
-        StdTensorOp::Eigh { eps } => linalg::linearize_eigh(builder, primal_out, tangent_in, *eps),
+        StdTensorOp::Svd { eps, input_shape } => {
+            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, input_shape)
+        }
+        StdTensorOp::Qr { input_shape } => {
+            linalg::linearize_qr(builder, primal_out, tangent_in, input_shape)
+        }
+        StdTensorOp::Eigh { eps, input_shape } => {
+            linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
+        }
         _ => return None,
     })
 }
@@ -139,12 +156,17 @@ fn transpose_non_semiring(
         }
         StdTensorOp::Tril { k } => structural::transpose_tril(builder, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(builder, cotangent_out, *k),
-        StdTensorOp::Solve => linalg::transpose_solve(builder, cotangent_out, inputs, mode),
+        StdTensorOp::Solve {
+            lhs_shape,
+            rhs_shape,
+        } => linalg::transpose_solve(builder, cotangent_out, inputs, mode, lhs_shape, rhs_shape),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
+            lhs_shape,
+            rhs_shape,
         } => linalg::transpose_triangular_solve(
             builder,
             cotangent_out,
@@ -154,6 +176,8 @@ fn transpose_non_semiring(
             *lower,
             *transpose_a,
             *unit_diagonal,
+            lhs_shape,
+            rhs_shape,
         ),
         _ => return None,
     })

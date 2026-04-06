@@ -160,7 +160,11 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
 
     let rows = tensor.shape[0];
     let cols = tensor.shape[1];
-    let batch_count: usize = tensor.shape[2..].iter().product::<usize>().max(1);
+    if tensor.shape.contains(&0) {
+        return tensor.clone();
+    }
+
+    let batch_count: usize = tensor.shape[2..].iter().product();
     let block_size = rows * cols;
     let mut out = tensor.clone();
     let data = out.host_data_mut();

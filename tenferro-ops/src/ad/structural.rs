@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{LocalValId, OpMode, ValRef};
+use tenferro_tensor::PadConfig;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -109,6 +110,26 @@ pub fn linearize_triu(
         Some(dx) => {
             let out = builder.add_op(
                 StdTensorOp::Triu { k },
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn linearize_pad(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    config: &PadConfig,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::Pad(config.clone()),
                 vec![ValRef::Local(dx)],
                 OpMode::Linear {
                     active_mask: vec![true],

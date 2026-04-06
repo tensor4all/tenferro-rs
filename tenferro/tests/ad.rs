@@ -163,6 +163,46 @@ fn matmul_config() -> DotGeneralConfig {
     }
 }
 
+fn svd_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
+    StdTensorOp::Svd {
+        eps,
+        input_shape: shape,
+    }
+}
+
+fn qr_op(shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::Qr { input_shape: shape }
+}
+
+fn eigh_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
+    StdTensorOp::Eigh {
+        eps,
+        input_shape: shape,
+    }
+}
+
+fn cholesky_op(shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::Cholesky { input_shape: shape }
+}
+
+fn solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::Solve {
+        lhs_shape,
+        rhs_shape,
+    }
+}
+
+fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::TriangularSolve {
+        left_side: true,
+        lower: true,
+        transpose_a: false,
+        unit_diagonal: false,
+        lhs_shape,
+        rhs_shape,
+    }
+}
+
 fn tensor_input_key(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
 }
@@ -238,11 +278,7 @@ fn build_svd_values_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let svd = builder.add_op(
-        StdTensorOp::Svd {
-            eps: 1.0e-12,
-            m: 2,
-            n: 2,
-        },
+        svd_op(vec![2, 2], 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -271,11 +307,7 @@ fn build_svd_values_real_sum_fragment(
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let svd = builder.add_op(
-        StdTensorOp::Svd {
-            eps: 1.0e-12,
-            m: input_shape[0],
-            n: input_shape[1],
-        },
+        svd_op(input_shape.clone(), 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -313,11 +345,7 @@ fn build_svd_uv_product_fragment(
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let svd = builder.add_op(
-        StdTensorOp::Svd {
-            eps: 1.0e-12,
-            m: product_shape[0],
-            n: product_shape[1],
-        },
+        svd_op(product_shape.clone(), 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -373,7 +401,7 @@ fn build_svd_reconstruction_sum_fragment(
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let svd = builder.add_op(
-        StdTensorOp::Svd { eps, m, n },
+        svd_op(vec![m, n], eps),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -417,7 +445,7 @@ fn build_eigh_values_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let eigh = builder.add_op(
-        StdTensorOp::Eigh { eps: 1.0e-12 },
+        eigh_op(vec![2, 2], 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -443,7 +471,7 @@ fn build_eigh_values_real_sum_complex_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let eigh = builder.add_op(
-        StdTensorOp::Eigh { eps: 1.0e-12 },
+        eigh_op(vec![2, 2], 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -471,7 +499,7 @@ fn build_eigh_projector_fragment(
     let weights = builder.add_input(weights_key.clone());
     let probe = builder.add_input(probe_key.clone());
     let eigh = builder.add_op(
-        StdTensorOp::Eigh { eps: 1.0e-12 },
+        eigh_op(vec![2, 2], 1.0e-12),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -583,7 +611,7 @@ fn build_solve_sum_fragment() -> (
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
     let solve = builder.add_op(
-        StdTensorOp::Solve,
+        solve_op(vec![2, 2], vec![2, 1]),
         vec![ValRef::Local(a), ValRef::Local(b)],
         OpMode::Primal,
     );
@@ -612,12 +640,7 @@ fn build_triangular_solve_sum_fragment() -> (
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
     let solve = builder.add_op(
-        StdTensorOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: false,
-        },
+        triangular_solve_op(vec![2, 2], vec![2, 1]),
         vec![ValRef::Local(a), ValRef::Local(b)],
         OpMode::Primal,
     );
@@ -646,7 +669,7 @@ fn build_solve_real_sum_fragment() -> (
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
     let solve = builder.add_op(
-        StdTensorOp::Solve,
+        solve_op(vec![2, 2], vec![2, 1]),
         vec![ValRef::Local(a), ValRef::Local(b)],
         OpMode::Primal,
     );
@@ -668,12 +691,7 @@ fn build_triangular_solve_real_sum_fragment() -> (
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
     let solve = builder.add_op(
-        StdTensorOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: false,
-        },
+        triangular_solve_op(vec![2, 2], vec![2, 1]),
         vec![ValRef::Local(a), ValRef::Local(b)],
         OpMode::Primal,
     );
@@ -692,7 +710,7 @@ fn build_cholesky_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let cholesky = builder.add_op(
-        StdTensorOp::Cholesky,
+        cholesky_op(vec![3, 3]),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -718,7 +736,7 @@ fn build_cholesky_real_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
     let cholesky = builder.add_op(
-        StdTensorOp::Cholesky,
+        cholesky_op(vec![2, 2]),
         vec![ValRef::Local(a)],
         OpMode::Primal,
     );
@@ -738,7 +756,7 @@ fn build_qr_r_fragment(
 ) {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(input_key.clone());
-    let qr = builder.add_op(StdTensorOp::Qr, vec![ValRef::Local(a)], OpMode::Primal);
+    let qr = builder.add_op(qr_op(vec![2, 2]), vec![ValRef::Local(a)], OpMode::Primal);
     let loss = if real_loss {
         add_real_reduce_sum_loss(&mut builder, qr[1], vec![2, 2])
     } else {
