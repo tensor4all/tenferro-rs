@@ -1,3 +1,4 @@
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -14,10 +15,10 @@ pub enum StableHloOp {
         perm: Vec<usize>,
     },
     Reshape {
-        shape: Vec<usize>,
+        shape: Vec<DimExpr>,
     },
     BroadcastInDim {
-        shape: Vec<usize>,
+        shape: Vec<DimExpr>,
         dims: Vec<usize>,
     },
     Convert {
