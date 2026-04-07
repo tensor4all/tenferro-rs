@@ -340,6 +340,12 @@ impl From<usize> for DimExpr {
     }
 }
 
+impl From<&DimExpr> for DimExpr {
+    fn from(value: &DimExpr) -> Self {
+        value.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

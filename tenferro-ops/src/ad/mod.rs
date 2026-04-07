@@ -162,7 +162,7 @@ fn transpose_non_semiring(
             contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config)
         }
         StdTensorOp::ReduceSum { .. } => {
-            contraction::transpose_reduce_sum(builder, cotangent_out, op)
+            contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs)
         }
         StdTensorOp::ReduceProd { .. } => {
             contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op)
@@ -173,7 +173,9 @@ fn transpose_non_semiring(
         StdTensorOp::Transpose { perm } => {
             structural::transpose_transpose(builder, cotangent_out, perm)
         }
-        StdTensorOp::Reshape { .. } => structural::transpose_reshape(builder, cotangent_out, op),
+        StdTensorOp::Reshape { .. } => {
+            structural::transpose_reshape(builder, cotangent_out, op, inputs)
+        }
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims)
         }
