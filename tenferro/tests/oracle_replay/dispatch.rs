@@ -222,24 +222,7 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
         "norm" => {
             let keepdim = bool_kwarg(&case.op_kwargs, "keepdim")?.unwrap_or(false);
             let axes = sum_axes(case, a.shape.len())?;
-            if matches!(
-                case.case_id.as_str(),
-                "norm_f64_identity_048" | "norm_f64_identity_060"
-            ) {
-                // TODO: re-enable these matrix ord=-inf oracle cases once the
-                // induced min-row-sum transpose path matches the oracle
-                // subgradient selection.
-                return Ok(DispatchResult::SkippedUnimplemented(case.op.clone()));
-            }
             let ord = norm_ord(case)?;
-            if matches!(ord, Some(NormOrd::Numeric(p)) if p.is_infinite() && p.is_sign_negative())
-                && axes.len() == 2
-            {
-                // TODO: re-enable matrix ord=-inf replay once the transpose
-                // path for the induced min-row-sum norm matches the oracle
-                // subgradient selection.
-                return Ok(DispatchResult::SkippedUnimplemented(case.op.clone()));
-            }
 
             let value = match ord {
                 None | Some(NormOrd::Fro) => norm(&a, None, Some(&axes), keepdim),
