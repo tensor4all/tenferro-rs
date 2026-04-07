@@ -6,6 +6,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
 use num_complex::{Complex32, Complex64};
 
+use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::semiring_ops::SemiringOps;
 use tenferro_tensor::{
@@ -24,11 +25,11 @@ pub enum StdTensorOp {
         perm: Vec<usize>,
     },
     Reshape {
-        from_shape: Vec<usize>,
-        to_shape: Vec<usize>,
+        from_shape: Vec<DimExpr>,
+        to_shape: Vec<DimExpr>,
     },
     BroadcastInDim {
-        shape: Vec<usize>,
+        shape: Vec<DimExpr>,
         dims: Vec<usize>,
     },
     Convert {
@@ -41,7 +42,7 @@ pub enum StdTensorOp {
     },
     ReduceSum {
         axes: Vec<usize>,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
 
     // Tier 2: elementwise
@@ -100,46 +101,46 @@ pub enum StdTensorOp {
     // Tier 2: reductions
     ReduceProd {
         axes: Vec<usize>,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     ReduceMax {
         axes: Vec<usize>,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     ReduceMin {
         axes: Vec<usize>,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
 
     // Linalg
     Cholesky {
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     Lu {
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     Svd {
         eps: f64,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     Qr {
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     Eigh {
         eps: f64,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     Eig {
         input_dtype: DType,
-        input_shape: Vec<usize>,
+        input_shape: Vec<DimExpr>,
     },
     TriangularSolve {
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        lhs_shape: Vec<usize>,
-        rhs_shape: Vec<usize>,
+        lhs_shape: Vec<DimExpr>,
+        rhs_shape: Vec<DimExpr>,
     },
 }
 
@@ -332,6 +333,16 @@ fn hash_f64<H: Hasher>(value: f64, state: &mut H) {
     bits.hash(state);
 }
 
+fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
+    let max_idx = exprs
+        .iter()
+        .flat_map(|exprs| exprs.iter())
+        .filter_map(DimExpr::max_input_idx)
+        .max()
+        .map_or(0, |max_idx| max_idx + 1);
+    max_idx.max(min_inputs)
+}
+
 impl GraphOp for StdTensorOp {
     type Operand = tenferro_tensor::Tensor;
     type Context = ();
@@ -343,20 +354,23 @@ impl GraphOp for StdTensorOp {
             Self::Neg
             | Self::Conj
             | Self::Transpose { .. }
-            | Self::Reshape { .. }
-            | Self::BroadcastInDim { .. }
             | Self::Convert { .. }
-            | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
             | Self::Tril { .. }
             | Self::Triu { .. }
             | Self::Slice(_)
             | Self::Pad(_)
-            | Self::Reverse { .. }
-            | Self::ReduceProd { .. }
-            | Self::ReduceMax { .. }
-            | Self::ReduceMin { .. } => 1,
+            | Self::Reverse { .. } => 1,
+            Self::Reshape {
+                from_shape,
+                to_shape,
+            } => n_inputs_from_dim_exprs(1, &[from_shape, to_shape]),
+            Self::BroadcastInDim { shape, .. } => n_inputs_from_dim_exprs(1, &[shape]),
+            Self::ReduceSum { input_shape, .. }
+            | Self::ReduceProd { input_shape, .. }
+            | Self::ReduceMax { input_shape, .. }
+            | Self::ReduceMin { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
@@ -379,13 +393,17 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky { .. }
-            | Self::Lu { .. }
-            | Self::Svd { .. }
-            | Self::Qr { .. }
-            | Self::Eigh { .. }
-            | Self::Eig { .. } => 1,
-            Self::TriangularSolve { .. } => 2,
+            Self::Cholesky { input_shape }
+            | Self::Lu { input_shape }
+            | Self::Svd { input_shape, .. }
+            | Self::Qr { input_shape }
+            | Self::Eigh { input_shape, .. }
+            | Self::Eig { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
+            Self::TriangularSolve {
+                lhs_shape,
+                rhs_shape,
+                ..
+            } => n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape]),
         }
     }
 
@@ -486,7 +504,7 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::DotGeneral(config)
     }
 
-    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<usize>) -> Self {
+    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self {
         StdTensorOp::ReduceSum { axes, input_shape }
     }
 
@@ -494,14 +512,14 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::Transpose { perm }
     }
 
-    fn reshape(from_shape: Vec<usize>, to_shape: Vec<usize>) -> Self {
+    fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
         StdTensorOp::Reshape {
             from_shape,
             to_shape,
         }
     }
 
-    fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
+    fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
         StdTensorOp::BroadcastInDim { shape, dims }
     }
 
