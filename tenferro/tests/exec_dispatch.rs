@@ -2,11 +2,16 @@ use num_complex::Complex64;
 use tenferro::buffer_pool::BufferPool;
 use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_algebra::Standard;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor, TensorBackend, TypedTensor,
 };
+
+fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
+    DimExpr::from_concrete(shape)
+}
 
 fn scalar_tensor(value: f64) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
@@ -284,10 +289,17 @@ impl TensorBackend for FakeTensorBackend {
 fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
     let cases = vec![
         (ExecOp::Permute { perm: vec![0] }, 1, "transpose", 23.0),
-        (ExecOp::Reshape { shape: vec![1] }, 1, "reshape", 24.0),
+        (
+            ExecOp::Reshape {
+                shape: dim_shape(&[1]),
+            },
+            1,
+            "reshape",
+            24.0,
+        ),
         (
             ExecOp::BroadcastInDim {
-                shape: vec![1],
+                shape: dim_shape(&[1]),
                 dims: vec![0],
             },
             1,
@@ -649,7 +661,12 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
 
     let reshape_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
-        &single_instruction_program(ExecOp::Reshape { shape: vec![3, 2] }, 1),
+        &single_instruction_program(
+            ExecOp::Reshape {
+                shape: dim_shape(&[3, 2]),
+            },
+            1,
+        ),
         vec![TypedTensor::from_vec(
             vec![2, 3],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -662,7 +679,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
         &mut backend,
         &single_instruction_program(
             ExecOp::BroadcastInDim {
-                shape: vec![3, 2],
+                shape: dim_shape(&[3, 2]),
                 dims: vec![0],
             },
             1,

@@ -268,15 +268,21 @@ pub fn transpose_reduce_sum(
                 ValRef::Local(ct)
             };
             let shape = DimExpr::remap_all(input_shape, 0, 1);
+            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let mut op_inputs = vec![cotangent];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(inputs[0].clone());
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims,
                 },
-                vec![cotangent, inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -299,15 +305,21 @@ pub fn transpose_reduce_prod(
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
             let shape = DimExpr::remap_all(input_shape, 0, 1);
+            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let mut op_inputs = vec![cotangent];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(inputs[0].clone());
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let cotangent = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims.clone(),
                 },
-                vec![cotangent, inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             )[0];
             let prod = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
             let prod_broadcast = broadcast_reduction_output(
@@ -357,15 +369,21 @@ pub fn transpose_reduce_chooser(
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
             let shape = DimExpr::remap_all(input_shape, 0, 1);
+            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let mut op_inputs = vec![cotangent];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(inputs[0].clone());
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let cotangent = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims.clone(),
                 },
-                vec![cotangent, inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             )[0];
             let answer = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
             let answer_broadcast = broadcast_reduction_output(
@@ -457,12 +475,18 @@ fn broadcast_reduction_output(
     kept_dims: &[usize],
 ) -> LocalValId {
     let shape = DimExpr::remap_all(input_shape, 0, 1);
+    let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+    let inputs = if needs_shape_source {
+        vec![output, shape_source]
+    } else {
+        vec![output]
+    };
     builder.add_op(
         StdTensorOp::BroadcastInDim {
             shape,
             dims: kept_dims.to_vec(),
         },
-        vec![output, shape_source],
+        inputs,
         OpMode::Primal,
     )[0]
 }

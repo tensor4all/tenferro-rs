@@ -169,7 +169,7 @@ fn oracle_replay_norm_case_048() {
         Some(&[0, 1]),
         false,
     );
-    let manual_axes: Vec<usize> = (0..manual_output.shape.len()).collect();
+    let manual_axes: Vec<usize> = (0..manual_output.rank).collect();
     let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
     let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
     let manual_actual = eval_named_tensors(
@@ -291,7 +291,7 @@ fn oracle_manual_norm_case_048() {
         Some(&[0, 1]),
         false,
     );
-    let manual_axes: Vec<usize> = (0..manual_output.shape.len()).collect();
+    let manual_axes: Vec<usize> = (0..manual_output.rank).collect();
     let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
     let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
     let actual = eval_named_tensors(
@@ -460,7 +460,14 @@ fn build_jvp_outputs(
         }
         let tangent =
             try_directional_jvp(&output.tensor, inputs, directions)?.unwrap_or_else(|| {
-                zero_traced_tensor(output.tensor.dtype, output.tensor.shape.clone())
+                zero_traced_tensor(
+                    output.tensor.dtype,
+                    expected
+                        .get(&output.name)
+                        .expect("expected JVP reference tensor")
+                        .shape
+                        .clone(),
+                )
             });
         tangents.push(NamedTensor {
             name: output.name.clone(),
@@ -481,7 +488,15 @@ fn build_grad_outputs(
             .map_err(|err| format!("failed to build VJP for input {name}: {err}"))?
         {
             Some(gradient) => gradient,
-            None => zero_traced_tensor(input.dtype, input.shape.clone()),
+            None => zero_traced_tensor(
+                input.dtype,
+                input
+                    .data
+                    .as_ref()
+                    .expect("expected concrete input shape")
+                    .shape()
+                    .to_vec(),
+            ),
         };
         gradients.push(NamedTensor {
             name: name.clone(),
@@ -498,23 +513,19 @@ fn build_hvp_outputs(
 ) -> Result<Vec<NamedTensor>, String> {
     let mut hvps = Vec::with_capacity(gradients.len());
     for gradient in gradients {
+        let fallback_shape = inputs
+            .get(&gradient.name)
+            .and_then(|input| input.data.as_ref().map(|data| data.shape().to_vec()))
+            .expect("expected concrete input shape");
         hvps.push(NamedTensor {
             name: gradient.name.clone(),
-            tensor: directional_jvp(&gradient.tensor, inputs, directions)?,
+            tensor: match try_directional_jvp(&gradient.tensor, inputs, directions)? {
+                Some(tangent) => tangent,
+                None => zero_traced_tensor(gradient.tensor.dtype, fallback_shape),
+            },
         });
     }
     Ok(hvps)
-}
-
-fn directional_jvp(
-    output: &TracedTensor,
-    inputs: &BTreeMap<String, TracedTensor>,
-    directions: &BTreeMap<String, TracedTensor>,
-) -> Result<TracedTensor, String> {
-    Ok(match try_directional_jvp(output, inputs, directions)? {
-        Some(tangent) => tangent,
-        None => zero_traced_tensor(output.dtype, output.shape.clone()),
-    })
 }
 
 fn try_directional_jvp(
@@ -557,7 +568,7 @@ fn cotangent_scalar(
             DType::C32 | DType::C64 => aligned_cotangent.conj(),
             DType::F32 | DType::F64 => aligned_cotangent,
         };
-        let axes: Vec<usize> = (0..output.tensor.shape.len()).collect();
+        let axes: Vec<usize> = (0..output.tensor.rank).collect();
         scalar_terms.push((&output.tensor * &aligned_cotangent).reduce_sum(&axes));
     }
 

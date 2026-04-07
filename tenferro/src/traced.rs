@@ -388,6 +388,11 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
         );
+        let linear_tangent_input_ids: Vec<LocalValId> = linear
+            .tangent_inputs
+            .iter()
+            .map(|(_, local_id)| *local_id)
+            .collect();
         let transposed = transpose(&linear);
         let linear_fragment = Arc::new(linear.fragment);
         let cotangent_output = transposed.tangent_outputs[0]?;
@@ -396,12 +401,26 @@ impl TracedTensor {
 
         let mut inputs_map = (*self.inputs_map).clone();
         inputs_map.insert(
-            cotangent_input_key,
+            cotangent_input_key.clone(),
             cotangent
                 .data
                 .clone()
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
+        let zero_tangent = zeros_tensor(
+            wrt.dtype,
+            wrt.shape_hint.clone().unwrap_or_else(|| vec![0; wrt.rank]),
+        );
+        for (_, local_id) in &transposed.tangent_inputs {
+            let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
+            if tangent_input_key != cotangent_input_key {
+                inputs_map.insert(tangent_input_key, zero_tangent.clone());
+            }
+        }
+        for local_id in linear_tangent_input_ids {
+            let tangent_input_key = linear_input_key(&linear_fragment, local_id);
+            inputs_map.insert(tangent_input_key, zero_tangent.clone());
+        }
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
         extra_roots.extend(self.extra_roots.iter().cloned());
@@ -1082,6 +1101,15 @@ fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         DType::F64 => Tensor::F64(TypedTensor::ones(shape)),
         DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
         DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
+    }
+}
+
+fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
+    match dtype {
+        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }
 }
 

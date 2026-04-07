@@ -204,15 +204,26 @@ pub fn transpose_reshape(
 
     match cotangent_out[0] {
         Some(ct) => {
+            let remapped_from_shape = DimExpr::remap_all(to_shape, 0, 1);
+            let remapped_to_shape = DimExpr::remap_all(from_shape, 0, 1);
+            let needs_shape_source = DimExpr::max_input_idx_all(&remapped_from_shape)
+                .into_iter()
+                .chain(DimExpr::max_input_idx_all(&remapped_to_shape))
+                .any(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(ct)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(inputs[0].clone());
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::Reshape {
-                    from_shape: DimExpr::remap_all(to_shape, 0, 1),
-                    to_shape: DimExpr::remap_all(from_shape, 0, 1),
+                    from_shape: remapped_from_shape,
+                    to_shape: remapped_to_shape,
                 },
-                vec![ValRef::Local(ct), inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
