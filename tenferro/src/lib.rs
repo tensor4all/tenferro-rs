@@ -47,12 +47,12 @@ pub use traced::TracedTensor;
 /// ```
 pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![a.shape.len() - 1],
+        lhs_contracting_dims: vec![a.rank - 1],
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: a.shape.len(),
-        rhs_rank: b.shape.len(),
+        lhs_rank: a.rank,
+        rhs_rank: b.rank,
     };
     a.dot_general(b, config)
 }
