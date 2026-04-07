@@ -360,6 +360,24 @@ pub fn eigvals(a: &TracedTensor) -> TracedTensor {
 /// let value = tenferro::pinv(&a);
 /// ```
 pub fn pinv(a: &TracedTensor) -> TracedTensor {
+    let max_dim = match (a.shape.first(), a.shape.get(1)) {
+        (Some(&m), Some(&n)) => m.max(n),
+        (Some(&m), None) => m,
+        _ => 0,
+    };
+    pinv_with_rtol(a, default_pinv_rtol(a.dtype, max_dim))
+}
+
+/// Moore-Penrose pseudoinverse via the SVD with an explicit relative cutoff.
+///
+/// Singular values `<= rtol * max(s)` are discarded.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let value = tenferro::pinv_with_rtol(&a, 1.0e-8);
+/// ```
+pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
     if has_zero_dim(&a.shape) {
         let mut out_shape = vec![a.shape[1], a.shape[0]];
         out_shape.extend_from_slice(&a.shape[2..]);
@@ -369,7 +387,7 @@ pub fn pinv(a: &TracedTensor) -> TracedTensor {
     let (u, s, vt) = svd(a);
     let abs_s = s.abs();
     let s_max = reduce_max(&abs_s, &[0]);
-    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, 1e-12), &s_max.shape);
+    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max.shape);
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s.shape);
     let mask = compare_dir(&abs_s, &threshold, CompareDir::Gt);
     let ones = ones_like(&s);
@@ -406,20 +424,19 @@ pub fn norm(
         return a.clone();
     }
 
-    let abs = a.abs();
-    let out = match ord {
-        None => frobenius_norm(&abs, &axes),
-        Some(p) if p == f64::INFINITY => reduce_max(&abs, &axes),
-        Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &axes),
-        Some(p) if axes.len() == 2 && p == 2.0 => {
-            let singular_values = svd(a).1.abs();
-            reduce_max(&singular_values, &[0])
+    let out = match axes.len() {
+        1 => vector_norm(a, axes[0], ord),
+        2 => matrix_norm(a, &axes, ord),
+        _ => {
+            let abs = a.abs();
+            match ord {
+                None => frobenius_norm(&abs, &axes),
+                Some(p) if p == f64::INFINITY => reduce_max(&abs, &axes),
+                Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &axes),
+                Some(p) if p == 0.0 => count_nonzero(&abs, &axes),
+                Some(p) => p_norm(&abs, &axes, p),
+            }
         }
-        Some(p) if axes.len() == 2 && p == -2.0 => {
-            let singular_values = svd(a).1.abs();
-            reduce_min(&singular_values, &[0])
-        }
-        Some(p) => p_norm(&abs, &axes, p),
     };
     restore_keepdim(out, &a.shape, &axes, keepdim)
 }
@@ -484,6 +501,90 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> TracedTensor {
     let power = abs.pow(&scalar_real(abs.dtype, p));
     let inv_p = scalar_real(abs.dtype, 1.0 / p);
     power.reduce_sum(axes).pow(&inv_p)
+}
+
+fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
+    let eps = match dtype {
+        DType::F32 | DType::C32 => f32::EPSILON as f64,
+        DType::F64 | DType::C64 => f64::EPSILON,
+    };
+    eps * max_dim as f64
+}
+
+fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor {
+    let abs = a.abs();
+    match ord {
+        None => frobenius_norm(&abs, &[axis]),
+        Some(p) if p == 0.0 => count_nonzero(&abs, &[axis]),
+        Some(p) if p == f64::INFINITY => reduce_max(&abs, &[axis]),
+        Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &[axis]),
+        Some(p) => p_norm(&abs, &[axis], p),
+    }
+}
+
+fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> TracedTensor {
+    let matrix = move_axes_to_front(a, axes);
+    let abs = matrix.abs();
+    match ord {
+        None => frobenius_norm(&abs, &[0, 1]),
+        Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
+        Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(&abs, false),
+        Some(p) if p == 1.0 => matrix_col_sum_norm(&abs, true),
+        Some(p) if p == -1.0 => matrix_col_sum_norm(&abs, false),
+        Some(p) if p == 2.0 => {
+            let singular_values = svd(&matrix).1.abs();
+            reduce_max(&singular_values, &[0])
+        }
+        Some(p) if p == -2.0 => {
+            let singular_values = svd(&matrix).1.abs();
+            reduce_min(&singular_values, &[0])
+        }
+        Some(p) if p == 0.0 => count_nonzero(&abs, &[0, 1]),
+        Some(p) => p_norm(&abs, &[0, 1], p),
+    }
+}
+
+fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
+    let mask = compare_dir(abs, &zero_scalar(abs.dtype), CompareDir::Gt);
+    mask.reduce_sum(axes)
+}
+
+fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
+    let row_sums = abs.reduce_sum(&[1]);
+    if take_max {
+        reduce_max(&row_sums, &[0])
+    } else {
+        reduce_min(&row_sums, &[0])
+    }
+}
+
+fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
+    let col_sums = abs.reduce_sum(&[0]);
+    if take_max {
+        reduce_max(&col_sums, &[0])
+    } else {
+        reduce_min(&col_sums, &[0])
+    }
+}
+
+fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> TracedTensor {
+    if axes.iter().enumerate().all(|(index, &axis)| index == axis) {
+        return tensor.clone();
+    }
+
+    let mut selected = vec![false; tensor.shape.len()];
+    for &axis in axes {
+        selected[axis] = true;
+    }
+
+    let mut perm = Vec::with_capacity(tensor.shape.len());
+    perm.extend_from_slice(axes);
+    for axis in 0..tensor.shape.len() {
+        if !selected[axis] {
+            perm.push(axis);
+        }
+    }
+    tensor.transpose(&perm)
 }
 
 fn restore_keepdim(

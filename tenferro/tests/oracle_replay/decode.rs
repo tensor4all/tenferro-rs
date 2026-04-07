@@ -18,8 +18,21 @@ pub struct CaseRecord {
     pub inputs: HashMap<String, TensorData>,
     pub observable: Observable,
     #[serde(default)]
+    pub op_args: Vec<OracleArg>,
+    #[serde(default)]
     pub op_kwargs: serde_json::Value,
     pub probes: Vec<Probe>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+pub enum OracleArg {
+    Null(()),
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<OracleArg>),
+    Object(HashMap<String, OracleArg>),
 }
 
 #[derive(Clone, Deserialize)]
@@ -85,14 +98,23 @@ pub fn decode_tensor(td: &TensorData) -> Option<Tensor> {
 }
 
 pub fn try_decode_tensor(td: &TensorData) -> Result<Option<Tensor>, String> {
-    if td.dtype != "float64" {
-        return Ok(None);
+    match td.dtype.as_str() {
+        "float64" => {
+            let data = tensor_data_as_col_major(td)?;
+            Ok(Some(Tensor::F64(TypedTensor::from_vec(
+                td.shape.clone(),
+                data,
+            ))))
+        }
+        "complex128" => {
+            let data = complex_tensor_data_as_col_major(td)?;
+            Ok(Some(Tensor::C64(TypedTensor::from_vec(
+                td.shape.clone(),
+                data,
+            ))))
+        }
+        _ => Ok(None),
     }
-    let data = tensor_data_as_col_major(td)?;
-    Ok(Some(Tensor::F64(TypedTensor::from_vec(
-        td.shape.clone(),
-        data,
-    ))))
 }
 
 pub fn tensor_data_as_col_major(td: &TensorData) -> Result<Vec<f64>, String> {

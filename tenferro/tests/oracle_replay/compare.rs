@@ -66,66 +66,44 @@ fn compare_complex64(
     rtol: f64,
     atol: f64,
 ) -> Result<(), String> {
-    match expected.dtype.as_str() {
-        "complex128" => {
-            let expected_data = complex_tensor_data_as_col_major(expected)?;
-            if actual.len() != expected_data.len() {
-                return Err(format!(
-                    "length mismatch: actual {} vs expected {}",
-                    actual.len(),
-                    expected_data.len()
-                ));
-            }
-            for (index, (actual_value, expected_value)) in
-                actual.iter().zip(expected_data.iter()).enumerate()
-            {
-                compare_component(actual_value.re, expected_value.re, rtol, atol, index, "re")?;
-                compare_component(actual_value.im, expected_value.im, rtol, atol, index, "im")?;
-            }
-            Ok(())
-        }
-        "float64" => {
-            let expected_data = tensor_data_as_col_major(expected)?;
-            if actual.len() != expected_data.len() {
-                return Err(format!(
-                    "length mismatch: actual {} vs expected {}",
-                    actual.len(),
-                    expected_data.len()
-                ));
-            }
-            for (index, (actual_value, expected_value)) in
-                actual.iter().zip(expected_data.iter()).enumerate()
-            {
-                compare_component(actual_value.re, *expected_value, rtol, atol, index, "re")?;
-                compare_component(actual_value.im, 0.0, rtol, atol, index, "im")?;
-            }
-            Ok(())
-        }
-        other => Err(format!("unsupported expected tensor dtype {other}")),
-    }
-}
+    let expected_data: Vec<Complex64> = match expected.dtype.as_str() {
+        "complex128" => complex_tensor_data_as_col_major(expected)?,
+        "float64" => tensor_data_as_col_major(expected)?
+            .into_iter()
+            .map(|value| Complex64::new(value, 0.0))
+            .collect(),
+        other => return Err(format!("unsupported expected tensor dtype {other}")),
+    };
 
-fn compare_component(
-    actual: f64,
-    expected: f64,
-    rtol: f64,
-    atol: f64,
-    index: usize,
-    component: &str,
-) -> Result<(), String> {
-    if actual == expected {
-        return Ok(());
-    }
-    if actual.is_nan() && expected.is_nan() {
-        return Ok(());
-    }
-
-    let diff = (actual - expected).abs();
-    let limit = atol + rtol * expected.abs();
-    if diff > limit {
+    if actual.len() != expected_data.len() {
         return Err(format!(
-            "mismatch at flat index {index} component {component}: actual={actual}, expected={expected}, diff={diff}, limit={limit}"
+            "length mismatch: actual {} vs expected {}",
+            actual.len(),
+            expected_data.len()
         ));
     }
+
+    for (index, (&actual_value, &expected_value)) in
+        actual.iter().zip(expected_data.iter()).enumerate()
+    {
+        if actual_value == expected_value {
+            continue;
+        }
+        if complex_is_nan(actual_value) && complex_is_nan(expected_value) {
+            continue;
+        }
+
+        let diff = (actual_value - expected_value).norm();
+        let limit = atol + rtol * expected_value.norm();
+        if diff > limit {
+            return Err(format!(
+                "mismatch at flat index {index}: actual={actual_value}, expected={expected_value}, diff={diff}, limit={limit}"
+            ));
+        }
+    }
     Ok(())
+}
+
+fn complex_is_nan(value: Complex64) -> bool {
+    value.re.is_nan() || value.im.is_nan()
 }

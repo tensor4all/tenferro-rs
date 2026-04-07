@@ -51,16 +51,14 @@ fn linearize_non_semiring(
             input_shape,
         ),
         StdTensorOp::ReduceMax { axes, input_shape }
-        | StdTensorOp::ReduceMin { axes, input_shape } => {
-            contraction::linearize_reduce_chooser(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                axes,
-                input_shape,
-            )
-        }
+        | StdTensorOp::ReduceMin { axes, input_shape } => contraction::linearize_reduce_chooser(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            axes,
+            input_shape,
+        ),
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
         }

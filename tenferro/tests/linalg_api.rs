@@ -2,7 +2,8 @@ use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::{eval_all, TracedTensor};
 use tenferro::{
-    cholesky, det, eig, eigh, inv, lu, norm, pinv, qr, slogdet, solve, svd, triangular_solve,
+    cholesky, det, eig, eigh, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd,
+    triangular_solve,
 };
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 
@@ -149,6 +150,48 @@ fn determinant_inverse_pseudoinverse_and_norm_eval() {
     assert_tensor_f64_eq(get_f64_data(&results[3]), &[0.5, 0.0, 0.0, 0.25]);
     assert_tensor_f64_eq(get_f64_data(&results[4]), &[0.5, 0.0, 0.0, 0.25]);
     assert_f64_eq(get_f64_data(&results[5])[0], (20.0f64).sqrt());
+}
+
+#[test]
+fn pinv_with_large_rtol_discards_all_singular_values() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+    let mut pseudo_inverse = pinv_with_rtol(&a, 1.0);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut pseudo_inverse]).unwrap();
+
+    assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn norm_supports_vector_zero_and_matrix_induced_orders() {
+    let vector = TracedTensor::from_tensor(f64_tensor(vec![4], vec![1.0, 0.0, 2.0, -3.0]));
+    let matrix = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
+
+    let mut zero_norm = norm(&vector, Some(0.0), Some(&[0]), false);
+    let mut matrix_one = norm(&matrix, Some(1.0), Some(&[0, 1]), false);
+    let mut matrix_neg_one = norm(&matrix, Some(-1.0), Some(&[0, 1]), false);
+    let mut matrix_inf = norm(&matrix, Some(f64::INFINITY), Some(&[0, 1]), false);
+    let mut matrix_neg_inf = norm(&matrix, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(
+        &mut engine,
+        &mut [
+            &mut zero_norm,
+            &mut matrix_one,
+            &mut matrix_neg_one,
+            &mut matrix_inf,
+            &mut matrix_neg_inf,
+        ],
+    )
+    .unwrap();
+
+    assert_f64_eq(get_f64_data(&results[0])[0], 3.0);
+    assert_f64_eq(get_f64_data(&results[1])[0], 6.0);
+    assert_f64_eq(get_f64_data(&results[2])[0], 4.0);
+    assert_f64_eq(get_f64_data(&results[3])[0], 7.0);
+    assert_f64_eq(get_f64_data(&results[4])[0], 3.0);
 }
 
 fn assert_f64_eq(actual: f64, expected: f64) {

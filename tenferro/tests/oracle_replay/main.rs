@@ -7,9 +7,10 @@ mod observable;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::{env, num::ParseIntError};
 
+use num_complex::{Complex32, Complex64};
 use tenferro::engine::Engine;
 use tenferro::traced::eval_all;
-use tenferro::{CpuBackend, Tensor, TracedTensor, TypedTensor};
+use tenferro::{CpuBackend, DType, Tensor, TracedTensor, TypedTensor};
 
 use crate::compare::compare_tensor;
 use crate::db::{oracle_cases_dir, try_discover_case_files, try_load_cases};
@@ -210,7 +211,7 @@ fn decode_named_tensors(
     let mut decoded = BTreeMap::new();
     for (name, tensor_data) in tensors {
         let tensor = try_decode_tensor(tensor_data)?
-            .ok_or_else(|| format!("tensor {name} is not float64"))?;
+            .ok_or_else(|| format!("tensor {name} has unsupported dtype {}", tensor_data.dtype))?;
         decoded.insert(name.clone(), TracedTensor::from_tensor(tensor));
     }
     Ok(decoded)
@@ -227,8 +228,10 @@ fn build_jvp_outputs(
         if !expected.contains_key(&output.name) {
             continue;
         }
-        let tangent = try_directional_jvp(&output.tensor, inputs, directions)?
-            .unwrap_or_else(|| output.tensor.scale_real(0.0));
+        let tangent =
+            try_directional_jvp(&output.tensor, inputs, directions)?.unwrap_or_else(|| {
+                zero_traced_tensor(output.tensor.dtype, output.tensor.shape.clone())
+            });
         tangents.push(NamedTensor {
             name: output.name.clone(),
             tensor: tangent,
@@ -248,7 +251,7 @@ fn build_grad_outputs(
             .map_err(|err| format!("failed to build VJP for input {name}: {err}"))?
         {
             Some(gradient) => gradient,
-            None => TracedTensor::from_tensor(Tensor::F64(TypedTensor::zeros(input.shape.clone()))),
+            None => zero_traced_tensor(input.dtype, input.shape.clone()),
         };
         gradients.push(NamedTensor {
             name: name.clone(),
@@ -280,7 +283,7 @@ fn directional_jvp(
 ) -> Result<TracedTensor, String> {
     Ok(match try_directional_jvp(output, inputs, directions)? {
         Some(tangent) => tangent,
-        None => TracedTensor::from_tensor(Tensor::F64(TypedTensor::zeros(output.shape.clone()))),
+        None => zero_traced_tensor(output.dtype, output.shape.clone()),
     })
 }
 
@@ -315,8 +318,9 @@ fn cotangent_scalar(
         let Some(cotangent) = cotangents.get(&output.name) else {
             continue;
         };
+        let aligned_cotangent = align_cotangent_dtype(&output.tensor, cotangent)?;
         let axes: Vec<usize> = (0..output.tensor.shape.len()).collect();
-        scalar_terms.push((&output.tensor * cotangent).reduce_sum(&axes));
+        scalar_terms.push((&output.tensor * &aligned_cotangent).reduce_sum(&axes));
     }
 
     let mut iter = scalar_terms.into_iter();
@@ -410,4 +414,51 @@ fn print_summary(stats: &ReplayStats) {
     for failure in &stats.failed {
         eprintln!("    {failure}");
     }
+}
+
+fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> TracedTensor {
+    let tensor = match dtype {
+        DType::F32 => Tensor::F32(TypedTensor::<f32>::zeros(shape)),
+        DType::F64 => Tensor::F64(TypedTensor::<f64>::zeros(shape)),
+        DType::C32 => Tensor::C32(TypedTensor::<Complex32>::zeros(shape)),
+        DType::C64 => Tensor::C64(TypedTensor::<Complex64>::zeros(shape)),
+    };
+    TracedTensor::from_tensor(tensor)
+}
+
+fn align_cotangent_dtype(
+    output: &TracedTensor,
+    cotangent: &TracedTensor,
+) -> Result<TracedTensor, String> {
+    if output.dtype == cotangent.dtype {
+        return Ok(cotangent.clone());
+    }
+
+    let promoted = match (output.dtype, cotangent.data.as_ref()) {
+        (DType::C32, Some(Tensor::F32(inner))) => Tensor::C32(TypedTensor::from_vec(
+            cotangent.shape.clone(),
+            inner
+                .host_data()
+                .iter()
+                .copied()
+                .map(|value| Complex32::new(value, 0.0))
+                .collect(),
+        )),
+        (DType::C64, Some(Tensor::F64(inner))) => Tensor::C64(TypedTensor::from_vec(
+            cotangent.shape.clone(),
+            inner
+                .host_data()
+                .iter()
+                .copied()
+                .map(|value| Complex64::new(value, 0.0))
+                .collect(),
+        )),
+        _ => {
+            return Err(format!(
+                "cannot align output dtype {:?} with cotangent dtype {:?}",
+                output.dtype, cotangent.dtype
+            ));
+        }
+    };
+    Ok(TracedTensor::from_tensor(promoted))
 }
