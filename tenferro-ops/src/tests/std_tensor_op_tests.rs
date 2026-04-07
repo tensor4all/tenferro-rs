@@ -7,7 +7,6 @@ use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
 use num_complex::{Complex32, Complex64};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use tenferro_algebra::Standard;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
@@ -296,20 +295,32 @@ fn test_std_tensor_op_linalg_input_output_counts() {
         2
     );
     assert_eq!(
-        StdTensorOp::Solve {
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+        StdTensorOp::Lu {
+            input_shape: vec![2, 2]
         }
         .n_inputs(),
-        2
+        1
     );
     assert_eq!(
-        StdTensorOp::Solve {
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+        StdTensorOp::Lu {
+            input_shape: vec![2, 2]
         }
         .n_outputs(),
+        4
+    );
+    assert_eq!(
+        StdTensorOp::Eig {
+            input_shape: vec![2, 2]
+        }
+        .n_inputs(),
         1
+    );
+    assert_eq!(
+        StdTensorOp::Eig {
+            input_shape: vec![2, 2]
+        }
+        .n_outputs(),
+        2
     );
     assert_eq!(
         StdTensorOp::TriangularSolve {
@@ -368,37 +379,55 @@ fn test_std_tensor_op_n_outputs_panics_for_concatenate() {
 }
 
 #[test]
-fn test_std_tensor_op_count_fallbacks_cover_unimplemented_reductions() {
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceProd {
-        axes: vec![1]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceProd {
-        axes: vec![1]
-    }
-    .n_outputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMax {
-        axes: vec![0]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMax {
-        axes: vec![0]
-    }
-    .n_outputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMin {
-        axes: vec![0, 1]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMin {
-        axes: vec![0, 1]
-    }
-    .n_outputs()))
-    .is_err());
+fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
+    assert_eq!(
+        StdTensorOp::ReduceProd {
+            axes: vec![1],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceProd {
+            axes: vec![1],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMin {
+            axes: vec![0, 1],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMin {
+            axes: vec![0, 1],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
 }
 
 #[test]
@@ -639,9 +668,18 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         }),
         StdTensorOp::Concatenate { axis: 1 },
         StdTensorOp::Reverse { axes: vec![0] },
-        StdTensorOp::ReduceProd { axes: vec![0] },
-        StdTensorOp::ReduceMax { axes: vec![0] },
-        StdTensorOp::ReduceMin { axes: vec![0] },
+        StdTensorOp::ReduceProd {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
+        StdTensorOp::ReduceMin {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
     ];
 
     for op in variants {

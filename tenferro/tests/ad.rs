@@ -7,6 +7,7 @@ use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
+use computegraph::LocalValId;
 use num_complex::Complex64;
 use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::einsum::einsum;
@@ -185,13 +186,6 @@ fn cholesky_op(shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::Cholesky { input_shape: shape }
 }
 
-fn solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Solve {
-        lhs_shape,
-        rhs_shape,
-    }
-}
-
 fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::TriangularSolve {
         left_side: true,
@@ -201,6 +195,84 @@ fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTenso
         lhs_shape,
         rhs_shape,
     }
+}
+
+fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
+    let batch_dims: Vec<usize> = (2..rank).collect();
+    DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: batch_dims.clone(),
+        rhs_batch_dims: batch_dims,
+        lhs_rank: rank,
+        rhs_rank: rank,
+    }
+}
+
+fn matmul_output_perm(rank: usize) -> Vec<usize> {
+    let batch_ndim = rank - 2;
+    let mut perm = Vec::with_capacity(rank);
+    perm.push(batch_ndim);
+    perm.push(batch_ndim + 1);
+    perm.extend(0..batch_ndim);
+    perm
+}
+
+fn add_solve_composition(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    a: LocalValId,
+    b: LocalValId,
+    lhs_shape: Vec<usize>,
+    rhs_shape: Vec<usize>,
+) -> LocalValId {
+    let lu = builder.add_op(
+        StdTensorOp::Lu {
+            input_shape: lhs_shape.clone(),
+        },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let rank = lhs_shape.len();
+    let pb = builder.add_op(
+        StdTensorOp::DotGeneral(solve_dot_general_config(rank)),
+        vec![ValRef::Local(lu[0]), ValRef::Local(b)],
+        OpMode::Primal,
+    )[0];
+    let pb = if rank > 2 {
+        builder.add_op(
+            StdTensorOp::Transpose {
+                perm: matmul_output_perm(rank),
+            },
+            vec![ValRef::Local(pb)],
+            OpMode::Primal,
+        )[0]
+    } else {
+        pb
+    };
+    let z = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: true,
+            lhs_shape: lhs_shape.clone(),
+            rhs_shape: rhs_shape.clone(),
+        },
+        vec![ValRef::Local(lu[1]), ValRef::Local(pb)],
+        OpMode::Primal,
+    )[0];
+    builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: false,
+            transpose_a: false,
+            unit_diagonal: false,
+            lhs_shape,
+            rhs_shape,
+        },
+        vec![ValRef::Local(lu[2]), ValRef::Local(z)],
+        OpMode::Primal,
+    )[0]
 }
 
 fn tensor_input_key(id: u64) -> TensorInputKey {
@@ -610,17 +682,13 @@ fn build_solve_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
-    let solve = builder.add_op(
-        solve_op(vec![2, 2], vec![2, 1]),
-        vec![ValRef::Local(a), ValRef::Local(b)],
-        OpMode::Primal,
-    );
+    let solve = add_solve_composition(&mut builder, a, b, vec![2, 2], vec![2, 1]);
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
             input_shape: vec![2, 1],
         },
-        vec![ValRef::Local(solve[0])],
+        vec![ValRef::Local(solve)],
         OpMode::Primal,
     );
     let loss_key = builder.global_key(loss[0]).clone();
@@ -668,12 +736,8 @@ fn build_solve_real_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
-    let solve = builder.add_op(
-        solve_op(vec![2, 2], vec![2, 1]),
-        vec![ValRef::Local(a), ValRef::Local(b)],
-        OpMode::Primal,
-    );
-    let loss = add_real_reduce_sum_loss(&mut builder, solve[0], vec![2, 1]);
+    let solve = add_solve_composition(&mut builder, a, b, vec![2, 2], vec![2, 1]);
+    let loss = add_real_reduce_sum_loss(&mut builder, solve, vec![2, 1]);
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), a_key, b_key, loss_key)

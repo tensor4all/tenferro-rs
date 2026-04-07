@@ -25,6 +25,7 @@ fn linearize_non_semiring(
         StdTensorOp::Abs => elementwise_tier2::linearize_abs(builder, primal_in, tangent_in),
         StdTensorOp::Sign => elementwise_tier2::linearize_sign(builder, tangent_in),
         StdTensorOp::Constant { .. } => vec![None],
+        StdTensorOp::Compare(_) => vec![None],
         StdTensorOp::Exp => analytic::linearize_exp(builder, primal_out, tangent_in),
         StdTensorOp::Log => analytic::linearize_log(builder, primal_in, tangent_in),
         StdTensorOp::Sin => analytic::linearize_sin(builder, primal_in, tangent_in),
@@ -40,6 +41,25 @@ fn linearize_non_semiring(
         }
         StdTensorOp::ReduceSum { axes, .. } => {
             contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
+        }
+        StdTensorOp::ReduceProd { axes, input_shape } => contraction::linearize_reduce_prod(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            axes,
+            input_shape,
+        ),
+        StdTensorOp::ReduceMax { axes, input_shape }
+        | StdTensorOp::ReduceMin { axes, input_shape } => {
+            contraction::linearize_reduce_chooser(
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                axes,
+                input_shape,
+            )
         }
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
@@ -57,12 +77,9 @@ fn linearize_non_semiring(
         StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
-        StdTensorOp::Solve {
-            lhs_shape,
-            rhs_shape,
-        } => linalg::linearize_solve(
-            builder, primal_in, primal_out, tangent_in, lhs_shape, rhs_shape,
-        ),
+        StdTensorOp::Lu { input_shape } => {
+            linalg::linearize_lu(builder, primal_out, tangent_in, input_shape)
+        }
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
@@ -93,6 +110,9 @@ fn linearize_non_semiring(
         }
         StdTensorOp::Eigh { eps, input_shape } => {
             linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
+        }
+        StdTensorOp::Eig { input_shape } => {
+            linalg::linearize_eig(builder, primal_out, tangent_in, input_shape)
         }
         _ => return None,
     })
@@ -125,6 +145,7 @@ fn transpose_non_semiring(
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sign => elementwise_tier2::transpose_sign(builder, cotangent_out, mode),
         StdTensorOp::Constant { .. } => vec![],
+        StdTensorOp::Compare(_) => vec![None, None],
         StdTensorOp::Exp => analytic::transpose_exp(builder, cotangent_out, inputs, mode),
         StdTensorOp::Log => analytic::transpose_log(builder, cotangent_out, inputs, mode),
         StdTensorOp::Sin => analytic::transpose_sin(builder, cotangent_out, inputs, mode),
@@ -141,6 +162,12 @@ fn transpose_non_semiring(
         StdTensorOp::ReduceSum { .. } => {
             contraction::transpose_reduce_sum(builder, cotangent_out, op)
         }
+        StdTensorOp::ReduceProd { .. } => {
+            contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op)
+        }
+        StdTensorOp::ReduceMax { .. } | StdTensorOp::ReduceMin { .. } => {
+            contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op)
+        }
         StdTensorOp::Transpose { perm } => {
             structural::transpose_transpose(builder, cotangent_out, perm)
         }
@@ -156,10 +183,6 @@ fn transpose_non_semiring(
         }
         StdTensorOp::Tril { k } => structural::transpose_tril(builder, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(builder, cotangent_out, *k),
-        StdTensorOp::Solve {
-            lhs_shape,
-            rhs_shape,
-        } => linalg::transpose_solve(builder, cotangent_out, inputs, mode, lhs_shape, rhs_shape),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,

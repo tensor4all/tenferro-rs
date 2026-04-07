@@ -81,6 +81,9 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Pad(config) => StableHloOp::Pad(config.clone()),
                 StdTensorOp::Reverse { axes } => StableHloOp::Reverse { axes: axes.clone() },
                 StdTensorOp::Cholesky { .. } => StableHloOp::Cholesky,
+                StdTensorOp::Lu { .. } => StableHloOp::CustomCall {
+                    target: "lu".to_string(),
+                },
                 StdTensorOp::TriangularSolve {
                     left_side,
                     lower,
@@ -102,8 +105,8 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Eigh { .. } => StableHloOp::CustomCall {
                     target: "eigh".to_string(),
                 },
-                StdTensorOp::Solve { .. } => StableHloOp::CustomCall {
-                    target: "solve".to_string(),
+                StdTensorOp::Eig { .. } => StableHloOp::CustomCall {
+                    target: "eig".to_string(),
                 },
             };
             let dtype = match &instr.op {

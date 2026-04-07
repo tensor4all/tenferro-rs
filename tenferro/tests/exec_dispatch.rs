@@ -238,17 +238,39 @@ impl TensorBackend for FakeTensorBackend {
     ) -> Tensor {
         self.result("triangular_solve", 40.5)
     }
+    fn lu(&mut self, _input: &Tensor) -> Vec<Tensor> {
+        self.calls.push("lu");
+        vec![
+            scalar_tensor(40.75),
+            scalar_tensor(41.0),
+            scalar_tensor(41.25),
+            scalar_tensor(41.5),
+        ]
+    }
     fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
         self.calls.push("svd");
-        vec![scalar_tensor(41.0), scalar_tensor(41.5)]
+        vec![scalar_tensor(42.0), scalar_tensor(42.5)]
     }
     fn qr(&mut self, _input: &Tensor) -> Vec<Tensor> {
         self.calls.push("qr");
-        vec![scalar_tensor(42.0), scalar_tensor(42.5)]
+        vec![scalar_tensor(43.0), scalar_tensor(43.5)]
     }
     fn eigh(&mut self, _input: &Tensor) -> Vec<Tensor> {
         self.calls.push("eigh");
-        vec![scalar_tensor(43.0), scalar_tensor(43.5)]
+        vec![scalar_tensor(44.0), scalar_tensor(44.5)]
+    }
+    fn eig(&mut self, _input: &Tensor) -> Vec<Tensor> {
+        self.calls.push("eig");
+        vec![
+            Tensor::C64(TypedTensor::from_vec(
+                vec![],
+                vec![Complex64::new(45.0, 0.5)],
+            )),
+            Tensor::C64(TypedTensor::from_vec(
+                vec![],
+                vec![Complex64::new(45.5, -0.5)],
+            )),
+        ]
     }
     fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> Tensor {
         self.result("solve", 44.0)
@@ -363,14 +385,6 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "triangular_solve",
             40.5,
         ),
-        (
-            ExecOp::CustomCall {
-                target: "solve".into(),
-            },
-            2,
-            "solve",
-            44.0,
-        ),
     ];
 
     for (op, n_inputs, expected_call, expected_value) in cases {
@@ -468,6 +482,25 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     let mut backend = FakeTensorBackend::default();
     let mut pool = BufferPool::new();
 
+    // LU: 1 input, 4 outputs
+    let program = multi_output_program(
+        ExecOp::CustomCall {
+            target: "lu".into(),
+        },
+        1,
+        4,
+    );
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    assert_eq!(backend.calls, vec!["lu"]);
+    assert_eq!(outputs.len(), 4);
+    assert_eq!(scalar_value(&outputs[0]), 40.75);
+    assert_eq!(scalar_value(&outputs[1]), 41.0);
+    assert_eq!(scalar_value(&outputs[2]), 41.25);
+    assert_eq!(scalar_value(&outputs[3]), 41.5);
+
+    backend.calls.clear();
+    pool = BufferPool::new();
+
     // SVD: 1 input, 2 outputs (fake returns 2)
     let program = multi_output_program(
         ExecOp::CustomCall {
@@ -479,8 +512,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
     assert_eq!(backend.calls, vec!["svd"]);
     assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 41.0);
-    assert_eq!(scalar_value(&outputs[1]), 41.5);
+    assert_eq!(scalar_value(&outputs[0]), 42.0);
+    assert_eq!(scalar_value(&outputs[1]), 42.5);
 
     backend.calls.clear();
     pool = BufferPool::new();
@@ -496,8 +529,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
     assert_eq!(backend.calls, vec!["qr"]);
     assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 42.0);
-    assert_eq!(scalar_value(&outputs[1]), 42.5);
+    assert_eq!(scalar_value(&outputs[0]), 43.0);
+    assert_eq!(scalar_value(&outputs[1]), 43.5);
 
     backend.calls.clear();
     pool = BufferPool::new();
@@ -513,8 +546,25 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
     assert_eq!(backend.calls, vec!["eigh"]);
     assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 43.0);
-    assert_eq!(scalar_value(&outputs[1]), 43.5);
+    assert_eq!(scalar_value(&outputs[0]), 44.0);
+    assert_eq!(scalar_value(&outputs[1]), 44.5);
+
+    backend.calls.clear();
+    pool = BufferPool::new();
+
+    // Eig: 1 input, 2 outputs
+    let program = multi_output_program(
+        ExecOp::CustomCall {
+            target: "eig".into(),
+        },
+        1,
+        2,
+    );
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    assert_eq!(backend.calls, vec!["eig"]);
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(scalar_c64_value(&outputs[0]), Complex64::new(45.0, 0.5));
+    assert_eq!(scalar_c64_value(&outputs[1]), Complex64::new(45.5, -0.5));
 }
 
 #[test]

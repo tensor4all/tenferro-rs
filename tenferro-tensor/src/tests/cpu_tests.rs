@@ -1333,6 +1333,46 @@ fn test_real_solve_non_batched() {
 }
 
 #[test]
+fn test_real_lu_returns_permutation_factors_and_parity() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.lu(&input);
+
+    assert_eq!(outputs.len(), 4);
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let parity = get_f64(&outputs[3], &[]);
+
+    let pa = matmul_f64(&p, &matrix_f64_from_tensor(&input, 2, 2), 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in pa.iter().zip(lu.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+    assert_f64_close(parity, -1.0);
+}
+
+#[test]
+fn test_real_eig_returns_complex_outputs() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.eig(&input);
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let mut values = vector_c64_from_tensor(&outputs[0], 2);
+    values.sort_by(|lhs, rhs| {
+        lhs.re
+            .partial_cmp(&rhs.re)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    assert_c64_close(values[0], Complex64::new(1.0, 0.0));
+    assert_c64_close(values[1], Complex64::new(3.0, 0.0));
+}
+
+#[test]
 fn test_batched_complex_eigh() {
     let l0 = vec![
         Complex64::new(2.0, 0.0),

@@ -146,7 +146,8 @@ fn replay_probe(
     let direction_tensors = decode_named_tensors(&probe.direction)?;
     let cotangent_tensors = decode_named_tensors(&probe.cotangent)?;
 
-    let mut jvp_outputs = build_jvp_outputs(outputs, inputs, &direction_tensors)?;
+    let mut jvp_outputs =
+        build_jvp_outputs(outputs, inputs, &direction_tensors, &probe.pytorch_ref.jvp)?;
     let jvp_results = eval_named_tensors(engine, &mut jvp_outputs)?;
     compare_named_results(
         &jvp_results,
@@ -219,12 +220,18 @@ fn build_jvp_outputs(
     outputs: &[NamedTensor],
     inputs: &BTreeMap<String, TracedTensor>,
     directions: &BTreeMap<String, TracedTensor>,
+    expected: &HashMap<String, TensorData>,
 ) -> Result<Vec<NamedTensor>, String> {
     let mut tangents = Vec::with_capacity(outputs.len());
     for output in outputs {
+        if !expected.contains_key(&output.name) {
+            continue;
+        }
+        let tangent = try_directional_jvp(&output.tensor, inputs, directions)?
+            .unwrap_or_else(|| output.tensor.scale_real(0.0));
         tangents.push(NamedTensor {
             name: output.name.clone(),
-            tensor: directional_jvp(&output.tensor, inputs, directions)?,
+            tensor: tangent,
         });
     }
     Ok(tangents)
@@ -271,6 +278,17 @@ fn directional_jvp(
     inputs: &BTreeMap<String, TracedTensor>,
     directions: &BTreeMap<String, TracedTensor>,
 ) -> Result<TracedTensor, String> {
+    Ok(match try_directional_jvp(output, inputs, directions)? {
+        Some(tangent) => tangent,
+        None => TracedTensor::from_tensor(Tensor::F64(TypedTensor::zeros(output.shape.clone()))),
+    })
+}
+
+fn try_directional_jvp(
+    output: &TracedTensor,
+    inputs: &BTreeMap<String, TracedTensor>,
+    directions: &BTreeMap<String, TracedTensor>,
+) -> Result<Option<TracedTensor>, String> {
     let mut tangent_sum: Option<TracedTensor> = None;
     for (name, input) in inputs {
         let Some(direction) = directions.get(name) else {
@@ -284,13 +302,7 @@ fn directional_jvp(
             None => tangent,
         });
     }
-
-    match tangent_sum {
-        Some(tangent) => Ok(tangent),
-        None => Ok(TracedTensor::from_tensor(Tensor::F64(TypedTensor::zeros(
-            output.shape.clone(),
-        )))),
-    }
+    Ok(tangent_sum)
 }
 
 fn cotangent_scalar(
@@ -300,12 +312,9 @@ fn cotangent_scalar(
 ) -> Result<TracedTensor, String> {
     let mut scalar_terms = Vec::with_capacity(outputs.len());
     for output in outputs {
-        let cotangent = cotangents.get(&output.name).ok_or_else(|| {
-            format!(
-                "probe {probe_id}: missing cotangent for output {}",
-                output.name
-            )
-        })?;
+        let Some(cotangent) = cotangents.get(&output.name) else {
+            continue;
+        };
         let axes: Vec<usize> = (0..output.tensor.shape.len()).collect();
         scalar_terms.push((&output.tensor * cotangent).reduce_sum(&axes));
     }

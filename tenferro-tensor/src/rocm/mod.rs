@@ -191,6 +191,9 @@ macro_rules! impl_stub_backend {
             ) -> Tensor {
                 todo!(concat!($label, " triangular_solve"))
             }
+            fn lu(&mut self, _input: &Tensor) -> Vec<Tensor> {
+                todo!(concat!($label, " lu"))
+            }
             fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
                 todo!(concat!($label, " svd"))
             }
@@ -199,6 +202,9 @@ macro_rules! impl_stub_backend {
             }
             fn eigh(&mut self, _input: &Tensor) -> Vec<Tensor> {
                 todo!(concat!($label, " eigh"))
+            }
+            fn eig(&mut self, _input: &Tensor) -> Vec<Tensor> {
+                todo!(concat!($label, " eig"))
             }
             fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> Tensor {
                 todo!(concat!($label, " solve"))

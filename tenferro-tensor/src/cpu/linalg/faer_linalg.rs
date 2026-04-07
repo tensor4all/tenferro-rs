@@ -1,11 +1,12 @@
-use faer::linalg::solvers::Solve;
 use faer::{diag::DiagRef, MatMut, MatRef, Par, Side};
 use num_complex::Complex64;
 
-use crate::{Buffer, TypedTensor};
+use crate::{Buffer, Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone {
+    fn parity_one() -> Self;
     fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self>;
+    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn triangular_solve_2d(
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -17,7 +18,6 @@ pub(crate) trait FaerLinalg: Copy + Clone {
     fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
-    fn solve_2d(a: &TypedTensor<Self>, b: &TypedTensor<Self>) -> TypedTensor<Self>;
 }
 
 fn matrix_dims<T>(input: &TypedTensor<T>, op: &str) -> (usize, usize) {
@@ -31,10 +31,10 @@ fn square_matrix_dim<T>(input: &TypedTensor<T>, op: &str) -> usize {
     rows
 }
 
-fn tensor_from_vec_with_template<T: Clone>(
+fn tensor_from_vec_with_template<T: Clone, U>(
     shape: Vec<usize>,
     data: Vec<T>,
-    template: &TypedTensor<T>,
+    template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
     TypedTensor {
         buffer: Buffer::Host(data),
@@ -54,10 +54,10 @@ fn col_major_vec_from_mat<T: Copy>(mat: MatRef<'_, T>) -> Vec<T> {
     data
 }
 
-fn tensor_from_mat<T: Copy + Clone>(
+fn tensor_from_mat<T: Copy + Clone, U>(
     mat: MatRef<'_, T>,
     shape: Vec<usize>,
-    template: &TypedTensor<T>,
+    template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
     tensor_from_vec_with_template(shape, col_major_vec_from_mat(mat), template)
 }
@@ -102,6 +102,27 @@ fn complex_vec_from_real_diag(diag: DiagRef<'_, faer::c64>) -> Vec<Complex64> {
     let mut data = Vec::with_capacity(col.nrows());
     for i in 0..col.nrows() {
         data.push(Complex64::new(col[i].re, 0.0));
+    }
+    data
+}
+
+fn complex_vec_from_diag(diag: DiagRef<'_, faer::c64>) -> Vec<Complex64> {
+    let col = diag.column_vector();
+    let mut data = Vec::with_capacity(col.nrows());
+    for i in 0..col.nrows() {
+        data.push(Complex64::new(col[i].re, col[i].im));
+    }
+    data
+}
+
+fn complex_vec_from_mat(mat: MatRef<'_, faer::c64>) -> Vec<Complex64> {
+    let (rows, cols) = mat.shape();
+    let mut data = Vec::with_capacity(rows * cols);
+    for j in 0..cols {
+        for i in 0..rows {
+            let value = mat[(i, j)];
+            data.push(Complex64::new(value.re, value.im));
+        }
     }
     data
 }
@@ -244,6 +265,78 @@ where
         .collect()
 }
 
+fn batched_multi_convert<InT, OutT, F>(
+    input: &TypedTensor<InT>,
+    core_rank: usize,
+    op: F,
+) -> Vec<TypedTensor<OutT>>
+where
+    InT: Clone,
+    OutT: Clone,
+    F: Fn(&TypedTensor<InT>) -> Vec<TypedTensor<OutT>>,
+{
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
+    if batch_shape.is_empty() {
+        return op(input);
+    }
+
+    let slice_size: usize = core_shape.iter().product();
+    let batch_count: usize = batch_shape.iter().product();
+    assert!(
+        batch_count > 0,
+        "batched_multi: zero-sized batch dims are unsupported"
+    );
+
+    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
+    let mut out_data: Vec<Vec<OutT>> = Vec::new();
+
+    for batch_idx in 0..batch_count {
+        let start = batch_idx * slice_size;
+        let end = start + slice_size;
+        let batch_input = tensor_from_vec_with_template(
+            core_shape.to_vec(),
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let batch_outputs = op(&batch_input);
+
+        if out_shapes.is_empty() {
+            out_shapes = batch_outputs
+                .iter()
+                .map(|tensor| tensor.shape.clone())
+                .collect();
+            out_data = batch_outputs
+                .iter()
+                .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
+                .collect();
+        } else {
+            assert_eq!(
+                batch_outputs.len(),
+                out_shapes.len(),
+                "batched_multi: output count mismatch across batches"
+            );
+        }
+
+        for (idx, batch_output) in batch_outputs.iter().enumerate() {
+            assert_eq!(
+                batch_output.shape.as_slice(),
+                out_shapes[idx].as_slice(),
+                "batched_multi: output core shape mismatch across batches"
+            );
+            out_data[idx].extend_from_slice(batch_output.host_data());
+        }
+    }
+
+    out_shapes
+        .into_iter()
+        .zip(out_data)
+        .map(|(mut out_shape, out_data)| {
+            out_shape.extend_from_slice(batch_shape);
+            tensor_from_vec_with_template(out_shape, out_data, input)
+        })
+        .collect()
+}
+
 fn batched_binary<T, F>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -315,6 +408,10 @@ where
 }
 
 impl FaerLinalg for f64 {
+    fn parity_one() -> Self {
+        1.0
+    }
+
     fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
         let n = square_matrix_dim(input, "cholesky");
         let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
@@ -323,6 +420,44 @@ impl FaerLinalg for f64 {
             Err(_) => panic!("cholesky: matrix is not positive definite"),
         };
         tensor_from_mat(chol.L(), vec![n, n], input)
+    }
+
+    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+        let (m, n) = matrix_dims(input, "lu");
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
+        let lu = mat.partial_piv_lu();
+        let perm: Vec<usize> = lu.P().arrays().0.iter().copied().collect();
+
+        let mut p_data = vec![0.0; m * m];
+        for (row, &col) in perm.iter().enumerate() {
+            p_data[row + col * m] = 1.0;
+        }
+
+        let mut parity = 1.0;
+        let mut visited = vec![false; m];
+        for start in 0..m {
+            if visited[start] {
+                continue;
+            }
+            let mut current = start;
+            let mut cycle_len = 0usize;
+            while !visited[current] {
+                visited[current] = true;
+                current = perm[current];
+                cycle_len += 1;
+            }
+            if cycle_len > 0 && (cycle_len - 1) % 2 == 1 {
+                parity = -parity;
+            }
+        }
+
+        vec![
+            tensor_from_vec_with_template(vec![m, m], p_data, input),
+            tensor_from_mat(lu.L(), vec![m, k], input),
+            tensor_from_mat(lu.U(), vec![k, n], input),
+            tensor_from_vec_with_template(vec![], vec![parity], input),
+        ]
     }
 
     fn triangular_solve_2d(
@@ -518,27 +653,13 @@ impl FaerLinalg for f64 {
 
         vec![values, vectors]
     }
-
-    fn solve_2d(a: &TypedTensor<Self>, b: &TypedTensor<Self>) -> TypedTensor<Self> {
-        let n = square_matrix_dim(a, "solve");
-        let (b_rows, nrhs) = matrix_dims(b, "solve");
-        assert_eq!(b_rows, n, "solve: rhs row count mismatch");
-
-        let a_mat = MatRef::from_column_major_slice(a.host_data(), n, n);
-        let b_mat = MatRef::from_column_major_slice(b.host_data(), n, nrhs);
-        let lu = a_mat.partial_piv_lu();
-        let u_mat = lu.U();
-        for i in 0..n {
-            let diag = u_mat[(i, i)];
-            assert!(diag.is_finite() && diag != 0.0, "solve: singular matrix");
-        }
-
-        let x = lu.solve(&b_mat);
-        tensor_from_mat(x.as_ref(), vec![n, nrhs], b)
-    }
 }
 
 impl FaerLinalg for Complex64 {
+    fn parity_one() -> Self {
+        Complex64::new(1.0, 0.0)
+    }
+
     fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
         let n = square_matrix_dim(input, "cholesky");
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
@@ -547,6 +668,44 @@ impl FaerLinalg for Complex64 {
             Err(_) => panic!("cholesky: matrix is not positive definite"),
         };
         tensor_from_mat(chol.L(), vec![n, n], input)
+    }
+
+    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+        let (m, n) = matrix_dims(input, "lu");
+        let k = m.min(n);
+        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
+        let lu = mat.partial_piv_lu();
+        let perm: Vec<usize> = lu.P().arrays().0.iter().copied().collect();
+
+        let mut p_data = vec![Complex64::new(0.0, 0.0); m * m];
+        for (row, &col) in perm.iter().enumerate() {
+            p_data[row + col * m] = Complex64::new(1.0, 0.0);
+        }
+
+        let mut parity = Complex64::new(1.0, 0.0);
+        let mut visited = vec![false; m];
+        for start in 0..m {
+            if visited[start] {
+                continue;
+            }
+            let mut current = start;
+            let mut cycle_len = 0usize;
+            while !visited[current] {
+                visited[current] = true;
+                current = perm[current];
+                cycle_len += 1;
+            }
+            if cycle_len > 0 && (cycle_len - 1) % 2 == 1 {
+                parity = -parity;
+            }
+        }
+
+        vec![
+            tensor_from_vec_with_template(vec![m, m], p_data, input),
+            tensor_from_mat(lu.L(), vec![m, k], input),
+            tensor_from_mat(lu.U(), vec![k, n], input),
+            tensor_from_vec_with_template(vec![], vec![parity], input),
+        ]
     }
 
     fn triangular_solve_2d(
@@ -751,28 +910,6 @@ impl FaerLinalg for Complex64 {
 
         vec![values, vectors]
     }
-
-    fn solve_2d(a: &TypedTensor<Self>, b: &TypedTensor<Self>) -> TypedTensor<Self> {
-        let n = square_matrix_dim(a, "solve");
-        let (b_rows, nrhs) = matrix_dims(b, "solve");
-        assert_eq!(b_rows, n, "solve: rhs row count mismatch");
-
-        let a_mat = MatRef::from_column_major_slice(complex64_to_faer_slice(a.host_data()), n, n);
-        let b_mat =
-            MatRef::from_column_major_slice(complex64_to_faer_slice(b.host_data()), n, nrhs);
-        let lu = a_mat.partial_piv_lu();
-        let u_mat = lu.U();
-        for i in 0..n {
-            let diag = u_mat[(i, i)];
-            assert!(
-                diag.re.is_finite() && diag.im.is_finite() && diag.norm_sqr() != 0.0,
-                "solve: singular matrix"
-            );
-        }
-
-        let x = lu.solve(&b_mat);
-        tensor_from_mat(x.as_ref(), vec![n, nrhs], b)
-    }
 }
 
 pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> {
@@ -780,6 +917,39 @@ pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> 
         return tensor_from_vec_with_template(input.shape.clone(), Vec::new(), input);
     }
     batched_single(input, 2, T::cholesky_2d)
+}
+
+pub(crate) fn lu<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    if has_zero_dim(&input.shape) {
+        let m = input.shape[0];
+        let n = input.shape[1];
+        let k = m.min(n);
+        let batch_shape = &input.shape[2..];
+        let parity_elements: usize = batch_shape.iter().product::<usize>().max(1);
+        return vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, m, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(k, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                batch_shape.to_vec(),
+                vec![T::parity_one(); parity_elements],
+                input,
+            ),
+        ];
+    }
+    batched_multi(input, 2, T::lu_2d)
 }
 
 pub(crate) fn triangular_solve<T: FaerLinalg>(
@@ -867,11 +1037,61 @@ pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>>
     batched_multi(input, 2, T::eigh_2d)
 }
 
-pub(crate) fn solve<T: FaerLinalg>(a: &TypedTensor<T>, b: &TypedTensor<T>) -> TypedTensor<T> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+fn eig_real_2d(input: &TypedTensor<f64>) -> Vec<TypedTensor<Complex64>> {
+    let n = square_matrix_dim(input, "eig");
+    let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+    let eig = match mat.eigen() {
+        Ok(eig) => eig,
+        Err(_) => panic!("eig: decomposition failed"),
+    };
+
+    vec![
+        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(eig.S()), input),
+        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(eig.U()), input),
+    ]
+}
+
+fn eig_complex_2d(input: &TypedTensor<Complex64>) -> Vec<TypedTensor<Complex64>> {
+    let n = square_matrix_dim(input, "eig");
+    let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
+    let eig = match mat.eigen() {
+        Ok(eig) => eig,
+        Err(_) => panic!("eig: decomposition failed"),
+    };
+
+    vec![
+        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(eig.S()), input),
+        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(eig.U()), input),
+    ]
+}
+
+pub(crate) fn eig(input: &Tensor) -> Vec<Tensor> {
+    if has_zero_dim(input.shape()) {
+        let n = input.shape()[0];
+        let batch_shape = &input.shape()[2..];
+        return vec![
+            Tensor::C64(TypedTensor::from_vec(
+                vector_with_batch_shape(n, batch_shape),
+                Vec::new(),
+            )),
+            Tensor::C64(TypedTensor::from_vec(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+            )),
+        ];
     }
-    batched_binary(a, b, 2, 2, T::solve_2d)
+
+    match input {
+        Tensor::F64(t) => batched_multi_convert(t, 2, eig_real_2d)
+            .into_iter()
+            .map(Tensor::C64)
+            .collect(),
+        Tensor::C64(t) => batched_multi_convert(t, 2, eig_complex_2d)
+            .into_iter()
+            .map(Tensor::C64)
+            .collect(),
+        _ => todo!("eig: unsupported dtype"),
+    }
 }
 
 fn has_zero_dim(shape: &[usize]) -> bool {

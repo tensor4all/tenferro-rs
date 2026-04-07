@@ -101,9 +101,11 @@ pub trait TensorBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Tensor;
+    fn lu(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn qr(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn eigh(&mut self, input: &Tensor) -> Vec<Tensor>;
+    fn eig(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor;
 }
 

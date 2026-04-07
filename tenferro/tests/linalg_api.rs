@@ -1,6 +1,9 @@
+use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::{eval_all, TracedTensor};
-use tenferro::{cholesky, eigh, qr, solve, svd, triangular_solve};
+use tenferro::{
+    cholesky, det, eig, eigh, inv, lu, norm, pinv, qr, slogdet, solve, svd, triangular_solve,
+};
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -11,6 +14,13 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
         Tensor::F64(inner) => inner.host_data(),
         _ => panic!("expected F64"),
+    }
+}
+
+fn get_c64_data(t: &Tensor) -> &[Complex64] {
+    match t {
+        Tensor::C64(inner) => inner.host_data(),
+        _ => panic!("expected C64"),
     }
 }
 
@@ -73,4 +83,84 @@ fn linalg_single_output_free_functions_eval() {
     assert_eq!(get_f64_data(&results[0]), &[2.0, 0.0, 0.0, 3.0]);
     assert_eq!(get_f64_data(&results[1]), &[2.0, 3.0]);
     assert_eq!(get_f64_data(&results[2]), &[2.0, 3.0]);
+}
+
+#[test]
+fn lu_free_function_returns_four_outputs() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
+    let (mut p, mut l, mut u, mut parity) = lu(&a);
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut p, &mut l, &mut u, &mut parity]).unwrap();
+
+    assert_eq!(results[0].shape(), &[2, 2]);
+    assert_eq!(results[1].shape(), &[2, 2]);
+    assert_eq!(results[2].shape(), &[2, 2]);
+    assert_eq!(results[3].shape(), &[] as &[usize]);
+    assert_eq!(get_f64_data(&results[3]), &[-1.0]);
+}
+
+#[test]
+fn eig_free_function_returns_complex_outputs() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let (mut values, mut vectors) = eig(&a);
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut values, &mut vectors]).unwrap();
+
+    assert_eq!(results[0].shape(), &[2]);
+    assert_eq!(results[1].shape(), &[2, 2]);
+
+    let mut eigenvalues = get_c64_data(&results[0]).to_vec();
+    eigenvalues.sort_by(|lhs, rhs| {
+        lhs.re
+            .partial_cmp(&rhs.re)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    assert_eq!(eigenvalues[0], Complex64::new(1.0, 0.0));
+    assert_eq!(eigenvalues[1], Complex64::new(3.0, 0.0));
+}
+
+#[test]
+fn determinant_inverse_pseudoinverse_and_norm_eval() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+
+    let (mut sign, mut logabsdet) = slogdet(&a);
+    let mut determinant = det(&a);
+    let mut inverse = inv(&a);
+    let mut pseudo_inverse = pinv(&a);
+    let mut frob = norm(&a, None, Some(&[0, 1]), false);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(
+        &mut engine,
+        &mut [
+            &mut sign,
+            &mut logabsdet,
+            &mut determinant,
+            &mut inverse,
+            &mut pseudo_inverse,
+            &mut frob,
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(get_f64_data(&results[0]), &[1.0]);
+    assert_f64_eq(get_f64_data(&results[1])[0], (8.0f64).ln());
+    assert_f64_eq(get_f64_data(&results[2])[0], 8.0);
+    assert_tensor_f64_eq(get_f64_data(&results[3]), &[0.5, 0.0, 0.0, 0.25]);
+    assert_tensor_f64_eq(get_f64_data(&results[4]), &[0.5, 0.0, 0.0, 0.25]);
+    assert_f64_eq(get_f64_data(&results[5])[0], (20.0f64).sqrt());
+}
+
+fn assert_f64_eq(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1.0e-10,
+        "expected {expected}, got {actual}"
+    );
+}
+
+fn assert_tensor_f64_eq(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len(), "tensor length mismatch");
+    for (&actual, &expected) in actual.iter().zip(expected.iter()) {
+        assert_f64_eq(actual, expected);
+    }
 }

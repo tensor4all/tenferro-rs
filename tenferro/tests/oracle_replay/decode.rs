@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use num_complex::Complex64;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer};
 use tenferro::{Tensor, TypedTensor};
@@ -107,20 +108,50 @@ pub fn tensor_data_as_col_major(td: &TensorData) -> Result<Vec<f64>, String> {
         ));
     }
     match td.order.as_str() {
-        "row_major" => Ok(row_to_col_major(&td.data, &td.shape)),
+        "row_major" => Ok(row_to_col_major_blocks(&td.data, &td.shape, 1)),
         "col_major" => Ok(td.data.clone()),
         other => Err(format!("unsupported tensor storage order {other}")),
     }
 }
 
+pub fn complex_tensor_data_as_col_major(td: &TensorData) -> Result<Vec<Complex64>, String> {
+    if td.dtype != "complex128" {
+        return Err(format!("unsupported tensor dtype {}", td.dtype));
+    }
+    let total: usize = td.shape.iter().product();
+    if td.data.len() != 2 * total {
+        return Err(format!(
+            "complex tensor data length {} does not match shape product {}",
+            td.data.len(),
+            total
+        ));
+    }
+
+    let flat = match td.order.as_str() {
+        "row_major" => row_to_col_major_blocks(&td.data, &td.shape, 2),
+        "col_major" => td.data.clone(),
+        other => return Err(format!("unsupported tensor storage order {other}")),
+    };
+
+    let mut out = Vec::with_capacity(total);
+    for pair in flat.chunks_exact(2) {
+        out.push(Complex64::new(pair[0], pair[1]));
+    }
+    Ok(out)
+}
+
 pub fn row_to_col_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
+    row_to_col_major_blocks(data, shape, 1)
+}
+
+pub fn row_to_col_major_blocks(data: &[f64], shape: &[usize], block: usize) -> Vec<f64> {
     let total: usize = shape.iter().product();
     if total == 0 {
         return Vec::new();
     }
 
     let rank = shape.len();
-    let mut result = vec![0.0; total];
+    let mut result = vec![0.0; total * block];
     let mut row_strides = vec![1usize; rank];
     let mut col_strides = vec![1usize; rank];
 
@@ -139,7 +170,9 @@ pub fn row_to_col_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
             remaining %= row_strides[dim];
             col_idx += coord * col_strides[dim];
         }
-        result[col_idx] = data[row_idx];
+        let src = row_idx * block;
+        let dst = col_idx * block;
+        result[dst..dst + block].copy_from_slice(&data[src..src + block]);
     }
 
     result
@@ -159,8 +192,24 @@ where
         if let Some(number) = item.as_f64() {
             out.push(number);
         } else if item.is_array() {
-            // Complex [re, im] pair — not supported yet
-            return Ok(Vec::new());
+            let pair = item
+                .as_array()
+                .ok_or_else(|| D::Error::custom("complex tensor entry must be an array"))?;
+            if pair.len() != 2 {
+                return Err(D::Error::custom(
+                    "complex tensor entries must be [re, im] pairs",
+                ));
+            }
+            out.push(
+                pair[0]
+                    .as_f64()
+                    .ok_or_else(|| D::Error::custom("complex real part must be numeric"))?,
+            );
+            out.push(
+                pair[1]
+                    .as_f64()
+                    .ok_or_else(|| D::Error::custom("complex imaginary part must be numeric"))?,
+            );
         } else {
             return Err(D::Error::custom(
                 "tensor data elements must be numbers, null, or numeric tuples",

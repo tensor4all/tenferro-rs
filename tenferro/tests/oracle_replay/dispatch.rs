@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use tenferro::{cholesky, eigh, qr, solve, svd, triangular_solve, TracedTensor};
+use tenferro::{
+    cholesky, det, eig, eigh, eigvals, eigvalsh, inv, lu, norm, pinv, qr, slogdet, solve, svd,
+    triangular_solve, TracedTensor,
+};
 
 use crate::decode::{try_decode_tensor, CaseRecord};
 
@@ -133,6 +136,19 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
             };
             single_output(inputs, "value", tenferro_to_oracle(&factor_tf, 2))
         }
+        "lu" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (p_tf, l_tf, u_tf, parity_tf) = lu(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("output_0", tenferro_to_oracle(&p_tf, 2)),
+                    named("output_1", tenferro_to_oracle(&l_tf, 2)),
+                    named("output_2", tenferro_to_oracle(&u_tf, 2)),
+                    named("output_3", tenferro_to_oracle(&parity_tf, 0)),
+                ],
+            })
+        }
         "solve" => {
             let b = required_input(&inputs, "b", case)?.clone();
             let rhs_matrix_rank = rhs_matrix_rank(&a, &b);
@@ -156,6 +172,80 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
                 "output_0",
                 tenferro_to_oracle(&solution_tf, rhs_matrix_rank),
             )
+        }
+        "slogdet" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (sign_tf, logabsdet_tf) = slogdet(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("output_0", tenferro_to_oracle(&sign_tf, 0)),
+                    named("output_1", tenferro_to_oracle(&logabsdet_tf, 0)),
+                ],
+            })
+        }
+        "det" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&det(&a_tf), 0))
+        }
+        "inv" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&inv(&a_tf), 2))
+        }
+        "pinv" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&pinv(&a_tf), 2))
+        }
+        "eig" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (values_tf, vectors_tf) = eig(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("values", tenferro_to_oracle(&values_tf, 1)),
+                    named("vectors", tenferro_to_oracle(&vectors_tf, 2)),
+                ],
+            })
+        }
+        "eigvals" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&eigvals(&a_tf), 1))
+        }
+        "eigvalsh" => {
+            let a_tf = hermitian_wrapper_tenferro(&oracle_to_tenferro(&a, 2));
+            single_output(inputs, "value", tenferro_to_oracle(&eigvalsh(&a_tf), 1))
+        }
+        "norm" => {
+            let keepdim = bool_kwarg(&case.op_kwargs, "keepdim")?.unwrap_or(false);
+            let axes = sum_axes(case, a.shape.len())?;
+            let value = match case
+                .op_kwargs
+                .as_object()
+                .and_then(|kwargs| kwargs.get("ord"))
+            {
+                None | Some(serde_json::Value::Null) => norm(&a, None, Some(&axes), keepdim),
+                Some(serde_json::Value::String(kind)) if kind == "fro" => {
+                    norm(&a, None, Some(&axes), keepdim)
+                }
+                Some(serde_json::Value::String(kind)) if kind == "nuc" => {
+                    let a_tf = oracle_to_tenferro(&a, 2);
+                    let singular_values = svd(&a_tf).1;
+                    let reduced = singular_values.reduce_sum(&[0]);
+                    if keepdim {
+                        reduced.reshape(&keepdim_shape(&a.shape, &axes))
+                    } else {
+                        reduced
+                    }
+                }
+                Some(serde_json::Value::Number(number)) => {
+                    let ord = number
+                        .as_f64()
+                        .ok_or_else(|| format!("expected numeric norm ord, got {number}"))?;
+                    norm(&a, Some(ord), Some(&axes), keepdim)
+                }
+                Some(other) => return Err(format!("unsupported norm ord {other}")),
+            };
+            single_output(inputs, "value", value)
         }
         "solve_triangular" => {
             let b = required_input(&inputs, "b", case)?.clone();
@@ -256,9 +346,18 @@ fn replay_enabled_op(op: &str) -> bool {
             | "qr"
             | "eigh"
             | "cholesky"
+            | "lu"
             | "solve"
             | "solve_ex"
             | "solve_triangular"
+            | "slogdet"
+            | "det"
+            | "inv"
+            | "eigvalsh"
+            | "eig"
+            | "eigvals"
+            | "pinv"
+            | "norm"
     )
 }
 

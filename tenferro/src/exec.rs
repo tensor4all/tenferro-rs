@@ -260,13 +260,11 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ),
             ExecOp::CustomCall { target } => {
                 let results: Vec<Tensor> = match target.as_str() {
+                    "lu" => backend.lu(get(&slots, &inst.input_slots, 0)),
                     "svd" => backend.svd(get(&slots, &inst.input_slots, 0)),
                     "qr" => backend.qr(get(&slots, &inst.input_slots, 0)),
                     "eigh" => backend.eigh(get(&slots, &inst.input_slots, 0)),
-                    "solve" => vec![backend.solve(
-                        get(&slots, &inst.input_slots, 0),
-                        get(&slots, &inst.input_slots, 1),
-                    )],
+                    "eig" => backend.eig(get(&slots, &inst.input_slots, 0)),
                     _ => todo!("custom call target {target}"),
                 };
                 for (i, tensor) in results.into_iter().enumerate() {
