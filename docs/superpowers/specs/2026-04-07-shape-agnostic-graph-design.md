@@ -1,4 +1,4 @@
-# Shape-Agnostic Graph + N-ary Einsum Design
+# Shape-Agnostic Graph with DimExpr
 
 **Issue:** #651
 **Date:** 2026-04-07
@@ -10,273 +10,413 @@ definitions. Tensor network algorithms (DMRG, TT decomposition, ALS) change
 bond dimensions dynamically via truncated SVD, making shape-fixed graphs
 non-reusable across iterations.
 
-This design removes axis sizes from the graph IR and adds an N-ary einsum op,
-enabling graph reuse with varying tensor sizes.
+**Usage model:** A graph is built once, executed many times with varying axis
+sizes (bond dimensions change between iterations), then dropped. No
+cross-graph caching or graph comparison is needed.
 
 ## Design Principles
 
-1. **Ops store only structural parameters** (axis indices, dimension mappings,
-   subscripts), never axis sizes.
-2. **Rank (ndim) is tracked statically** in `TracedTensor`; sizes are not.
-3. **AD rules run as graph transformations** (not deferred to runtime).
-   Shape-dependent ops use `*Like` variants with a shape-source graph edge.
-4. **StableHLO lowering happens at execution time**, when actual tensor shapes
-   are available to resolve `*Like` variants and `NaryEinsum`.
+1. **Rank is static, sizes are dynamic.** `TracedTensor` stores `rank: usize`
+   instead of `shape: Vec<usize>`. All ops must support rank inference from
+   their parameters and input ranks.
+2. **Shape expressions reference graph values.** Ops that need output size
+   information (Reshape, BroadcastInDim) store `Vec<DimExpr>` instead of
+   `Vec<usize>`. DimExpr is evaluated at execution time from actual tensor
+   shapes.
+3. **AD rules are graph transformations.** They construct DimExpr values
+   referencing primal inputs/outputs, keeping the backward graph
+   shape-agnostic.
+4. **Explicit API.** Users build symbolic size expressions via
+   `TracedTensor::sym_size()` and operator overloading. No heuristic inference.
 
-## Change 1: Remove Size Information from StdTensorOp
+## DimExpr
 
-### Fields to Remove
-
-| Op | Remove | Keep |
-|---|---|---|
-| `ReduceSum` | `input_shape` | `axes` |
-| `ReduceProd` | `input_shape` | `axes` |
-| `ReduceMax` | `input_shape` | `axes` |
-| `ReduceMin` | `input_shape` | `axes` |
-| `Reshape` | `from_shape` | `to_shape` |
-| `Svd` | `input_shape` | `eps` |
-| `Qr` | `input_shape` | (unit variant) |
-| `Cholesky` | `input_shape` | (unit variant) |
-| `Lu` | `input_shape` | (unit variant) |
-| `Eigh` | `input_shape` | `eps` |
-| `Eig` | `input_shape` | `input_dtype` |
-| `TriangularSolve` | `lhs_shape`, `rhs_shape` | `left_side`, `lower`, `transpose_a`, `unit_diagonal` |
-
-### Unchanged Ops
-
-- `Reshape { to_shape: Vec<usize> }` -- user-specified output shape stays.
-  Using this op makes the graph non-reusable with different sizes.
-- `BroadcastInDim { shape: Vec<usize>, dims: Vec<usize> }` -- retained for
-  runtime einsum expansion. Using this op also makes the graph non-reusable.
-- `DotGeneral { config }` -- contains axis indices, not sizes.
-
-## Change 2: New Op Variants
-
-### `ReshapeLike`
+An arithmetic expression over dimension sizes, evaluated at execution time.
 
 ```rust
-ReshapeLike {}
-// n_inputs: 2  -- [data, shape_source]
-// n_outputs: 1
-// Execution: reshape data to shape_source.shape()
+#[derive(Clone, Debug)]
+pub enum DimExpr {
+    /// A concrete constant.
+    Const(usize),
+    /// Axis size of the op's i-th input tensor.
+    /// Resolved from actual tensor shapes at execution time.
+    InputDim { input_idx: usize, axis: usize },
+
+    // Arithmetic
+    Add(Box<DimExpr>, Box<DimExpr>),
+    Sub(Box<DimExpr>, Box<DimExpr>),
+    Mul(Box<DimExpr>, Box<DimExpr>),
+    FloorDiv(Box<DimExpr>, Box<DimExpr>),
+
+    // Comparison-based
+    Min(Box<DimExpr>, Box<DimExpr>),
+    Max(Box<DimExpr>, Box<DimExpr>),
+}
 ```
 
-Used by AD rules (e.g., Reshape VJP) to reshape cotangent back to the primal
-input shape without embedding concrete sizes.
+Additional operations (Pow, Sqrt, Prod, Mod) can be added as needed. Since
+DimExpr is never compared or cached (only evaluated), extending the enum has
+no architectural cost.
 
-### `BroadcastInDimLike`
+### Evaluation
 
 ```rust
-BroadcastInDimLike { dims: Vec<usize> }
-// n_inputs: 2  -- [data, shape_source]
-// n_outputs: 1
-// Execution: broadcast data to shape_source.shape(), mapping along dims
+impl DimExpr {
+    pub fn eval(&self, input_shapes: &[&[usize]]) -> usize {
+        match self {
+            Const(v) => *v,
+            InputDim { input_idx, axis } => input_shapes[*input_idx][*axis],
+            Add(a, b) => a.eval(input_shapes) + b.eval(input_shapes),
+            Sub(a, b) => a.eval(input_shapes) - b.eval(input_shapes),
+            Mul(a, b) => a.eval(input_shapes) * b.eval(input_shapes),
+            FloorDiv(a, b) => a.eval(input_shapes) / b.eval(input_shapes),
+            Min(a, b) => a.eval(input_shapes).min(b.eval(input_shapes)),
+            Max(a, b) => a.eval(input_shapes).max(b.eval(input_shapes)),
+        }
+    }
+}
 ```
 
-Used by AD rules (e.g., ReduceSum VJP) to broadcast cotangent back to the
-primal input shape.
+## Lowering: TracedTensor -> DimExpr
 
-### `NaryEinsum`
+Two-stage mapping converts user-level symbolic sizes into op-level DimExpr.
+
+### Stage 1: User API -- SymDim
+
+`TracedTensor::sym_size(axis)` returns a `SymDim` that references the tensor
+by identity (an opaque ID assigned at TracedTensor creation).
+
+```rust
+impl TracedTensor {
+    pub fn sym_size(&self, axis: usize) -> SymDim {
+        SymDim(RawSymDim::TensorAxis { tensor_id: self.id, axis })
+    }
+}
+```
+
+`SymDim` supports operator overloading to build expression trees:
+
+```rust
+// User writes:
+let merged = x.sym_size(0) * x.sym_size(1);
+let y = x.reshape(&[merged, 4.into()])?;
+```
+
+`SymDim` is a transient API-level type. It is never stored in the graph.
+
+### Stage 2: Op construction -- SymDim to DimExpr
+
+When an op method is called (e.g., `reshape`), the implementation:
+
+1. Knows its input tensors and their order (e.g., `x` is input 0)
+2. Builds a map: `{ tensor_id -> input_idx }`
+3. Walks the SymDim expression tree and replaces each `TensorAxis { tensor_id, axis }`
+   with `DimExpr::InputDim { input_idx, axis }`
+4. If a tensor_id is not found in the input map, returns an error
+
+```
+User code                       Op stored in graph
+─────────────                   ──────────────────
+x.sym_size(0) * x.sym_size(1)  Mul(InputDim(0,0), InputDim(0,1))
+4.into()                        Const(4)
+```
+
+### Backward compatibility and constant arithmetic
+
+`usize` values are accepted via `Into<SymDim>` / `Into<DimExpr>`:
+
+```rust
+impl From<usize> for SymDim {
+    fn from(v: usize) -> Self { SymDim(RawSymDim::Const(v)) }
+}
+
+// Mixed arithmetic with usize constants:
+impl Mul<SymDim> for usize { ... }  // 2 * x.sym_size(0)
+impl Mul<usize> for SymDim { ... }  // x.sym_size(0) * 2
+impl Add<usize> for SymDim { ... }  // x.sym_size(0) + 3
+// etc. for Sub, FloorDiv
+```
+
+Usage examples:
+
+```rust
+let a = 2 * x.sym_size(0);                   // Mul(Const(2), InputDim(0,0))
+let b = x.sym_size(0) * x.sym_size(1) + 3;   // Add(Mul(...), Const(3))
+let y = x.reshape(&[a, b])?;                  // SymDim and usize mix freely
+let z = x.reshape(&[3, 4])?;                  // pure usize still works
+```
+
+## Changes to StdTensorOp
+
+### Shape fields: remove or convert to DimExpr
+
+| Op | Field change |
+|---|---|
+| `Reshape` | remove `from_shape`; change `to_shape: Vec<usize>` to `Vec<DimExpr>` |
+| `BroadcastInDim` | change `shape: Vec<usize>` to `Vec<DimExpr>`; `dims` unchanged |
+| `ReduceSum` | remove `input_shape` |
+| `ReduceProd` | remove `input_shape` |
+| `ReduceMax` | remove `input_shape` |
+| `ReduceMin` | remove `input_shape` |
+| `Svd` | remove `input_shape` |
+| `Qr` | remove `input_shape` |
+| `Cholesky` | remove `input_shape` |
+| `Lu` | remove `input_shape` |
+| `Eigh` | remove `input_shape` |
+| `Eig` | remove `input_shape` |
+| `TriangularSolve` | remove `lhs_shape`, `rhs_shape` |
+
+### Hash / Eq
+
+`DimExpr` must implement `Hash` and `Eq` (structurally). This is needed
+because `StdTensorOp` derives Hash/Eq for `GlobalOpKey` identity in
+computegraph. Two DimExpr values are equal iff they have identical tree
+structure -- no algebraic simplification.
+
+### Dynamic n_inputs
+
+When AD rules add shape-source inputs to Reshape or BroadcastInDim, the
+op's `n_inputs()` must reflect the actual number of inputs. This is
+computed from the DimExpr fields:
+
+```rust
+fn n_inputs(&self) -> usize {
+    match self {
+        Self::Reshape { to_shape } | Self::BroadcastInDim { shape: to_shape, .. } => {
+            let max_idx = to_shape.iter()
+                .flat_map(|d| d.max_input_idx())
+                .max()
+                .map_or(0, |m| m + 1);
+            max_idx.max(1) // at least 1 (data input)
+        }
+        // ...
+    }
+}
+```
+
+For user-facing ops, DimExpr only references InputDim(0, ..) (the data
+input itself), so n_inputs remains 1. AD-generated ops may reference
+InputDim(1, ..) (the primal tensor), making n_inputs = 2.
+
+### New op: NaryEinsum
 
 ```rust
 NaryEinsum {
     subscripts: String,   // e.g. "ij,jk,kl->il"
-    n_inputs: usize,      // number of input tensors
+    n_inputs: usize,
 }
-// n_inputs: n_inputs
-// n_outputs: 1
 ```
 
-Records N-ary einsum as a single graph node. Contraction path optimization is
-deferred to execution time.
+Records N-ary einsum as a single graph node. Contraction path optimization
+is deferred to execution time, where `EinsumCache` is consulted with
+actual input shapes.
 
-## Change 3: TracedTensor -- Shape to Rank
+## TracedTensor Changes
 
 ```rust
 // Before
 pub struct TracedTensor {
     pub shape: Vec<usize>,
-    // ...
+    ...
 }
 
 // After
 pub struct TracedTensor {
-    pub rank: usize,
-    // ...
+    pub id: TracedTensorId,   // unique ID for SymDim references
+    pub rank: usize,          // static rank (ndim)
+    ...
 }
 ```
 
-### Rank Inference Rules
+### Rank inference
 
 | Op | Output rank |
 |---|---|
-| Unary elementwise (Neg, Exp, ...) | same as input |
-| Binary elementwise (Add, Mul, ...) | same as input |
-| `ReduceSum { axes }` | input rank - axes.len() |
+| Elementwise (Add, Neg, Exp, ...) | same as input |
+| `ReduceSum { axes }` | input_rank - axes.len() |
 | `Reshape { to_shape }` | to_shape.len() |
-| `ReshapeLike` | shape_source.rank |
-| `BroadcastInDimLike { dims }` | shape_source.rank |
 | `BroadcastInDim { shape, dims }` | shape.len() |
-| `Transpose { perm }` | same as input |
-| `DotGeneral` | computed from config |
-| `Svd` | 3 outputs: (rank, rank-1, rank) |
-| `Qr` | 2 outputs: (rank, rank) |
+| `Transpose { perm }` | perm.len() |
+| `DotGeneral(config)` | computed from config |
+| `Svd` | 3 outputs with ranks derivable from input rank |
+| `Qr` | 2 outputs with ranks equal to input rank |
 | `NaryEinsum { subscripts }` | output subscript length |
-| `ReshapeLike` | shape_source.rank |
 
-Rank inference is trivially computable for all ops, unlike size inference.
+## AD Rules
 
-## Change 4: AD Rules
+AD rules construct `DimExpr` values referencing primal inputs/outputs.
+The `FragmentBuilder` and AD rule signatures provide access to primal
+values via `ValRef` / `GlobalValKey`. The AD rule knows:
+- The forward op (including its DimExpr fields)
+- The primal input/output `GlobalValKey`s
+- Input ranks (from the forward op's rank inference)
 
-AD rules continue to run as graph transformations (linearization/transpose).
-They use `*Like` variants with primal nodes as shape sources.
-
-### ReduceSum VJP
+### Example: ReduceSum VJP (transpose rule)
 
 ```rust
-// Before
-BroadcastInDim { shape: input_shape.clone(), dims: kept_dims }
-inputs: [cotangent]
+// Before:
+let StdTensorOp::ReduceSum { axes, input_shape } = op;
+let kept_dims = (0..input_shape.len())
+    .filter(|d| !axes.contains(d)).collect();
+builder.add_op(
+    BroadcastInDim { shape: input_shape.clone(), dims: kept_dims },
+    vec![cotangent],
+    ...
+);
 
-// After
-BroadcastInDimLike { dims: kept_dims }
-inputs: [cotangent, primal_input]
+// After:
+let StdTensorOp::ReduceSum { axes } = op;
+let input_rank = /* known from primal input's rank */;
+let kept_dims: Vec<usize> = (0..input_rank)
+    .filter(|d| !axes.contains(d)).collect();
+// primal_input is inputs[0] of the forward op, exposed to the
+// backward fragment as some input at index K
+let shape: Vec<DimExpr> = (0..input_rank)
+    .map(|a| DimExpr::InputDim { input_idx: K, axis: a })
+    .collect();
+builder.add_op(
+    BroadcastInDim { shape, dims: kept_dims },
+    vec![cotangent, primal_input_ref],  // primal_input added as shape source
+    ...
+);
 ```
 
-`kept_dims` is computed from `axes` and the primal input's rank (available via
-`TracedTensor.rank`).
+The BroadcastInDim op gains an extra input (the primal tensor) solely to
+make `InputDim` references resolvable. At execution, only its shape is read.
 
-### ReduceProd / ReduceMax / ReduceMin VJP
-
-Same pattern as ReduceSum: use `BroadcastInDimLike` with primal input as
-shape source.
-
-### Reshape VJP
+### Example: Reshape VJP
 
 ```rust
-// Before
+// Before:
 Reshape { from_shape: to_shape.clone(), to_shape: from_shape.clone() }
 inputs: [cotangent]
 
-// After
-ReshapeLike {}
-inputs: [cotangent, primal_input]
+// After:
+// primal_input is added as input 1 to the backward reshape
+Reshape { to_shape: (0..primal_input_rank)
+    .map(|a| DimExpr::InputDim { input_idx: 1, axis: a })
+    .collect()
+}
+inputs: [cotangent, primal_input_ref]
 ```
 
-### BroadcastInDim VJP (concrete shape variant)
+### Linalg AD
 
-```rust
-// Before
-ReduceSum { axes: broadcast_axes, input_shape: shape.to_vec() }
-inputs: [cotangent]
+Linalg AD rules (SVD, QR, Cholesky, Eigh, TriangularSolve) currently extract
+`(m, n, batch_shape)` from `input_shape`. After the change:
+- `m` = `DimExpr::InputDim { input_idx: K, axis: 0 }`
+- `n` = `DimExpr::InputDim { input_idx: K, axis: 1 }`
+- `min(m, n)` = `DimExpr::Min(m, n)`
+- Batch dims = `DimExpr::InputDim { input_idx: K, axis: 2.. }`
 
-// After
-ReduceSum { axes: broadcast_axes }
-inputs: [cotangent]
-```
+Where K is the input index of the primal tensor in the backward fragment.
 
-`broadcast_axes` is computed from `dims` and output rank at graph
-transformation time.
-
-### BroadcastInDimLike VJP
-
-Same as above: produce `ReduceSum { axes }` where axes are computed from
-`dims` and shape_source rank.
-
-### Linalg AD (SVD, QR, Cholesky, Eigh, TriangularSolve)
-
-Linearization rules extract `(m, n, batch_shape)` from primal input/output
-tensors at execution time (during StableHLO lowering), not from op metadata.
-Intermediate ops (DotGeneral, TriangularSolve) carry no size information.
-Where intermediate Reshape is needed, `ReshapeLike` references a primal
-output tensor as shape source.
-
-## Change 5: Execution Pipeline
+## Execution Pipeline
 
 ```
-Trace time:
-  StdTensorOp graph (shape-agnostic, rank only)
-  AD transformations (linearization/transpose) applied here
+Trace time (shape-agnostic):
+  User builds graph via TracedTensor API
+  TracedTensor stores rank only
+  Ops store DimExpr (not concrete sizes)
+  AD transformations produce shape-agnostic backward graph
 
-Execution time:
+Execution time (shapes resolved):
   1. Input tensors provide actual shapes
-  2. StdTensorOp -> StableHloOp (shapes resolved from tensors)
-     - ReshapeLike + shape_source.shape()  -> Reshape { concrete shape }
-     - BroadcastInDimLike + shape_source.shape() -> BroadcastInDim { concrete shape, dims }
-     - NaryEinsum -> custom_call (or binary ops expansion)
-     - ReduceSum { axes } -> ReduceSum { axes } (no change needed)
-     - Linalg ops -> same (shapes from tensors)
+  2. Lower StdTensorOp -> StableHloOp:
+     - Evaluate DimExpr fields using actual input shapes
+     - Reshape { to_shape: Vec<DimExpr> } -> Reshape { to_shape: Vec<usize> }
+     - BroadcastInDim { shape: Vec<DimExpr> } -> BroadcastInDim { shape: Vec<usize> }
+     - NaryEinsum -> expand via EinsumCache to binary DotGeneral ops
+     - ReduceSum { axes } -> unchanged
+     - Linalg ops -> unchanged (shapes from actual tensors)
   3. StableHloOp -> ExecOp (unchanged)
   4. Backend execution (unchanged)
 ```
 
-**StableHloOp, ExecOp, and Backend layers require no changes.** All shape
+StableHloOp, ExecOp, and backend layers require no changes. All DimExpr
 resolution happens during the StdTensorOp-to-StableHloOp lowering step.
 
-## Change 6: NaryEinsum Execution
+## NaryEinsum Execution
 
 At execution time when `NaryEinsum` is encountered:
 
 1. Read actual input tensor shapes
 2. Look up `EinsumCache` with key `(subscripts, input_shapes)`
-3. Cache miss: run `ContractionTree::optimize()`, store result
+3. Cache miss: run contraction tree optimization, store result
 4. Cache hit: reuse stored `ContractionTree`
-5. Expand tree to binary ops (DotGeneral, Transpose, ReduceSum) with concrete
-   shapes and execute
+5. Expand tree to binary ops with concrete shapes and execute
 
-The `EinsumCache` key type remains `(String, Vec<Vec<usize>>)`.
+When bond dimensions change between iterations, a cache miss triggers
+re-optimization. When the same size pattern recurs (e.g., left-to-right
+then right-to-left DMRG sweep), the cache hits.
 
-When bond dimensions change (e.g., between DMRG sweeps), a cache miss triggers
-re-optimization. When the same size pattern recurs (e.g., left-to-right then
-right-to-left sweep), the cache hits.
+## Graph Reusability
 
-## Graph Reuse
+A graph built with DimExpr is reusable with any input sizes as long as
+ranks match. The same graph handles:
+- Bond dimension chi=10 in iteration 1
+- Bond dimension chi=8 in iteration 2 (after truncated SVD)
+- No re-tracing needed
 
-A graph is reusable with different input sizes if and only if it contains no
-concrete-size ops:
+Ops with all-`Const` DimExpr (from `x.reshape(&[3, 4])`) are valid but
+their concrete sizes must match at execution time.
 
-| Op | Reusable? |
-|---|---|
-| `Reshape { to_shape }` | No -- concrete sizes |
-| `BroadcastInDim { shape, dims }` | No -- concrete sizes |
-| All other ops | Yes |
+## Constraints
 
-In typical tensor network workloads (einsum + QR/SVD), users do not call
-`Reshape` explicitly, so graphs are fully reusable.
+- **Rank must be statically known.** Ops that change rank (Reshape,
+  BroadcastInDim) determine output rank from the length of the DimExpr
+  vector, which is fixed at trace time.
+- **DimExpr references must be op inputs.** A DimExpr `InputDim { input_idx, axis }`
+  must refer to one of the op's inputs. This is validated at op construction
+  and ensured structurally by AD rules.
+- **No DimExpr comparison or normalization.** DimExpr values are only
+  evaluated, never simplified or compared for semantic equality. Structural
+  Hash/Eq is sufficient for computegraph's GlobalOpKey.
 
-## Constraints and Limitations
+## Comparison with PyTorch SymInt
 
-- **Reshape with concrete sizes breaks graph reuse.** This is documented as a
-  known limitation. Tensor network workloads (einsum + QR/SVD) do not require
-  explicit Reshape.
-- **XLA backend**: `NaryEinsum` lowers to `custom_call`. `*Like` variants
-  resolve to concrete StableHLO ops at execution time.
-- **Rank must be statically known.** All ops must support rank inference from
-  their parameters and input ranks. This is satisfied by the current op set.
+| Aspect | PyTorch SymInt | tenferro DimExpr |
+|---|---|---|
+| Scope | Global symbol space (s0, s1, ...) | Op-local (InputDim references) |
+| Expression engine | Full sympy algebra | Simple eval-only enum |
+| Guard system | Runtime guards + recompilation | None needed (single graph, reused) |
+| Graph caching | Guard-based cache lookup | N/A (graph held directly, not cached) |
+| Complexity | Very high | Low |
+| Use case | General-purpose JIT | Iterative tensor network algorithms |
 
 ## Scope
 
-### In Scope
+### Phase 1 (this issue)
 
-- Remove size fields from `StdTensorOp` variants
-- Add `ReshapeLike`, `BroadcastInDimLike`, `NaryEinsum` variants
-- Change `TracedTensor.shape` to `TracedTensor.rank`
-- Update all AD rules to use `*Like` variants with shape-source edges
-- Update StableHLO lowering to resolve shapes at execution time
-- Update `einsum()` to emit `NaryEinsum` instead of expanding to binary ops
+1. Define `DimExpr` type with eval + Hash/Eq
+2. Define `SymDim` API type with operator overloading + `Into<DimExpr>` conversion
+3. Change `TracedTensor.shape` to `TracedTensor.rank` + add `TracedTensor.id`
+4. Change `Reshape.to_shape` and `BroadcastInDim.shape` to `Vec<DimExpr>`
+5. Remove `from_shape` from `Reshape`
+6. Remove `input_shape` from `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
+7. Update corresponding AD rules
+8. Update StableHLO lowering to evaluate DimExpr
 
-### Out of Scope
+### Phase 2
 
-- StableHloOp changes (none needed)
-- ExecOp changes (none needed)
-- Backend changes (none needed)
-- XLA backend implementation (future work)
+9. Remove `input_shape` from linalg ops (Svd, Qr, Cholesky, Lu, Eigh, Eig)
+10. Remove `lhs_shape`, `rhs_shape` from TriangularSolve
+11. Update linalg AD rules
+12. Add `NaryEinsum` variant
 
-### Files to Modify
+### Future extensions
 
-- `tenferro-ops/src/std_tensor_op.rs` -- op definitions
-- `tenferro-ops/src/ad/` -- all AD rule files
-- `tenferro/src/traced.rs` -- TracedTensor shape->rank
-- `tenferro/src/compiler.rs` -- StableHLO lowering
-- `tenferro/src/einsum.rs` -- NaryEinsum emission
-- `tenferro-einsum/` -- NaryEinsum support
+- Add Pow, Sqrt, Prod, Mod to DimExpr as needed
+- XLA/StableHLO backend: NaryEinsum lowering to custom_call or binary expansion
+
+## Files to Modify
+
+- `tenferro-ops/src/std_tensor_op.rs` -- op definitions, DimExpr type
+- `tenferro-ops/src/ad/structural.rs` -- Reshape, BroadcastInDim AD rules
+- `tenferro-ops/src/ad/contraction.rs` -- ReduceSum AD rules, DotGeneral
+- `tenferro-ops/src/ad/linalg.rs` -- linalg AD rules (phase 2)
+- `tenferro-ops/src/semiring_ops.rs` -- SemiringOps trait (reshape, broadcast_in_dim signatures)
+- `tenferro/src/traced.rs` -- TracedTensor API, sym_size(), rank inference
+- `tenferro/src/compiler.rs` -- StableHLO lowering with DimExpr evaluation
+- `tenferro/src/einsum.rs` -- NaryEinsum emission (phase 2)
+- `tenferro-einsum/src/builder.rs` -- adapt to DimExpr shapes
