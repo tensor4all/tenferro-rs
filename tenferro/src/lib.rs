@@ -25,6 +25,7 @@ pub mod error;
 pub mod exec;
 mod linalg_api;
 pub mod stablehlo;
+pub mod sym_dim;
 pub mod traced;
 
 pub use engine::Engine;
@@ -32,6 +33,7 @@ pub use linalg_api::{
     cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, inv, lu, norm, pinv,
     pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps, triangular_solve,
 };
+pub use sym_dim::SymDim;
 pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 pub use traced::TracedTensor;

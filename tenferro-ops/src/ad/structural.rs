@@ -1,5 +1,5 @@
 use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{LocalValId, OpMode, ValRef};
+use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::PadConfig;
 
 use crate::dim_expr::DimExpr;
@@ -29,6 +29,7 @@ pub fn linearize_transpose(
 
 pub fn linearize_reshape(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
 ) -> Vec<Option<LocalValId>> {
@@ -42,15 +43,24 @@ pub fn linearize_reshape(
 
     match tangent_in[0] {
         Some(dx) => {
+            let needs_shape_source = DimExpr::max_input_idx_all(from_shape)
+                .into_iter()
+                .chain(DimExpr::max_input_idx_all(to_shape))
+                .any(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(dx)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::Reshape {
                     from_shape: from_shape.clone(),
                     to_shape: to_shape.clone(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -60,21 +70,28 @@ pub fn linearize_reshape(
 
 pub fn linearize_broadcast_in_dim(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
         Some(dx) => {
+            let needs_shape_source = DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(dx)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape: shape.to_vec(),
                     dims: dims.to_vec(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }

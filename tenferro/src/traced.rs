@@ -19,6 +19,7 @@ use super::compiler::{compile_to_exec, lower_to_stablehlo};
 use super::engine::Engine;
 use super::error::{Error, Result};
 use super::exec::eval_exec_ir;
+use super::sym_dim::SymDim;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -825,6 +826,54 @@ impl TracedTensor {
             shape.len(),
             Some(shape.to_vec()),
         )
+    }
+
+    /// Return a symbolic expression for the size of one axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let rows = x.sym_size(0);
+    /// let cols = x.sym_size(1);
+    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// ```
+    pub fn sym_size(&self, axis: usize) -> SymDim {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        SymDim::tensor_axis(self.id, axis)
+    }
+
+    /// Reshape using symbolic dimensions derived from traced tensor axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let rows = x.sym_size(0);
+    /// let cols = x.sym_size(1);
+    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// ```
+    pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
+        let tensor_map = [(self.id, 0usize)];
+        let to_shape = shape
+            .iter()
+            .map(|dim| dim.to_dim_expr(&tensor_map).map_err(Error::Internal))
+            .collect::<Result<Vec<_>>>()?;
+        let out_shape_hint = shape
+            .iter()
+            .map(SymDim::constant_value)
+            .collect::<Option<Vec<_>>>();
+        Ok(apply_unary(
+            StdTensorOp::Reshape {
+                from_shape: DimExpr::input_shape(0, self.rank),
+                to_shape,
+            },
+            self,
+            shape.len(),
+            out_shape_hint,
+        ))
     }
 
     /// Broadcast into a larger shape with explicit dimension placement.

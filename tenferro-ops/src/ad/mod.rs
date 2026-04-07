@@ -62,9 +62,11 @@ fn linearize_non_semiring(
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
         }
-        StdTensorOp::Reshape { .. } => structural::linearize_reshape(builder, tangent_in, op),
+        StdTensorOp::Reshape { .. } => {
+            structural::linearize_reshape(builder, primal_in, tangent_in, op)
+        }
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            structural::linearize_broadcast_in_dim(builder, tangent_in, shape, dims)
+            structural::linearize_broadcast_in_dim(builder, primal_in, tangent_in, shape, dims)
         }
         StdTensorOp::Convert { from, to } => {
             structural::linearize_convert(builder, tangent_in, *from, *to)
