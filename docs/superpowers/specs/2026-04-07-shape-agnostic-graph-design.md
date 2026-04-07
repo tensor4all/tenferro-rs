@@ -19,10 +19,11 @@ cross-graph caching or graph comparison is needed.
 1. **Rank is static, sizes are dynamic.** `TracedTensor` stores `rank: usize`
    instead of `shape: Vec<usize>`. All ops must support rank inference from
    their parameters and input ranks.
-2. **Shape expressions reference graph values.** Ops that need output size
-   information (Reshape, BroadcastInDim) store `Vec<DimExpr>` instead of
-   `Vec<usize>`. DimExpr is evaluated at execution time from actual tensor
-   shapes.
+2. **All shape fields become `Vec<DimExpr>`.** Every `Vec<usize>` shape
+   field in StdTensorOp is uniformly converted to `Vec<DimExpr>`. This
+   includes output shape parameters (Reshape.to_shape, BroadcastInDim.shape)
+   AND input shape metadata (ReduceSum.input_shape, Svd.input_shape, etc.).
+   DimExpr is evaluated at execution time from actual tensor shapes.
 3. **AD rules are graph transformations.** They construct DimExpr values
    referencing primal inputs/outputs, keeping the backward graph
    shape-agnostic.
@@ -148,23 +149,40 @@ let z = x.reshape(&[3, 4])?;                  // pure usize still works
 
 ## Changes to StdTensorOp
 
-### Shape fields: remove or convert to DimExpr
+### Shape fields: uniformly convert to `Vec<DimExpr>`
+
+All `Vec<usize>` shape fields become `Vec<DimExpr>`. No fields are removed.
+Rank is always available as `field.len()`.
 
 | Op | Field change |
 |---|---|
-| `Reshape` | remove `from_shape`; change `to_shape: Vec<usize>` to `Vec<DimExpr>` |
-| `BroadcastInDim` | change `shape: Vec<usize>` to `Vec<DimExpr>`; `dims` unchanged |
-| `ReduceSum` | remove `input_shape` |
-| `ReduceProd` | remove `input_shape` |
-| `ReduceMax` | remove `input_shape` |
-| `ReduceMin` | remove `input_shape` |
-| `Svd` | remove `input_shape` |
-| `Qr` | remove `input_shape` |
-| `Cholesky` | remove `input_shape` |
-| `Lu` | remove `input_shape` |
-| `Eigh` | remove `input_shape` |
-| `Eig` | remove `input_shape` |
-| `TriangularSolve` | remove `lhs_shape`, `rhs_shape` |
+| `Reshape` | `from_shape: Vec<usize>` -> `Vec<DimExpr>`; `to_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `BroadcastInDim` | `shape: Vec<usize>` -> `Vec<DimExpr>`; `dims` unchanged |
+| `ReduceSum` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `ReduceProd` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `ReduceMax` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `ReduceMin` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Svd` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Qr` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Cholesky` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Lu` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Eigh` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `Eig` | `input_shape: Vec<usize>` -> `Vec<DimExpr>` |
+| `TriangularSolve` | `lhs_shape: Vec<usize>` -> `Vec<DimExpr>`; `rhs_shape` -> `Vec<DimExpr>` |
+
+At trace time, shape fields are populated with `DimExpr::InputDim`
+references to the op's own inputs:
+
+```rust
+// Example: ReduceSum at trace time
+ReduceSum {
+    axes: vec![1],
+    input_shape: vec![
+        DimExpr::InputDim { input_idx: 0, axis: 0 },
+        DimExpr::InputDim { input_idx: 0, axis: 1 },
+    ],
+}
+```
 
 ### Hash / Eq
 
@@ -175,21 +193,22 @@ structure -- no algebraic simplification.
 
 ### Dynamic n_inputs
 
-When AD rules add shape-source inputs to Reshape or BroadcastInDim, the
-op's `n_inputs()` must reflect the actual number of inputs. This is
-computed from the DimExpr fields:
+Ops with DimExpr fields may reference additional shape-source inputs
+beyond their data inputs. `n_inputs()` is computed from all DimExpr
+fields in the op:
 
 ```rust
 fn n_inputs(&self) -> usize {
     match self {
-        Self::Reshape { to_shape } | Self::BroadcastInDim { shape: to_shape, .. } => {
-            let max_idx = to_shape.iter()
-                .flat_map(|d| d.max_input_idx())
+        Self::Reshape { from_shape, to_shape } => {
+            let all_exprs = from_shape.iter().chain(to_shape.iter());
+            let max_idx = all_exprs
+                .filter_map(|d| d.max_input_idx())
                 .max()
                 .map_or(0, |m| m + 1);
             max_idx.max(1) // at least 1 (data input)
         }
-        // ...
+        // Same pattern for BroadcastInDim, ReduceSum, linalg ops...
     }
 }
 ```
@@ -197,6 +216,23 @@ fn n_inputs(&self) -> usize {
 For user-facing ops, DimExpr only references InputDim(0, ..) (the data
 input itself), so n_inputs remains 1. AD-generated ops may reference
 InputDim(1, ..) (the primal tensor), making n_inputs = 2.
+
+### AD helper: remap_input_idx
+
+AD rules read DimExpr from the forward op and pass them to backward ops.
+Since backward ops have different input ordering, `InputDim` references
+must be remapped:
+
+```rust
+/// Remap InputDim references: input_idx `from` -> `to`.
+fn remap_input_idx(exprs: &[DimExpr], from: usize, to: usize) -> Vec<DimExpr> {
+    exprs.iter().map(|e| e.remap(from, to)).collect()
+}
+```
+
+Example: forward ReduceSum has `input_shape` with `InputDim(0, ..)`.
+The backward BroadcastInDim has inputs `[cotangent, primal_input]`, so
+the primal is at index 1. Remap: `InputDim(0, axis) -> InputDim(1, axis)`.
 
 ### New op: NaryEinsum
 
@@ -233,7 +269,7 @@ pub struct TracedTensor {
 | Op | Output rank |
 |---|---|
 | Elementwise (Add, Neg, Exp, ...) | same as input |
-| `ReduceSum { axes }` | input_rank - axes.len() |
+| `ReduceSum { axes, input_shape }` | input_shape.len() - axes.len() |
 | `Reshape { to_shape }` | to_shape.len() |
 | `BroadcastInDim { shape, dims }` | shape.len() |
 | `Transpose { perm }` | perm.len() |
@@ -255,7 +291,7 @@ values via `ValRef` / `GlobalValKey`. The AD rule knows:
 
 ```rust
 // Before:
-let StdTensorOp::ReduceSum { axes, input_shape } = op;
+let StdTensorOp::ReduceSum { axes, input_shape } = op;  // input_shape: Vec<usize>
 let kept_dims = (0..input_shape.len())
     .filter(|d| !axes.contains(d)).collect();
 builder.add_op(
@@ -265,18 +301,16 @@ builder.add_op(
 );
 
 // After:
-let StdTensorOp::ReduceSum { axes } = op;
-let input_rank = /* known from primal input's rank */;
+let StdTensorOp::ReduceSum { axes, input_shape } = op;  // input_shape: Vec<DimExpr>
+let input_rank = input_shape.len();
 let kept_dims: Vec<usize> = (0..input_rank)
     .filter(|d| !axes.contains(d)).collect();
-// primal_input is inputs[0] of the forward op, exposed to the
-// backward fragment as some input at index K
-let shape: Vec<DimExpr> = (0..input_rank)
-    .map(|a| DimExpr::InputDim { input_idx: K, axis: a })
-    .collect();
+// Remap: forward's InputDim(0, ..) -> backward's InputDim(1, ..)
+// because backward inputs are [cotangent, primal_input]
+let shape = remap_input_idx(input_shape, 0, 1);
 builder.add_op(
     BroadcastInDim { shape, dims: kept_dims },
-    vec![cotangent, primal_input_ref],  // primal_input added as shape source
+    vec![cotangent, primal_input_ref],
     ...
 );
 ```
@@ -292,10 +326,11 @@ Reshape { from_shape: to_shape.clone(), to_shape: from_shape.clone() }
 inputs: [cotangent]
 
 // After:
-// primal_input is added as input 1 to the backward reshape
-Reshape { to_shape: (0..primal_input_rank)
-    .map(|a| DimExpr::InputDim { input_idx: 1, axis: a })
-    .collect()
+// Remap from_shape's InputDim(0, ..) -> InputDim(1, ..)
+// primal_input is added as input 1
+Reshape {
+    from_shape: remap_input_idx(to_shape, 0, 1),
+    to_shape: remap_input_idx(from_shape, 0, 1),
 }
 inputs: [cotangent, primal_input_ref]
 ```
@@ -303,13 +338,15 @@ inputs: [cotangent, primal_input_ref]
 ### Linalg AD
 
 Linalg AD rules (SVD, QR, Cholesky, Eigh, TriangularSolve) currently extract
-`(m, n, batch_shape)` from `input_shape`. After the change:
-- `m` = `DimExpr::InputDim { input_idx: K, axis: 0 }`
-- `n` = `DimExpr::InputDim { input_idx: K, axis: 1 }`
-- `min(m, n)` = `DimExpr::Min(m, n)`
-- Batch dims = `DimExpr::InputDim { input_idx: K, axis: 2.. }`
+`(m, n, batch_shape)` from `input_shape: Vec<usize>`. After the change,
+`input_shape` is `Vec<DimExpr>`:
+- `m` = `input_shape[0]` (already a `DimExpr::InputDim`)
+- `n` = `input_shape[1]`
+- `min(m, n)` = `DimExpr::Min(m.clone(), n.clone())`
+- Batch dims = `input_shape[2..]`
 
-Where K is the input index of the primal tensor in the backward fragment.
+The AD rules remap these DimExpr values using `remap_input_idx` when
+constructing backward ops with different input ordering.
 
 ## Execution Pipeline
 
@@ -327,8 +364,8 @@ Execution time (shapes resolved):
      - Reshape { to_shape: Vec<DimExpr> } -> Reshape { to_shape: Vec<usize> }
      - BroadcastInDim { shape: Vec<DimExpr> } -> BroadcastInDim { shape: Vec<usize> }
      - NaryEinsum -> expand via EinsumCache to binary DotGeneral ops
-     - ReduceSum { axes } -> unchanged
-     - Linalg ops -> unchanged (shapes from actual tensors)
+     - ReduceSum { input_shape: Vec<DimExpr> } -> ReduceSum { input_shape: Vec<usize> }
+     - Linalg ops { input_shape: Vec<DimExpr> } -> evaluate to concrete
   3. StableHloOp -> ExecOp (unchanged)
   4. Backend execution (unchanged)
 ```
@@ -386,23 +423,23 @@ their concrete sizes must match at execution time.
 
 ## Scope
 
-### Phase 1 (this issue)
+All shape fields are converted uniformly. No phasing needed for the
+DimExpr migration itself — all ops change together.
 
-1. Define `DimExpr` type with eval + Hash/Eq
-2. Define `SymDim` API type with operator overloading + `Into<DimExpr>` conversion
+### DimExpr migration (this issue)
+
+1. Define `DimExpr` type with eval + Hash/Eq + `remap_input_idx`
+2. Define `SymDim` API type with operator overloading
 3. Change `TracedTensor.shape` to `TracedTensor.rank` + add `TracedTensor.id`
-4. Change `Reshape.to_shape` and `BroadcastInDim.shape` to `Vec<DimExpr>`
-5. Remove `from_shape` from `Reshape`
-6. Remove `input_shape` from `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
-7. Update corresponding AD rules
-8. Update StableHLO lowering to evaluate DimExpr
+4. Convert ALL `Vec<usize>` shape fields in StdTensorOp to `Vec<DimExpr>`
+5. Update SemiringOps trait signatures
+6. Update ALL AD rules (structural, contraction, linalg)
+7. Update StableHLO lowering to evaluate DimExpr
+8. Add `TracedTensor::sym_size()` + `reshape_sym()` API
 
-### Phase 2
+### Separate issue
 
-9. Remove `input_shape` from linalg ops (Svd, Qr, Cholesky, Lu, Eigh, Eig)
-10. Remove `lhs_shape`, `rhs_shape` from TriangularSolve
-11. Update linalg AD rules
-12. Add `NaryEinsum` variant
+9. Add `NaryEinsum` variant (independent of DimExpr migration)
 
 ### Future extensions
 
