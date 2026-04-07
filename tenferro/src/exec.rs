@@ -1,6 +1,7 @@
 use super::buffer_pool::BufferPool;
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Semiring;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::cpu::structural::{
     typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
     typed_transpose,
@@ -16,10 +17,10 @@ pub enum ExecOp {
         perm: Vec<usize>,
     },
     Reshape {
-        shape: Vec<usize>,
+        shape: Vec<DimExpr>,
     },
     BroadcastInDim {
-        shape: Vec<usize>,
+        shape: Vec<DimExpr>,
         dims: Vec<usize>,
     },
     Convert {
@@ -124,6 +125,41 @@ fn get<'a, T>(slots: &'a [Option<T>], input_slots: &[usize], idx: usize) -> &'a 
     slots[input_slots[idx]].as_ref().expect("missing slot")
 }
 
+fn resolve_tensor_shape_exprs(
+    slots: &[Option<Tensor>],
+    input_slots: &[usize],
+    exprs: &[DimExpr],
+) -> Vec<usize> {
+    let input_shapes: Vec<&[usize]> = input_slots
+        .iter()
+        .map(|&slot| {
+            slots[slot]
+                .as_ref()
+                .expect("missing input slot for shape evaluation")
+                .shape()
+        })
+        .collect();
+    DimExpr::eval_all(exprs, &input_shapes)
+}
+
+fn resolve_semiring_shape_exprs<Alg: Semiring>(
+    slots: &[Option<TypedTensor<Alg::Scalar>>],
+    input_slots: &[usize],
+    exprs: &[DimExpr],
+) -> Vec<usize> {
+    let input_shapes: Vec<&[usize]> = input_slots
+        .iter()
+        .map(|&slot| {
+            slots[slot]
+                .as_ref()
+                .expect("missing semiring input slot for shape evaluation")
+                .shape
+                .as_slice()
+        })
+        .collect();
+    DimExpr::eval_all(exprs, &input_shapes)
+}
+
 pub fn eval_exec_ir<B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
@@ -138,9 +174,13 @@ pub fn eval_exec_ir<B: TensorBackend>(
     for inst in &program.instructions {
         let result = match &inst.op {
             ExecOp::Permute { perm } => backend.transpose(get(&slots, &inst.input_slots, 0), perm),
-            ExecOp::Reshape { shape } => backend.reshape(get(&slots, &inst.input_slots, 0), shape),
+            ExecOp::Reshape { shape } => {
+                let shape = resolve_tensor_shape_exprs(&slots, &inst.input_slots, shape);
+                backend.reshape(get(&slots, &inst.input_slots, 0), &shape)
+            }
             ExecOp::BroadcastInDim { shape, dims } => {
-                backend.broadcast_in_dim(get(&slots, &inst.input_slots, 0), shape, dims)
+                let shape = resolve_tensor_shape_exprs(&slots, &inst.input_slots, shape);
+                backend.broadcast_in_dim(get(&slots, &inst.input_slots, 0), &shape, dims)
             }
             ExecOp::Convert { to } => backend.convert(get(&slots, &inst.input_slots, 0), *to),
             ExecOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
@@ -393,9 +433,13 @@ where
     for inst in &program.instructions {
         let result = match &inst.op {
             ExecOp::Permute { perm } => typed_transpose(get(&slots, &inst.input_slots, 0), perm),
-            ExecOp::Reshape { shape } => typed_reshape(get(&slots, &inst.input_slots, 0), shape),
+            ExecOp::Reshape { shape } => {
+                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape);
+                typed_reshape(get(&slots, &inst.input_slots, 0), &shape)
+            }
             ExecOp::BroadcastInDim { shape, dims } => {
-                typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0), shape, dims)
+                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape);
+                typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0), &shape, dims)
             }
             ExecOp::BatchedGemm(config) => backend.batched_gemm(
                 get(&slots, &inst.input_slots, 0),

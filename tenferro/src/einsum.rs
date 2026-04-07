@@ -32,7 +32,7 @@ use tenferro_tensor::TensorBackend;
 
 use super::engine::Engine;
 use super::error::{Error, Result};
-use super::traced::TracedTensor;
+use super::traced::{next_traced_id, TracedTensor};
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
@@ -244,7 +244,17 @@ pub fn einsum_with<B: TensorBackend>(
 ) -> Result<TracedTensor> {
     let subs =
         Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
-    let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| t.shape.clone()).collect();
+    let shapes: Vec<Vec<usize>> = inputs
+        .iter()
+        .map(|t| {
+            t.shape_hint.as_ref().cloned().unwrap_or_else(|| {
+                panic!(
+                    "missing concrete shape hint for einsum input traced tensor {}",
+                    t.id
+                )
+            })
+        })
+        .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
 
     match optimize {
@@ -421,11 +431,13 @@ fn build_traced_from_tree(
             }
 
             TracedTensor {
-                shape: out_shape,
+                id: next_traced_id(),
+                rank: out_shape.len(),
                 dtype: inputs[0].dtype,
                 fragment,
                 val: result_local,
                 data: None,
+                shape_hint: Some(out_shape),
                 inputs_map: Arc::new(merged),
                 extra_roots,
             }
@@ -436,11 +448,13 @@ fn build_traced_from_tree(
             for (i, iv) in input_vals.iter().enumerate() {
                 if *iv == result_ref {
                     return TracedTensor {
-                        shape: out_shape,
+                        id: next_traced_id(),
+                        rank: out_shape.len(),
                         dtype: inputs[i].dtype,
                         fragment: inputs[i].fragment.clone(),
                         val: inputs[i].val,
                         data: inputs[i].data.clone(),
+                        shape_hint: Some(out_shape),
                         inputs_map: inputs[i].inputs_map.clone(),
                         extra_roots: inputs[i].extra_roots.clone(),
                     };

@@ -217,7 +217,7 @@ fn matrix_neg_inf_norm_grad_flows_to_unique_min_row() {
 fn norm_neg_inf_grad_matches_oracle_identity_case_without_keepdim() {
     let a = norm_neg_inf_oracle_input();
     let mut y = norm(&a, Some(f64::NEG_INFINITY), None, false);
-    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let axes: Vec<usize> = (0..y.rank).collect();
     let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();
@@ -272,7 +272,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
 
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let mut jvp = y.jvp(&a, &direction);
-    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let axes: Vec<usize> = (0..y.rank).collect();
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();
 
@@ -294,7 +294,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() 
     let a = norm_neg_inf_oracle_input();
     let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
-    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let axes: Vec<usize> = (0..y.rank).collect();
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();
 
@@ -314,7 +314,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() 
 fn norm_neg_inf_grad_matches_oracle_identity_case_with_keepdim() {
     let a = norm_neg_inf_oracle_input();
     let mut y = norm(&a, Some(f64::NEG_INFINITY), None, true);
-    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let axes: Vec<usize> = (0..y.rank).collect();
     let cotangent = TracedTensor::from_tensor(f64_tensor(vec![1, 1], vec![-1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();

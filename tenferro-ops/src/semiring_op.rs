@@ -6,6 +6,7 @@ use computegraph::GraphOp;
 use tenferro_algebra::Algebra;
 use tenferro_tensor::{DotGeneralConfig, TypedTensor};
 
+use crate::dim_expr::DimExpr;
 use crate::semiring_op_kind::SemiringOpKind;
 use crate::semiring_ops::SemiringOps;
 
@@ -92,7 +93,7 @@ where
         Self::new(SemiringOpKind::DotGeneral(config))
     }
 
-    fn reduce_sum(axes: Vec<usize>, _input_shape: Vec<usize>) -> Self {
+    fn reduce_sum(axes: Vec<usize>, _input_shape: Vec<DimExpr>) -> Self {
         Self::new(SemiringOpKind::ReduceSum { axes })
     }
 
@@ -100,12 +101,17 @@ where
         Self::new(SemiringOpKind::Transpose { perm })
     }
 
-    fn reshape(_from_shape: Vec<usize>, to_shape: Vec<usize>) -> Self {
-        Self::new(SemiringOpKind::Reshape { shape: to_shape })
+    fn reshape(_from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
+        Self::new(SemiringOpKind::Reshape {
+            shape: concrete_shape(to_shape),
+        })
     }
 
-    fn broadcast_in_dim(shape: Vec<usize>, dims: Vec<usize>) -> Self {
-        Self::new(SemiringOpKind::BroadcastInDim { shape, dims })
+    fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
+        Self::new(SemiringOpKind::BroadcastInDim {
+            shape: concrete_shape(shape),
+            dims,
+        })
     }
 
     fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
@@ -115,4 +121,14 @@ where
     fn embed_diag(axis_a: usize, axis_b: usize) -> Self {
         Self::new(SemiringOpKind::EmbedDiag { axis_a, axis_b })
     }
+}
+
+fn concrete_shape(shape: Vec<DimExpr>) -> Vec<usize> {
+    shape
+        .into_iter()
+        .map(|dim| match dim {
+            DimExpr::Const(value) => value,
+            other => panic!("SemiringOp only supports concrete shape expressions, got {other:?}"),
+        })
+        .collect()
 }

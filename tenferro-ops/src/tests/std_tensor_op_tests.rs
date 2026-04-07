@@ -1,3 +1,4 @@
+use crate::dim_expr::DimExpr;
 use crate::semiring_op::{SemiringInputKey, SemiringOp};
 use crate::semiring_op_kind::SemiringOpKind;
 use crate::semiring_ops::SemiringOps;
@@ -13,6 +14,12 @@ use tenferro_tensor::{
 };
 
 use crate::input_key::TensorInputKey;
+
+macro_rules! shape {
+    ($($dim:expr),* $(,)?) => {
+        DimExpr::from_concrete(&[$($dim),*])
+    };
+}
 
 fn tensor_input_key(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -110,7 +117,7 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(
         StdTensorOp::ReduceSum {
             axes: vec![0],
-            input_shape: vec![2, 3],
+            input_shape: shape![2, 3],
         }
         .n_inputs(),
         1
@@ -236,14 +243,14 @@ fn test_std_tensor_op_input_output_counts() {
 fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Cholesky {
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_inputs(),
         1
     );
     assert_eq!(
         StdTensorOp::Cholesky {
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_outputs(),
         1
@@ -251,7 +258,7 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Svd {
             eps: 1.0e-12,
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_inputs(),
         1
@@ -259,21 +266,21 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Svd {
             eps: 1.0e-12,
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_outputs(),
         3
     );
     assert_eq!(
         StdTensorOp::Qr {
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_inputs(),
         1
     );
     assert_eq!(
         StdTensorOp::Qr {
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_outputs(),
         2
@@ -281,7 +288,7 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Eigh {
             eps: 1.0e-12,
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_inputs(),
         1
@@ -289,21 +296,21 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Eigh {
             eps: 1.0e-12,
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         }
         .n_outputs(),
         2
     );
     assert_eq!(
         StdTensorOp::Lu {
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_inputs(),
         1
     );
     assert_eq!(
         StdTensorOp::Lu {
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_outputs(),
         4
@@ -311,7 +318,7 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Eig {
             input_dtype: DType::F64,
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_inputs(),
         1
@@ -319,7 +326,7 @@ fn test_std_tensor_op_linalg_input_output_counts() {
     assert_eq!(
         StdTensorOp::Eig {
             input_dtype: DType::F64,
-            input_shape: vec![2, 2]
+            input_shape: shape![2, 2]
         }
         .n_outputs(),
         2
@@ -330,8 +337,8 @@ fn test_std_tensor_op_linalg_input_output_counts() {
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+            lhs_shape: shape![2, 2],
+            rhs_shape: shape![2, 1],
         }
         .n_inputs(),
         2
@@ -342,8 +349,8 @@ fn test_std_tensor_op_linalg_input_output_counts() {
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+            lhs_shape: shape![2, 2],
+            rhs_shape: shape![2, 1],
         }
         .n_outputs(),
         1
@@ -401,7 +408,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceProd {
             axes: vec![1],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_inputs(),
         1
@@ -409,7 +416,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceProd {
             axes: vec![1],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_outputs(),
         1
@@ -417,7 +424,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceMax {
             axes: vec![0],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_inputs(),
         1
@@ -425,7 +432,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceMax {
             axes: vec![0],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_outputs(),
         1
@@ -433,7 +440,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceMin {
             axes: vec![0, 1],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_inputs(),
         1
@@ -441,7 +448,7 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(
         StdTensorOp::ReduceMin {
             axes: vec![0, 1],
-            input_shape: vec![2, 3]
+            input_shape: shape![2, 3]
         }
         .n_outputs(),
         1
@@ -556,15 +563,15 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
         SemiringOpKind::Transpose { perm: vec![1, 0] }
     );
     assert_eq!(
-        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2], vec![2, 3, 4]).kind,
+        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2], shape![2, 3, 4]).kind,
         SemiringOpKind::ReduceSum { axes: vec![0, 2] }
     );
     assert_eq!(
-        SemiringOp::<Standard<f64>>::reshape(vec![3, 2], vec![2, 3]).kind,
+        SemiringOp::<Standard<f64>>::reshape(shape![3, 2], shape![2, 3]).kind,
         SemiringOpKind::Reshape { shape: vec![2, 3] }
     );
     assert_eq!(
-        SemiringOp::<Standard<f64>>::broadcast_in_dim(vec![2, 3], vec![0]).kind,
+        SemiringOp::<Standard<f64>>::broadcast_in_dim(shape![2, 3], vec![0]).kind,
         SemiringOpKind::BroadcastInDim {
             shape: vec![2, 3],
             dims: vec![0]
@@ -603,10 +610,10 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
 fn test_std_tensor_op_semiring_ops_impl_constructors_cover_remaining_variants() {
     assert_eq!(<StdTensorOp as SemiringOps>::add_op(), StdTensorOp::Add);
     assert_eq!(
-        <StdTensorOp as SemiringOps>::reshape(vec![6], vec![2, 3]),
+        <StdTensorOp as SemiringOps>::reshape(shape![6], shape![2, 3]),
         StdTensorOp::Reshape {
-            from_shape: vec![6],
-            to_shape: vec![2, 3],
+            from_shape: shape![6],
+            to_shape: shape![2, 3],
         }
     );
 }
@@ -692,15 +699,15 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         StdTensorOp::Reverse { axes: vec![0] },
         StdTensorOp::ReduceProd {
             axes: vec![0],
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         },
         StdTensorOp::ReduceMax {
             axes: vec![0],
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         },
         StdTensorOp::ReduceMin {
             axes: vec![0],
-            input_shape: vec![2, 2],
+            input_shape: shape![2, 2],
         },
     ];
 
@@ -999,8 +1006,8 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert!(transpose_none_fragment.ops().is_empty());
 
     let reshape = StdTensorOp::Reshape {
-        from_shape: vec![4],
-        to_shape: vec![2, 2],
+        from_shape: shape![4],
+        to_shape: shape![2, 2],
     };
     let (reshape_linear_result, reshape_linear_fragment) =
         run_linearize_case(reshape.clone(), 0, 0, &[true]);
@@ -1023,7 +1030,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
 
     let (broadcast_linear_result, broadcast_linear_fragment) = run_linearize_case(
         StdTensorOp::BroadcastInDim {
-            shape: vec![2, 2, 3],
+            shape: shape![2, 2, 3],
             dims: vec![0, 2],
         },
         0,
@@ -1034,14 +1041,14 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(
         broadcast_linear_fragment.ops()[0].op,
         StdTensorOp::BroadcastInDim {
-            shape: vec![2, 2, 3],
+            shape: shape![2, 2, 3],
             dims: vec![0, 2],
         }
     );
 
     let (broadcast_none_result, broadcast_none_fragment) = run_linearize_case(
         StdTensorOp::BroadcastInDim {
-            shape: vec![2, 2, 3],
+            shape: shape![2, 2, 3],
             dims: vec![0, 2],
         },
         0,
@@ -1058,15 +1065,15 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(
         reshape_transpose_fragment.ops()[0].op,
         StdTensorOp::Reshape {
-            from_shape: vec![2, 2],
-            to_shape: vec![4],
+            from_shape: shape![2, 2],
+            to_shape: shape![4],
         }
     );
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let cotangent = builder.add_input(tensor_input_key(910));
     let result = StdTensorOp::BroadcastInDim {
-        shape: vec![2, 3],
+        shape: shape![2, 3],
         dims: vec![0, 1],
     }
     .transpose_rule(
@@ -1118,7 +1125,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let none_broadcast = StdTensorOp::BroadcastInDim {
-        shape: vec![2, 2, 3],
+        shape: shape![2, 2, 3],
         dims: vec![0, 2],
     }
     .transpose_rule(
@@ -1199,7 +1206,7 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
 
     let reduce = StdTensorOp::ReduceSum {
         axes: vec![1],
-        input_shape: vec![2, 3],
+        input_shape: shape![2, 3],
     };
     let (reduce_linearize_none_result, reduce_linearize_none_fragment) =
         run_linearize_case(reduce.clone(), 0, 0, &[false]);
@@ -1213,7 +1220,7 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert_eq!(
         reduce_transpose_fragment.ops()[0].op,
         StdTensorOp::BroadcastInDim {
-            shape: vec![2, 3],
+            shape: shape![2, 3],
             dims: vec![0],
         }
     );
@@ -1238,8 +1245,8 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert_eq!(
         scalar_transpose_fragment.ops()[0].op,
         StdTensorOp::Reshape {
-            from_shape: vec![1],
-            to_shape: vec![],
+            from_shape: shape![1],
+            to_shape: shape![],
         }
     );
     assert_eq!(scalar_transpose_fragment.ops()[1].op, StdTensorOp::Conj);

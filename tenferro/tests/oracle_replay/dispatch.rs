@@ -82,11 +82,11 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
             single_output(inputs, "value", b.pow(&a))
         }
         "sum" => {
-            let axes = sum_axes(case, a.shape.len())?;
+            let axes = sum_axes(case, a.rank)?;
             let keepdim = bool_kwarg(&case.op_kwargs, "keepdim")?.unwrap_or(false);
             let reduced = a.reduce_sum(&axes);
             if keepdim {
-                let kept_shape = keepdim_shape(&a.shape, &axes);
+                let kept_shape = keepdim_shape(&concrete_shape(&a)?, &axes);
                 single_output(inputs, "value", reduced.reshape(&kept_shape))
             } else {
                 single_output(inputs, "value", reduced)
@@ -221,7 +221,7 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
         }
         "norm" => {
             let keepdim = bool_kwarg(&case.op_kwargs, "keepdim")?.unwrap_or(false);
-            let axes = sum_axes(case, a.shape.len())?;
+            let axes = sum_axes(case, a.rank)?;
             let ord = norm_ord(case)?;
 
             let value = match ord {
@@ -231,7 +231,7 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
                     let singular_values = svd(&a_tf).1;
                     let reduced = singular_values.reduce_sum(&[0]);
                     if keepdim {
-                        reduced.reshape(&keepdim_shape(&a.shape, &axes))
+                        reduced.reshape(&keepdim_shape(&concrete_shape(&a)?, &axes))
                     } else {
                         reduced
                     }
@@ -419,11 +419,19 @@ fn keepdim_shape(shape: &[usize], axes: &[usize]) -> Vec<usize> {
     kept
 }
 
+fn concrete_shape(tensor: &TracedTensor) -> Result<Vec<usize>, String> {
+    tensor
+        .data
+        .as_ref()
+        .map(|data| data.shape().to_vec())
+        .ok_or_else(|| "expected concrete traced tensor shape".to_string())
+}
+
 fn oracle_to_tenferro(tensor: &TracedTensor, matrix_rank: usize) -> TracedTensor {
-    if tensor.shape.len() <= matrix_rank {
+    if tensor.rank <= matrix_rank {
         return tensor.clone();
     }
-    let rank = tensor.shape.len();
+    let rank = tensor.rank;
     let split = rank - matrix_rank;
     let mut perm = Vec::with_capacity(rank);
     perm.extend(split..rank);
@@ -432,10 +440,10 @@ fn oracle_to_tenferro(tensor: &TracedTensor, matrix_rank: usize) -> TracedTensor
 }
 
 fn tenferro_to_oracle(tensor: &TracedTensor, matrix_rank: usize) -> TracedTensor {
-    if tensor.shape.len() <= matrix_rank {
+    if tensor.rank <= matrix_rank {
         return tensor.clone();
     }
-    let rank = tensor.shape.len();
+    let rank = tensor.rank;
     let mut perm = Vec::with_capacity(rank);
     perm.extend(matrix_rank..rank);
     perm.extend(0..matrix_rank);
@@ -443,10 +451,10 @@ fn tenferro_to_oracle(tensor: &TracedTensor, matrix_rank: usize) -> TracedTensor
 }
 
 fn swap_tenferro_matrix_axes(tensor: &TracedTensor) -> TracedTensor {
-    if tensor.shape.len() < 2 {
+    if tensor.rank < 2 {
         return tensor.clone();
     }
-    let mut perm: Vec<usize> = (0..tensor.shape.len()).collect();
+    let mut perm: Vec<usize> = (0..tensor.rank).collect();
     perm.swap(0, 1);
     tensor.transpose(&perm)
 }
@@ -457,7 +465,7 @@ fn hermitian_wrapper_tenferro(tensor: &TracedTensor) -> TracedTensor {
 }
 
 fn rhs_matrix_rank(a: &TracedTensor, b: &TracedTensor) -> usize {
-    if b.shape.len() + 1 == a.shape.len() {
+    if b.rank + 1 == a.rank {
         1
     } else {
         2

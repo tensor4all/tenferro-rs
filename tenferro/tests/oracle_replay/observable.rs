@@ -29,7 +29,7 @@ pub fn apply_observable(
             let u = required(&outputs, "u")?;
             let s = required(&outputs, "s")?;
             let vh = required(&outputs, "vh")?;
-            let subscripts = svd_uvh_subscripts(u.shape.len().saturating_sub(2))?;
+            let subscripts = svd_uvh_subscripts(u.rank.saturating_sub(2))?;
             let product = einsum(engine, &[u, vh], &subscripts).map_err(|err| err.to_string())?;
             Ok(vec![named("s", s.clone()), named("uvh", product)])
         }

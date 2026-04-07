@@ -14,6 +14,7 @@ use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::einsum::einsum;
 use tenferro::exec::eval_exec_ir;
 use tenferro::{matmul, Engine, TracedTensor};
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
@@ -174,6 +175,20 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
     }
 }
 
+fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
+    DimExpr::from_concrete(shape)
+}
+
+fn concrete_dim_shape(shape: &[DimExpr]) -> Vec<usize> {
+    shape
+        .iter()
+        .map(|dim| match dim {
+            DimExpr::Const(value) => *value,
+            other => panic!("expected concrete DimExpr in test shape, got {other:?}"),
+        })
+        .collect()
+}
+
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
     let mut engine = Engine::new(CpuBackend::new());
     traced.eval(&mut engine).unwrap().clone()
@@ -197,23 +212,27 @@ fn matmul_config() -> DotGeneralConfig {
 fn svd_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
     StdTensorOp::Svd {
         eps,
-        input_shape: shape,
+        input_shape: dim_shape(&shape),
     }
 }
 
 fn qr_op(shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Qr { input_shape: shape }
+    StdTensorOp::Qr {
+        input_shape: dim_shape(&shape),
+    }
 }
 
 fn eigh_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
     StdTensorOp::Eigh {
         eps,
-        input_shape: shape,
+        input_shape: dim_shape(&shape),
     }
 }
 
 fn cholesky_op(shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Cholesky { input_shape: shape }
+    StdTensorOp::Cholesky {
+        input_shape: dim_shape(&shape),
+    }
 }
 
 fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
@@ -222,8 +241,8 @@ fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTenso
         lower: true,
         transpose_a: false,
         unit_diagonal: false,
-        lhs_shape,
-        rhs_shape,
+        lhs_shape: dim_shape(&lhs_shape),
+        rhs_shape: dim_shape(&rhs_shape),
     }
 }
 
@@ -257,7 +276,7 @@ fn add_solve_composition(
 ) -> LocalValId {
     let lu = builder.add_op(
         StdTensorOp::Lu {
-            input_shape: lhs_shape.clone(),
+            input_shape: dim_shape(&lhs_shape),
         },
         vec![ValRef::Local(a)],
         OpMode::Primal,
@@ -285,8 +304,8 @@ fn add_solve_composition(
             lower: true,
             transpose_a: false,
             unit_diagonal: true,
-            lhs_shape: lhs_shape.clone(),
-            rhs_shape: rhs_shape.clone(),
+            lhs_shape: dim_shape(&lhs_shape),
+            rhs_shape: dim_shape(&rhs_shape),
         },
         vec![ValRef::Local(lu[1]), ValRef::Local(pb)],
         OpMode::Primal,
@@ -297,8 +316,8 @@ fn add_solve_composition(
             lower: false,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape,
-            rhs_shape,
+            lhs_shape: dim_shape(&lhs_shape),
+            rhs_shape: dim_shape(&rhs_shape),
         },
         vec![ValRef::Local(lu[2]), ValRef::Local(z)],
         OpMode::Primal,
@@ -364,7 +383,7 @@ fn add_real_reduce_sum_loss(
     builder.add_op(
         StdTensorOp::ReduceSum {
             axes: (0..input_shape.len()).collect(),
-            input_shape,
+            input_shape: dim_shape(&input_shape),
         },
         vec![ValRef::Local(scaled[0])],
         OpMode::Primal,
@@ -387,7 +406,7 @@ fn build_svd_values_sum_fragment() -> (
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0],
-            input_shape: vec![2],
+            input_shape: dim_shape(&[2]),
         },
         vec![ValRef::Local(svd[1])],
         OpMode::Primal,
@@ -462,7 +481,7 @@ fn build_svd_uv_product_fragment(
         builder.add_op(
             StdTensorOp::ReduceSum {
                 axes: vec![0, 1],
-                input_shape: product_shape,
+                input_shape: dim_shape(&product_shape),
             },
             vec![ValRef::Local(uv_product[0])],
             OpMode::Primal,
@@ -528,7 +547,7 @@ fn build_svd_reconstruction_sum_fragment(
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
-            input_shape: vec![m, n],
+            input_shape: dim_shape(&[m, n]),
         },
         vec![ValRef::Local(reconstructed[0])],
         OpMode::Primal,
@@ -554,7 +573,7 @@ fn build_eigh_values_sum_fragment() -> (
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0],
-            input_shape: vec![2],
+            input_shape: dim_shape(&[2]),
         },
         vec![ValRef::Local(eigh[0])],
         OpMode::Primal,
@@ -652,7 +671,7 @@ fn build_eigh_projector_fragment(
         builder.add_op(
             StdTensorOp::ReduceSum {
                 axes: vec![0, 1],
-                input_shape: vec![2, 2],
+                input_shape: dim_shape(&[2, 2]),
             },
             vec![ValRef::Local(weighted[0])],
             OpMode::Primal,
@@ -716,7 +735,7 @@ fn build_solve_sum_fragment() -> (
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
-            input_shape: vec![2, 1],
+            input_shape: dim_shape(&[2, 1]),
         },
         vec![ValRef::Local(solve)],
         OpMode::Primal,
@@ -745,7 +764,7 @@ fn build_triangular_solve_sum_fragment() -> (
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
-            input_shape: vec![2, 1],
+            input_shape: dim_shape(&[2, 1]),
         },
         vec![ValRef::Local(solve[0])],
         OpMode::Primal,
@@ -811,7 +830,7 @@ fn build_cholesky_sum_fragment() -> (
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
-            input_shape: vec![3, 3],
+            input_shape: dim_shape(&[3, 3]),
         },
         vec![ValRef::Local(cholesky[0])],
         OpMode::Primal,
@@ -857,7 +876,7 @@ fn build_qr_r_fragment(
         builder.add_op(
             StdTensorOp::ReduceSum {
                 axes: vec![0, 1],
-                input_shape: vec![2, 2],
+                input_shape: dim_shape(&[2, 2]),
             },
             vec![ValRef::Local(qr[1])],
             OpMode::Primal,
@@ -999,15 +1018,15 @@ fn eval_f64_reduction_op(op: &StdTensorOp, data: &[f64]) -> Vec<f64> {
     let mut backend = CpuBackend::new();
     let output = match op {
         StdTensorOp::ReduceProd { axes, input_shape } => {
-            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
             backend.reduce_prod(&input, axes)
         }
         StdTensorOp::ReduceMax { axes, input_shape } => {
-            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
             backend.reduce_max(&input, axes)
         }
         StdTensorOp::ReduceMin { axes, input_shape } => {
-            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
             backend.reduce_min(&input, axes)
         }
         _ => panic!("expected reduction op"),
@@ -1379,7 +1398,7 @@ fn grad_x_squared() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let y = &x * &x;
     let loss = y.reduce_sum(&[0]);
-    assert!(loss.shape.is_empty());
+    assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1394,7 +1413,7 @@ fn grad_extract_diag_sum() {
     ));
     let diag = a.extract_diag(0, 1);
     let loss = diag.reduce_sum(&[0]);
-    assert!(loss.shape.is_empty());
+    assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
     let result = eval_tensor(grad);
@@ -1410,7 +1429,7 @@ fn grad_embed_diag_sum() {
     let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![2.0, -1.0, 4.0]));
     let diag = x.embed_diag(0, 1);
     let loss = diag.reduce_sum(&[0, 1]);
-    assert!(loss.shape.is_empty());
+    assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1461,7 +1480,7 @@ fn grad_matmul_sum() {
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], a_data.clone()));
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
     let loss = matmul(&a, &b).sum(&[0, 1]);
-    assert!(loss.shape.is_empty());
+    assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -1492,7 +1511,7 @@ fn grad_matmul_sum_wrt_rhs() {
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
     let matmul = a.dot_general(&b, matmul_config());
     let loss = matmul.reduce_sum(&[0, 1]);
-    assert!(loss.shape.is_empty());
+    assert_eq!(loss.rank, 0);
     let grad = loss.grad(&b).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -1778,7 +1797,7 @@ fn grad_full_vector_reduction() {
 fn test_reduce_prod_jvp() {
     let op = StdTensorOp::ReduceProd {
         axes: vec![0],
-        input_shape: vec![4],
+        input_shape: dim_shape(&[4]),
     };
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_000));
@@ -1804,7 +1823,7 @@ fn test_reduce_prod_jvp() {
 fn test_reduce_prod_vjp() {
     let op = StdTensorOp::ReduceProd {
         axes: vec![0],
-        input_shape: vec![2, 3],
+        input_shape: dim_shape(&[2, 3]),
     };
     let input_key = tensor_input_key(60_001);
     let x_data = vec![1.5, -2.0, 0.75, 4.0, -0.5, 2.0];
@@ -1829,7 +1848,7 @@ fn test_reduce_prod_vjp() {
 fn test_reduce_max_jvp() {
     let op = StdTensorOp::ReduceMax {
         axes: vec![0],
-        input_shape: vec![2, 3],
+        input_shape: dim_shape(&[2, 3]),
     };
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_002));
@@ -1855,7 +1874,7 @@ fn test_reduce_max_jvp() {
 fn test_reduce_max_vjp() {
     let op = StdTensorOp::ReduceMax {
         axes: vec![0],
-        input_shape: vec![4],
+        input_shape: dim_shape(&[4]),
     };
     let input_key = tensor_input_key(60_003);
     let x_data = vec![1.0, 3.0, 3.0, -2.0];
@@ -1876,7 +1895,7 @@ fn test_reduce_max_vjp() {
 fn test_reduce_min_jvp() {
     let op = StdTensorOp::ReduceMin {
         axes: vec![0],
-        input_shape: vec![4],
+        input_shape: dim_shape(&[4]),
     };
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_004));
@@ -1902,7 +1921,7 @@ fn test_reduce_min_jvp() {
 fn test_reduce_min_vjp() {
     let op = StdTensorOp::ReduceMin {
         axes: vec![0],
-        input_shape: vec![2, 3],
+        input_shape: dim_shape(&[2, 3]),
     };
     let input_key = tensor_input_key(60_005);
     let x_data = vec![-4.0, -4.0, 0.5, 2.0, 1.0, 1.0];

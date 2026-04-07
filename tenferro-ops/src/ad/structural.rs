@@ -1,7 +1,8 @@
 use computegraph::fragment::FragmentBuilder;
-use computegraph::types::{LocalValId, OpMode, ValRef};
+use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::PadConfig;
 
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_transpose(
@@ -28,6 +29,7 @@ pub fn linearize_transpose(
 
 pub fn linearize_reshape(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
 ) -> Vec<Option<LocalValId>> {
@@ -41,15 +43,24 @@ pub fn linearize_reshape(
 
     match tangent_in[0] {
         Some(dx) => {
+            let needs_shape_source = DimExpr::max_input_idx_all(from_shape)
+                .into_iter()
+                .chain(DimExpr::max_input_idx_all(to_shape))
+                .any(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(dx)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::Reshape {
                     from_shape: from_shape.clone(),
                     to_shape: to_shape.clone(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -59,21 +70,28 @@ pub fn linearize_reshape(
 
 pub fn linearize_broadcast_in_dim(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    shape: &[usize],
+    shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
         Some(dx) => {
+            let needs_shape_source = DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(dx)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(ValRef::External(primal_in[1].clone()));
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape: shape.to_vec(),
                     dims: dims.to_vec(),
                 },
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -191,6 +209,7 @@ pub fn transpose_reshape(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
+    inputs: &[ValRef<StdTensorOp>],
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::Reshape {
         from_shape,
@@ -202,15 +221,26 @@ pub fn transpose_reshape(
 
     match cotangent_out[0] {
         Some(ct) => {
+            let remapped_from_shape = DimExpr::remap_all(to_shape, 0, 1);
+            let remapped_to_shape = DimExpr::remap_all(from_shape, 0, 1);
+            let needs_shape_source = DimExpr::max_input_idx_all(&remapped_from_shape)
+                .into_iter()
+                .chain(DimExpr::max_input_idx_all(&remapped_to_shape))
+                .any(|idx| idx > 0);
+            let mut op_inputs = vec![ValRef::Local(ct)];
+            let active_mask = if needs_shape_source {
+                op_inputs.push(inputs[0].clone());
+                vec![true, false]
+            } else {
+                vec![true]
+            };
             let out = builder.add_op(
                 StdTensorOp::Reshape {
-                    from_shape: to_shape.clone(),
-                    to_shape: from_shape.clone(),
+                    from_shape: remapped_from_shape,
+                    to_shape: remapped_to_shape,
                 },
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                op_inputs,
+                OpMode::Linear { active_mask },
             );
             vec![Some(out[0])]
         }
@@ -221,10 +251,11 @@ pub fn transpose_reshape(
 pub fn transpose_broadcast_in_dim(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
-    shape: &[usize],
+    shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
-    let broadcast_axes: Vec<usize> = (0..shape.len()).filter(|dim| !dims.contains(dim)).collect();
+    let output_rank = shape.len();
+    let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
 
     match cotangent_out[0] {
         Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],

@@ -3,8 +3,13 @@ use num_complex::Complex64;
 use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::exec::ExecOp;
 use tenferro::stablehlo::StableHloOp;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+
+fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
+    DimExpr::from_concrete(shape)
+}
 
 fn make_program(instructions: Vec<Instruction<StdTensorOp>>) -> CompiledProgram<StdTensorOp> {
     CompiledProgram {
@@ -38,7 +43,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(
             StdTensorOp::ReduceProd {
                 axes: vec![0],
-                input_shape: vec![2, 2],
+                input_shape: dim_shape(&[2, 2]),
             },
             vec![0],
             vec![3],
@@ -46,7 +51,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(
             StdTensorOp::ReduceMax {
                 axes: vec![1],
-                input_shape: vec![2, 2],
+                input_shape: dim_shape(&[2, 2]),
             },
             vec![1],
             vec![4],
@@ -54,7 +59,7 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
         make_instr(
             StdTensorOp::ReduceMin {
                 axes: vec![0, 1],
-                input_shape: vec![2, 2],
+                input_shape: dim_shape(&[2, 2]),
             },
             vec![2],
             vec![5],
@@ -70,8 +75,8 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
                 lower: true,
                 transpose_a: false,
                 unit_diagonal: false,
-                lhs_shape: vec![2, 2],
-                rhs_shape: vec![2, 1],
+                lhs_shape: dim_shape(&[2, 2]),
+                rhs_shape: dim_shape(&[2, 1]),
             },
             vec![0, 1],
             vec![11],

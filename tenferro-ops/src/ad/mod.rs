@@ -62,9 +62,11 @@ fn linearize_non_semiring(
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
         }
-        StdTensorOp::Reshape { .. } => structural::linearize_reshape(builder, tangent_in, op),
+        StdTensorOp::Reshape { .. } => {
+            structural::linearize_reshape(builder, primal_in, tangent_in, op)
+        }
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            structural::linearize_broadcast_in_dim(builder, tangent_in, shape, dims)
+            structural::linearize_broadcast_in_dim(builder, primal_in, tangent_in, shape, dims)
         }
         StdTensorOp::Convert { from, to } => {
             structural::linearize_convert(builder, tangent_in, *from, *to)
@@ -162,7 +164,7 @@ fn transpose_non_semiring(
             contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config)
         }
         StdTensorOp::ReduceSum { .. } => {
-            contraction::transpose_reduce_sum(builder, cotangent_out, op)
+            contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs)
         }
         StdTensorOp::ReduceProd { .. } => {
             contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op)
@@ -173,7 +175,9 @@ fn transpose_non_semiring(
         StdTensorOp::Transpose { perm } => {
             structural::transpose_transpose(builder, cotangent_out, perm)
         }
-        StdTensorOp::Reshape { .. } => structural::transpose_reshape(builder, cotangent_out, op),
+        StdTensorOp::Reshape { .. } => {
+            structural::transpose_reshape(builder, cotangent_out, op, inputs)
+        }
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims)
         }

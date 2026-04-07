@@ -38,6 +38,7 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
 use computegraph::GraphOp;
 
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::semiring_ops::SemiringOps;
 use tenferro_tensor::DotGeneralConfig;
 
@@ -88,7 +89,7 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         .map(|(_, &s)| s)
         .collect();
     let outputs = builder.add_op(
-        Op::reduce_sum(reduce_axes, lv.shape.clone()),
+        Op::reduce_sum(reduce_axes, DimExpr::from_concrete(&lv.shape)),
         vec![lv.val.clone()],
         OpMode::Primal,
     );
@@ -397,12 +398,12 @@ fn outer_product<Op: GraphOp + SemiringOps>(
         .collect();
 
     let lhs_bc = builder.add_op(
-        Op::broadcast_in_dim(combined_shape.clone(), lhs_dims),
+        Op::broadcast_in_dim(DimExpr::from_concrete(&combined_shape), lhs_dims),
         vec![lhs.val.clone()],
         OpMode::Primal,
     );
     let rhs_bc = builder.add_op(
-        Op::broadcast_in_dim(combined_shape.clone(), rhs_dims),
+        Op::broadcast_in_dim(DimExpr::from_concrete(&combined_shape), rhs_dims),
         vec![rhs.val.clone()],
         OpMode::Primal,
     );

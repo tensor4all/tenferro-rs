@@ -1,4 +1,5 @@
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
@@ -15,6 +16,23 @@ use crate::traced::{apply_binary, apply_multi_output, apply_nullary, apply_unary
 /// ```
 pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
     input.convert(to)
+}
+
+fn known_shape(tensor: &TracedTensor) -> &[usize] {
+    tensor.shape_hint.as_deref().unwrap_or_else(|| {
+        panic!(
+            "missing concrete shape hint for linalg operation on traced tensor {}",
+            tensor.id
+        )
+    })
+}
+
+fn input_shape_expr(tensor: &TracedTensor) -> Vec<DimExpr> {
+    tensor
+        .shape_hint
+        .as_deref()
+        .map(DimExpr::from_concrete)
+        .unwrap_or_else(|| DimExpr::input_shape(0, tensor.rank))
 }
 
 /// Singular value decomposition with a default numerical epsilon.
@@ -36,13 +54,14 @@ pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
 /// let (u, s, vt) = tenferro::svd_with_eps(&a, 1e-10);
 /// ```
 pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, TracedTensor) {
-    let m = a.shape[0];
-    let n = a.shape[1];
+    let shape = known_shape(a);
+    let m = shape[0];
+    let n = shape[1];
     let k = m.min(n);
-    let batch = &a.shape[2..];
+    let batch = &shape[2..];
     let op = StdTensorOp::Svd {
         eps,
-        input_shape: a.shape.clone(),
+        input_shape: input_shape_expr(a),
     };
     let mut u_shape = vec![m, k];
     u_shape.extend_from_slice(batch);
@@ -70,17 +89,18 @@ pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, 
 /// let (q, r) = tenferro::qr(&a);
 /// ```
 pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    let m = a.shape[0];
-    let n = a.shape[1];
+    let shape = known_shape(a);
+    let m = shape[0];
+    let n = shape[1];
     let k = m.min(n);
-    let batch = &a.shape[2..];
+    let batch = &shape[2..];
     let mut q_shape = vec![m, k];
     q_shape.extend_from_slice(batch);
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch);
     let mut results = apply_multi_output(
         StdTensorOp::Qr {
-            input_shape: a.shape.clone(),
+            input_shape: input_shape_expr(a),
         },
         a,
         vec![q_shape, r_shape],
@@ -111,11 +131,12 @@ pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 /// let (values, vectors) = tenferro::eigh_with_eps(&a, 1e-10);
 /// ```
 pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor) {
-    let n = a.shape[0];
-    let batch = &a.shape[2..];
+    let shape = known_shape(a);
+    let n = shape[0];
+    let batch = &shape[2..];
     let op = StdTensorOp::Eigh {
         eps,
-        input_shape: a.shape.clone(),
+        input_shape: input_shape_expr(a),
     };
     let mut vals_shape = vec![n];
     vals_shape.extend_from_slice(batch);
@@ -136,12 +157,14 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
 /// let l = tenferro::cholesky(&a);
 /// ```
 pub fn cholesky(a: &TracedTensor) -> TracedTensor {
+    let shape = known_shape(a).to_vec();
     apply_unary(
         StdTensorOp::Cholesky {
-            input_shape: a.shape.clone(),
+            input_shape: input_shape_expr(a),
         },
         a,
-        a.shape.clone(),
+        a.rank,
+        Some(shape),
     )
 }
 
@@ -155,10 +178,11 @@ pub fn cholesky(a: &TracedTensor) -> TracedTensor {
 /// let (p, l, u, parity) = tenferro::lu(&a);
 /// ```
 pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, TracedTensor) {
-    let m = a.shape[0];
-    let n = a.shape[1];
+    let shape = known_shape(a);
+    let m = shape[0];
+    let n = shape[1];
     let k = m.min(n);
-    let batch = &a.shape[2..];
+    let batch = &shape[2..];
     let mut p_shape = vec![m, m];
     p_shape.extend_from_slice(batch);
     let mut l_shape = vec![m, k];
@@ -168,7 +192,7 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
     let parity_shape = batch.to_vec();
     let mut results = apply_multi_output(
         StdTensorOp::Lu {
-            input_shape: a.shape.clone(),
+            input_shape: input_shape_expr(a),
         },
         a,
         vec![p_shape, l_shape, u_shape, parity_shape],
@@ -196,8 +220,9 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
 /// let (values, vectors) = tenferro::eig(&a);
 /// ```
 pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    let n = a.shape[0];
-    let batch = &a.shape[2..];
+    let shape = known_shape(a);
+    let n = shape[0];
+    let batch = &shape[2..];
     let mut vals_shape = vec![n];
     vals_shape.extend_from_slice(batch);
     let mut vecs_shape = vec![n, n];
@@ -206,7 +231,7 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let mut results = apply_multi_output(
         StdTensorOp::Eig {
             input_dtype: a.dtype,
-            input_shape: a.shape.clone(),
+            input_shape: input_shape_expr(a),
         },
         a,
         vec![vals_shape, vecs_shape],
@@ -230,7 +255,7 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 /// let x = tenferro::solve(&a, &b);
 /// ```
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(known_shape(a)) || has_zero_dim(known_shape(b)) {
         return zeros_like(b);
     }
 
@@ -244,7 +269,7 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
     if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         let b2d = b.reshape(&matrix_rhs_shape);
         let x2d = do_solve(a, &b2d);
-        x2d.reshape(&b.shape)
+        x2d.reshape(known_shape(b))
     } else {
         do_solve(a, b)
     }
@@ -265,7 +290,7 @@ pub fn triangular_solve(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> TracedTensor {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(known_shape(a)) || has_zero_dim(known_shape(b)) {
         return zeros_like(b);
     }
     let op = StdTensorOp::TriangularSolve {
@@ -273,8 +298,8 @@ pub fn triangular_solve(
         lower,
         transpose_a,
         unit_diagonal,
-        lhs_shape: a.shape.clone(),
-        rhs_shape: b.shape.clone(),
+        lhs_shape: input_shape_expr(a),
+        rhs_shape: input_shape_expr(b),
     };
     if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         let b2d = b.reshape(&matrix_rhs_shape);
@@ -284,16 +309,17 @@ pub fn triangular_solve(
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: a.shape.clone(),
-                rhs_shape: matrix_rhs_shape.clone(),
+                lhs_shape: input_shape_expr(a),
+                rhs_shape: DimExpr::from_concrete(&matrix_rhs_shape),
             },
             a,
             &b2d,
-            matrix_rhs_shape,
+            matrix_rhs_shape.len(),
+            Some(matrix_rhs_shape),
         );
-        x2d.reshape(&b.shape)
+        x2d.reshape(known_shape(b))
     } else {
-        apply_binary(op, a, b, b.shape.clone())
+        apply_binary(op, a, b, b.rank, b.shape_hint.clone())
     }
 }
 
@@ -305,8 +331,9 @@ pub fn triangular_solve(
 /// let (sign, logabsdet) = tenferro::slogdet(&a);
 /// ```
 pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    let batch_shape = &a.shape[2..];
-    if has_zero_dim(&a.shape) {
+    let shape = known_shape(a);
+    let batch_shape = &shape[2..];
+    if has_zero_dim(shape) {
         let sign = broadcast_scalar(one_scalar(a.dtype), batch_shape);
         let logabsdet = broadcast_scalar(zero_scalar(a.dtype), batch_shape);
         return (sign, logabsdet);
@@ -340,7 +367,7 @@ pub fn det(a: &TracedTensor) -> TracedTensor {
 /// let value = tenferro::inv(&a);
 /// ```
 pub fn inv(a: &TracedTensor) -> TracedTensor {
-    let eye = eye_like(a, a.shape[0]);
+    let eye = eye_like(a, known_shape(a)[0]);
     solve(a, &eye)
 }
 
@@ -374,7 +401,8 @@ pub fn eigvals(a: &TracedTensor) -> TracedTensor {
 /// let value = tenferro::pinv(&a);
 /// ```
 pub fn pinv(a: &TracedTensor) -> TracedTensor {
-    let max_dim = match (a.shape.first(), a.shape.get(1)) {
+    let shape = known_shape(a);
+    let max_dim = match (shape.first(), shape.get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
         (Some(&m), None) => m,
         _ => 0,
@@ -392,24 +420,26 @@ pub fn pinv(a: &TracedTensor) -> TracedTensor {
 /// let value = tenferro::pinv_with_rtol(&a, 1.0e-8);
 /// ```
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
-    if has_zero_dim(&a.shape) {
-        let mut out_shape = vec![a.shape[1], a.shape[0]];
-        out_shape.extend_from_slice(&a.shape[2..]);
+    let shape = known_shape(a);
+    if has_zero_dim(shape) {
+        let mut out_shape = vec![shape[1], shape[0]];
+        out_shape.extend_from_slice(&shape[2..]);
         return zeros_of_shape(a.dtype, out_shape);
     }
 
     let (u, s, vt) = svd(a);
     let abs_s = s.abs();
     let s_max = reduce_max(&abs_s, &[0]);
-    let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max.shape);
-    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s.shape);
+    let threshold =
+        &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), known_shape(&s_max));
+    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, known_shape(&s));
     let mask = compare_dir(&abs_s, &threshold, CompareDir::Gt);
     let ones = ones_like(&s);
     let denom = &s + &(&ones + &(-&mask));
     let s_inv = &mask / &denom;
 
-    let v = vt.conj().transpose(&matrix_transpose_perm(vt.shape.len()));
-    let uh = u.conj().transpose(&matrix_transpose_perm(u.shape.len()));
+    let v = vt.conj().transpose(&matrix_transpose_perm(vt.rank));
+    let uh = u.conj().transpose(&matrix_transpose_perm(u.rank));
     let s_inv_diag = s_inv.embed_diag(0, 1);
     let vs = matmul_preserve_trailing_batch(&v, &s_inv_diag);
     matmul_preserve_trailing_batch(&vs, &uh)
@@ -430,10 +460,7 @@ pub fn norm(
     dim: Option<&[usize]>,
     keepdim: bool,
 ) -> TracedTensor {
-    let axes = dim.map_or_else(
-        || (0..a.shape.len()).collect::<Vec<_>>(),
-        |dims| dims.to_vec(),
-    );
+    let axes = dim.map_or_else(|| (0..a.rank).collect::<Vec<_>>(), |dims| dims.to_vec());
     if axes.is_empty() {
         return a.clone();
     }
@@ -452,7 +479,7 @@ pub fn norm(
             }
         }
     };
-    restore_keepdim(out, &a.shape, &axes, keepdim)
+    restore_keepdim(out, known_shape(a), &axes, keepdim)
 }
 
 fn eig_output_dtype(dtype: DType) -> DType {
@@ -464,17 +491,29 @@ fn eig_output_dtype(dtype: DType) -> DType {
 
 fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
     match dtype {
-        DType::F64 => apply_nullary(StdTensorOp::constant_f64(value), vec![], DType::F64),
-        DType::F32 => apply_nullary(StdTensorOp::constant_f32(value as f32), vec![], DType::F32),
+        DType::F64 => apply_nullary(
+            StdTensorOp::constant_f64(value),
+            0,
+            DType::F64,
+            Some(vec![]),
+        ),
+        DType::F32 => apply_nullary(
+            StdTensorOp::constant_f32(value as f32),
+            0,
+            DType::F32,
+            Some(vec![]),
+        ),
         DType::C64 => apply_nullary(
             StdTensorOp::constant_c64(Complex64::new(value, 0.0)),
-            vec![],
+            0,
             DType::C64,
+            Some(vec![]),
         ),
         DType::C32 => apply_nullary(
             StdTensorOp::constant_c32(Complex32::new(value as f32, 0.0)),
-            vec![],
+            0,
             DType::C32,
+            Some(vec![]),
         ),
     }
 }
@@ -488,7 +527,7 @@ fn one_scalar(dtype: DType) -> TracedTensor {
 }
 
 fn zeros_like(input: &TracedTensor) -> TracedTensor {
-    zeros_of_shape(input.dtype, input.shape.clone())
+    zeros_of_shape(input.dtype, known_shape(input).to_vec())
 }
 
 fn zeros_of_shape(dtype: DType, shape: Vec<usize>) -> TracedTensor {
@@ -496,12 +535,12 @@ fn zeros_of_shape(dtype: DType, shape: Vec<usize>) -> TracedTensor {
 }
 
 fn ones_like(input: &TracedTensor) -> TracedTensor {
-    broadcast_scalar(one_scalar(input.dtype), &input.shape)
+    broadcast_scalar(one_scalar(input.dtype), known_shape(input))
 }
 
 fn eye_like(anchor: &TracedTensor, size: usize) -> TracedTensor {
     let mut vector_shape = vec![size];
-    vector_shape.extend_from_slice(&anchor.shape[2..]);
+    vector_shape.extend_from_slice(&known_shape(anchor)[2..]);
     let diagonal = broadcast_scalar(one_scalar(anchor.dtype), &vector_shape);
     diagonal.embed_diag(0, 1)
 }
@@ -586,14 +625,14 @@ fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> TracedTensor {
         return tensor.clone();
     }
 
-    let mut selected = vec![false; tensor.shape.len()];
+    let mut selected = vec![false; tensor.rank];
     for &axis in axes {
         selected[axis] = true;
     }
 
-    let mut perm = Vec::with_capacity(tensor.shape.len());
+    let mut perm = Vec::with_capacity(tensor.rank);
     perm.extend_from_slice(axes);
-    for axis in 0..tensor.shape.len() {
+    for axis in 0..tensor.rank {
         if !selected[axis] {
             perm.push(axis);
         }
@@ -618,55 +657,64 @@ fn restore_keepdim(
 }
 
 fn reduce_prod(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let out_shape = reduced_shape(&input.shape, axes);
+    let out_shape = reduced_shape(known_shape(input), axes);
     apply_unary(
         StdTensorOp::ReduceProd {
             axes: axes.to_vec(),
-            input_shape: input.shape.clone(),
+            input_shape: input_shape_expr(input),
         },
         input,
-        out_shape,
+        input.rank - axes.len(),
+        Some(out_shape),
     )
 }
 
 fn reduce_max(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let out_shape = reduced_shape(&input.shape, axes);
+    let out_shape = reduced_shape(known_shape(input), axes);
     apply_unary(
         StdTensorOp::ReduceMax {
             axes: axes.to_vec(),
-            input_shape: input.shape.clone(),
+            input_shape: input_shape_expr(input),
         },
         input,
-        out_shape,
+        input.rank - axes.len(),
+        Some(out_shape),
     )
 }
 
 fn reduce_min(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let out_shape = reduced_shape(&input.shape, axes);
+    let out_shape = reduced_shape(known_shape(input), axes);
     apply_unary(
         StdTensorOp::ReduceMin {
             axes: axes.to_vec(),
-            input_shape: input.shape.clone(),
+            input_shape: input_shape_expr(input),
         },
         input,
-        out_shape,
+        input.rank - axes.len(),
+        Some(out_shape),
     )
 }
 
 fn compare_dir(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> TracedTensor {
     let (lhs, rhs) = broadcast_binary(lhs, rhs);
-    apply_binary(StdTensorOp::Compare(dir), &lhs, &rhs, lhs.shape.clone())
+    apply_binary(
+        StdTensorOp::Compare(dir),
+        &lhs,
+        &rhs,
+        lhs.rank,
+        lhs.shape_hint.clone(),
+    )
 }
 
 fn broadcast_scalar(input: TracedTensor, shape: &[usize]) -> TracedTensor {
-    if input.shape == shape {
+    if known_shape(&input) == shape {
         return input;
     }
     input.broadcast_in_dim(shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(input: &TracedTensor, shape: &[usize]) -> TracedTensor {
-    if input.shape == shape {
+    if known_shape(input) == shape {
         return input.clone();
     }
     let dims: Vec<usize> = (1..shape.len()).collect();
@@ -674,7 +722,7 @@ fn broadcast_batch_scalar_to_leading_axis(input: &TracedTensor, shape: &[usize])
 }
 
 fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
-    let rank = lhs.shape.len();
+    let rank = lhs.rank;
     let batch_dims: Vec<usize> = (2..rank).collect();
     let out = lhs.dot_general(
         rhs,
@@ -716,20 +764,23 @@ fn reduced_shape(shape: &[usize], axes: &[usize]) -> Vec<usize> {
 }
 
 fn batched_vector_rhs_shape(a: &TracedTensor, b: &TracedTensor) -> Option<Vec<usize>> {
-    if b.shape.len() == 1 {
-        return Some(vec![b.shape[0], 1]);
+    let a_shape = known_shape(a);
+    let b_shape = known_shape(b);
+
+    if b_shape.len() == 1 {
+        return Some(vec![b_shape[0], 1]);
     }
 
-    let is_batched_vector_rhs = a.shape.len() == b.shape.len() + 1
-        && !b.shape.is_empty()
-        && b.shape[0] == a.shape[0]
-        && b.shape[1..] == a.shape[2..];
+    let is_batched_vector_rhs = a_shape.len() == b_shape.len() + 1
+        && !b_shape.is_empty()
+        && b_shape[0] == a_shape[0]
+        && b_shape[1..] == a_shape[2..];
     if !is_batched_vector_rhs {
         return None;
     }
 
-    let mut rhs_shape = vec![b.shape[0], 1];
-    rhs_shape.extend_from_slice(&b.shape[1..]);
+    let mut rhs_shape = vec![b_shape[0], 1];
+    rhs_shape.extend_from_slice(&b_shape[1..]);
     Some(rhs_shape)
 }
 
@@ -765,27 +816,28 @@ fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
 }
 
 fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
-    if tensor.shape == target_shape {
+    if known_shape(tensor) == target_shape {
         return tensor.clone();
     }
 
     assert!(
-        tensor.shape.len() <= target_shape.len(),
+        tensor.rank <= target_shape.len(),
         "cannot broadcast higher-rank shape {:?} to {:?}",
-        tensor.shape,
+        known_shape(tensor),
         target_shape
     );
 
-    let rank_diff = target_shape.len() - tensor.shape.len();
-    let mut source_shape = Vec::with_capacity(tensor.shape.len());
-    let mut dims = Vec::with_capacity(tensor.shape.len());
-    for (src_axis, &src_dim) in tensor.shape.iter().enumerate() {
+    let tensor_shape = known_shape(tensor);
+    let rank_diff = target_shape.len() - tensor.rank;
+    let mut source_shape = Vec::with_capacity(tensor.rank);
+    let mut dims = Vec::with_capacity(tensor.rank);
+    for (src_axis, &src_dim) in tensor_shape.iter().enumerate() {
         let dst_axis = src_axis + rank_diff;
         let dst_dim = target_shape[dst_axis];
         assert!(
             src_dim == dst_dim || src_dim == 1,
             "cannot broadcast shape {:?} to {:?}",
-            tensor.shape,
+            tensor_shape,
             target_shape
         );
         if src_dim == 1 && dst_dim != 1 {
@@ -795,7 +847,7 @@ fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
         dims.push(dst_axis);
     }
 
-    let source = if source_shape == tensor.shape {
+    let source = if source_shape == tensor_shape {
         tensor.clone()
     } else {
         tensor.reshape(&source_shape)
@@ -804,13 +856,15 @@ fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
 }
 
 fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    if a.shape == b.shape {
+    if a.shape_hint == b.shape_hint && a.rank == b.rank {
         return (a.clone(), b.clone());
     }
-    let target = broadcast_shape(&a.shape, &b.shape).unwrap_or_else(|| {
+    let a_shape = known_shape(a);
+    let b_shape = known_shape(b);
+    let target = broadcast_shape(a_shape, b_shape).unwrap_or_else(|| {
         panic!(
             "incompatible shapes for broadcast: {:?} and {:?}",
-            a.shape, b.shape
+            a_shape, b_shape
         )
     });
     (broadcast_to(a, &target), broadcast_to(b, &target))

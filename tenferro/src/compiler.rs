@@ -1,5 +1,6 @@
 use computegraph::compile::CompiledProgram;
 use tenferro_algebra::Algebra;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::semiring_op::SemiringOp;
 use tenferro_ops::semiring_op_kind::SemiringOpKind;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -150,10 +151,10 @@ where
                 SemiringOpKind::ReduceSum { axes } => StableHloOp::ReduceSum { axes: axes.clone() },
                 SemiringOpKind::Transpose { perm } => StableHloOp::Transpose { perm: perm.clone() },
                 SemiringOpKind::Reshape { shape } => StableHloOp::Reshape {
-                    shape: shape.clone(),
+                    shape: DimExpr::from_concrete(shape),
                 },
                 SemiringOpKind::BroadcastInDim { shape, dims } => StableHloOp::BroadcastInDim {
-                    shape: shape.clone(),
+                    shape: DimExpr::from_concrete(shape),
                     dims: dims.clone(),
                 },
                 SemiringOpKind::ExtractDiag { axis_a, axis_b } => StableHloOp::ExtractDiag {
