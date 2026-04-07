@@ -2,6 +2,7 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{LocalValId, OpMode, ValRef};
 use tenferro_tensor::PadConfig;
 
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_transpose(
@@ -60,7 +61,7 @@ pub fn linearize_reshape(
 pub fn linearize_broadcast_in_dim(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
-    shape: &[usize],
+    shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
@@ -191,6 +192,7 @@ pub fn transpose_reshape(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
+    inputs: &[ValRef<StdTensorOp>],
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::Reshape {
         from_shape,
@@ -204,12 +206,12 @@ pub fn transpose_reshape(
         Some(ct) => {
             let out = builder.add_op(
                 StdTensorOp::Reshape {
-                    from_shape: to_shape.clone(),
-                    to_shape: from_shape.clone(),
+                    from_shape: DimExpr::remap_all(to_shape, 0, 1),
+                    to_shape: DimExpr::remap_all(from_shape, 0, 1),
                 },
-                vec![ValRef::Local(ct)],
+                vec![ValRef::Local(ct), inputs[0].clone()],
                 OpMode::Linear {
-                    active_mask: vec![true],
+                    active_mask: vec![true, false],
                 },
             );
             vec![Some(out[0])]
@@ -221,10 +223,11 @@ pub fn transpose_reshape(
 pub fn transpose_broadcast_in_dim(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
-    shape: &[usize],
+    shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
-    let broadcast_axes: Vec<usize> = (0..shape.len()).filter(|dim| !dims.contains(dim)).collect();
+    let output_rank = shape.len();
+    let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
 
     match cotangent_out[0] {
         Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],
