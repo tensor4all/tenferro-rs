@@ -1303,6 +1303,18 @@ fn shared_matrix_rank(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr], op: &str) ->
     lhs_shape.len()
 }
 
+/// Extract a concrete dimension from a [`DimExpr`].
+///
+/// Linalg AD rules (LU, SVD, QR, etc.) compute branch-dependent
+/// sub-expressions whose structure depends on the relationship between
+/// matrix dimensions (e.g. `m >= n`). This requires the dimensions to
+/// be known at graph-construction time, so only `DimExpr::Const`
+/// values are accepted.
+///
+/// **Known limitation:** symbolic (`InputDim`) dimensions will cause
+/// a panic here. Supporting fully symbolic linalg AD would require
+/// a conditional/select node in the AD graph, which is not yet
+/// implemented.
 fn const_dim(dim: &DimExpr, op: &str) -> usize {
     match dim {
         DimExpr::Const(value) => *value,

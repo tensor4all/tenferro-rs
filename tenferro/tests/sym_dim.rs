@@ -74,3 +74,33 @@ fn reshape_sym_rejects_symbolic_dims_from_another_tensor() {
         matches!(err, Error::Internal(message) if message.contains("unknown symbolic tensor id"))
     );
 }
+
+/// Build a symbolic flatten graph (reshape to [dim0 * dim1]) ONCE and
+/// execute it with two tensors of different shapes, verifying that the
+/// DimExpr-based reshape resolves correctly each time.
+#[test]
+fn reshape_sym_graph_reuse_with_different_shapes() {
+    // Helper: build a flatten graph from a 2-D input tensor.
+    fn build_flatten(input: &TracedTensor) -> TracedTensor {
+        let total = input.sym_size(0) * input.sym_size(1);
+        input.reshape_sym(&[total]).unwrap()
+    }
+
+    let mut engine = Engine::new(CpuBackend::new());
+
+    // First execution: shape [2, 3]
+    let data_a: Vec<f64> = (1..=6).map(|v| v as f64).collect();
+    let x_a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], data_a.clone()));
+    let mut y_a = build_flatten(&x_a);
+    let result_a = y_a.eval(&mut engine).unwrap();
+    assert_eq!(result_a.shape(), &[6]);
+    assert_eq!(get_f64_data(result_a), &data_a);
+
+    // Second execution: shape [4, 5] — same graph pattern, different sizes
+    let data_b: Vec<f64> = (1..=20).map(|v| v as f64).collect();
+    let x_b = TracedTensor::from_tensor(f64_tensor(vec![4, 5], data_b.clone()));
+    let mut y_b = build_flatten(&x_b);
+    let result_b = y_b.eval(&mut engine).unwrap();
+    assert_eq!(result_b.shape(), &[20]);
+    assert_eq!(get_f64_data(result_b), &data_b);
+}
