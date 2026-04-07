@@ -75,6 +75,74 @@ fn reshape_sym_rejects_symbolic_dims_from_another_tensor() {
     );
 }
 
+#[test]
+fn sym_dim_sub_and_div_operators() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![12], (1..=12).map(|v| v as f64).collect()));
+    // reshape [12] -> [dim0 - 2, dim0 / 2] = [10, 6]... that doesn't multiply to 12
+    // Instead: reshape [12] -> [dim0 / 4, dim0 / 3] = [3, 4]
+    let a = x.sym_size(0) / 4usize;
+    let b = x.sym_size(0) / 3usize;
+    let mut y = x.reshape_sym(&[a, b]).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3, 4]);
+}
+
+#[test]
+fn sym_dim_sub_operator() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![6], (1..=6).map(|v| v as f64).collect()));
+    // reshape [6] -> [dim0 - 4, dim0 - 3] = [2, 3]
+    let a = x.sym_size(0) - 4usize;
+    let b = x.sym_size(0) - 3usize;
+    let mut y = x.reshape_sym(&[a, b]).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[2, 3]);
+}
+
+#[test]
+fn sym_dim_usize_lhs_operators() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![6], (1..=6).map(|v| v as f64).collect()));
+    // 12usize / dim0 = 2, dim0 + 0usize = 6 -- but need product = 6
+    // Use: 3usize + (dim0 - dim0) = 3, dim0 - 4usize = 2 => [3, 2]
+    let a = 3usize + (x.sym_size(0) - x.sym_size(0));
+    let b = x.sym_size(0) - 4usize;
+    let mut y = x.reshape_sym(&[a, b]).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3, 2]);
+}
+
+#[test]
+fn sym_dim_usize_sub_and_div_lhs() {
+    // Test usize - SymDim and usize / SymDim
+    let x = TracedTensor::from_tensor(f64_tensor(vec![2, 3], (1..=6).map(|v| v as f64).collect()));
+    // 5usize - dim0 = 3, 6usize / dim1 = 2 => [3, 2]
+    let a = 5usize - x.sym_size(0);
+    let b = 6usize / x.sym_size(1);
+    let mut y = x.reshape_sym(&[a, b]).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[3, 2]);
+}
+
+#[test]
+fn sym_dim_min_max_methods() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![2, 3], (1..=6).map(|v| v as f64).collect()));
+    // min(dim0, dim1) = 2, max(dim0, dim1) = 3 => [2, 3]
+    let a = x.sym_size(0).min(x.sym_size(1));
+    let b = x.sym_size(0).max(x.sym_size(1));
+    let mut y = x.reshape_sym(&[a, b]).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[2, 3]);
+}
+
 /// Build a symbolic flatten graph (reshape to [dim0 * dim1]) ONCE and
 /// execute it with two tensors of different shapes, verifying that the
 /// DimExpr-based reshape resolves correctly each time.
