@@ -1,12 +1,12 @@
-# DimExpr Phase 1 Implementation Plan
+# DimExpr Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace concrete `Vec<usize>` shapes in StdTensorOp with `DimExpr` expressions, enabling graph reuse across varying tensor sizes.
+**Goal:** Uniformly convert all `Vec<usize>` shape fields in StdTensorOp to `Vec<DimExpr>`, enabling graph reuse across varying tensor sizes.
 
-**Architecture:** Define `DimExpr` (evaluated at execution time from actual input shapes) in tenferro-ops, update op variants to use it, update AD rules to construct DimExpr references to primal inputs, and update the StableHLO lowering to evaluate DimExpr. TracedTensor changes from storing `shape: Vec<usize>` to `rank: usize`.
+**Architecture:** Every shape field (`input_shape`, `from_shape`, `to_shape`, `lhs_shape`, `rhs_shape`) becomes `Vec<DimExpr>`. At trace time, these store `InputDim` references to the op's own inputs. AD rules read DimExpr from forward ops and remap input indices for backward ops via `remap_input_idx`. DimExpr is evaluated to concrete sizes during StableHLO lowering.
 
-**Tech Stack:** Rust, tenferro-ops, tenferro, computegraph
+**Tech Stack:** Rust, tenferro-ops, tenferro, tenferro-einsum, computegraph
 
 **Spec:** `docs/superpowers/specs/2026-04-07-shape-agnostic-graph-design.md`
 
@@ -16,20 +16,21 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `tenferro-ops/src/dim_expr.rs` | Create | DimExpr enum, eval, Hash/Eq, max_input_idx |
+| `tenferro-ops/src/dim_expr.rs` | Create | DimExpr enum, eval, Hash/Eq, remap, helpers |
 | `tenferro-ops/src/lib.rs` | Modify | Add `pub mod dim_expr` |
-| `tenferro-ops/src/std_tensor_op.rs` | Modify | Update Reshape, BroadcastInDim, ReduceSum/Prod/Max/Min |
+| `tenferro-ops/src/std_tensor_op.rs` | Modify | All shape fields → `Vec<DimExpr>` |
 | `tenferro-ops/src/semiring_ops.rs` | Modify | Update trait signatures |
-| `tenferro-ops/src/ad/structural.rs` | Modify | Update Reshape + BroadcastInDim AD rules |
-| `tenferro-ops/src/ad/contraction.rs` | Modify | Update ReduceSum/Prod/Max/Min AD rules |
-| `tenferro-ops/src/ad/mod.rs` | Modify | Update AD dispatch |
+| `tenferro-ops/src/ad/structural.rs` | Modify | Reshape + BroadcastInDim AD rules |
+| `tenferro-ops/src/ad/contraction.rs` | Modify | ReduceSum/Prod/Max/Min AD rules |
+| `tenferro-ops/src/ad/linalg.rs` | Modify | Linalg AD rules |
+| `tenferro-ops/src/ad/mod.rs` | Modify | AD dispatch |
 | `tenferro-ops/src/tests/std_tensor_op_tests.rs` | Modify | Fix tests |
-| `tenferro/src/traced.rs` | Modify | shape->rank, sym_size, update op construction |
+| `tenferro/src/traced.rs` | Modify | shape→rank, op construction |
 | `tenferro/src/sym_dim.rs` | Create | SymDim type with operator overloading |
 | `tenferro/src/lib.rs` | Modify | Add `pub mod sym_dim` |
 | `tenferro/src/compiler.rs` | Modify | Evaluate DimExpr during lowering |
-| `tenferro/src/linalg_api.rs` | Modify | Update reduce_sum/reshape/broadcast calls |
-| `tenferro-einsum/src/builder.rs` | Modify | Update SemiringOps calls to use DimExpr |
+| `tenferro/src/linalg_api.rs` | Modify | Update op construction |
+| `tenferro-einsum/src/builder.rs` | Modify | Wrap concrete shapes in DimExpr::Const |
 
 ---
 
@@ -38,13 +39,11 @@
 **Files:**
 - Create: `tenferro-ops/src/dim_expr.rs`
 - Modify: `tenferro-ops/src/lib.rs`
-- Test: `tenferro-ops/src/dim_expr.rs` (inline tests, small leaf module)
 
-- [ ] **Step 1: Create dim_expr.rs with DimExpr enum + eval**
+- [ ] **Step 1: Create dim_expr.rs**
 
 ```rust
 // tenferro-ops/src/dim_expr.rs
-use std::hash::{Hash, Hasher};
 
 /// Arithmetic expression over tensor dimension sizes.
 ///
@@ -61,8 +60,7 @@ use std::hash::{Hash, Hasher};
 ///     DimExpr::InputDim { input_idx: 0, axis: 0 },
 ///     DimExpr::InputDim { input_idx: 0, axis: 1 },
 /// );
-/// let result = expr.eval(&[&[3, 4]]);
-/// assert_eq!(result, 12);
+/// assert_eq!(expr.eval(&[&[3, 4]]), 12);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DimExpr {
@@ -77,7 +75,7 @@ pub enum DimExpr {
 }
 
 impl DimExpr {
-    /// Evaluate the expression using actual input tensor shapes.
+    /// Evaluate using actual input tensor shapes.
     pub fn eval(&self, input_shapes: &[&[usize]]) -> usize {
         match self {
             Self::Const(v) => *v,
@@ -91,7 +89,7 @@ impl DimExpr {
         }
     }
 
-    /// Return the maximum `input_idx` referenced, or `None` if all Const.
+    /// Maximum `input_idx` referenced, or `None` if all Const.
     pub fn max_input_idx(&self) -> Option<usize> {
         match self {
             Self::Const(_) => None,
@@ -109,61 +107,67 @@ impl DimExpr {
         }
     }
 
-    /// Convenience: create `Const(v)`.
-    pub fn constant(v: usize) -> Self {
-        Self::Const(v)
+    /// Remap `InputDim { input_idx: from, .. }` to `InputDim { input_idx: to, .. }`.
+    ///
+    /// Used by AD rules to adjust input references when constructing
+    /// backward ops with different input ordering than the forward op.
+    pub fn remap(&self, from: usize, to: usize) -> Self {
+        match self {
+            Self::Const(v) => Self::Const(*v),
+            Self::InputDim { input_idx, axis } => {
+                let new_idx = if *input_idx == from { to } else { *input_idx };
+                Self::InputDim { input_idx: new_idx, axis: *axis }
+            }
+            Self::Add(a, b) => Self::add(a.remap(from, to), b.remap(from, to)),
+            Self::Sub(a, b) => Self::sub(a.remap(from, to), b.remap(from, to)),
+            Self::Mul(a, b) => Self::mul(a.remap(from, to), b.remap(from, to)),
+            Self::FloorDiv(a, b) => Self::floor_div(a.remap(from, to), b.remap(from, to)),
+            Self::Min(a, b) => Self::min(a.remap(from, to), b.remap(from, to)),
+            Self::Max(a, b) => Self::max(a.remap(from, to), b.remap(from, to)),
+        }
     }
 
-    /// Convenience: create `Add(a, b)`.
-    pub fn add(a: Self, b: Self) -> Self {
-        Self::Add(Box::new(a), Box::new(b))
-    }
+    // --- Convenience constructors ---
 
-    /// Convenience: create `Sub(a, b)`.
-    pub fn sub(a: Self, b: Self) -> Self {
-        Self::Sub(Box::new(a), Box::new(b))
-    }
+    pub fn constant(v: usize) -> Self { Self::Const(v) }
 
-    /// Convenience: create `Mul(a, b)`.
-    pub fn mul(a: Self, b: Self) -> Self {
-        Self::Mul(Box::new(a), Box::new(b))
-    }
+    pub fn add(a: Self, b: Self) -> Self { Self::Add(Box::new(a), Box::new(b)) }
+    pub fn sub(a: Self, b: Self) -> Self { Self::Sub(Box::new(a), Box::new(b)) }
+    pub fn mul(a: Self, b: Self) -> Self { Self::Mul(Box::new(a), Box::new(b)) }
+    pub fn floor_div(a: Self, b: Self) -> Self { Self::FloorDiv(Box::new(a), Box::new(b)) }
+    pub fn min(a: Self, b: Self) -> Self { Self::Min(Box::new(a), Box::new(b)) }
+    pub fn max(a: Self, b: Self) -> Self { Self::Max(Box::new(a), Box::new(b)) }
 
-    /// Convenience: create `FloorDiv(a, b)`.
-    pub fn floor_div(a: Self, b: Self) -> Self {
-        Self::FloorDiv(Box::new(a), Box::new(b))
-    }
+    pub fn is_const(&self) -> bool { matches!(self, Self::Const(_)) }
 
-    /// Convenience: create `Min(a, b)`.
-    pub fn min(a: Self, b: Self) -> Self {
-        Self::Min(Box::new(a), Box::new(b))
-    }
-
-    /// Convenience: create `Max(a, b)`.
-    pub fn max(a: Self, b: Self) -> Self {
-        Self::Max(Box::new(a), Box::new(b))
-    }
-
-    /// Whether this expression is a plain constant.
-    pub fn is_const(&self) -> bool {
-        matches!(self, Self::Const(_))
-    }
-
-    /// Convert a `Vec<usize>` to `Vec<DimExpr::Const>`.
+    /// Convert `Vec<usize>` to `Vec<DimExpr::Const>`.
     pub fn from_concrete(shape: &[usize]) -> Vec<Self> {
         shape.iter().map(|&v| Self::Const(v)).collect()
+    }
+
+    /// Build `[InputDim(input_idx, 0), ..., InputDim(input_idx, rank-1)]`.
+    pub fn input_shape(input_idx: usize, rank: usize) -> Vec<Self> {
+        (0..rank).map(|axis| Self::InputDim { input_idx, axis }).collect()
     }
 
     /// Evaluate a slice of DimExpr to concrete sizes.
     pub fn eval_all(exprs: &[Self], input_shapes: &[&[usize]]) -> Vec<usize> {
         exprs.iter().map(|e| e.eval(input_shapes)).collect()
     }
+
+    /// Remap all InputDim references in a slice.
+    pub fn remap_all(exprs: &[Self], from: usize, to: usize) -> Vec<Self> {
+        exprs.iter().map(|e| e.remap(from, to)).collect()
+    }
+
+    /// Compute max_input_idx across a slice of DimExpr.
+    pub fn max_input_idx_all(exprs: &[Self]) -> Option<usize> {
+        exprs.iter().filter_map(|d| d.max_input_idx()).max()
+    }
 }
 
 impl From<usize> for DimExpr {
-    fn from(v: usize) -> Self {
-        Self::Const(v)
-    }
+    fn from(v: usize) -> Self { Self::Const(v) }
 }
 
 #[cfg(test)]
@@ -172,8 +176,7 @@ mod tests {
 
     #[test]
     fn test_const_eval() {
-        let e = DimExpr::Const(42);
-        assert_eq!(e.eval(&[]), 42);
+        assert_eq!(DimExpr::Const(42).eval(&[]), 42);
     }
 
     #[test]
@@ -184,44 +187,35 @@ mod tests {
 
     #[test]
     fn test_arithmetic() {
-        // inputs[0].shape = [3, 4], inputs[1].shape = [5]
         let shapes: &[&[usize]] = &[&[3, 4], &[5]];
         let e = DimExpr::mul(
             DimExpr::InputDim { input_idx: 0, axis: 0 },
             DimExpr::InputDim { input_idx: 0, axis: 1 },
         );
         assert_eq!(e.eval(shapes), 12);
-
-        let e2 = DimExpr::add(e.clone(), DimExpr::Const(3));
-        assert_eq!(e2.eval(shapes), 15);
-
-        let e3 = DimExpr::floor_div(e, DimExpr::Const(4));
-        assert_eq!(e3.eval(shapes), 3);
+        assert_eq!(DimExpr::add(e.clone(), DimExpr::Const(3)).eval(shapes), 15);
+        assert_eq!(DimExpr::floor_div(e, DimExpr::Const(4)).eval(shapes), 3);
     }
 
     #[test]
     fn test_min_max() {
         let shapes: &[&[usize]] = &[&[3, 7]];
-        let e = DimExpr::min(
+        let e_min = DimExpr::min(
             DimExpr::InputDim { input_idx: 0, axis: 0 },
             DimExpr::InputDim { input_idx: 0, axis: 1 },
         );
-        assert_eq!(e.eval(shapes), 3);
-
-        let e2 = DimExpr::max(
+        assert_eq!(e_min.eval(shapes), 3);
+        let e_max = DimExpr::max(
             DimExpr::InputDim { input_idx: 0, axis: 0 },
             DimExpr::InputDim { input_idx: 0, axis: 1 },
         );
-        assert_eq!(e2.eval(shapes), 7);
+        assert_eq!(e_max.eval(shapes), 7);
     }
 
     #[test]
     fn test_max_input_idx() {
         assert_eq!(DimExpr::Const(5).max_input_idx(), None);
-        assert_eq!(
-            DimExpr::InputDim { input_idx: 2, axis: 0 }.max_input_idx(),
-            Some(2)
-        );
+        assert_eq!(DimExpr::InputDim { input_idx: 2, axis: 0 }.max_input_idx(), Some(2));
         let e = DimExpr::add(
             DimExpr::InputDim { input_idx: 0, axis: 0 },
             DimExpr::InputDim { input_idx: 3, axis: 1 },
@@ -230,23 +224,60 @@ mod tests {
     }
 
     #[test]
-    fn test_from_concrete() {
-        let exprs = DimExpr::from_concrete(&[3, 4, 5]);
-        assert_eq!(exprs.len(), 3);
-        assert_eq!(exprs[0].eval(&[]), 3);
-        assert_eq!(exprs[1].eval(&[]), 4);
-        assert_eq!(exprs[2].eval(&[]), 5);
+    fn test_remap() {
+        let e = DimExpr::mul(
+            DimExpr::InputDim { input_idx: 0, axis: 0 },
+            DimExpr::InputDim { input_idx: 0, axis: 1 },
+        );
+        let remapped = e.remap(0, 1);
+        assert_eq!(
+            remapped,
+            DimExpr::mul(
+                DimExpr::InputDim { input_idx: 1, axis: 0 },
+                DimExpr::InputDim { input_idx: 1, axis: 1 },
+            )
+        );
     }
 
     #[test]
-    fn test_hash_eq() {
+    fn test_remap_selective() {
+        // Only remap input_idx 0, leave input_idx 2 unchanged
+        let e = DimExpr::add(
+            DimExpr::InputDim { input_idx: 0, axis: 0 },
+            DimExpr::InputDim { input_idx: 2, axis: 1 },
+        );
+        let remapped = e.remap(0, 1);
+        assert_eq!(
+            remapped,
+            DimExpr::add(
+                DimExpr::InputDim { input_idx: 1, axis: 0 },
+                DimExpr::InputDim { input_idx: 2, axis: 1 },
+            )
+        );
+    }
+
+    #[test]
+    fn test_input_shape() {
+        let exprs = DimExpr::input_shape(0, 3);
+        assert_eq!(exprs.len(), 3);
+        assert_eq!(exprs[0], DimExpr::InputDim { input_idx: 0, axis: 0 });
+        assert_eq!(exprs[2], DimExpr::InputDim { input_idx: 0, axis: 2 });
+    }
+
+    #[test]
+    fn test_from_concrete() {
+        let exprs = DimExpr::from_concrete(&[3, 4, 5]);
+        assert_eq!(exprs, vec![DimExpr::Const(3), DimExpr::Const(4), DimExpr::Const(5)]);
+    }
+
+    #[test]
+    fn test_hash_eq_structural() {
         use std::collections::HashSet;
         let a = DimExpr::mul(DimExpr::Const(2), DimExpr::Const(3));
         let b = DimExpr::mul(DimExpr::Const(2), DimExpr::Const(3));
-        let c = DimExpr::mul(DimExpr::Const(3), DimExpr::Const(2));
+        let c = DimExpr::mul(DimExpr::Const(3), DimExpr::Const(2)); // commuted
         assert_eq!(a, b);
-        assert_ne!(a, c); // structural, not algebraic
-
+        assert_ne!(a, c);
         let mut set = HashSet::new();
         set.insert(a.clone());
         assert!(set.contains(&b));
@@ -255,31 +286,28 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register module in lib.rs**
+- [ ] **Step 2: Register module**
 
-Add to `tenferro-ops/src/lib.rs`:
-```rust
-pub mod dim_expr;
-```
+Add `pub mod dim_expr;` to `tenferro-ops/src/lib.rs`.
 
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test -p tenferro-ops dim_expr`
-Expected: All tests pass.
+Expected: All pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add tenferro-ops/src/dim_expr.rs tenferro-ops/src/lib.rs
-git commit -m "feat: add DimExpr type for symbolic dimension expressions (#651)"
+git commit -m "feat: add DimExpr type with eval, remap, and helpers (#651)"
 ```
 
 ---
 
-### Task 2: Update StdTensorOp Variants + SemiringOps
+### Task 2: Update StdTensorOp + SemiringOps
 
-This task updates the op enum fields and trait signatures. All downstream
-consumers will break until subsequent tasks fix them.
+Change all `Vec<usize>` shape fields to `Vec<DimExpr>`. This breaks
+downstream crates until later tasks fix them.
 
 **Files:**
 - Modify: `tenferro-ops/src/std_tensor_op.rs`
@@ -287,96 +315,119 @@ consumers will break until subsequent tasks fix them.
 
 - [ ] **Step 1: Update StdTensorOp variants**
 
-In `tenferro-ops/src/std_tensor_op.rs`, add the import and change these variants:
+Add `use crate::dim_expr::DimExpr;` at the top.
+
+Change every shape field from `Vec<usize>` to `Vec<DimExpr>`:
 
 ```rust
-use crate::dim_expr::DimExpr;
-
-// Change Reshape (line 26-29):
 Reshape {
-    to_shape: Vec<DimExpr>,
-    input_rank: usize,
+    from_shape: Vec<DimExpr>,  // was Vec<usize>
+    to_shape: Vec<DimExpr>,    // was Vec<usize>
 },
-
-// Change BroadcastInDim (line 30-33):
 BroadcastInDim {
-    shape: Vec<DimExpr>,
-    dims: Vec<usize>,
+    shape: Vec<DimExpr>,       // was Vec<usize>
+    dims: Vec<usize>,          // unchanged
 },
-
-// Change ReduceSum (line 42-45):
 ReduceSum {
-    axes: Vec<usize>,
-    input_rank: usize,
+    axes: Vec<usize>,          // unchanged
+    input_shape: Vec<DimExpr>, // was Vec<usize>
 },
-
-// Change ReduceProd (line 101-104):
 ReduceProd {
     axes: Vec<usize>,
-    input_rank: usize,
+    input_shape: Vec<DimExpr>,
 },
-
-// Change ReduceMax (line 105-108):
 ReduceMax {
     axes: Vec<usize>,
-    input_rank: usize,
+    input_shape: Vec<DimExpr>,
 },
-
-// Change ReduceMin (line 109-112):
 ReduceMin {
     axes: Vec<usize>,
-    input_rank: usize,
+    input_shape: Vec<DimExpr>,
+},
+Cholesky {
+    input_shape: Vec<DimExpr>,
+},
+Lu {
+    input_shape: Vec<DimExpr>,
+},
+Svd {
+    eps: f64,
+    input_shape: Vec<DimExpr>,
+},
+Qr {
+    input_shape: Vec<DimExpr>,
+},
+Eigh {
+    eps: f64,
+    input_shape: Vec<DimExpr>,
+},
+Eig {
+    input_dtype: DType,
+    input_shape: Vec<DimExpr>,
+},
+TriangularSolve {
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+    lhs_shape: Vec<DimExpr>,
+    rhs_shape: Vec<DimExpr>,
 },
 ```
 
 - [ ] **Step 2: Update Hash impl**
 
-In the Hash impl (lines 222-328), update the affected match arms:
+The Hash impl already hashes each field. Since `DimExpr` derives `Hash`,
+no logic changes are needed — only field type changes. Verify all match
+arms still compile.
+
+- [ ] **Step 3: Update n_inputs to be dynamic**
+
+For ops whose DimExpr may reference additional inputs (added by AD rules),
+compute n_inputs from DimExpr fields. Add a helper:
 
 ```rust
-Self::Reshape { to_shape, input_rank } => {
-    to_shape.hash(state);
-    input_rank.hash(state);
-}
-Self::BroadcastInDim { shape, dims } => {
-    shape.hash(state);
-    dims.hash(state);
-}
-Self::ReduceSum { axes, input_rank }
-| Self::ReduceProd { axes, input_rank }
-| Self::ReduceMax { axes, input_rank }
-| Self::ReduceMin { axes, input_rank } => {
-    axes.hash(state);
-    input_rank.hash(state);
-}
-```
-
-- [ ] **Step 3: Update n_inputs to be dynamic for Reshape/BroadcastInDim**
-
-In the `GraphOp::n_inputs()` impl (line 340), update:
-
-```rust
-Self::Reshape { to_shape, .. } => {
-    let max_idx = to_shape.iter()
+/// Compute n_inputs from DimExpr fields: max referenced input_idx + 1,
+/// but at least `min_inputs` (the number of data inputs).
+fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
+    let max_idx = exprs.iter()
+        .flat_map(|e| e.iter())
         .filter_map(|d| d.max_input_idx())
         .max()
         .map_or(0, |m| m + 1);
-    max_idx.max(1)
+    max_idx.max(min_inputs)
+}
+```
+
+Update `n_inputs()` for affected ops:
+
+```rust
+Self::Reshape { from_shape, to_shape } => {
+    n_inputs_from_dim_exprs(1, &[from_shape, to_shape])
 }
 Self::BroadcastInDim { shape, .. } => {
-    let max_idx = shape.iter()
-        .filter_map(|d| d.max_input_idx())
-        .max()
-        .map_or(0, |m| m + 1);
-    max_idx.max(1)
+    n_inputs_from_dim_exprs(1, &[shape])
+}
+Self::ReduceSum { input_shape, .. }
+| Self::ReduceProd { input_shape, .. }
+| Self::ReduceMax { input_shape, .. }
+| Self::ReduceMin { input_shape, .. } => {
+    n_inputs_from_dim_exprs(1, &[input_shape])
+}
+Self::Cholesky { input_shape }
+| Self::Lu { input_shape }
+| Self::Svd { input_shape, .. }
+| Self::Qr { input_shape }
+| Self::Eigh { input_shape, .. }
+| Self::Eig { input_shape, .. } => {
+    n_inputs_from_dim_exprs(1, &[input_shape])
+}
+Self::TriangularSolve { lhs_shape, rhs_shape, .. } => {
+    n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape])
 }
 ```
 
-Keep ReduceSum/Prod/Max/Min at `1` (unchanged).
-
 - [ ] **Step 4: Update SemiringOps trait**
-
-In `tenferro-ops/src/semiring_ops.rs`:
 
 ```rust
 use crate::dim_expr::DimExpr;
@@ -385,60 +436,53 @@ pub trait SemiringOps: GraphOp {
     fn add_op() -> Self;
     fn mul_op() -> Self;
     fn dot_general(config: DotGeneralConfig) -> Self;
-    fn reduce_sum(axes: Vec<usize>, input_rank: usize) -> Self;
+    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self;
     fn transpose_op(perm: Vec<usize>) -> Self;
-    fn reshape(to_shape: Vec<DimExpr>, input_rank: usize) -> Self;
+    fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self;
     fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self;
     fn extract_diag(axis_a: usize, axis_b: usize) -> Self;
     fn embed_diag(axis_a: usize, axis_b: usize) -> Self;
 }
 ```
 
-- [ ] **Step 5: Update SemiringOps impl for StdTensorOp**
-
-In `tenferro-ops/src/std_tensor_op.rs` (lines 476-515):
+- [ ] **Step 5: Update SemiringOps impl**
 
 ```rust
-impl SemiringOps for StdTensorOp {
-    // ... unchanged methods ...
-
-    fn reduce_sum(axes: Vec<usize>, input_rank: usize) -> Self {
-        StdTensorOp::ReduceSum { axes, input_rank }
-    }
-
-    fn reshape(to_shape: Vec<DimExpr>, input_rank: usize) -> Self {
-        StdTensorOp::Reshape { to_shape, input_rank }
-    }
-
-    fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
-        StdTensorOp::BroadcastInDim { shape, dims }
-    }
+fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self {
+    StdTensorOp::ReduceSum { axes, input_shape }
+}
+fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
+    StdTensorOp::Reshape { from_shape, to_shape }
+}
+fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
+    StdTensorOp::BroadcastInDim { shape, dims }
 }
 ```
 
-- [ ] **Step 6: Verify it compiles (expect downstream errors)**
+- [ ] **Step 6: Verify tenferro-ops compiles**
 
-Run: `cargo check -p tenferro-ops 2>&1 | head -50`
-Expected: tenferro-ops compiles (with warnings). Downstream crates (tenferro, tenferro-einsum) will have errors — fixed in later tasks.
+Run: `cargo check -p tenferro-ops`
+Expected: Compiles (downstream crates will have errors).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add tenferro-ops/src/std_tensor_op.rs tenferro-ops/src/semiring_ops.rs
-git commit -m "refactor: update StdTensorOp variants and SemiringOps for DimExpr (#651)"
+git commit -m "refactor: convert all shape fields to Vec<DimExpr> (#651)"
 ```
 
 ---
 
-### Task 3: Update AD Rules (structural.rs)
+### Task 3: Update AD Rules — Structural
 
 **Files:**
 - Modify: `tenferro-ops/src/ad/structural.rs`
 
 - [ ] **Step 1: Update linearize_reshape**
 
-In `structural.rs` (lines 29-58), the linearize rule applies the same
-Reshape to the tangent. Update to match new field names:
+No logic change — just match the new field names (both `from_shape` and
+`to_shape` are now `Vec<DimExpr>`). The linearize rule clones the same
+op for the tangent:
 
 ```rust
 pub fn linearize_reshape(
@@ -446,21 +490,18 @@ pub fn linearize_reshape(
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::Reshape { to_shape, input_rank } = op else {
+    let StdTensorOp::Reshape { from_shape, to_shape } = op else {
         unreachable!("linearize_reshape expects Reshape");
     };
-
     match tangent_in[0] {
         Some(dx) => {
             let out = builder.add_op(
                 StdTensorOp::Reshape {
+                    from_shape: from_shape.clone(),
                     to_shape: to_shape.clone(),
-                    input_rank: *input_rank,
                 },
                 vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                OpMode::Linear { active_mask: vec![true] },
             );
             vec![Some(out[0])]
         }
@@ -471,9 +512,8 @@ pub fn linearize_reshape(
 
 - [ ] **Step 2: Update transpose_reshape**
 
-In `structural.rs` (lines 190-219). The backward Reshape needs to reshape
-cotangent back to the primal input's shape. Add the primal input as input 1
-and use `DimExpr::InputDim` to reference its axes:
+The backward reshape swaps from/to and remaps InputDim(0,..) → InputDim(1,..)
+because the backward op has inputs `[cotangent, primal_input]`:
 
 ```rust
 pub fn transpose_reshape(
@@ -482,27 +522,19 @@ pub fn transpose_reshape(
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::Reshape { to_shape, input_rank } = op else {
+    let StdTensorOp::Reshape { from_shape, to_shape } = op else {
         unreachable!("transpose_reshape expects Reshape");
     };
-
     match cotangent_out[0] {
         Some(ct) => {
-            // Backward: reshape cotangent to primal input's shape.
-            // inputs[0] is the primal data input; add it as input 1
-            // to the backward reshape so DimExpr can reference its shape.
-            let backward_to_shape: Vec<DimExpr> = (0..*input_rank)
-                .map(|a| DimExpr::InputDim { input_idx: 1, axis: a })
-                .collect();
+            // Backward: swap from/to, remap InputDim(0,..) -> InputDim(1,..)
             let out = builder.add_op(
                 StdTensorOp::Reshape {
-                    to_shape: backward_to_shape,
-                    input_rank: to_shape.len(),
+                    from_shape: DimExpr::remap_all(to_shape, 0, 1),
+                    to_shape: DimExpr::remap_all(from_shape, 0, 1),
                 },
                 vec![ValRef::Local(ct), inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                OpMode::Linear { active_mask: vec![true, false] },
             );
             vec![Some(out[0])]
         }
@@ -511,10 +543,12 @@ pub fn transpose_reshape(
 }
 ```
 
+Note: `transpose_reshape` now takes `inputs` parameter. Update the
+call site in `ad/mod.rs` (Task 5).
+
 - [ ] **Step 3: Update linearize_broadcast_in_dim**
 
-In `structural.rs` (lines 60-82). Same Reshape/BroadcastInDim applies
-to the tangent:
+Change parameter type from `&[usize]` to `&[DimExpr]`:
 
 ```rust
 pub fn linearize_broadcast_in_dim(
@@ -523,6 +557,7 @@ pub fn linearize_broadcast_in_dim(
     shape: &[DimExpr],
     dims: &[usize],
 ) -> Vec<Option<LocalValId>> {
+    // Same logic, shape is now Vec<DimExpr>
     match tangent_in[0] {
         Some(dx) => {
             let out = builder.add_op(
@@ -531,9 +566,7 @@ pub fn linearize_broadcast_in_dim(
                     dims: dims.to_vec(),
                 },
                 vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                OpMode::Linear { active_mask: vec![true] },
             );
             vec![Some(out[0])]
         }
@@ -544,9 +577,8 @@ pub fn linearize_broadcast_in_dim(
 
 - [ ] **Step 4: Update transpose_broadcast_in_dim**
 
-In `structural.rs` (lines 221-246). The backward creates a ReduceSum to
-undo the broadcast. `broadcast_axes` is computed from `dims` and
-`shape.len()` (output rank) — both are known statically:
+The backward creates ReduceSum. `input_shape` for that ReduceSum is the
+BroadcastInDim's output shape (which is `shape`), remapped:
 
 ```rust
 pub fn transpose_broadcast_in_dim(
@@ -563,15 +595,16 @@ pub fn transpose_broadcast_in_dim(
     match cotangent_out[0] {
         Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],
         Some(ct) => {
+            // ReduceSum's input_shape = the cotangent's shape = broadcast output shape
+            // Remap InputDim(0,..) -> InputDim(0,..) (no remap needed here;
+            // the cotangent IS input 0 of the ReduceSum)
             let out = builder.add_op(
                 StdTensorOp::ReduceSum {
                     axes: broadcast_axes,
-                    input_rank: output_rank,
+                    input_shape: shape.to_vec(),
                 },
                 vec![ValRef::Local(ct)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
+                OpMode::Linear { active_mask: vec![true] },
             );
             vec![Some(out[0])]
         }
@@ -580,96 +613,71 @@ pub fn transpose_broadcast_in_dim(
 }
 ```
 
-- [ ] **Step 5: Update normalize_scalar_cotangent and normalize_reduction_cotangent in contraction.rs**
-
-These helper functions in `contraction.rs` create `Reshape { from_shape: vec![1], to_shape: vec![] }`. Update them:
-
-```rust
-// normalize_reduction_cotangent (line 420-440):
-fn normalize_reduction_cotangent(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    cotangent: LocalValId,
-    kept_dims: &[usize],
-) -> ValRef<StdTensorOp> {
-    if kept_dims.is_empty() {
-        let scalar = builder.add_op(
-            StdTensorOp::Reshape {
-                to_shape: vec![],
-                input_rank: 1,
-            },
-            vec![ValRef::Local(cotangent)],
-            OpMode::Linear {
-                active_mask: vec![true],
-            },
-        );
-        ValRef::Local(scalar[0])
-    } else {
-        ValRef::Local(cotangent)
-    }
-}
-
-// normalize_scalar_cotangent (line 486-506):
-fn normalize_scalar_cotangent(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    cotangent: LocalValId,
-    output_rank: usize,
-) -> ValRef<StdTensorOp> {
-    if output_rank == 0 {
-        let scalar = builder.add_op(
-            StdTensorOp::Reshape {
-                to_shape: vec![],
-                input_rank: 1,
-            },
-            vec![ValRef::Local(cotangent)],
-            OpMode::Linear {
-                active_mask: vec![true],
-            },
-        );
-        ValRef::Local(scalar[0])
-    } else {
-        ValRef::Local(cotangent)
-    }
-}
-```
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add tenferro-ops/src/ad/structural.rs tenferro-ops/src/ad/contraction.rs
+git add tenferro-ops/src/ad/structural.rs
 git commit -m "refactor: update structural AD rules for DimExpr (#651)"
 ```
 
 ---
 
-### Task 4: Update AD Rules (contraction.rs) — Reduce Ops
+### Task 4: Update AD Rules — Contraction
 
 **Files:**
 - Modify: `tenferro-ops/src/ad/contraction.rs`
 
-- [ ] **Step 1: Update broadcast_reduction_output_fixed**
+- [ ] **Step 1: Update helper functions**
 
-This helper broadcasts a reduced output back to input shape.
-Change it to use `DimExpr::InputDim` referencing a shape-source tensor:
+Read `contraction.rs` fully first. Update these helpers:
+
+`normalize_reduction_cotangent` and `normalize_scalar_cotangent` create
+`Reshape { from_shape: vec![1], to_shape: vec![] }`. Change to DimExpr:
 
 ```rust
-/// Broadcast a reduced output back to input shape using DimExpr.
-/// `shape_source` is passed as an extra input so DimExpr can reference it.
+StdTensorOp::Reshape {
+    from_shape: DimExpr::from_concrete(&[1]),
+    to_shape: vec![],
+}
+```
+
+`broadcast_reduction_output_fixed` creates BroadcastInDim with
+`input_shape`. Update to accept `&[DimExpr]` and remap:
+
+```rust
 fn broadcast_reduction_output(
     builder: &mut FragmentBuilder<StdTensorOp>,
     output: ValRef<StdTensorOp>,
     shape_source: ValRef<StdTensorOp>,
-    input_rank: usize,
+    input_shape: &[DimExpr],
     kept_dims: &[usize],
 ) -> LocalValId {
-    let shape: Vec<DimExpr> = (0..input_rank)
-        .map(|a| DimExpr::InputDim { input_idx: 1, axis: a })
-        .collect();
+    // Remap InputDim(0,..) -> InputDim(1,..) because inputs are
+    // [output, shape_source]
+    let shape = DimExpr::remap_all(input_shape, 0, 1);
     builder.add_op(
-        StdTensorOp::BroadcastInDim {
-            shape,
-            dims: kept_dims.to_vec(),
-        },
+        StdTensorOp::BroadcastInDim { shape, dims: kept_dims.to_vec() },
         vec![output, shape_source],
+        OpMode::Primal,
+    )[0]
+}
+```
+
+`reduction_location_counts` creates ReduceSum with `input_shape`:
+
+```rust
+fn reduction_location_counts(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    indicators: LocalValId,
+    axes: &[usize],
+    input_shape: &[DimExpr],
+) -> LocalValId {
+    builder.add_op(
+        StdTensorOp::ReduceSum {
+            axes: axes.to_vec(),
+            input_shape: input_shape.to_vec(),
+        },
+        vec![ValRef::Local(indicators)],
         OpMode::Primal,
     )[0]
 }
@@ -684,27 +692,19 @@ pub fn transpose_reduce_sum(
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::ReduceSum { axes, input_rank } = op else {
-        unreachable!("transpose_reduce_sum expects ReduceSum");
+    let StdTensorOp::ReduceSum { axes, input_shape } = op else {
+        unreachable!();
     };
-
     match cotangent_out[0] {
         Some(ct) => {
-            let kept_dims = kept_dims(*input_rank, axes);
+            let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
-            // Build BroadcastInDim with DimExpr referencing primal input (inputs[0])
-            let shape: Vec<DimExpr> = (0..*input_rank)
-                .map(|a| DimExpr::InputDim { input_idx: 1, axis: a })
-                .collect();
+            // Remap: forward's InputDim(0,..) -> backward's InputDim(1,..)
+            let shape = DimExpr::remap_all(input_shape, 0, 1);
             let out = builder.add_op(
-                StdTensorOp::BroadcastInDim {
-                    shape,
-                    dims: kept_dims,
-                },
+                StdTensorOp::BroadcastInDim { shape, dims: kept_dims },
                 vec![cotangent, inputs[0].clone()],
-                OpMode::Linear {
-                    active_mask: vec![true, false],
-                },
+                OpMode::Linear { active_mask: vec![true, false] },
             );
             vec![Some(out[0])]
         }
@@ -713,189 +713,22 @@ pub fn transpose_reduce_sum(
 }
 ```
 
-- [ ] **Step 3: Update linearize_reduce_sum**
+- [ ] **Step 3: Update linearize_reduce_prod and linearize_reduce_chooser**
 
-```rust
-pub fn linearize_reduce_sum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    tangent_in: &[Option<LocalValId>],
-    op: &StdTensorOp,
-    _axes: &[usize],
-) -> Vec<Option<LocalValId>> {
-    match tangent_in[0] {
-        Some(dx) => {
-            let out = builder.add_op(
-                op.clone(),
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
-            );
-            vec![Some(out[0])]
-        }
-        None => vec![None],
-    }
-}
-```
+These functions take `input_shape: &[usize]` parameters. Change to
+`&[DimExpr]`. Update internal ReduceSum/BroadcastInDim constructions
+similarly. Read each function fully, apply the same pattern:
+- `input_shape.len()` for rank (unchanged — DimExpr slice has same len)
+- `input_shape.to_vec()` for ReduceSum's `input_shape` field
+- Use `broadcast_reduction_output` helper (updated in Step 1)
 
-(No change needed — it clones the op, which now has `input_rank`.)
+- [ ] **Step 4: Update transpose_reduce_prod and transpose_reduce_chooser**
 
-- [ ] **Step 4: Update linearize_reduce_prod**
+Same pattern as `transpose_reduce_sum`: extract `input_shape: &[DimExpr]`
+from op, use `DimExpr::remap_all` for backward ops, pass `inputs[0]` as
+shape source.
 
-Replace `input_shape: &[usize]` parameter with `input_rank: usize`.
-Update `broadcast_reduction_output_fixed` calls to `broadcast_reduction_output`:
-
-```rust
-pub fn linearize_reduce_prod(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-    axes: &[usize],
-    input_rank: usize,
-) -> Vec<Option<LocalValId>> {
-    let Some(dx) = tangent_in[0] else {
-        return vec![None];
-    };
-
-    let kept_dims = kept_dims(input_rank, axes);
-    let prod_broadcast = broadcast_reduction_output(
-        builder,
-        ValRef::External(primal_out[0].clone()),
-        ValRef::External(primal_in[0].clone()),
-        input_rank,
-        &kept_dims,
-    );
-    let coeff = builder.add_op(
-        StdTensorOp::Div,
-        vec![
-            ValRef::Local(prod_broadcast),
-            ValRef::External(primal_in[0].clone()),
-        ],
-        OpMode::Primal,
-    )[0];
-    let scaled_tangent = builder.add_op(
-        StdTensorOp::Mul,
-        vec![ValRef::Local(coeff), ValRef::Local(dx)],
-        OpMode::Linear {
-            active_mask: vec![false, true],
-        },
-    )[0];
-    let out = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: axes.to_vec(),
-            input_rank,
-        },
-        vec![ValRef::Local(scaled_tangent)],
-        OpMode::Linear {
-            active_mask: vec![true],
-        },
-    )[0];
-    vec![Some(out)]
-}
-```
-
-- [ ] **Step 5: Update linearize_reduce_chooser**
-
-Same pattern: replace `input_shape: &[usize]` with `input_rank: usize`.
-
-```rust
-pub fn linearize_reduce_chooser(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-    axes: &[usize],
-    input_rank: usize,
-) -> Vec<Option<LocalValId>> {
-    let Some(dx) = tangent_in[0] else {
-        return vec![None];
-    };
-
-    let kept_dims = kept_dims(input_rank, axes);
-    let answer_broadcast = broadcast_reduction_output(
-        builder,
-        ValRef::External(primal_out[0].clone()),
-        ValRef::External(primal_in[0].clone()),
-        input_rank,
-        &kept_dims,
-    );
-    let indicators = reduction_location_indicators(
-        builder,
-        ValRef::External(primal_in[0].clone()),
-        ValRef::Local(answer_broadcast),
-    );
-    let weighted_tangent = builder.add_op(
-        StdTensorOp::Mul,
-        vec![ValRef::Local(indicators), ValRef::Local(dx)],
-        OpMode::Linear {
-            active_mask: vec![false, true],
-        },
-    )[0];
-    let tangent_sum = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: axes.to_vec(),
-            input_rank,
-        },
-        vec![ValRef::Local(weighted_tangent)],
-        OpMode::Linear {
-            active_mask: vec![true],
-        },
-    )[0];
-    let counts = reduction_location_counts(builder, indicators, axes, input_rank);
-    let out = builder.add_op(
-        StdTensorOp::Div,
-        vec![ValRef::Local(tangent_sum), ValRef::Local(counts)],
-        OpMode::Linear {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    vec![Some(out)]
-}
-```
-
-- [ ] **Step 6: Update reduction_location_counts**
-
-```rust
-fn reduction_location_counts(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    indicators: LocalValId,
-    axes: &[usize],
-    input_rank: usize,
-) -> LocalValId {
-    builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: axes.to_vec(),
-            input_rank,
-        },
-        vec![ValRef::Local(indicators)],
-        OpMode::Primal,
-    )[0]
-}
-```
-
-- [ ] **Step 7: Update transpose_reduce_prod and transpose_reduce_chooser**
-
-These functions (lines 282-402) follow the same pattern as
-`transpose_reduce_sum`. Replace `input_shape` usage with `input_rank`
-and `DimExpr::InputDim` references. The key change in each:
-
-```rust
-// Extract input_rank instead of input_shape from op:
-let StdTensorOp::ReduceProd { axes, input_rank } = op else { ... };
-// (or ReduceMax / ReduceMin)
-
-// Use broadcast_reduction_output instead of broadcast_reduction_output_fixed:
-let broadcast = broadcast_reduction_output(
-    builder, output_ref, inputs[0].clone(), *input_rank, &kept_dims,
-);
-```
-
-Read the current `transpose_reduce_prod` and `transpose_reduce_chooser`
-functions fully before modifying them. Apply the same `input_shape` ->
-`input_rank` + DimExpr pattern used in `transpose_reduce_sum`.
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add tenferro-ops/src/ad/contraction.rs
@@ -904,113 +737,76 @@ git commit -m "refactor: update contraction AD rules for DimExpr (#651)"
 
 ---
 
-### Task 5: Update AD Dispatch (mod.rs)
+### Task 5: Update AD Dispatch + Linalg AD
 
 **Files:**
 - Modify: `tenferro-ops/src/ad/mod.rs`
+- Modify: `tenferro-ops/src/ad/linalg.rs`
 
-- [ ] **Step 1: Update linearize dispatch**
+- [ ] **Step 1: Update AD dispatch (mod.rs)**
 
-In `linearize_non_semiring` (lines 14-121), update the dispatch calls
-to match new function signatures. Key changes:
+Read `mod.rs` fully. Update dispatch calls to pass new parameter types.
+Key changes:
 
-```rust
-// ReduceSum: no change needed (linearize_reduce_sum takes op reference)
-StdTensorOp::ReduceSum { axes, .. } => {
-    contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
-}
+- `transpose_reshape` now takes `inputs` — add it to the call
+- `linearize_reduce_prod`/`linearize_reduce_chooser` take `&[DimExpr]`
+  instead of `&[usize]` — the match arm already extracts `input_shape`
+- `transpose_reduce_sum`/`prod`/`chooser` now take `inputs` — add it
 
-// ReduceProd: pass input_rank instead of input_shape
-StdTensorOp::ReduceProd { axes, input_rank } => {
-    contraction::linearize_reduce_prod(
-        builder, primal_in, primal_out, tangent_in, axes, *input_rank,
-    )
-}
+- [ ] **Step 2: Update linalg AD rules**
 
-// ReduceMax / ReduceMin: pass input_rank instead of input_shape
-StdTensorOp::ReduceMax { axes, input_rank }
-| StdTensorOp::ReduceMin { axes, input_rank } => {
-    contraction::linearize_reduce_chooser(
-        builder, primal_in, primal_out, tangent_in, axes, *input_rank,
-    )
-}
-
-// BroadcastInDim: pass &[DimExpr] instead of &[usize]
-StdTensorOp::BroadcastInDim { shape, dims } => {
-    structural::linearize_broadcast_in_dim(builder, tangent_in, shape, dims)
-}
-```
-
-- [ ] **Step 2: Update transpose dispatch**
-
-In `transpose_non_semiring` (lines 138-212), update the dispatch calls.
-Key changes — transpose_reshape and transpose_reduce_sum now receive `inputs`:
+Read `linalg.rs` fully. Every function that takes `input_shape: &[usize]`
+changes to `&[DimExpr]`. Internal usage patterns:
 
 ```rust
-// Reshape: pass inputs so backward can reference primal input shape
-StdTensorOp::Reshape { .. } => {
-    structural::transpose_reshape(builder, cotangent_out, op, inputs)
-}
+// Before:
+let (m, n, batch_shape) = (input_shape[0], input_shape[1], &input_shape[2..]);
 
-// BroadcastInDim: pass DimExpr shape
-StdTensorOp::BroadcastInDim { shape, dims } => {
-    structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims)
-}
-
-// ReduceSum: pass inputs
-StdTensorOp::ReduceSum { .. } => {
-    contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs)
-}
-
-// ReduceProd: pass inputs
-StdTensorOp::ReduceProd { .. } => {
-    contraction::transpose_reduce_prod(builder, cotangent_out, inputs, op)
-}
-
-// ReduceMax / ReduceMin: pass inputs
-StdTensorOp::ReduceMax { .. } | StdTensorOp::ReduceMin { .. } => {
-    contraction::transpose_reduce_chooser(builder, cotangent_out, inputs, op)
-}
+// After:
+let (m, n, batch_shape) = (&input_shape[0], &input_shape[1], &input_shape[2..]);
+// m, n are now &DimExpr, batch_shape is &[DimExpr]
 ```
 
-Read the current `transpose_reduce_prod` and `transpose_reduce_chooser`
-signatures to verify they accept `inputs` (they may already — check first).
+Where linalg AD builds Reshape or BroadcastInDim ops, it already passes
+shape vectors — these are now `Vec<DimExpr>` instead of `Vec<usize>`.
+The `matrix_shape` and `vector_shape` helpers that build shape vectors
+must return `Vec<DimExpr>`.
+
+For `min(m, n)` (used in SVD/QR), use `DimExpr::min(m.clone(), n.clone())`.
+
+This is a large file. Read it carefully and update systematically. Every
+`Vec<usize>` shape construction becomes `Vec<DimExpr>`.
 
 - [ ] **Step 3: Verify tenferro-ops compiles**
 
 Run: `cargo check -p tenferro-ops`
-Expected: Compiles. Downstream crates still broken.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tenferro-ops/src/ad/mod.rs
-git commit -m "refactor: update AD dispatch for DimExpr (#651)"
+git add tenferro-ops/src/ad/mod.rs tenferro-ops/src/ad/linalg.rs
+git commit -m "refactor: update AD dispatch and linalg rules for DimExpr (#651)"
 ```
 
 ---
 
-### Task 6: Update tenferro-einsum Builder
+### Task 6: Update Einsum Builder
 
 **Files:**
 - Modify: `tenferro-einsum/src/builder.rs`
 
-- [ ] **Step 1: Find all SemiringOps calls in builder.rs**
+- [ ] **Step 1: Update SemiringOps calls**
 
-Search for `Op::reshape(`, `Op::broadcast_in_dim(`, `Op::reduce_sum(`
-in `tenferro-einsum/src/builder.rs`. Each call currently passes
-`Vec<usize>` — update to wrap in `DimExpr::from_concrete()`.
+Add `use tenferro_ops::dim_expr::DimExpr;` at the top.
 
-The einsum builder operates with concrete shapes at trace time, so all
-DimExpr values will be `Const`.
-
-For each call site, apply these transformations:
+Find all calls to `Op::reshape(`, `Op::broadcast_in_dim(`, `Op::reduce_sum(`
+and wrap concrete shapes:
 
 ```rust
 // Before:
 Op::reshape(from_shape, to_shape)
 // After:
-Op::reshape(DimExpr::from_concrete(&to_shape), from_shape.len())
+Op::reshape(DimExpr::from_concrete(&from_shape), DimExpr::from_concrete(&to_shape))
 
 // Before:
 Op::broadcast_in_dim(shape, dims)
@@ -1020,15 +816,10 @@ Op::broadcast_in_dim(DimExpr::from_concrete(&shape), dims)
 // Before:
 Op::reduce_sum(axes, input_shape)
 // After:
-Op::reduce_sum(axes, input_shape.len())
+Op::reduce_sum(axes, DimExpr::from_concrete(&input_shape))
 ```
 
-Add the import at the top of the file:
-```rust
-use tenferro_ops::dim_expr::DimExpr;
-```
-
-- [ ] **Step 2: Verify tenferro-einsum compiles**
+- [ ] **Step 2: Verify compilation**
 
 Run: `cargo check -p tenferro-einsum`
 
@@ -1045,63 +836,44 @@ git commit -m "refactor: update einsum builder for DimExpr (#651)"
 
 **Files:**
 - Modify: `tenferro/src/compiler.rs`
+- Possibly: `tenferro/src/stablehlo.rs`, `tenferro/src/exec.rs`
 
-- [ ] **Step 1: Add DimExpr evaluation in lowering**
+- [ ] **Step 1: Understand the execution pipeline**
 
-The `lower_to_stablehlo` function translates `StdTensorOp` -> `StableHloOp`.
-Currently it passes shapes through directly. After the change, DimExpr
-fields must be evaluated using actual input tensor shapes.
+Read these files to understand where actual tensor shapes are available:
+- `tenferro/src/compiler.rs` — `lower_to_stablehlo`
+- `tenferro/src/stablehlo.rs` — `StableHloOp` definition
+- `tenferro/src/exec.rs` — `eval_exec_ir`, `ExecOp`
 
-The `CompiledProgram` has `instructions` with `input_slots` and
-`output_slots`. At lowering time, we do NOT have actual tensor data —
-lowering happens before execution. So we need to defer DimExpr evaluation
-to execution time.
+The spec says DimExpr evaluation happens during StdTensorOp→StableHloOp
+lowering. Check if input tensor shapes are available at that point. If
+not, the evaluation must happen later (during execution).
 
-**Key insight**: The current lowering is a 1-to-1 op translation with no
-runtime data. DimExpr evaluation requires runtime shapes. So the approach
-is: **keep DimExpr in StableHloOp** (or evaluate during execution, not
-during lowering).
+- [ ] **Step 2: Implement DimExpr evaluation**
 
-Check `tenferro/src/stablehlo.rs` to see if `StableHloOp::Reshape` and
-`StableHloOp::BroadcastInDim` already use `Vec<usize>`. If so, evaluation
-must happen at the `StableHloOp -> ExecOp` step or during `ExecOp`
-execution.
+The approach depends on findings from Step 1. Two options:
 
-Read `tenferro/src/exec.rs` to understand where actual tensor data is
-available and evaluate DimExpr there.
-
-The simplest approach: change `StableHloOp::Reshape { shape: Vec<usize> }`
-to `StableHloOp::Reshape { shape: Vec<DimExpr> }`, then evaluate in
-`eval_exec_ir` when actual tensors are available.
-
-Alternatively, evaluate during `lower_to_stablehlo` by passing input
-shapes through. This depends on whether input shapes are available at
-that point — check the call site in `traced.rs`.
-
-**Read these files before making changes:**
-- `tenferro/src/stablehlo.rs` (StableHloOp definition)
-- `tenferro/src/exec.rs` (ExecOp, eval_exec_ir)
-- `tenferro/src/traced.rs` (where lower_to_stablehlo is called)
-
-The spec says: "All DimExpr resolution happens during the
-StdTensorOp-to-StableHloOp lowering step." But if actual shapes are not
-available at lowering time, resolution must be deferred. Adjust the
-approach based on what you find.
-
-- [ ] **Step 2: Implement DimExpr evaluation at the appropriate layer**
-
-Apply the evaluation. The exact change depends on findings from Step 1.
-If input shapes are available at lowering time:
-
+**Option A: Evaluate during lowering** (if shapes available):
 ```rust
 StdTensorOp::Reshape { to_shape, .. } => {
-    // input_shapes must be available here
-    let concrete: Vec<usize> = DimExpr::eval_all(&to_shape, &input_shapes);
+    let concrete = DimExpr::eval_all(&to_shape, &input_shapes_for_this_op);
     StableHloOp::Reshape { shape: concrete }
 }
 ```
 
-If not, propagate DimExpr through to the execution layer and evaluate there.
+**Option B: Propagate DimExpr to StableHloOp** (if shapes not available
+at lowering):
+Change StableHloOp's shape fields to `Vec<DimExpr>` and evaluate in
+`eval_exec_ir` where actual tensors are available.
+
+Read the code to determine which option is needed. The current lowering
+in `compiler.rs` already ignores `from_shape` and `input_shape` fields:
+```rust
+StdTensorOp::Reshape { to_shape, .. } => StableHloOp::Reshape { shape: to_shape.clone() }
+StdTensorOp::ReduceSum { axes, .. } => StableHloOp::ReduceSum { axes: axes.clone() }
+```
+
+So `to_shape` must be evaluable at lowering time OR deferred.
 
 - [ ] **Step 3: Verify compilation**
 
@@ -1110,13 +882,14 @@ Run: `cargo check -p tenferro`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tenferro/src/compiler.rs tenferro/src/stablehlo.rs tenferro/src/exec.rs
+git add tenferro/src/compiler.rs
+# Include stablehlo.rs and exec.rs if modified
 git commit -m "refactor: evaluate DimExpr during lowering/execution (#651)"
 ```
 
 ---
 
-### Task 8: Update TracedTensor (shape -> rank)
+### Task 8: Update TracedTensor (shape → rank)
 
 **Files:**
 - Modify: `tenferro/src/traced.rs`
@@ -1125,20 +898,12 @@ git commit -m "refactor: evaluate DimExpr during lowering/execution (#651)"
 - [ ] **Step 1: Change TracedTensor struct**
 
 ```rust
-use std::sync::atomic::{AtomicU64, Ordering};
-
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
-
-/// Unique identifier for a TracedTensor, used by SymDim references.
 pub type TracedTensorId = u64;
-
-fn next_traced_id() -> TracedTensorId {
-    NEXT_TRACED_ID.fetch_add(1, Ordering::Relaxed)
-}
 
 pub struct TracedTensor {
     pub id: TracedTensorId,
-    pub rank: usize,
+    pub rank: usize,              // was: shape: Vec<usize>
     pub dtype: DType,
     pub fragment: Arc<Fragment<StdTensorOp>>,
     pub val: LocalValId,
@@ -1150,53 +915,18 @@ pub struct TracedTensor {
 
 - [ ] **Step 2: Update apply_unary, apply_binary, apply_nullary**
 
-Change `out_shape: Vec<usize>` to `out_rank: usize` in all apply_ helpers:
+Change `out_shape: Vec<usize>` → `out_rank: usize`. In the TracedTensor
+construction, set `id: NEXT_TRACED_ID.fetch_add(1, Ordering::Relaxed)`
+and `rank: out_rank`.
 
-```rust
-pub(crate) fn apply_unary(
-    op: StdTensorOp,
-    input: &TracedTensor,
-    out_rank: usize,
-) -> TracedTensor {
-    apply_unary_with_dtype(op, input, out_rank, input.dtype)
-}
-
-pub(crate) fn apply_unary_with_dtype(
-    op: StdTensorOp,
-    input: &TracedTensor,
-    out_rank: usize,
-    out_dtype: DType,
-) -> TracedTensor {
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(input.fragment.clone());
-    let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
-    let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
-    builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
-
-    TracedTensor {
-        id: next_traced_id(),
-        rank: out_rank,
-        dtype: out_dtype,
-        fragment,
-        val: outputs[0],
-        data: None,
-        inputs_map: input.inputs_map.clone(),
-        extra_roots: input.extra_roots.clone(),
-    }
-}
-```
-
-Apply the same pattern to `apply_binary` and `apply_nullary`.
-
-- [ ] **Step 3: Update reshape, reduce_sum, broadcast_in_dim methods**
+- [ ] **Step 3: Update op construction methods**
 
 ```rust
 pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
     apply_unary(
         StdTensorOp::Reshape {
+            from_shape: DimExpr::input_shape(0, self.rank),
             to_shape: DimExpr::from_concrete(shape),
-            input_rank: self.rank,
         },
         self,
         shape.len(),
@@ -1204,14 +934,13 @@ pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
 }
 
 pub fn reduce_sum(&self, axes: &[usize]) -> TracedTensor {
-    let out_rank = self.rank - axes.len();
     apply_unary(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_rank: self.rank,
+            input_shape: DimExpr::input_shape(0, self.rank),
         },
         self,
-        out_rank,
+        self.rank - axes.len(),
     )
 }
 
@@ -1227,41 +956,34 @@ pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> TracedTensor 
 }
 ```
 
-- [ ] **Step 4: Update all other methods that use self.shape**
+- [ ] **Step 4: Update all other methods using self.shape**
 
-Search `self.shape` in traced.rs and update every occurrence:
-- `transpose`: `out_rank = self.rank` (rank unchanged by transpose)
-- `dot_general`: compute output rank from config
+Search `self.shape` in traced.rs. For each occurrence:
+- Replace `self.shape.len()` with `self.rank`
+- Replace `self.shape[i]` — this is no longer available. For output rank
+  computation, use rank inference from the op parameters.
+- `transpose`: `out_rank = self.rank`
+- `dot_general`: compute from config dimensions
 - `extract_diag`: `out_rank = self.rank - 1`
 - `embed_diag`: `out_rank = self.rank + 1`
-- `broadcast_shape`: needs rewrite — compute output rank from input ranks
-- Other element-wise ops: `out_rank = self.rank` (or `lhs.rank`)
+- `broadcast_shape`: compute output rank from input ranks
 - `from_tensor`: `rank: tensor.shape().len()`
+- Element-wise ops: `out_rank = self.rank`
 
-Also update `linalg_api.rs` — every function that constructs TracedTensors
-with `shape: Vec<usize>` must change to `rank: usize`.
+For `broadcast_shape` helper, it currently computes the output shape
+element-by-element. Since we no longer have concrete sizes, replace it
+with rank-only computation: `output_rank = max(a.rank, b.rank)`.
 
 - [ ] **Step 5: Update linalg_api.rs**
 
-Search for `.shape` and `out_shape` in `tenferro/src/linalg_api.rs` and
-update. For reduce_prod, reduce_max, reduce_min, update the StdTensorOp
-construction to use `input_rank` instead of `input_shape`. Example:
+Search `self.shape`, `.shape`, `out_shape` in `linalg_api.rs`. Update
+all op constructions to use `DimExpr::input_shape(0, self.rank)` for
+input_shape fields. Replace output shape computations with rank-only.
 
-```rust
-// reduce_prod:
-StdTensorOp::ReduceProd {
-    axes: axes.to_vec(),
-    input_rank: input.rank,
-}
-```
+For SVD output ranks: `u_rank = input.rank, s_rank = input.rank - 1,
+vt_rank = input.rank`.
 
-For SVD, QR, etc. output rank computation:
-```rust
-// SVD: u_rank = input.rank, s_rank = input.rank - 1, vt_rank = input.rank
-// QR: q_rank = input.rank, r_rank = input.rank
-```
-
-Read the current linalg_api.rs fully before modifying.
+For reduce_prod/max/min: same pattern as reduce_sum.
 
 - [ ] **Step 6: Verify compilation**
 
@@ -1271,7 +993,7 @@ Run: `cargo check -p tenferro`
 
 ```bash
 git add tenferro/src/traced.rs tenferro/src/linalg_api.rs
-git commit -m "refactor: TracedTensor shape to rank (#651)"
+git commit -m "refactor: TracedTensor shape to rank, DimExpr in op construction (#651)"
 ```
 
 ---
@@ -1280,61 +1002,41 @@ git commit -m "refactor: TracedTensor shape to rank (#651)"
 
 **Files:**
 - Modify: `tenferro-ops/src/tests/std_tensor_op_tests.rs`
-- Modify: `tenferro/tests/ad.rs`
-- Modify: `tenferro/tests/primitive_ops.rs`
-- Modify: other test files as needed
+- Modify: `tenferro/tests/*.rs`
 
-- [ ] **Step 1: Fix tenferro-ops unit tests**
+- [ ] **Step 1: Fix tenferro-ops tests**
 
-Search for `from_shape`, `input_shape`, `to_shape:` in test files and
-update to match new field names. Tests that construct StdTensorOp
-directly need updating:
+Update all StdTensorOp constructions in test files:
 
 ```rust
 // Before:
 StdTensorOp::Reshape { from_shape: vec![6], to_shape: vec![2, 3] }
 // After:
-StdTensorOp::Reshape { to_shape: DimExpr::from_concrete(&[2, 3]), input_rank: 1 }
+StdTensorOp::Reshape {
+    from_shape: DimExpr::from_concrete(&[6]),
+    to_shape: DimExpr::from_concrete(&[2, 3]),
+}
 
 // Before:
 StdTensorOp::ReduceSum { axes: vec![0], input_shape: vec![3, 4] }
 // After:
-StdTensorOp::ReduceSum { axes: vec![0], input_rank: 2 }
-
-// Before:
-StdTensorOp::BroadcastInDim { shape: vec![3, 4], dims: vec![1] }
-// After:
-StdTensorOp::BroadcastInDim { shape: DimExpr::from_concrete(&[3, 4]), dims: vec![1] }
+StdTensorOp::ReduceSum {
+    axes: vec![0],
+    input_shape: DimExpr::from_concrete(&[3, 4]),
+}
 ```
 
 - [ ] **Step 2: Fix integration tests**
 
-Update `tenferro/tests/*.rs` — these tests use TracedTensor API methods.
-Replace `.shape` accesses with `.rank` assertions where applicable.
-The traced tensor methods (reshape, reduce_sum, etc.) still accept
-`&[usize]`, so most test code should work as-is.
-
-Tests that assert on output shapes (e.g., `assert_eq!(result.shape, vec![2, 3])`)
-need to change to rank assertions or execute the graph and check the
-result tensor's shape:
-
-```rust
-// Before:
-assert_eq!(y.shape, vec![2, 3]);
-// After:
-assert_eq!(y.rank, 2);
-```
+Update `tenferro/tests/*.rs`:
+- Replace `.shape` with `.rank` in assertions
+- `assert_eq!(y.shape, vec![2, 3])` → `assert_eq!(y.rank, 2)`
 
 - [ ] **Step 3: Run all tests**
 
 Run: `cargo test --workspace --release`
-Fix any remaining failures.
 
-- [ ] **Step 4: Run coverage check**
-
-Run: `cargo llvm-cov --workspace --json --output-path coverage.json && python3 scripts/check-coverage.py coverage.json`
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add -A
@@ -1343,7 +1045,7 @@ git commit -m "test: fix tests for DimExpr migration (#651)"
 
 ---
 
-### Task 10: SymDim API + sym_size
+### Task 10: SymDim API
 
 **Files:**
 - Create: `tenferro/src/sym_dim.rs`
@@ -1353,207 +1055,42 @@ git commit -m "test: fix tests for DimExpr migration (#651)"
 
 - [ ] **Step 1: Create sym_dim.rs**
 
+See Task 10 in the previous plan version for the full SymDim
+implementation. Key types:
+
 ```rust
-// tenferro/src/sym_dim.rs
-use std::ops;
-use tenferro_ops::dim_expr::DimExpr;
-
-/// User-facing symbolic dimension value.
-///
-/// Created via `TracedTensor::sym_size(axis)`. Supports arithmetic
-/// via operator overloading to build `DimExpr` expression trees.
-///
-/// # Examples
-///
-/// ```ignore
-/// let merged = x.sym_size(0) * x.sym_size(1);
-/// let y = x.reshape_sym(&[merged, 4.into()]);
-/// ```
-#[derive(Clone, Debug)]
 pub struct SymDim(pub(crate) RawSymDim);
-
-/// Unique ID for a TracedTensor, used to resolve SymDim -> DimExpr.
 pub type TracedTensorId = u64;
 
-#[derive(Clone, Debug)]
-pub(crate) enum RawSymDim {
+enum RawSymDim {
     Const(usize),
     TensorAxis { tensor_id: TracedTensorId, axis: usize },
     Add(Box<RawSymDim>, Box<RawSymDim>),
-    Sub(Box<RawSymDim>, Box<RawSymDim>),
-    Mul(Box<RawSymDim>, Box<RawSymDim>),
-    FloorDiv(Box<RawSymDim>, Box<RawSymDim>),
-    Min(Box<RawSymDim>, Box<RawSymDim>),
-    Max(Box<RawSymDim>, Box<RawSymDim>),
-}
-
-impl SymDim {
-    /// Resolve this SymDim to a DimExpr using a tensor_id -> input_idx map.
-    pub(crate) fn to_dim_expr(
-        &self,
-        tensor_map: &[(TracedTensorId, usize)],
-    ) -> Result<DimExpr, String> {
-        self.0.to_dim_expr(tensor_map)
-    }
-}
-
-impl RawSymDim {
-    fn to_dim_expr(
-        &self,
-        tensor_map: &[(TracedTensorId, usize)],
-    ) -> Result<DimExpr, String> {
-        match self {
-            Self::Const(v) => Ok(DimExpr::Const(*v)),
-            Self::TensorAxis { tensor_id, axis } => {
-                let input_idx = tensor_map
-                    .iter()
-                    .find(|(id, _)| id == tensor_id)
-                    .map(|(_, idx)| *idx)
-                    .ok_or_else(|| {
-                        format!("SymDim references tensor_id {} which is not an input", tensor_id)
-                    })?;
-                Ok(DimExpr::InputDim { input_idx, axis: *axis })
-            }
-            Self::Add(a, b) => Ok(DimExpr::add(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-            Self::Sub(a, b) => Ok(DimExpr::sub(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-            Self::Mul(a, b) => Ok(DimExpr::mul(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-            Self::FloorDiv(a, b) => Ok(DimExpr::floor_div(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-            Self::Min(a, b) => Ok(DimExpr::min(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-            Self::Max(a, b) => Ok(DimExpr::max(
-                a.to_dim_expr(tensor_map)?,
-                b.to_dim_expr(tensor_map)?,
-            )),
-        }
-    }
-}
-
-impl From<usize> for SymDim {
-    fn from(v: usize) -> Self {
-        SymDim(RawSymDim::Const(v))
-    }
-}
-
-// SymDim op SymDim
-impl ops::Add for SymDim {
-    type Output = SymDim;
-    fn add(self, rhs: SymDim) -> SymDim {
-        SymDim(RawSymDim::Add(Box::new(self.0), Box::new(rhs.0)))
-    }
-}
-
-impl ops::Sub for SymDim {
-    type Output = SymDim;
-    fn sub(self, rhs: SymDim) -> SymDim {
-        SymDim(RawSymDim::Sub(Box::new(self.0), Box::new(rhs.0)))
-    }
-}
-
-impl ops::Mul for SymDim {
-    type Output = SymDim;
-    fn mul(self, rhs: SymDim) -> SymDim {
-        SymDim(RawSymDim::Mul(Box::new(self.0), Box::new(rhs.0)))
-    }
-}
-
-impl ops::Div for SymDim {
-    type Output = SymDim;
-    fn div(self, rhs: SymDim) -> SymDim {
-        SymDim(RawSymDim::FloorDiv(Box::new(self.0), Box::new(rhs.0)))
-    }
-}
-
-// SymDim op usize
-impl ops::Add<usize> for SymDim {
-    type Output = SymDim;
-    fn add(self, rhs: usize) -> SymDim {
-        self + SymDim::from(rhs)
-    }
-}
-
-impl ops::Sub<usize> for SymDim {
-    type Output = SymDim;
-    fn sub(self, rhs: usize) -> SymDim {
-        self - SymDim::from(rhs)
-    }
-}
-
-impl ops::Mul<usize> for SymDim {
-    type Output = SymDim;
-    fn mul(self, rhs: usize) -> SymDim {
-        self * SymDim::from(rhs)
-    }
-}
-
-impl ops::Div<usize> for SymDim {
-    type Output = SymDim;
-    fn div(self, rhs: usize) -> SymDim {
-        self / SymDim::from(rhs)
-    }
-}
-
-// usize op SymDim
-impl ops::Add<SymDim> for usize {
-    type Output = SymDim;
-    fn add(self, rhs: SymDim) -> SymDim {
-        SymDim::from(self) + rhs
-    }
-}
-
-impl ops::Mul<SymDim> for usize {
-    type Output = SymDim;
-    fn mul(self, rhs: SymDim) -> SymDim {
-        SymDim::from(self) * rhs
-    }
+    // ... same variants as DimExpr
 }
 ```
 
-- [ ] **Step 2: Register module and add sym_size to TracedTensor**
+Implement `From<usize>`, operator overloading (`Add`, `Mul`, `Sub`, `Div`
+for `SymDim×SymDim`, `SymDim×usize`, `usize×SymDim`), and
+`to_dim_expr(&[(TracedTensorId, usize)]) -> Result<DimExpr>`.
 
-In `tenferro/src/lib.rs`, add:
-```rust
-pub mod sym_dim;
-```
-
-In `tenferro/src/traced.rs`, add `sym_size` and `reshape_sym` methods:
+- [ ] **Step 2: Add sym_size and reshape_sym to TracedTensor**
 
 ```rust
-use crate::sym_dim::{SymDim, TracedTensorId};
-
 impl TracedTensor {
-    /// Return a symbolic reference to this tensor's axis size.
     pub fn sym_size(&self, axis: usize) -> SymDim {
-        SymDim(crate::sym_dim::RawSymDim::TensorAxis {
-            tensor_id: self.id,
-            axis,
-        })
+        SymDim(RawSymDim::TensorAxis { tensor_id: self.id, axis })
     }
 
-    /// Reshape with symbolic dimensions.
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
         let tensor_map = [(self.id, 0usize)];
-        let to_shape: Vec<DimExpr> = shape
-            .iter()
+        let to_shape: Vec<DimExpr> = shape.iter()
             .map(|s| s.to_dim_expr(&tensor_map).map_err(|e| Error::Other(e)))
             .collect::<Result<_>>()?;
         Ok(apply_unary(
             StdTensorOp::Reshape {
+                from_shape: DimExpr::input_shape(0, self.rank),
                 to_shape,
-                input_rank: self.rank,
             },
             self,
             shape.len(),
@@ -1564,57 +1101,14 @@ impl TracedTensor {
 
 - [ ] **Step 3: Write integration test**
 
-Create `tenferro/tests/sym_dim.rs`:
+Create `tenferro/tests/sym_dim.rs` with tests for `sym_size`,
+`reshape_sym`, and mixed `usize`/`SymDim` usage. Test that executing the
+graph produces correct results.
 
-```rust
-use tenferro::engine::Engine;
-use tenferro::traced::TracedTensor;
-use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DType, TypedTensor};
-
-#[test]
-fn test_sym_reshape_flatten() {
-    let mut engine = Engine::new(CpuBackend::new());
-
-    // Create a 2x3 tensor
-    let data = TypedTensor::<f64>::from_shape_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let x = TracedTensor::from_tensor(data.into());
-    assert_eq!(x.rank, 2);
-
-    // Reshape using symbolic sizes: flatten to [x.shape[0] * x.shape[1]]
-    let merged = x.sym_size(0) * x.sym_size(1);
-    let y = x.reshape_sym(&[merged]).unwrap();
-    assert_eq!(y.rank, 1);
-
-    // Execute and verify
-    let results = engine.eval(&[&y]).unwrap();
-    assert_eq!(results[0].shape(), &[6]);
-}
-
-#[test]
-fn test_sym_reshape_with_constant() {
-    let mut engine = Engine::new(CpuBackend::new());
-
-    let data = TypedTensor::<f64>::from_shape_vec(vec![6], (1..=6).map(|x| x as f64).collect());
-    let x = TracedTensor::from_tensor(data.into());
-
-    // Reshape [6] -> [2, 3] using sym: x.sym_size(0) / 2, 2
-    let half = x.sym_size(0) / 2;
-    let y = x.reshape_sym(&[2.into(), half]).unwrap();
-    assert_eq!(y.rank, 2);
-
-    let results = engine.eval(&[&y]).unwrap();
-    assert_eq!(results[0].shape(), &[2, 3]);
-}
-```
-
-- [ ] **Step 4: Run tests**
-
-Run: `cargo test --workspace --release`
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Run tests and commit**
 
 ```bash
+cargo test --workspace --release
 git add tenferro/src/sym_dim.rs tenferro/src/lib.rs tenferro/src/traced.rs tenferro/tests/sym_dim.rs
 git commit -m "feat: add SymDim API with sym_size and reshape_sym (#651)"
 ```
@@ -1623,26 +1117,13 @@ git commit -m "feat: add SymDim API with sym_size and reshape_sym (#651)"
 
 ### Task 11: Final Verification
 
-- [ ] **Step 1: Full test suite**
-
-Run: `cargo test --workspace --release`
-
-- [ ] **Step 2: Formatting**
-
-Run: `cargo fmt --all --check`
-If fails: `cargo fmt --all`
-
-- [ ] **Step 3: Coverage**
-
-Run: `cargo llvm-cov --workspace --json --output-path coverage.json && python3 scripts/check-coverage.py coverage.json`
-
-- [ ] **Step 4: Docs**
-
-Run: `cargo doc --workspace --no-deps && python3 scripts/check-docs-site.py`
-
-- [ ] **Step 5: Final commit if any fixes**
+- [ ] **Step 1:** `cargo fmt --all --check` (fix with `cargo fmt --all` if needed)
+- [ ] **Step 2:** `cargo test --workspace --release`
+- [ ] **Step 3:** `cargo llvm-cov --workspace --json --output-path coverage.json && python3 scripts/check-coverage.py coverage.json`
+- [ ] **Step 4:** `cargo doc --workspace --no-deps && python3 scripts/check-docs-site.py`
+- [ ] **Step 5:** Commit any fixes
 
 ```bash
 git add -A
-git commit -m "chore: final cleanup for DimExpr phase 1 (#651)"
+git commit -m "chore: final cleanup for DimExpr migration (#651)"
 ```
