@@ -141,7 +141,7 @@ Before pushing or creating a pull request, **all** of the following must pass:
 ```bash
 cargo fmt --all --check   # formatting
 cargo test --workspace --release   # all tests
-cargo llvm-cov --workspace --json --output-path coverage.json
+cargo llvm-cov --workspace --release --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
@@ -179,7 +179,7 @@ cargo fmt --check
 
 # Coverage check (per-file thresholds)
 # Target: 90%+ line coverage per file. Files below 90% should have tests added.
-cargo llvm-cov --workspace --json --output-path coverage.json
+cargo llvm-cov --workspace --release --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
 # Build rustdoc and docs site inputs

@@ -61,7 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage JSON
-        run: cargo llvm-cov --workspace --json --output-path coverage.json
+        run: cargo llvm-cov --workspace --release --json --output-path coverage.json
       - name: Enforce per-file coverage thresholds
         run: python3 scripts/check-coverage.py coverage.json
 
