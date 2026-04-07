@@ -37,6 +37,10 @@ pub fn apply_observable(
             named("values", required(&outputs, "values")?.clone()),
             named("vectors", required(&outputs, "vectors")?.abs()),
         ]),
+        "eig_values_vectors_abs" => Ok(vec![
+            named("values", required(&outputs, "values")?.clone()),
+            named("vectors", required(&outputs, "vectors")?.abs()),
+        ]),
         other => Err(format!("unsupported observable kind {other}")),
     }
 }

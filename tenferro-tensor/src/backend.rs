@@ -64,6 +64,7 @@ pub trait TensorBackend {
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> Tensor;
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> Tensor;
     fn broadcast_in_dim(&mut self, input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor;
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> Tensor;
     fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
     fn embed_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
     fn tril(&mut self, input: &Tensor, k: i64) -> Tensor;
@@ -101,9 +102,11 @@ pub trait TensorBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Tensor;
+    fn lu(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn qr(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn eigh(&mut self, input: &Tensor) -> Vec<Tensor>;
+    fn eig(&mut self, input: &Tensor) -> Vec<Tensor>;
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor;
 }
 

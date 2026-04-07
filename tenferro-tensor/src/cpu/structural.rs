@@ -1,8 +1,12 @@
-use strided_kernel::{copy_into, StridedView};
+use num_complex::{Complex32, Complex64};
+use strided_kernel::{copy_into, map_into, StridedView};
 
 use num_traits::Zero;
 
-use crate::types::{dispatch_tensor, flat_to_multi, Tensor, TypedTensor};
+use crate::{
+    types::{dispatch_tensor, flat_to_multi, Tensor, TypedTensor},
+    DType,
+};
 
 use super::{tensor_from_array, typed_array, typed_view};
 
@@ -16,6 +20,35 @@ pub fn reshape(input: &Tensor, shape: &[usize]) -> Tensor {
 
 pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor {
     dispatch_tensor!(input, t => typed_broadcast_in_dim(t, shape, dims))
+}
+
+pub fn convert(input: &Tensor, to: DType) -> Tensor {
+    match (input, to) {
+        (Tensor::F32(t), DType::F32) => Tensor::F32(t.clone()),
+        (Tensor::F32(t), DType::F64) => Tensor::F64(typed_convert(t, |x| x as f64)),
+        (Tensor::F32(t), DType::C32) => Tensor::C32(typed_convert(t, |x| Complex32::new(x, 0.0))),
+        (Tensor::F32(t), DType::C64) => {
+            Tensor::C64(typed_convert(t, |x| Complex64::new(x as f64, 0.0)))
+        }
+        (Tensor::F64(t), DType::F32) => Tensor::F32(typed_convert(t, |x| x as f32)),
+        (Tensor::F64(t), DType::F64) => Tensor::F64(t.clone()),
+        (Tensor::F64(t), DType::C32) => {
+            Tensor::C32(typed_convert(t, |x| Complex32::new(x as f32, 0.0)))
+        }
+        (Tensor::F64(t), DType::C64) => Tensor::C64(typed_convert(t, |x| Complex64::new(x, 0.0))),
+        (Tensor::C32(t), DType::F32) => Tensor::F32(typed_convert(t, |z| z.re)),
+        (Tensor::C32(t), DType::F64) => Tensor::F64(typed_convert(t, |z| z.re as f64)),
+        (Tensor::C32(t), DType::C32) => Tensor::C32(t.clone()),
+        (Tensor::C32(t), DType::C64) => Tensor::C64(typed_convert(t, |z| {
+            Complex64::new(z.re as f64, z.im as f64)
+        })),
+        (Tensor::C64(t), DType::F32) => Tensor::F32(typed_convert(t, |z| z.re as f32)),
+        (Tensor::C64(t), DType::F64) => Tensor::F64(typed_convert(t, |z| z.re)),
+        (Tensor::C64(t), DType::C32) => Tensor::C32(typed_convert(t, |z| {
+            Complex32::new(z.re as f32, z.im as f32)
+        })),
+        (Tensor::C64(t), DType::C64) => Tensor::C64(t.clone()),
+    }
 }
 
 pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
@@ -82,6 +115,16 @@ pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
     let broadcast = base.broadcast(shape).expect("broadcast shape");
     let mut out = typed_array(shape, T::zero());
     copy_into(&mut out.view_mut(), &broadcast).expect("broadcast copy");
+    tensor_from_array(out)
+}
+
+fn typed_convert<S, T>(tensor: &TypedTensor<S>, f: impl Fn(S) -> T) -> TypedTensor<T>
+where
+    S: Copy,
+    T: Copy + Clone + Zero,
+{
+    let mut out = typed_array(&tensor.shape, T::zero());
+    map_into(&mut out.view_mut(), &typed_view(tensor), f).expect("typed_convert");
     tensor_from_array(out)
 }
 

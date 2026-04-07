@@ -22,6 +22,9 @@ pub enum ExecOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Convert {
+        to: DType,
+    },
     Constant {
         dtype: DType,
         bytes: Vec<u8>,
@@ -139,6 +142,7 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ExecOp::BroadcastInDim { shape, dims } => {
                 backend.broadcast_in_dim(get(&slots, &inst.input_slots, 0), shape, dims)
             }
+            ExecOp::Convert { to } => backend.convert(get(&slots, &inst.input_slots, 0), *to),
             ExecOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
             ExecOp::BatchedGemm(config) => backend.dot_general(
                 get(&slots, &inst.input_slots, 0),
@@ -260,13 +264,11 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ),
             ExecOp::CustomCall { target } => {
                 let results: Vec<Tensor> = match target.as_str() {
+                    "lu" => backend.lu(get(&slots, &inst.input_slots, 0)),
                     "svd" => backend.svd(get(&slots, &inst.input_slots, 0)),
                     "qr" => backend.qr(get(&slots, &inst.input_slots, 0)),
                     "eigh" => backend.eigh(get(&slots, &inst.input_slots, 0)),
-                    "solve" => vec![backend.solve(
-                        get(&slots, &inst.input_slots, 0),
-                        get(&slots, &inst.input_slots, 1),
-                    )],
+                    "eig" => backend.eig(get(&slots, &inst.input_slots, 0)),
                     _ => todo!("custom call target {target}"),
                 };
                 for (i, tensor) in results.into_iter().enumerate() {

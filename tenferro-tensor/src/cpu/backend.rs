@@ -218,6 +218,10 @@ impl TensorBackend for CpuBackend {
         self.install(|| structural::broadcast_in_dim(input, shape, dims))
     }
 
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> Tensor {
+        self.install(|| structural::convert(input, to))
+    }
+
     fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
         self.install(|| structural::extract_diagonal(input, axis_a, axis_b))
     }
@@ -333,6 +337,15 @@ impl TensorBackend for CpuBackend {
         })
     }
 
+    fn lu(&mut self, input: &Tensor) -> Vec<Tensor> {
+        self.install(|| match input {
+            Tensor::F64(t) => linalg::lu(t).into_iter().map(Tensor::F64).collect(),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => linalg::lu(t).into_iter().map(Tensor::C64).collect(),
+            _ => todo!("lu: unsupported dtype"),
+        })
+    }
+
     fn svd(&mut self, input: &Tensor) -> Vec<Tensor> {
         self.install(|| match input {
             Tensor::F64(t) => linalg::svd(t).into_iter().map(Tensor::F64).collect(),
@@ -360,13 +373,128 @@ impl TensorBackend for CpuBackend {
         })
     }
 
+    fn eig(&mut self, input: &Tensor) -> Vec<Tensor> {
+        self.install(|| linalg::eig(input))
+    }
+
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
-        self.install(|| match (a, b) {
-            (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(linalg::solve(a, b)),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => Tensor::C64(linalg::solve(a, b)),
-            _ => todo!("solve: unsupported dtype"),
-        })
+        if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+            return zeros_like_tensor(b);
+        }
+
+        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
+            (self.reshape(b, &matrix_rhs_shape), Some(b.shape().to_vec()))
+        } else {
+            (b.clone(), None)
+        };
+
+        let outputs = self.lu(a);
+        let p = &outputs[0];
+        let l = &outputs[1];
+        let u = &outputs[2];
+        assert_nonsingular_u(u);
+
+        let pb = matmul_preserve_trailing_batch(self, p, &rhs);
+        let z = self.triangular_solve(l, &pb, true, true, false, true);
+        let x = self.triangular_solve(u, &z, true, false, false, false);
+        if let Some(shape) = restore_shape {
+            self.reshape(&x, &shape)
+        } else {
+            x
+        }
+    }
+}
+
+fn has_zero_dim(shape: &[usize]) -> bool {
+    shape.contains(&0)
+}
+
+fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
+    if b.shape().len() == 1 {
+        return Some(vec![b.shape()[0], 1]);
+    }
+
+    let is_batched_vector_rhs = a.shape().len() == b.shape().len() + 1
+        && !b.shape().is_empty()
+        && b.shape()[0] == a.shape()[0]
+        && b.shape()[1..] == a.shape()[2..];
+    if !is_batched_vector_rhs {
+        return None;
+    }
+
+    let mut rhs_shape = vec![b.shape()[0], 1];
+    rhs_shape.extend_from_slice(&b.shape()[1..]);
+    Some(rhs_shape)
+}
+
+fn matmul_preserve_trailing_batch(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+    let rank = lhs.shape().len();
+    let batch_dims: Vec<usize> = (2..rank).collect();
+    let out = backend.dot_general(
+        lhs,
+        rhs,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: batch_dims.clone(),
+            rhs_batch_dims: batch_dims,
+            lhs_rank: rank,
+            rhs_rank: rank,
+        },
+    );
+    if rank <= 2 {
+        return out;
+    }
+
+    let batch_ndim = rank - 2;
+    let mut perm = Vec::with_capacity(rank);
+    perm.push(batch_ndim);
+    perm.push(batch_ndim + 1);
+    perm.extend(0..batch_ndim);
+    backend.transpose(&out, &perm)
+}
+
+fn zeros_like_tensor(input: &Tensor) -> Tensor {
+    match input {
+        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
+        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
+        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
+    }
+}
+
+fn assert_nonsingular_u(u: &Tensor) {
+    match u {
+        Tensor::F64(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    assert!(diag.is_finite() && diag != 0.0, "solve: singular matrix");
+                }
+            }
+        }
+        Tensor::C64(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    assert!(
+                        diag.re.is_finite() && diag.im.is_finite() && diag.norm_sqr() != 0.0,
+                        "solve: singular matrix"
+                    );
+                }
+            }
+        }
+        _ => todo!("solve: unsupported dtype"),
     }
 }
 

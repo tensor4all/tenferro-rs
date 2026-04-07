@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tenferro::buffer_pool::BufferPool;
 
+use chainrules_core::ADKey;
 use computegraph::compile::compile;
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
+use computegraph::LocalValId;
 use num_complex::Complex64;
 use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
 use tenferro::einsum::einsum;
@@ -15,8 +17,8 @@ use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
-use tidu::{differentiate, transpose};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tidu::{differentiate, transpose, LinearFragment};
 
 const TOL: f64 = 1e-6;
 
@@ -54,6 +56,35 @@ fn finite_diff_scalar_rhs(
     rp[idx] += h;
     rm[idx] -= h;
     (f(lhs, &rp) - f(lhs, &rm)) / (2.0 * h)
+}
+
+fn finite_diff_tensor_directional(
+    f: impl Fn(&[f64]) -> Vec<f64>,
+    x: &[f64],
+    tangent: &[f64],
+    h: f64,
+) -> Vec<f64> {
+    assert_eq!(x.len(), tangent.len());
+
+    let xp: Vec<f64> = x
+        .iter()
+        .zip(tangent.iter())
+        .map(|(&value, &delta)| value + h * delta)
+        .collect();
+    let xm: Vec<f64> = x
+        .iter()
+        .zip(tangent.iter())
+        .map(|(&value, &delta)| value - h * delta)
+        .collect();
+
+    let yp = f(&xp);
+    let ym = f(&xm);
+    assert_eq!(yp.len(), ym.len());
+
+    yp.iter()
+        .zip(ym.iter())
+        .map(|(&plus, &minus)| (plus - minus) / (2.0 * h))
+        .collect()
 }
 
 fn finite_diff_complex(
@@ -185,13 +216,6 @@ fn cholesky_op(shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::Cholesky { input_shape: shape }
 }
 
-fn solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Solve {
-        lhs_shape,
-        rhs_shape,
-    }
-}
-
 fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::TriangularSolve {
         left_side: true,
@@ -201,6 +225,84 @@ fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTenso
         lhs_shape,
         rhs_shape,
     }
+}
+
+fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
+    let batch_dims: Vec<usize> = (2..rank).collect();
+    DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: batch_dims.clone(),
+        rhs_batch_dims: batch_dims,
+        lhs_rank: rank,
+        rhs_rank: rank,
+    }
+}
+
+fn matmul_output_perm(rank: usize) -> Vec<usize> {
+    let batch_ndim = rank - 2;
+    let mut perm = Vec::with_capacity(rank);
+    perm.push(batch_ndim);
+    perm.push(batch_ndim + 1);
+    perm.extend(0..batch_ndim);
+    perm
+}
+
+fn add_solve_composition(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    a: LocalValId,
+    b: LocalValId,
+    lhs_shape: Vec<usize>,
+    rhs_shape: Vec<usize>,
+) -> LocalValId {
+    let lu = builder.add_op(
+        StdTensorOp::Lu {
+            input_shape: lhs_shape.clone(),
+        },
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let rank = lhs_shape.len();
+    let pb = builder.add_op(
+        StdTensorOp::DotGeneral(solve_dot_general_config(rank)),
+        vec![ValRef::Local(lu[0]), ValRef::Local(b)],
+        OpMode::Primal,
+    )[0];
+    let pb = if rank > 2 {
+        builder.add_op(
+            StdTensorOp::Transpose {
+                perm: matmul_output_perm(rank),
+            },
+            vec![ValRef::Local(pb)],
+            OpMode::Primal,
+        )[0]
+    } else {
+        pb
+    };
+    let z = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: true,
+            lhs_shape: lhs_shape.clone(),
+            rhs_shape: rhs_shape.clone(),
+        },
+        vec![ValRef::Local(lu[1]), ValRef::Local(pb)],
+        OpMode::Primal,
+    )[0];
+    builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: false,
+            transpose_a: false,
+            unit_diagonal: false,
+            lhs_shape,
+            rhs_shape,
+        },
+        vec![ValRef::Local(lu[2]), ValRef::Local(z)],
+        OpMode::Primal,
+    )[0]
 }
 
 fn tensor_input_key(id: u64) -> TensorInputKey {
@@ -610,17 +712,13 @@ fn build_solve_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
-    let solve = builder.add_op(
-        solve_op(vec![2, 2], vec![2, 1]),
-        vec![ValRef::Local(a), ValRef::Local(b)],
-        OpMode::Primal,
-    );
+    let solve = add_solve_composition(&mut builder, a, b, vec![2, 2], vec![2, 1]);
     let loss = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: vec![0, 1],
             input_shape: vec![2, 1],
         },
-        vec![ValRef::Local(solve[0])],
+        vec![ValRef::Local(solve)],
         OpMode::Primal,
     );
     let loss_key = builder.global_key(loss[0]).clone();
@@ -668,12 +766,8 @@ fn build_solve_real_sum_fragment() -> (
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let a = builder.add_input(a_key.clone());
     let b = builder.add_input(b_key.clone());
-    let solve = builder.add_op(
-        solve_op(vec![2, 2], vec![2, 1]),
-        vec![ValRef::Local(a), ValRef::Local(b)],
-        OpMode::Primal,
-    );
-    let loss = add_real_reduce_sum_loss(&mut builder, solve[0], vec![2, 1]);
+    let solve = add_solve_composition(&mut builder, a, b, vec![2, 2], vec![2, 1]);
+    let loss = add_real_reduce_sum_loss(&mut builder, solve, vec![2, 1]);
     let loss_key = builder.global_key(loss).clone();
     builder.set_outputs(vec![loss]);
     (Arc::new(builder.build()), a_key, b_key, loss_key)
@@ -852,6 +946,116 @@ fn grad_from_fragment(
     let mut inputs_map = HashMap::new();
     inputs_map.insert(input_key.clone(), input);
     grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map)
+}
+
+fn jvp_from_fragment_with_inputs(
+    fragment: Arc<Fragment<StdTensorOp>>,
+    output_key: GlobalValKey<StdTensorOp>,
+    input_key: TensorInputKey,
+    mut inputs_map: HashMap<TensorInputKey, Tensor>,
+    tangent: Tensor,
+) -> Tensor {
+    let view = resolve(vec![fragment.clone()]);
+    let linear = differentiate(
+        &view,
+        std::slice::from_ref(&output_key),
+        std::slice::from_ref(&input_key),
+        0,
+    );
+    let tangent_key = linear.tangent_outputs[0]
+        .map(|id| linear.fragment.vals()[id].key.clone())
+        .expect("expected active tangent output");
+    let tangent_input_key = match &linear.fragment.vals()[linear.tangent_inputs[0].1].key {
+        GlobalValKey::Input(key) => key.clone(),
+        _ => panic!("expected tangent input"),
+    };
+    let linear_fragment = Arc::new(linear.fragment);
+
+    inputs_map.insert(tangent_input_key, tangent);
+
+    eval_fragment_outputs(vec![fragment, linear_fragment], &[tangent_key], &inputs_map)
+        .into_iter()
+        .next()
+        .expect("tangent output")
+}
+
+fn build_unary_fragment(
+    op: StdTensorOp,
+    input_key: TensorInputKey,
+) -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let input = builder.add_input(input_key.clone());
+    let output = builder.add_op(op, vec![ValRef::Local(input)], OpMode::Primal)[0];
+    let output_key = builder.global_key(output).clone();
+    builder.set_outputs(vec![output]);
+    (Arc::new(builder.build()), input_key, output_key)
+}
+
+fn eval_f64_reduction_op(op: &StdTensorOp, data: &[f64]) -> Vec<f64> {
+    let mut backend = CpuBackend::new();
+    let output = match op {
+        StdTensorOp::ReduceProd { axes, input_shape } => {
+            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            backend.reduce_prod(&input, axes)
+        }
+        StdTensorOp::ReduceMax { axes, input_shape } => {
+            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            backend.reduce_max(&input, axes)
+        }
+        StdTensorOp::ReduceMin { axes, input_shape } => {
+            let input = f64_tensor(input_shape.clone(), data.to_vec());
+            backend.reduce_min(&input, axes)
+        }
+        _ => panic!("expected reduction op"),
+    };
+    get_f64_data(&output).to_vec()
+}
+
+fn transpose_primal_unary_op_with_inputs(
+    op: StdTensorOp,
+    input_key: TensorInputKey,
+    input: Tensor,
+    cotangent: Tensor,
+) -> Tensor {
+    let tangent_input_key = input_key.tangent_of(90_000);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let tangent_input = builder.add_input(tangent_input_key.clone());
+    let output = builder.add_op(op, vec![ValRef::Local(tangent_input)], OpMode::Primal)[0];
+    builder.set_outputs(vec![output]);
+
+    let linear = LinearFragment {
+        fragment: builder.build(),
+        tangent_inputs: vec![(input_key, tangent_input)],
+        tangent_outputs: vec![Some(output)],
+    };
+    let transposed = transpose(&linear);
+    let linear_fragment = Arc::new(linear.fragment);
+    let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key
+    {
+        GlobalValKey::Input(key) => key.clone(),
+        _ => panic!("expected cotangent seed input"),
+    };
+    let output_key = transposed.tangent_outputs[0]
+        .map(|id| transposed.fragment.vals()[id].key.clone())
+        .expect("expected active transpose output");
+    let transposed_fragment = Arc::new(transposed.fragment);
+
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(tangent_input_key, input);
+    inputs_map.insert(cotangent_input_key, cotangent);
+
+    eval_fragment_outputs(
+        vec![linear_fragment, transposed_fragment],
+        &[output_key],
+        &inputs_map,
+    )
+    .into_iter()
+    .next()
+    .expect("transpose output")
 }
 
 fn sum_svd_values(data: &[f64]) -> f64 {
@@ -1059,6 +1263,16 @@ fn assert_close_slice_c64(actual: &[Complex64], expected: &[Complex64]) {
             "index {index}: expected {expected:?}, got {actual:?}"
         );
     }
+}
+
+fn assert_jvp_matches_finite_diff(
+    actual: &[f64],
+    base: &[f64],
+    tangent: &[f64],
+    f: impl Fn(&[f64]) -> Vec<f64>,
+) {
+    let expected = finite_diff_tensor_directional(f, base, tangent, 1e-6);
+    assert_close_slice(actual, &expected);
 }
 
 fn assert_grad_matches_finite_diff(actual: &[f64], base: &[f64], f: impl Fn(&[f64]) -> f64) {
@@ -1483,6 +1697,51 @@ fn scale_complex_eval_and_grad_complex_sum() {
 }
 
 #[test]
+fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![2], vec![1.25, -2.5]));
+    let dx = TracedTensor::from_tensor(f64_tensor(vec![2], vec![0.5, -1.0]));
+    let cotangent = TracedTensor::from_tensor(c64_tensor(
+        vec![2],
+        vec![Complex64::new(3.0, -7.0), Complex64::new(-2.5, 4.0)],
+    ));
+
+    let mut roundtrip = x.convert(DType::C64).convert(DType::F64);
+    let mut jvp = x.convert(DType::C64).jvp(&x, &dx);
+    let mut vjp = x.convert(DType::C64).vjp(&x, &cotangent);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results =
+        tenferro::traced::eval_all(&mut engine, &mut [&mut roundtrip, &mut jvp, &mut vjp]).unwrap();
+
+    assert_close_slice(get_f64_data(&results[0]), &[1.25, -2.5]);
+    assert_close_slice_c64(
+        get_c64_data(&results[1]),
+        &[Complex64::new(0.5, 0.0), Complex64::new(-1.0, 0.0)],
+    );
+    assert_close_slice(get_f64_data(&results[2]), &[3.0, -2.5]);
+}
+
+#[test]
+fn grad_real_sum_of_eigvals_matches_trace_gradient() {
+    let a = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 3],
+        vec![1.0, 0.0, 0.0, 0.2, 2.0, 0.0, -0.1, 0.3, 4.0],
+    ));
+
+    let mut loss = tenferro::eigvals(&a).convert(DType::F64).reduce_sum(&[0]);
+    let mut grad = loss.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = tenferro::traced::eval_all(&mut engine, &mut [&mut loss, &mut grad]).unwrap();
+
+    assert_close_slice(get_f64_data(&results[0]), &[7.0]);
+    assert_close_slice(
+        get_f64_data(&results[1]),
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    );
+}
+
+#[test]
 fn vjp_matmul() {
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
     let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
@@ -1513,6 +1772,155 @@ fn grad_full_vector_reduction() {
     let result = eval_tensor(grad);
     assert_eq!(result.shape(), &[4]);
     assert_close_slice(get_f64_data(&result), &[1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn test_reduce_prod_jvp() {
+    let op = StdTensorOp::ReduceProd {
+        axes: vec![0],
+        input_shape: vec![4],
+    };
+    let (fragment, input_key, output_key) =
+        build_unary_fragment(op.clone(), tensor_input_key(60_000));
+    let x_data = vec![1.5, -2.0, 0.75, 4.0];
+    let dx_data = vec![0.25, -0.5, 1.0, 0.75];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key.clone(), f64_tensor(vec![4], x_data.clone()));
+
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(vec![4], dx_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
+        eval_f64_reduction_op(&op, xs)
+    });
+}
+
+#[test]
+fn test_reduce_prod_vjp() {
+    let op = StdTensorOp::ReduceProd {
+        axes: vec![0],
+        input_shape: vec![2, 3],
+    };
+    let input_key = tensor_input_key(60_001);
+    let x_data = vec![1.5, -2.0, 0.75, 4.0, -0.5, 2.0];
+    let cotangent = vec![0.5, -1.0, 2.0];
+    let grad = transpose_primal_unary_op_with_inputs(
+        op.clone(),
+        input_key,
+        f64_tensor(vec![2, 3], x_data.clone()),
+        f64_tensor(vec![3], cotangent.clone()),
+    );
+
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
+        eval_f64_reduction_op(&op, xs)
+            .iter()
+            .zip(cotangent.iter())
+            .map(|(value, weight)| value * weight)
+            .sum()
+    });
+}
+
+#[test]
+fn test_reduce_max_jvp() {
+    let op = StdTensorOp::ReduceMax {
+        axes: vec![0],
+        input_shape: vec![2, 3],
+    };
+    let (fragment, input_key, output_key) =
+        build_unary_fragment(op.clone(), tensor_input_key(60_002));
+    let x_data = vec![2.0, 2.0, 4.0, 1.0, -3.0, -3.0];
+    let dx_data = vec![1.0, -0.5, 0.75, -1.25, 2.0, -1.0];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key.clone(), f64_tensor(vec![2, 3], x_data.clone()));
+
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(vec![2, 3], dx_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
+        eval_f64_reduction_op(&op, xs)
+    });
+}
+
+#[test]
+fn test_reduce_max_vjp() {
+    let op = StdTensorOp::ReduceMax {
+        axes: vec![0],
+        input_shape: vec![4],
+    };
+    let input_key = tensor_input_key(60_003);
+    let x_data = vec![1.0, 3.0, 3.0, -2.0];
+    let cotangent = 2.5;
+    let grad = transpose_primal_unary_op_with_inputs(
+        op.clone(),
+        input_key,
+        f64_tensor(vec![4], x_data.clone()),
+        scalar_f64_tensor(cotangent),
+    );
+
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
+        cotangent * eval_f64_reduction_op(&op, xs)[0]
+    });
+}
+
+#[test]
+fn test_reduce_min_jvp() {
+    let op = StdTensorOp::ReduceMin {
+        axes: vec![0],
+        input_shape: vec![4],
+    };
+    let (fragment, input_key, output_key) =
+        build_unary_fragment(op.clone(), tensor_input_key(60_004));
+    let x_data = vec![1.0, -2.0, 4.0, -2.0];
+    let dx_data = vec![0.5, 1.0, -1.0, -0.5];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(input_key.clone(), f64_tensor(vec![4], x_data.clone()));
+
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(vec![4], dx_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
+        eval_f64_reduction_op(&op, xs)
+    });
+}
+
+#[test]
+fn test_reduce_min_vjp() {
+    let op = StdTensorOp::ReduceMin {
+        axes: vec![0],
+        input_shape: vec![2, 3],
+    };
+    let input_key = tensor_input_key(60_005);
+    let x_data = vec![-4.0, -4.0, 0.5, 2.0, 1.0, 1.0];
+    let cotangent = vec![1.5, -0.25, 0.75];
+    let grad = transpose_primal_unary_op_with_inputs(
+        op.clone(),
+        input_key,
+        f64_tensor(vec![2, 3], x_data.clone()),
+        f64_tensor(vec![3], cotangent.clone()),
+    );
+
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
+        eval_f64_reduction_op(&op, xs)
+            .iter()
+            .zip(cotangent.iter())
+            .map(|(value, weight)| value * weight)
+            .sum()
+    });
 }
 
 #[test]

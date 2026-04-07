@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 
-use tenferro::{cholesky, eigh, qr, solve, svd, triangular_solve, TracedTensor};
+use tenferro::{
+    cholesky, det, eig, eigh, eigvals, eigvalsh, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet,
+    solve, svd, triangular_solve, TracedTensor,
+};
 
-use crate::decode::{try_decode_tensor, CaseRecord};
+use crate::decode::{try_decode_tensor, CaseRecord, OracleArg};
 
 pub struct NamedTensor {
     pub name: String,
@@ -133,6 +136,19 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
             };
             single_output(inputs, "value", tenferro_to_oracle(&factor_tf, 2))
         }
+        "lu" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (p_tf, l_tf, u_tf, parity_tf) = lu(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("output_0", tenferro_to_oracle(&p_tf, 2)),
+                    named("output_1", tenferro_to_oracle(&l_tf, 2)),
+                    named("output_2", tenferro_to_oracle(&u_tf, 2)),
+                    named("output_3", tenferro_to_oracle(&parity_tf, 0)),
+                ],
+            })
+        }
         "solve" => {
             let b = required_input(&inputs, "b", case)?.clone();
             let rhs_matrix_rank = rhs_matrix_rank(&a, &b);
@@ -156,6 +172,73 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
                 "output_0",
                 tenferro_to_oracle(&solution_tf, rhs_matrix_rank),
             )
+        }
+        "slogdet" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (sign_tf, logabsdet_tf) = slogdet(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("output_0", tenferro_to_oracle(&sign_tf, 0)),
+                    named("output_1", tenferro_to_oracle(&logabsdet_tf, 0)),
+                ],
+            })
+        }
+        "det" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&det(&a_tf), 0))
+        }
+        "inv" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&inv(&a_tf), 2))
+        }
+        "pinv" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let value = match number_kwarg(&case.op_kwargs, "rtol")? {
+                Some(rtol) => pinv_with_rtol(&a_tf, rtol),
+                None => pinv(&a_tf),
+            };
+            single_output(inputs, "value", tenferro_to_oracle(&value, 2))
+        }
+        "eig" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            let (values_tf, vectors_tf) = eig(&a_tf);
+            DispatchResult::Executed(CaseExecution {
+                inputs,
+                outputs: vec![
+                    named("values", tenferro_to_oracle(&values_tf, 1)),
+                    named("vectors", tenferro_to_oracle(&vectors_tf, 2)),
+                ],
+            })
+        }
+        "eigvals" => {
+            let a_tf = oracle_to_tenferro(&a, 2);
+            single_output(inputs, "value", tenferro_to_oracle(&eigvals(&a_tf), 1))
+        }
+        "eigvalsh" => {
+            let a_tf = hermitian_wrapper_tenferro(&oracle_to_tenferro(&a, 2));
+            single_output(inputs, "value", tenferro_to_oracle(&eigvalsh(&a_tf), 1))
+        }
+        "norm" => {
+            let keepdim = bool_kwarg(&case.op_kwargs, "keepdim")?.unwrap_or(false);
+            let axes = sum_axes(case, a.shape.len())?;
+            let ord = norm_ord(case)?;
+
+            let value = match ord {
+                None | Some(NormOrd::Fro) => norm(&a, None, Some(&axes), keepdim),
+                Some(NormOrd::Nuc) => {
+                    let a_tf = oracle_to_tenferro(&a, 2);
+                    let singular_values = svd(&a_tf).1;
+                    let reduced = singular_values.reduce_sum(&[0]);
+                    if keepdim {
+                        reduced.reshape(&keepdim_shape(&a.shape, &axes))
+                    } else {
+                        reduced
+                    }
+                }
+                Some(NormOrd::Numeric(ord)) => norm(&a, Some(ord), Some(&axes), keepdim),
+            };
+            single_output(inputs, "value", value)
         }
         "solve_triangular" => {
             let b = required_input(&inputs, "b", case)?.clone();
@@ -182,8 +265,12 @@ pub fn dispatch_case(case: &CaseRecord) -> Result<DispatchResult, String> {
 fn decode_inputs(case: &CaseRecord) -> Result<BTreeMap<String, TracedTensor>, String> {
     let mut inputs = BTreeMap::new();
     for (name, tensor_data) in &case.inputs {
-        let tensor = try_decode_tensor(tensor_data)?
-            .ok_or_else(|| format!("{}: input {name} is not float64", case.case_id))?;
+        let tensor = try_decode_tensor(tensor_data)?.ok_or_else(|| {
+            format!(
+                "{}: input {name} has unsupported dtype {}",
+                case.case_id, tensor_data.dtype
+            )
+        })?;
         inputs.insert(name.clone(), TracedTensor::from_tensor(tensor));
     }
     Ok(inputs)
@@ -256,14 +343,44 @@ fn replay_enabled_op(op: &str) -> bool {
             | "qr"
             | "eigh"
             | "cholesky"
+            | "lu"
             | "solve"
             | "solve_ex"
             | "solve_triangular"
+            | "slogdet"
+            | "det"
+            | "inv"
+            | "eig"
+            | "eigvals"
+            | "eigvalsh"
+            | "pinv"
+            | "norm"
     )
 }
 
 fn alpha_kwarg(case: &CaseRecord) -> Result<f64, String> {
     Ok(number_kwarg(&case.op_kwargs, "alpha")?.unwrap_or(1.0))
+}
+
+enum NormOrd {
+    Fro,
+    Nuc,
+    Numeric(f64),
+}
+
+fn norm_ord(case: &CaseRecord) -> Result<Option<NormOrd>, String> {
+    if let Some(value) = case
+        .op_kwargs
+        .as_object()
+        .and_then(|kwargs| kwargs.get("ord"))
+    {
+        return parse_norm_ord_json(value);
+    }
+
+    match case.op_args.first() {
+        Some(value) => parse_norm_ord_arg(value),
+        None => Ok(None),
+    }
 }
 
 fn sum_axes(case: &CaseRecord, rank: usize) -> Result<Vec<usize>, String> {
@@ -349,6 +466,7 @@ fn rhs_matrix_rank(a: &TracedTensor, b: &TracedTensor) -> usize {
 
 fn bool_kwarg(value: &serde_json::Value, key: &str) -> Result<Option<bool>, String> {
     match value.as_object().and_then(|kwargs| kwargs.get(key)) {
+        Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::Bool(flag)) => Ok(Some(*flag)),
         Some(other) => Err(format!("expected boolean kwarg {key}, got {other}")),
         None => Ok(None),
@@ -357,6 +475,7 @@ fn bool_kwarg(value: &serde_json::Value, key: &str) -> Result<Option<bool>, Stri
 
 fn number_kwarg(value: &serde_json::Value, key: &str) -> Result<Option<f64>, String> {
     match value.as_object().and_then(|kwargs| kwargs.get(key)) {
+        Some(serde_json::Value::Null) => Ok(None),
         Some(other) => Ok(Some(as_f64(other)?)),
         None => Ok(None),
     }
@@ -384,5 +503,52 @@ fn as_f64(value: &serde_json::Value) -> Result<f64, String> {
         Ok(number)
     } else {
         Err(format!("expected numeric JSON value, got {value}"))
+    }
+}
+
+fn parse_norm_ord_json(value: &serde_json::Value) -> Result<Option<NormOrd>, String> {
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(kind) if kind == "fro" => Ok(Some(NormOrd::Fro)),
+        serde_json::Value::String(kind) if kind == "nuc" => Ok(Some(NormOrd::Nuc)),
+        serde_json::Value::String(kind) => Err(format!("unsupported norm ord {kind}")),
+        other => Ok(Some(NormOrd::Numeric(normalize_norm_ord_number(as_f64(
+            other,
+        )?)))),
+    }
+}
+
+fn parse_norm_ord_arg(value: &OracleArg) -> Result<Option<NormOrd>, String> {
+    match value {
+        OracleArg::Null(()) => Ok(None),
+        OracleArg::String(kind) if kind == "fro" => Ok(Some(NormOrd::Fro)),
+        OracleArg::String(kind) if kind == "nuc" => Ok(Some(NormOrd::Nuc)),
+        OracleArg::String(kind) => Err(format!("unsupported norm ord {kind}")),
+        OracleArg::Number(number) => Ok(Some(NormOrd::Numeric(normalize_norm_ord_number(*number)))),
+        other => Err(format!(
+            "expected numeric or string positional norm ord, got {}",
+            oracle_arg_kind(other)
+        )),
+    }
+}
+
+fn normalize_norm_ord_number(number: f64) -> f64 {
+    if number == f64::MAX {
+        f64::INFINITY
+    } else if number == -f64::MAX {
+        f64::NEG_INFINITY
+    } else {
+        number
+    }
+}
+
+fn oracle_arg_kind(value: &OracleArg) -> &'static str {
+    match value {
+        OracleArg::Null(()) => "null",
+        OracleArg::Bool(_) => "bool",
+        OracleArg::Number(_) => "number",
+        OracleArg::String(_) => "string",
+        OracleArg::Array(_) => "array",
+        OracleArg::Object(_) => "object",
     }
 }

@@ -31,6 +31,10 @@ pub enum StdTensorOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Convert {
+        from: DType,
+        to: DType,
+    },
     Constant {
         dtype: DType,
         bytes: Vec<u8>,
@@ -96,16 +100,22 @@ pub enum StdTensorOp {
     // Tier 2: reductions
     ReduceProd {
         axes: Vec<usize>,
+        input_shape: Vec<usize>,
     },
     ReduceMax {
         axes: Vec<usize>,
+        input_shape: Vec<usize>,
     },
     ReduceMin {
         axes: Vec<usize>,
+        input_shape: Vec<usize>,
     },
 
     // Linalg
     Cholesky {
+        input_shape: Vec<usize>,
+    },
+    Lu {
         input_shape: Vec<usize>,
     },
     Svd {
@@ -119,9 +129,9 @@ pub enum StdTensorOp {
         eps: f64,
         input_shape: Vec<usize>,
     },
-    Solve {
-        lhs_shape: Vec<usize>,
-        rhs_shape: Vec<usize>,
+    Eig {
+        input_dtype: DType,
+        input_shape: Vec<usize>,
     },
     TriangularSolve {
         left_side: bool,
@@ -238,19 +248,21 @@ impl Hash for StdTensorOp {
                 hash_f64(*eps, state);
                 input_shape.hash(state);
             }
-            Self::Qr { input_shape } | Self::Cholesky { input_shape } => {
+            Self::Qr { input_shape }
+            | Self::Cholesky { input_shape }
+            | Self::Lu { input_shape } => {
+                input_shape.hash(state);
+            }
+            Self::Eig {
+                input_dtype,
+                input_shape,
+            } => {
+                input_dtype.hash(state);
                 input_shape.hash(state);
             }
             Self::Eigh { eps, input_shape } => {
                 hash_f64(*eps, state);
                 input_shape.hash(state);
-            }
-            Self::Solve {
-                lhs_shape,
-                rhs_shape,
-            } => {
-                lhs_shape.hash(state);
-                rhs_shape.hash(state);
             }
             Self::DotGeneral(config) => config.hash(state),
             Self::Transpose { perm } => perm.hash(state),
@@ -264,6 +276,10 @@ impl Hash for StdTensorOp {
             Self::BroadcastInDim { shape, dims } => {
                 shape.hash(state);
                 dims.hash(state);
+            }
+            Self::Convert { from, to } => {
+                from.hash(state);
+                to.hash(state);
             }
             Self::Constant { dtype, bytes } => {
                 dtype.hash(state);
@@ -286,8 +302,11 @@ impl Hash for StdTensorOp {
             Self::Pad(config) => config.hash(state),
             Self::Concatenate { axis } => axis.hash(state),
             Self::Reverse { axes } => axes.hash(state),
-            Self::ReduceProd { axes } | Self::ReduceMax { axes } | Self::ReduceMin { axes } => {
+            Self::ReduceProd { axes, input_shape }
+            | Self::ReduceMax { axes, input_shape }
+            | Self::ReduceMin { axes, input_shape } => {
                 axes.hash(state);
+                input_shape.hash(state);
             }
             Self::TriangularSolve {
                 left_side,
@@ -326,6 +345,7 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
+            | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
@@ -333,7 +353,10 @@ impl GraphOp for StdTensorOp {
             | Self::Triu { .. }
             | Self::Slice(_)
             | Self::Pad(_)
-            | Self::Reverse { .. } => 1,
+            | Self::Reverse { .. }
+            | Self::ReduceProd { .. }
+            | Self::ReduceMax { .. }
+            | Self::ReduceMin { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
@@ -356,9 +379,13 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky { .. } | Self::Svd { .. } | Self::Qr { .. } | Self::Eigh { .. } => 1,
-            Self::Solve { .. } | Self::TriangularSolve { .. } => 2,
-            _ => todo!("n_inputs not yet implemented for {:?}", self),
+            Self::Cholesky { .. }
+            | Self::Lu { .. }
+            | Self::Svd { .. }
+            | Self::Qr { .. }
+            | Self::Eigh { .. }
+            | Self::Eig { .. } => 1,
+            Self::TriangularSolve { .. } => 2,
         }
     }
 
@@ -372,6 +399,7 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
+            | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::Div
             | Self::Abs
@@ -401,16 +429,20 @@ impl GraphOp for StdTensorOp {
             | Self::Slice(_)
             | Self::DynamicSlice { .. }
             | Self::Pad(_)
-            | Self::Reverse { .. } => 1,
-            Self::Cholesky { .. } | Self::Solve { .. } | Self::TriangularSolve { .. } => 1,
+            | Self::Reverse { .. }
+            | Self::ReduceProd { .. }
+            | Self::ReduceMax { .. }
+            | Self::ReduceMin { .. } => 1,
+            Self::Cholesky { .. } | Self::TriangularSolve { .. } => 1,
+            Self::Lu { .. } => 4,
             Self::Svd { .. } => 3,  // U, S, Vt
             Self::Qr { .. } => 2,   // Q, R
             Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
+            Self::Eig { .. } => 2,  // eigenvalues, eigenvectors
             Self::Concatenate { .. } => todo!(
                 "n_outputs not yet implemented for variable-arity op {:?}",
                 self
             ),
-            _ => todo!("n_outputs not yet implemented for {:?}", self),
         }
     }
 }

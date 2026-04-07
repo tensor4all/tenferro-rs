@@ -1333,6 +1333,46 @@ fn test_real_solve_non_batched() {
 }
 
 #[test]
+fn test_real_lu_returns_permutation_factors_and_parity() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.lu(&input);
+
+    assert_eq!(outputs.len(), 4);
+    let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
+    let l = matrix_f64_from_tensor(&outputs[1], 2, 2);
+    let u = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let parity = get_f64(&outputs[3], &[]);
+
+    let pa = matmul_f64(&p, &matrix_f64_from_tensor(&input, 2, 2), 2, 2, 2);
+    let lu = matmul_f64(&l, &u, 2, 2, 2);
+    for (actual, expected) in pa.iter().zip(lu.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+    assert_f64_close(parity, -1.0);
+}
+
+#[test]
+fn test_real_eig_returns_complex_outputs() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.eig(&input);
+
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+
+    let mut values = vector_c64_from_tensor(&outputs[0], 2);
+    values.sort_by(|lhs, rhs| {
+        lhs.re
+            .partial_cmp(&rhs.re)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    assert_c64_close(values[0], Complex64::new(1.0, 0.0));
+    assert_c64_close(values[1], Complex64::new(3.0, 0.0));
+}
+
+#[test]
 fn test_batched_complex_eigh() {
     let l0 = vec![
         Complex64::new(2.0, 0.0),
@@ -1810,6 +1850,89 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     assert_eq!(reversed.shape(), &[4, 3]);
     assert_eq!(get_f64(&reversed, &[0, 0]), 12.0);
     assert_eq!(get_f64(&reversed, &[3, 2]), 1.0);
+}
+
+#[test]
+fn test_backend_convert_supports_real_complex_and_precision_changes() {
+    let mut backend = CpuBackend::new();
+    let f32_input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
+    let f64_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.25_f64, -2.5_f64]));
+    let c32_input = Tensor::C32(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)],
+    ));
+    let c64_input = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)],
+    ));
+
+    let cases = [
+        (&f32_input, DType::F32),
+        (&f32_input, DType::F64),
+        (&f32_input, DType::C32),
+        (&f32_input, DType::C64),
+        (&f64_input, DType::F32),
+        (&f64_input, DType::F64),
+        (&f64_input, DType::C32),
+        (&f64_input, DType::C64),
+        (&c32_input, DType::F32),
+        (&c32_input, DType::F64),
+        (&c32_input, DType::C32),
+        (&c32_input, DType::C64),
+        (&c64_input, DType::F32),
+        (&c64_input, DType::F64),
+        (&c64_input, DType::C32),
+        (&c64_input, DType::C64),
+    ];
+
+    for (input, to) in cases {
+        let output = backend.convert(input, to);
+        assert_eq!(output.shape(), &[2]);
+        assert_eq!(output.dtype(), to);
+
+        match (input.dtype(), &output) {
+            (DType::F32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F32, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
+            ),
+            (DType::F32, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
+            ),
+            (DType::F64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F64, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
+            ),
+            (DType::F64, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
+            ),
+            (DType::C32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C32, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
+            ),
+            (DType::C32, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
+            ),
+            (DType::C64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C64, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
+            ),
+            (DType::C64, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
+            ),
+        }
+    }
 }
 
 #[test]

@@ -20,6 +20,9 @@ pub enum StableHloOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Convert {
+        to: DType,
+    },
     Constant {
         dtype: DType,
         bytes: Vec<u8>,

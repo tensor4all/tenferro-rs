@@ -81,6 +81,27 @@ pub fn linearize_broadcast_in_dim(
     }
 }
 
+pub fn linearize_convert(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    from: tenferro_tensor::DType,
+    to: tenferro_tensor::DType,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dt) => {
+            let out = builder.add_op(
+                StdTensorOp::Convert { from, to },
+                vec![ValRef::Local(dt)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
 pub fn linearize_tril(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
@@ -213,6 +234,36 @@ pub fn transpose_broadcast_in_dim(
                     axes: broadcast_axes,
                     input_shape: shape.to_vec(),
                 },
+                vec![ValRef::Local(ct)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn transpose_convert(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    mode: &OpMode,
+    from: tenferro_tensor::DType,
+    to: tenferro_tensor::DType,
+) -> Vec<Option<LocalValId>> {
+    let is_active = matches!(
+        mode,
+        OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
+    );
+    if !is_active {
+        return vec![None];
+    }
+
+    match cotangent_out[0] {
+        Some(ct) => {
+            let out = builder.add_op(
+                StdTensorOp::Convert { from: to, to: from },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
                     active_mask: vec![true],

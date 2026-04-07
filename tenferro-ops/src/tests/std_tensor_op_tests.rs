@@ -7,7 +7,6 @@ use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
 use num_complex::{Complex32, Complex64};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use tenferro_algebra::Standard;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
@@ -296,20 +295,34 @@ fn test_std_tensor_op_linalg_input_output_counts() {
         2
     );
     assert_eq!(
-        StdTensorOp::Solve {
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+        StdTensorOp::Lu {
+            input_shape: vec![2, 2]
         }
         .n_inputs(),
-        2
+        1
     );
     assert_eq!(
-        StdTensorOp::Solve {
-            lhs_shape: vec![2, 2],
-            rhs_shape: vec![2, 1],
+        StdTensorOp::Lu {
+            input_shape: vec![2, 2]
         }
         .n_outputs(),
+        4
+    );
+    assert_eq!(
+        StdTensorOp::Eig {
+            input_dtype: DType::F64,
+            input_shape: vec![2, 2]
+        }
+        .n_inputs(),
         1
+    );
+    assert_eq!(
+        StdTensorOp::Eig {
+            input_dtype: DType::F64,
+            input_shape: vec![2, 2]
+        }
+        .n_outputs(),
+        2
     );
     assert_eq!(
         StdTensorOp::TriangularSolve {
@@ -349,6 +362,22 @@ fn test_std_tensor_op_remaining_input_output_counts() {
     assert_eq!(StdTensorOp::Maximum.n_outputs(), 1);
     assert_eq!(StdTensorOp::Minimum.n_inputs(), 2);
     assert_eq!(StdTensorOp::Minimum.n_outputs(), 1);
+    assert_eq!(
+        StdTensorOp::Convert {
+            from: DType::F64,
+            to: DType::C64,
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::Convert {
+            from: DType::F64,
+            to: DType::C64,
+        }
+        .n_outputs(),
+        1
+    );
     assert_eq!(StdTensorOp::Slice(slice.clone()).n_inputs(), 1);
     assert_eq!(StdTensorOp::Slice(slice).n_outputs(), 1);
     assert_eq!(StdTensorOp::Reverse { axes: vec![0, 2] }.n_inputs(), 1);
@@ -368,37 +397,55 @@ fn test_std_tensor_op_n_outputs_panics_for_concatenate() {
 }
 
 #[test]
-fn test_std_tensor_op_count_fallbacks_cover_unimplemented_reductions() {
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceProd {
-        axes: vec![1]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceProd {
-        axes: vec![1]
-    }
-    .n_outputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMax {
-        axes: vec![0]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMax {
-        axes: vec![0]
-    }
-    .n_outputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMin {
-        axes: vec![0, 1]
-    }
-    .n_inputs()))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| StdTensorOp::ReduceMin {
-        axes: vec![0, 1]
-    }
-    .n_outputs()))
-    .is_err());
+fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
+    assert_eq!(
+        StdTensorOp::ReduceProd {
+            axes: vec![1],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceProd {
+            axes: vec![1],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMin {
+            axes: vec![0, 1],
+            input_shape: vec![2, 3]
+        }
+        .n_inputs(),
+        1
+    );
+    assert_eq!(
+        StdTensorOp::ReduceMin {
+            axes: vec![0, 1],
+            input_shape: vec![2, 3]
+        }
+        .n_outputs(),
+        1
+    );
 }
 
 #[test]
@@ -637,11 +684,24 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
             edge_padding_high: vec![0],
             interior_padding: vec![0],
         }),
+        StdTensorOp::Convert {
+            from: DType::F64,
+            to: DType::C64,
+        },
         StdTensorOp::Concatenate { axis: 1 },
         StdTensorOp::Reverse { axes: vec![0] },
-        StdTensorOp::ReduceProd { axes: vec![0] },
-        StdTensorOp::ReduceMax { axes: vec![0] },
-        StdTensorOp::ReduceMin { axes: vec![0] },
+        StdTensorOp::ReduceProd {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
+        StdTensorOp::ReduceMax {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
+        StdTensorOp::ReduceMin {
+            axes: vec![0],
+            input_shape: vec![2, 2],
+        },
     ];
 
     for op in variants {
@@ -1069,6 +1129,41 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     );
     assert_eq!(none_broadcast, vec![None]);
     assert!(builder.build().ops().is_empty());
+}
+
+#[test]
+fn test_std_tensor_op_convert_linearize_and_transpose_swap_dtypes() {
+    let convert = StdTensorOp::Convert {
+        from: DType::F64,
+        to: DType::C64,
+    };
+
+    let (linear_result, linear_fragment) = run_linearize_case(convert.clone(), 0, 0, &[true]);
+    assert!(linear_result[0].is_some());
+    assert_eq!(linear_fragment.ops().len(), 1);
+    assert_eq!(linear_fragment.ops()[0].op, convert);
+
+    let (linear_none_result, linear_none_fragment) =
+        run_linearize_case(convert.clone(), 0, 0, &[false]);
+    assert_eq!(linear_none_result, vec![None]);
+    assert!(linear_none_fragment.ops().is_empty());
+
+    let (transpose_result, _, transpose_fragment) =
+        run_transpose_case(convert.clone(), 1, &[true], true);
+    assert!(transpose_result[0].is_some());
+    assert_eq!(transpose_fragment.ops().len(), 1);
+    assert_eq!(
+        transpose_fragment.ops()[0].op,
+        StdTensorOp::Convert {
+            from: DType::C64,
+            to: DType::F64,
+        }
+    );
+
+    let (transpose_inactive_result, _, transpose_inactive_fragment) =
+        run_transpose_case(convert, 1, &[false], true);
+    assert_eq!(transpose_inactive_result, vec![None]);
+    assert!(transpose_inactive_fragment.ops().is_empty());
 }
 
 #[test]
