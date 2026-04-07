@@ -2,6 +2,7 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_dot_general(
@@ -78,16 +79,17 @@ pub fn linearize_reduce_prod(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    input_shape: &[usize],
+    input_shape: &[DimExpr],
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
     };
 
     let kept_dims = kept_dims(input_shape.len(), axes);
-    let prod_broadcast = broadcast_reduction_output_fixed(
+    let prod_broadcast = broadcast_reduction_output(
         builder,
         ValRef::External(primal_out[0].clone()),
+        ValRef::External(primal_in[0].clone()),
         input_shape,
         &kept_dims,
     );
@@ -125,16 +127,17 @@ pub fn linearize_reduce_chooser(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    input_shape: &[usize],
+    input_shape: &[DimExpr],
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
     };
 
     let kept_dims = kept_dims(input_shape.len(), axes);
-    let answer_broadcast = broadcast_reduction_output_fixed(
+    let answer_broadcast = broadcast_reduction_output(
         builder,
         ValRef::External(primal_out[0].clone()),
+        ValRef::External(primal_in[0].clone()),
         input_shape,
         &kept_dims,
     );
@@ -238,6 +241,7 @@ pub fn transpose_reduce_sum(
     builder: &mut FragmentBuilder<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
+    inputs: &[ValRef<StdTensorOp>],
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::ReduceSum { axes, input_shape } = op else {
         unreachable!("transpose_reduce_sum expects ReduceSum");
@@ -251,7 +255,7 @@ pub fn transpose_reduce_sum(
             let cotangent = if kept_dims.is_empty() {
                 let scalar = builder.add_op(
                     StdTensorOp::Reshape {
-                        from_shape: vec![1],
+                        from_shape: DimExpr::from_concrete(&[1]),
                         to_shape: vec![],
                     },
                     vec![ValRef::Local(ct)],
@@ -263,14 +267,15 @@ pub fn transpose_reduce_sum(
             } else {
                 ValRef::Local(ct)
             };
+            let shape = DimExpr::remap_all(input_shape, 0, 1);
             let out = builder.add_op(
                 StdTensorOp::BroadcastInDim {
-                    shape: input_shape.clone(),
+                    shape,
                     dims: kept_dims,
                 },
-                vec![cotangent],
+                vec![cotangent, inputs[0].clone()],
                 OpMode::Linear {
-                    active_mask: vec![true],
+                    active_mask: vec![true, false],
                 },
             );
             vec![Some(out[0])]
@@ -293,20 +298,22 @@ pub fn transpose_reduce_prod(
         Some(ct) => {
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
+            let shape = DimExpr::remap_all(input_shape, 0, 1);
             let cotangent = builder.add_op(
                 StdTensorOp::BroadcastInDim {
-                    shape: input_shape.clone(),
+                    shape,
                     dims: kept_dims.clone(),
                 },
-                vec![cotangent],
+                vec![cotangent, inputs[0].clone()],
                 OpMode::Linear {
-                    active_mask: vec![true],
+                    active_mask: vec![true, false],
                 },
             )[0];
             let prod = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
-            let prod_broadcast = broadcast_reduction_output_fixed(
+            let prod_broadcast = broadcast_reduction_output(
                 builder,
                 ValRef::Local(prod),
+                inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
@@ -349,20 +356,22 @@ pub fn transpose_reduce_chooser(
         Some(ct) => {
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
+            let shape = DimExpr::remap_all(input_shape, 0, 1);
             let cotangent = builder.add_op(
                 StdTensorOp::BroadcastInDim {
-                    shape: input_shape.clone(),
+                    shape,
                     dims: kept_dims.clone(),
                 },
-                vec![cotangent],
+                vec![cotangent, inputs[0].clone()],
                 OpMode::Linear {
-                    active_mask: vec![true],
+                    active_mask: vec![true, false],
                 },
             )[0];
             let answer = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
-            let answer_broadcast = broadcast_reduction_output_fixed(
+            let answer_broadcast = broadcast_reduction_output(
                 builder,
                 ValRef::Local(answer),
+                inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
@@ -372,9 +381,10 @@ pub fn transpose_reduce_chooser(
                 ValRef::Local(answer_broadcast),
             );
             let counts = reduction_location_counts(builder, indicators, axes, input_shape);
-            let counts_broadcast = broadcast_reduction_output_fixed(
+            let counts_broadcast = broadcast_reduction_output(
                 builder,
                 ValRef::Local(counts),
+                inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
@@ -425,7 +435,7 @@ fn normalize_reduction_cotangent(
     if kept_dims.is_empty() {
         let scalar = builder.add_op(
             StdTensorOp::Reshape {
-                from_shape: vec![1],
+                from_shape: DimExpr::from_concrete(&[1]),
                 to_shape: vec![],
             },
             vec![ValRef::Local(cotangent)],
@@ -439,18 +449,20 @@ fn normalize_reduction_cotangent(
     }
 }
 
-fn broadcast_reduction_output_fixed(
+fn broadcast_reduction_output(
     builder: &mut FragmentBuilder<StdTensorOp>,
     output: ValRef<StdTensorOp>,
-    input_shape: &[usize],
+    shape_source: ValRef<StdTensorOp>,
+    input_shape: &[DimExpr],
     kept_dims: &[usize],
 ) -> LocalValId {
+    let shape = DimExpr::remap_all(input_shape, 0, 1);
     builder.add_op(
         StdTensorOp::BroadcastInDim {
-            shape: input_shape.to_vec(),
+            shape,
             dims: kept_dims.to_vec(),
         },
-        vec![output],
+        vec![output, shape_source],
         OpMode::Primal,
     )[0]
 }
@@ -471,7 +483,7 @@ fn reduction_location_counts(
     builder: &mut FragmentBuilder<StdTensorOp>,
     indicators: LocalValId,
     axes: &[usize],
-    input_shape: &[usize],
+    input_shape: &[DimExpr],
 ) -> LocalValId {
     builder.add_op(
         StdTensorOp::ReduceSum {
@@ -491,7 +503,7 @@ fn normalize_scalar_cotangent(
     if output_rank == 0 {
         let scalar = builder.add_op(
             StdTensorOp::Reshape {
-                from_shape: vec![1],
+                from_shape: DimExpr::from_concrete(&[1]),
                 to_shape: vec![],
             },
             vec![ValRef::Local(cotangent)],
