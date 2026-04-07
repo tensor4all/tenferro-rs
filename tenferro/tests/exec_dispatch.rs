@@ -160,6 +160,9 @@ impl TensorBackend for FakeTensorBackend {
     fn broadcast_in_dim(&mut self, _input: &Tensor, _shape: &[usize], _dims: &[usize]) -> Tensor {
         self.result("broadcast_in_dim", 25.0)
     }
+    fn convert(&mut self, _input: &Tensor, _to: DType) -> Tensor {
+        self.result("convert", 25.5)
+    }
     fn extract_diagonal(&mut self, _input: &Tensor, _axis_a: usize, _axis_b: usize) -> Tensor {
         self.result("extract_diagonal", 26.0)
     }
@@ -291,6 +294,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "broadcast_in_dim",
             25.0,
         ),
+        (ExecOp::Convert { to: DType::C64 }, 1, "convert", 25.5),
         (
             ExecOp::BatchedGemm(DotGeneralConfig {
                 lhs_contracting_dims: vec![0],

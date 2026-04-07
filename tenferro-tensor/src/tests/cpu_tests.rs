@@ -1853,6 +1853,89 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
 }
 
 #[test]
+fn test_backend_convert_supports_real_complex_and_precision_changes() {
+    let mut backend = CpuBackend::new();
+    let f32_input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
+    let f64_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.25_f64, -2.5_f64]));
+    let c32_input = Tensor::C32(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)],
+    ));
+    let c64_input = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)],
+    ));
+
+    let cases = [
+        (&f32_input, DType::F32),
+        (&f32_input, DType::F64),
+        (&f32_input, DType::C32),
+        (&f32_input, DType::C64),
+        (&f64_input, DType::F32),
+        (&f64_input, DType::F64),
+        (&f64_input, DType::C32),
+        (&f64_input, DType::C64),
+        (&c32_input, DType::F32),
+        (&c32_input, DType::F64),
+        (&c32_input, DType::C32),
+        (&c32_input, DType::C64),
+        (&c64_input, DType::F32),
+        (&c64_input, DType::F64),
+        (&c64_input, DType::C32),
+        (&c64_input, DType::C64),
+    ];
+
+    for (input, to) in cases {
+        let output = backend.convert(input, to);
+        assert_eq!(output.shape(), &[2]);
+        assert_eq!(output.dtype(), to);
+
+        match (input.dtype(), &output) {
+            (DType::F32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F32, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
+            ),
+            (DType::F32, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
+            ),
+            (DType::F64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F64, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
+            ),
+            (DType::F64, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
+            ),
+            (DType::C32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C32, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
+            ),
+            (DType::C32, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
+            ),
+            (DType::C64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C64, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
+            ),
+            (DType::C64, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
+            ),
+        }
+    }
+}
+
+#[test]
 fn test_backend_linalg_panics_for_unsupported_dtypes() {
     let mut backend = CpuBackend::new();
     let f32_matrix = Tensor::F32(TypedTensor::from_vec(

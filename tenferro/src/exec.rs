@@ -22,6 +22,9 @@ pub enum ExecOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Convert {
+        to: DType,
+    },
     Constant {
         dtype: DType,
         bytes: Vec<u8>,
@@ -139,6 +142,7 @@ pub fn eval_exec_ir<B: TensorBackend>(
             ExecOp::BroadcastInDim { shape, dims } => {
                 backend.broadcast_in_dim(get(&slots, &inst.input_slots, 0), shape, dims)
             }
+            ExecOp::Convert { to } => backend.convert(get(&slots, &inst.input_slots, 0), *to),
             ExecOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
             ExecOp::BatchedGemm(config) => backend.dot_general(
                 get(&slots, &inst.input_slots, 0),

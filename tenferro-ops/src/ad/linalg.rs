@@ -1,7 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use num_complex::Complex64;
-use tenferro_tensor::{DotGeneralConfig, PadConfig};
+use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -112,6 +111,7 @@ pub fn linearize_eig(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    input_dtype: DType,
     input_shape: &[usize],
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
@@ -120,18 +120,23 @@ pub fn linearize_eig(
 
     let rank = input_shape.len();
     let v = ValRef::External(primal_out[1].clone());
-    let complex_one = builder.add_op(
-        StdTensorOp::constant_c64(Complex64::new(1.0, 0.0)),
-        vec![],
-        OpMode::Primal,
-    )[0];
-    let da_complex = builder.add_op(
-        StdTensorOp::Mul,
-        vec![ValRef::Local(complex_one), ValRef::Local(da)],
-        OpMode::Linear {
-            active_mask: vec![false, true],
-        },
-    )[0];
+    let da_complex = match input_dtype {
+        DType::F64 | DType::F32 => builder.add_op(
+            StdTensorOp::Convert {
+                from: input_dtype,
+                to: match input_dtype {
+                    DType::F64 => DType::C64,
+                    DType::F32 => DType::C32,
+                    _ => unreachable!("real dtype branch"),
+                },
+            },
+            vec![ValRef::Local(da)],
+            OpMode::Linear {
+                active_mask: vec![true],
+            },
+        )[0],
+        DType::C64 | DType::C32 => da,
+    };
 
     let dav = matmul_linear(
         builder,

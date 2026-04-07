@@ -31,6 +31,10 @@ pub enum StdTensorOp {
         shape: Vec<usize>,
         dims: Vec<usize>,
     },
+    Convert {
+        from: DType,
+        to: DType,
+    },
     Constant {
         dtype: DType,
         bytes: Vec<u8>,
@@ -126,6 +130,7 @@ pub enum StdTensorOp {
         input_shape: Vec<usize>,
     },
     Eig {
+        input_dtype: DType,
         input_shape: Vec<usize>,
     },
     TriangularSolve {
@@ -245,8 +250,14 @@ impl Hash for StdTensorOp {
             }
             Self::Qr { input_shape }
             | Self::Cholesky { input_shape }
-            | Self::Lu { input_shape }
-            | Self::Eig { input_shape } => {
+            | Self::Lu { input_shape } => {
+                input_shape.hash(state);
+            }
+            Self::Eig {
+                input_dtype,
+                input_shape,
+            } => {
+                input_dtype.hash(state);
                 input_shape.hash(state);
             }
             Self::Eigh { eps, input_shape } => {
@@ -265,6 +276,10 @@ impl Hash for StdTensorOp {
             Self::BroadcastInDim { shape, dims } => {
                 shape.hash(state);
                 dims.hash(state);
+            }
+            Self::Convert { from, to } => {
+                from.hash(state);
+                to.hash(state);
             }
             Self::Constant { dtype, bytes } => {
                 dtype.hash(state);
@@ -330,6 +345,7 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
+            | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
@@ -383,6 +399,7 @@ impl GraphOp for StdTensorOp {
             | Self::Transpose { .. }
             | Self::Reshape { .. }
             | Self::BroadcastInDim { .. }
+            | Self::Convert { .. }
             | Self::ReduceSum { .. }
             | Self::Div
             | Self::Abs

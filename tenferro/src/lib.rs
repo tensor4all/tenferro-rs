@@ -29,7 +29,7 @@ pub mod traced;
 
 pub use engine::Engine;
 pub use linalg_api::{
-    cholesky, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, inv, lu, norm, pinv,
+    cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, inv, lu, norm, pinv,
     pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps, triangular_solve,
 };
 pub use tenferro_tensor::cpu::CpuBackend;

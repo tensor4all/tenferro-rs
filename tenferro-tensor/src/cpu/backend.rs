@@ -218,6 +218,10 @@ impl TensorBackend for CpuBackend {
         self.install(|| structural::broadcast_in_dim(input, shape, dims))
     }
 
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> Tensor {
+        self.install(|| structural::convert(input, to))
+    }
+
     fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
         self.install(|| structural::extract_diagonal(input, axis_a, axis_b))
     }

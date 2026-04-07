@@ -66,6 +66,9 @@ fn linearize_non_semiring(
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::linearize_broadcast_in_dim(builder, tangent_in, shape, dims)
         }
+        StdTensorOp::Convert { from, to } => {
+            structural::linearize_convert(builder, tangent_in, *from, *to)
+        }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             diagonal::linearize_extract_diag(builder, tangent_in, *axis_a, *axis_b)
         }
@@ -109,9 +112,10 @@ fn linearize_non_semiring(
         StdTensorOp::Eigh { eps, input_shape } => {
             linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
         }
-        StdTensorOp::Eig { input_shape } => {
-            linalg::linearize_eig(builder, primal_out, tangent_in, input_shape)
-        }
+        StdTensorOp::Eig {
+            input_dtype,
+            input_shape,
+        } => linalg::linearize_eig(builder, primal_out, tangent_in, *input_dtype, input_shape),
         _ => return None,
     })
 }
@@ -172,6 +176,9 @@ fn transpose_non_semiring(
         StdTensorOp::Reshape { .. } => structural::transpose_reshape(builder, cotangent_out, op),
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::transpose_broadcast_in_dim(builder, cotangent_out, shape, dims)
+        }
+        StdTensorOp::Convert { from, to } => {
+            structural::transpose_convert(builder, cotangent_out, mode, *from, *to)
         }
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             diagonal::transpose_extract_diag(builder, cotangent_out, *axis_a, *axis_b)

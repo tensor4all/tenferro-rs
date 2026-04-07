@@ -16,7 +16,7 @@ use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 use tidu::{differentiate, transpose};
 
 const TOL: f64 = 1e-6;
@@ -1544,6 +1544,51 @@ fn scale_complex_eval_and_grad_complex_sum() {
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice_c64(get_c64_data(&grad_eval), &[factor.conj(), factor.conj()]);
+}
+
+#[test]
+fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
+    let x = TracedTensor::from_tensor(f64_tensor(vec![2], vec![1.25, -2.5]));
+    let dx = TracedTensor::from_tensor(f64_tensor(vec![2], vec![0.5, -1.0]));
+    let cotangent = TracedTensor::from_tensor(c64_tensor(
+        vec![2],
+        vec![Complex64::new(3.0, -7.0), Complex64::new(-2.5, 4.0)],
+    ));
+
+    let mut roundtrip = x.convert(DType::C64).convert(DType::F64);
+    let mut jvp = x.convert(DType::C64).jvp(&x, &dx);
+    let mut vjp = x.convert(DType::C64).vjp(&x, &cotangent);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results =
+        tenferro::traced::eval_all(&mut engine, &mut [&mut roundtrip, &mut jvp, &mut vjp]).unwrap();
+
+    assert_close_slice(get_f64_data(&results[0]), &[1.25, -2.5]);
+    assert_close_slice_c64(
+        get_c64_data(&results[1]),
+        &[Complex64::new(0.5, 0.0), Complex64::new(-1.0, 0.0)],
+    );
+    assert_close_slice(get_f64_data(&results[2]), &[3.0, -2.5]);
+}
+
+#[test]
+fn grad_real_sum_of_eigvals_matches_trace_gradient() {
+    let a = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 3],
+        vec![1.0, 0.0, 0.0, 0.2, 2.0, 0.0, -0.1, 0.3, 4.0],
+    ));
+
+    let mut loss = tenferro::eigvals(&a).convert(DType::F64).reduce_sum(&[0]);
+    let mut grad = loss.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = tenferro::traced::eval_all(&mut engine, &mut [&mut loss, &mut grad]).unwrap();
+
+    assert_close_slice(get_f64_data(&results[0]), &[7.0]);
+    assert_close_slice(
+        get_f64_data(&results[1]),
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    );
 }
 
 #[test]

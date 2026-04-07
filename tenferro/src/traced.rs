@@ -626,6 +626,34 @@ impl TracedTensor {
         apply_unary(StdTensorOp::Log1p, self, self.shape.clone())
     }
 
+    /// Convert the tensor to a different dtype.
+    ///
+    /// For real-to-complex conversions this embeds the real values as
+    /// `x + 0i`. For complex-to-real conversions this extracts the real part.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use tenferro::DType;
+    ///
+    /// let y = x.convert(DType::C64);
+    /// ```
+    pub fn convert(&self, to: DType) -> TracedTensor {
+        if self.dtype == to {
+            return self.clone();
+        }
+
+        apply_unary_with_dtype(
+            StdTensorOp::Convert {
+                from: self.dtype,
+                to,
+            },
+            self,
+            self.shape.clone(),
+            to,
+        )
+    }
+
     /// Generalized tensor contraction.
     ///
     /// # Examples
@@ -802,6 +830,15 @@ pub(crate) fn apply_unary(
     input: &TracedTensor,
     out_shape: Vec<usize>,
 ) -> TracedTensor {
+    apply_unary_with_dtype(op, input, out_shape, input.dtype)
+}
+
+pub(crate) fn apply_unary_with_dtype(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    out_shape: Vec<usize>,
+    out_dtype: DType,
+) -> TracedTensor {
     let mut builder = FragmentBuilder::new();
     builder.add_parent(input.fragment.clone());
     let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
@@ -811,7 +848,7 @@ pub(crate) fn apply_unary(
 
     TracedTensor {
         shape: out_shape,
-        dtype: input.dtype,
+        dtype: out_dtype,
         fragment,
         val: outputs[0],
         data: None,

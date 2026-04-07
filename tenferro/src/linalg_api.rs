@@ -4,6 +4,19 @@ use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
 use crate::traced::{apply_binary, apply_multi_output, apply_nullary, apply_unary, TracedTensor};
 
+/// Convert a traced tensor to a different dtype.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use tenferro::DType;
+///
+/// let y = tenferro::convert(&x, DType::C64);
+/// ```
+pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
+    input.convert(to)
+}
+
 /// Singular value decomposition with a default numerical epsilon.
 ///
 /// # Examples
@@ -192,6 +205,7 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let eig_dtype = eig_output_dtype(a.dtype);
     let mut results = apply_multi_output(
         StdTensorOp::Eig {
+            input_dtype: a.dtype,
             input_shape: a.shape.clone(),
         },
         a,

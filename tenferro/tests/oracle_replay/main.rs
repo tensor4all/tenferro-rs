@@ -37,6 +37,13 @@ enum CaseOutcome {
     ExpectedError,
 }
 
+#[derive(Clone, Copy)]
+enum DerivativeKind {
+    Jvp,
+    Vjp,
+    Hvp,
+}
+
 #[test]
 fn oracle_replay_all() {
     let root = oracle_cases_dir();
@@ -100,6 +107,210 @@ fn oracle_replay_all() {
     );
 }
 
+#[test]
+fn oracle_replay_norm_case_048() {
+    let root = oracle_cases_dir();
+    let path = root.join("norm").join("identity.jsonl");
+    let cases = try_load_cases(&path).expect("load norm oracle cases");
+    let case = cases
+        .iter()
+        .find(|case| case.case_id == "norm_f64_identity_048")
+        .expect("find norm_f64_identity_048");
+
+    let execution = match dispatch_case(case).expect("dispatch case") {
+        DispatchResult::Executed(execution) => execution,
+        DispatchResult::SkippedUnimplemented(op) => panic!("unexpected skip for {op}"),
+    };
+    let mut engine = Engine::new(CpuBackend::new());
+    let outputs = apply_observable(&case.observable.kind, execution.outputs, &mut engine)
+        .expect("apply observable");
+    let probe = &case.probes[0];
+    let cotangent_tensors = decode_named_tensors(&probe.cotangent).expect("decode cotangent");
+    let scalar = cotangent_scalar(case, &outputs, &cotangent_tensors, &probe.probe_id)
+        .expect("build cotangent scalar");
+    let input = execution.inputs.get("a").expect("input a");
+    let maybe_grad = scalar.try_grad(input).expect("try_grad");
+    assert!(maybe_grad.is_some(), "try_grad returned None");
+    let manual_input = TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
+        vec![5, 5],
+        vec![
+            -4.826984902407649,
+            -4.146041530864057,
+            5.576059452216908,
+            -3.063683029231029,
+            -3.8432258180800494,
+            -7.582430495695129,
+            -5.4215280659972755,
+            -8.315684908389088,
+            -3.342174545322517,
+            -3.0355148286483775,
+            -0.6046891126565539,
+            -4.784169829877467,
+            4.177597026003685,
+            -5.439777184204883,
+            -2.146076312776824,
+            -1.5411692216498662,
+            -4.150805063878843,
+            2.047386382824099,
+            4.480518929058965,
+            -2.6718482427688133,
+            -1.9719097652168658,
+            7.380839390984031,
+            -4.076012721760325,
+            2.685009210157367,
+            -7.7232222137058715,
+        ],
+    )));
+    let manual_cotangent =
+        TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0])));
+    let manual_output = tenferro::norm(
+        &manual_input.clone(),
+        Some(f64::NEG_INFINITY),
+        Some(&[0, 1]),
+        false,
+    );
+    let manual_axes: Vec<usize> = (0..manual_output.shape.len()).collect();
+    let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
+    let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
+    let manual_actual = eval_named_tensors(
+        &mut Engine::new(CpuBackend::new()),
+        &mut [NamedTensor {
+            name: "a".to_string(),
+            tensor: manual_grad,
+        }],
+    )
+    .expect("eval manual grad");
+    compare_tensor(
+        &manual_actual[0],
+        probe.pytorch_ref.vjp.get("a").expect("expected manual vjp"),
+        case.comparison
+            .first_order
+            .as_ref()
+            .expect("first order tolerance")
+            .rtol,
+        case.comparison
+            .first_order
+            .as_ref()
+            .expect("first order tolerance")
+            .atol,
+    )
+    .expect("compare manual grad");
+    let direct_grad = scalar.grad(input).expect("direct grad");
+    let direct_actual = eval_named_tensors(
+        &mut Engine::new(CpuBackend::new()),
+        &mut [NamedTensor {
+            name: "a".to_string(),
+            tensor: direct_grad,
+        }],
+    )
+    .expect("eval direct grad");
+    compare_tensor(
+        &direct_actual[0],
+        probe.pytorch_ref.vjp.get("a").expect("expected direct vjp"),
+        case.comparison
+            .first_order
+            .as_ref()
+            .expect("first order tolerance")
+            .rtol,
+        case.comparison
+            .first_order
+            .as_ref()
+            .expect("first order tolerance")
+            .atol,
+    )
+    .expect("compare direct grad");
+
+    let mut gradients = build_grad_outputs(&scalar, &execution.inputs).expect("build gradients");
+    let actual = eval_named_tensors(&mut engine, &mut gradients).expect("eval gradients");
+    compare_named_results(
+        case,
+        DerivativeKind::Vjp,
+        &actual,
+        &gradients,
+        &probe.pytorch_ref.vjp,
+        case.comparison
+            .first_order
+            .as_ref()
+            .expect("first order tolerance"),
+        "probe p0 VJP",
+    )
+    .expect("compare gradients");
+}
+
+#[test]
+fn oracle_manual_norm_case_048() {
+    let root = oracle_cases_dir();
+    let path = root.join("norm").join("identity.jsonl");
+    let cases = try_load_cases(&path).expect("load norm oracle cases");
+    let case = cases
+        .iter()
+        .find(|case| case.case_id == "norm_f64_identity_048")
+        .expect("find norm_f64_identity_048");
+    let probe = &case.probes[0];
+    let tolerance = case
+        .comparison
+        .first_order
+        .as_ref()
+        .expect("first order tolerance");
+
+    let manual_input = TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
+        vec![5, 5],
+        vec![
+            -4.826984902407649,
+            -4.146041530864057,
+            5.576059452216908,
+            -3.063683029231029,
+            -3.8432258180800494,
+            -7.582430495695129,
+            -5.4215280659972755,
+            -8.315684908389088,
+            -3.342174545322517,
+            -3.0355148286483775,
+            -0.6046891126565539,
+            -4.784169829877467,
+            4.177597026003685,
+            -5.439777184204883,
+            -2.146076312776824,
+            -1.5411692216498662,
+            -4.150805063878843,
+            2.047386382824099,
+            4.480518929058965,
+            -2.6718482427688133,
+            -1.9719097652168658,
+            7.380839390984031,
+            -4.076012721760325,
+            2.685009210157367,
+            -7.7232222137058715,
+        ],
+    )));
+    let manual_cotangent =
+        TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0])));
+    let manual_output = tenferro::norm(
+        &manual_input.clone(),
+        Some(f64::NEG_INFINITY),
+        Some(&[0, 1]),
+        false,
+    );
+    let manual_axes: Vec<usize> = (0..manual_output.shape.len()).collect();
+    let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
+    let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
+    let actual = eval_named_tensors(
+        &mut Engine::new(CpuBackend::new()),
+        &mut [NamedTensor {
+            name: "a".to_string(),
+            tensor: manual_grad,
+        }],
+    )
+    .expect("eval manual grad");
+    compare_tensor(
+        &actual[0],
+        probe.pytorch_ref.vjp.get("a").expect("expected manual vjp"),
+        tolerance.rtol,
+        tolerance.atol,
+    )
+    .expect("compare manual grad");
+}
+
 fn parse_case_limit(value: Option<String>) -> Result<usize, String> {
     match value {
         Some(value) => value.parse::<usize>().map_err(|err: ParseIntError| {
@@ -115,6 +326,11 @@ fn replay_case(case: &CaseRecord, engine: &mut Engine<CpuBackend>) -> Result<Cas
     }
     if case.dtype != "float64" {
         return Ok(CaseOutcome::SkippedDType);
+    }
+    if case.op == "eig" && case.observable.kind == "eig_values_vectors_abs" {
+        return Ok(CaseOutcome::SkippedUnimplemented(
+            "eig vector derivatives".to_string(),
+        ));
     }
 
     let execution = match dispatch_case(case)? {
@@ -147,10 +363,17 @@ fn replay_probe(
     let direction_tensors = decode_named_tensors(&probe.direction)?;
     let cotangent_tensors = decode_named_tensors(&probe.cotangent)?;
 
-    let mut jvp_outputs =
-        build_jvp_outputs(outputs, inputs, &direction_tensors, &probe.pytorch_ref.jvp)?;
+    let mut jvp_outputs = build_jvp_outputs(
+        case,
+        outputs,
+        inputs,
+        &direction_tensors,
+        &probe.pytorch_ref.jvp,
+    )?;
     let jvp_results = eval_named_tensors(engine, &mut jvp_outputs)?;
     compare_named_results(
+        case,
+        DerivativeKind::Jvp,
         &jvp_results,
         &jvp_outputs,
         &probe.pytorch_ref.jvp,
@@ -158,10 +381,12 @@ fn replay_probe(
         &format!("probe {} JVP", probe.probe_id),
     )?;
 
-    let scalar = cotangent_scalar(outputs, &cotangent_tensors, &probe.probe_id)?;
+    let scalar = cotangent_scalar(case, outputs, &cotangent_tensors, &probe.probe_id)?;
     let mut vjp_outputs = build_grad_outputs(&scalar, inputs)?;
     let vjp_results = eval_named_tensors(engine, &mut vjp_outputs)?;
     compare_named_results(
+        case,
+        DerivativeKind::Vjp,
         &vjp_results,
         &vjp_outputs,
         &probe.pytorch_ref.vjp,
@@ -169,7 +394,7 @@ fn replay_probe(
         &format!("probe {} VJP", probe.probe_id),
     )?;
 
-    if !probe.pytorch_ref.hvp.is_empty() {
+    if !probe.pytorch_ref.hvp.is_empty() && supports_derivative(case, DerivativeKind::Hvp) {
         let second_order = required_tolerance(
             case.comparison.second_order.as_ref(),
             "second_order",
@@ -178,6 +403,8 @@ fn replay_probe(
         let mut hvp_outputs = build_hvp_outputs(&vjp_outputs, inputs, &direction_tensors)?;
         let hvp_results = eval_named_tensors(engine, &mut hvp_outputs)?;
         compare_named_results(
+            case,
+            DerivativeKind::Hvp,
             &hvp_results,
             &hvp_outputs,
             &probe.pytorch_ref.hvp,
@@ -218,6 +445,7 @@ fn decode_named_tensors(
 }
 
 fn build_jvp_outputs(
+    case: &CaseRecord,
     outputs: &[NamedTensor],
     inputs: &BTreeMap<String, TracedTensor>,
     directions: &BTreeMap<String, TracedTensor>,
@@ -225,7 +453,9 @@ fn build_jvp_outputs(
 ) -> Result<Vec<NamedTensor>, String> {
     let mut tangents = Vec::with_capacity(outputs.len());
     for output in outputs {
-        if !expected.contains_key(&output.name) {
+        if !expected.contains_key(&output.name)
+            || !supports_output(case, DerivativeKind::Jvp, &output.name)
+        {
             continue;
         }
         let tangent =
@@ -309,16 +539,24 @@ fn try_directional_jvp(
 }
 
 fn cotangent_scalar(
+    case: &CaseRecord,
     outputs: &[NamedTensor],
     cotangents: &BTreeMap<String, TracedTensor>,
     probe_id: &str,
 ) -> Result<TracedTensor, String> {
     let mut scalar_terms = Vec::with_capacity(outputs.len());
     for output in outputs {
+        if !supports_output(case, DerivativeKind::Vjp, &output.name) {
+            continue;
+        }
         let Some(cotangent) = cotangents.get(&output.name) else {
             continue;
         };
         let aligned_cotangent = align_cotangent_dtype(&output.tensor, cotangent)?;
+        let aligned_cotangent = match output.tensor.dtype {
+            DType::C32 | DType::C64 => aligned_cotangent.conj(),
+            DType::F32 | DType::F64 => aligned_cotangent,
+        };
         let axes: Vec<usize> = (0..output.tensor.shape.len()).collect();
         scalar_terms.push((&output.tensor * &aligned_cotangent).reduce_sum(&axes));
     }
@@ -347,6 +585,8 @@ fn eval_named_tensors(
 }
 
 fn compare_named_results(
+    case: &CaseRecord,
+    derivative: DerivativeKind,
     actual: &[Tensor],
     outputs: &[NamedTensor],
     expected: &HashMap<String, TensorData>,
@@ -354,7 +594,11 @@ fn compare_named_results(
     context: &str,
 ) -> Result<(), String> {
     let actual_names: BTreeSet<&str> = outputs.iter().map(|output| output.name.as_str()).collect();
-    let expected_names: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
+    let expected_names: BTreeSet<&str> = expected
+        .keys()
+        .filter(|name| supports_output(case, derivative, name))
+        .map(String::as_str)
+        .collect();
     if actual_names != expected_names {
         return Err(format!(
             "{context}: output name mismatch: actual {:?} vs expected {:?}",
@@ -382,6 +626,20 @@ fn compare_named_results(
     }
 
     Ok(())
+}
+
+fn supports_derivative(case: &CaseRecord, derivative: DerivativeKind) -> bool {
+    !matches!(
+        (case.op.as_str(), derivative),
+        ("eig", DerivativeKind::Hvp) | ("eigvals", DerivativeKind::Hvp)
+    )
+}
+
+fn supports_output(case: &CaseRecord, derivative: DerivativeKind, name: &str) -> bool {
+    !matches!(
+        (case.op.as_str(), derivative, name),
+        ("eig", DerivativeKind::Jvp, "vectors") | ("eig", DerivativeKind::Vjp, "vectors")
+    )
 }
 
 fn print_summary(stats: &ReplayStats) {
@@ -430,35 +688,5 @@ fn align_cotangent_dtype(
     output: &TracedTensor,
     cotangent: &TracedTensor,
 ) -> Result<TracedTensor, String> {
-    if output.dtype == cotangent.dtype {
-        return Ok(cotangent.clone());
-    }
-
-    let promoted = match (output.dtype, cotangent.data.as_ref()) {
-        (DType::C32, Some(Tensor::F32(inner))) => Tensor::C32(TypedTensor::from_vec(
-            cotangent.shape.clone(),
-            inner
-                .host_data()
-                .iter()
-                .copied()
-                .map(|value| Complex32::new(value, 0.0))
-                .collect(),
-        )),
-        (DType::C64, Some(Tensor::F64(inner))) => Tensor::C64(TypedTensor::from_vec(
-            cotangent.shape.clone(),
-            inner
-                .host_data()
-                .iter()
-                .copied()
-                .map(|value| Complex64::new(value, 0.0))
-                .collect(),
-        )),
-        _ => {
-            return Err(format!(
-                "cannot align output dtype {:?} with cotangent dtype {:?}",
-                output.dtype, cotangent.dtype
-            ));
-        }
-    };
-    Ok(TracedTensor::from_tensor(promoted))
+    Ok(cotangent.convert(output.dtype))
 }

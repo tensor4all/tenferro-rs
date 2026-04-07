@@ -350,9 +350,9 @@ fn replay_enabled_op(op: &str) -> bool {
             | "slogdet"
             | "det"
             | "inv"
+            | "eig"
+            | "eigvals"
             | "eigvalsh"
-            // TODO: re-enable eig/eigvals replay once StdTensorOp::Eig has
-            // complex-safe JVP casting and a transpose rule for VJP/HVP.
             | "pinv"
             | "norm"
     )
@@ -512,7 +512,9 @@ fn parse_norm_ord_json(value: &serde_json::Value) -> Result<Option<NormOrd>, Str
         serde_json::Value::String(kind) if kind == "fro" => Ok(Some(NormOrd::Fro)),
         serde_json::Value::String(kind) if kind == "nuc" => Ok(Some(NormOrd::Nuc)),
         serde_json::Value::String(kind) => Err(format!("unsupported norm ord {kind}")),
-        other => Ok(Some(NormOrd::Numeric(as_f64(other)?))),
+        other => Ok(Some(NormOrd::Numeric(normalize_norm_ord_number(as_f64(
+            other,
+        )?)))),
     }
 }
 
@@ -522,11 +524,21 @@ fn parse_norm_ord_arg(value: &OracleArg) -> Result<Option<NormOrd>, String> {
         OracleArg::String(kind) if kind == "fro" => Ok(Some(NormOrd::Fro)),
         OracleArg::String(kind) if kind == "nuc" => Ok(Some(NormOrd::Nuc)),
         OracleArg::String(kind) => Err(format!("unsupported norm ord {kind}")),
-        OracleArg::Number(number) => Ok(Some(NormOrd::Numeric(*number))),
+        OracleArg::Number(number) => Ok(Some(NormOrd::Numeric(normalize_norm_ord_number(*number)))),
         other => Err(format!(
             "expected numeric or string positional norm ord, got {}",
             oracle_arg_kind(other)
         )),
+    }
+}
+
+fn normalize_norm_ord_number(number: f64) -> f64 {
+    if number == f64::MAX {
+        f64::INFINITY
+    } else if number == -f64::MAX {
+        f64::NEG_INFINITY
+    } else {
+        number
     }
 }
 

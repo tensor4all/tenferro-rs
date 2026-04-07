@@ -281,3 +281,34 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_constant_ops() {
         ExecOp::Constant { dtype: DType::C64, ref bytes } if bytes == &complex_bytes
     ));
 }
+
+#[test]
+fn lower_to_stablehlo_and_compile_to_exec_wire_convert_op() {
+    let program = CompiledProgram {
+        instructions: vec![make_instr(
+            StdTensorOp::Convert {
+                from: DType::F64,
+                to: DType::C64,
+            },
+            vec![0],
+            vec![1],
+        )],
+        input_slots: vec![0],
+        output_slots: vec![1],
+        n_slots: 2,
+    };
+
+    let stablehlo = lower_to_stablehlo(&program);
+    assert!(matches!(
+        stablehlo.instructions[0].op,
+        StableHloOp::Convert { to: DType::C64 }
+    ));
+    assert_eq!(stablehlo.instructions[0].dtype, DType::C64);
+
+    let exec = compile_to_exec(&stablehlo);
+    assert!(matches!(
+        exec.instructions[0].op,
+        ExecOp::Convert { to: DType::C64 }
+    ));
+    assert_eq!(exec.instructions[0].dtype, DType::C64);
+}

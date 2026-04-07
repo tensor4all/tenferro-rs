@@ -194,6 +194,177 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
     assert_f64_eq(get_f64_data(&results[4])[0], 3.0);
 }
 
+#[test]
+fn matrix_neg_inf_norm_grad_flows_to_unique_min_row() {
+    let a = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 3],
+        vec![1.0, 4.0, 2.0, -2.0, 1.0, 3.0, 1.0, -1.0, -4.0],
+    ));
+    let mut y = norm(&a, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
+    let mut grad = y.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+
+    assert_f64_eq(get_f64_data(&results[0])[0], 4.0);
+    assert_tensor_f64_eq(
+        get_f64_data(&results[1]),
+        &[1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    );
+}
+
+#[test]
+fn norm_neg_inf_grad_matches_oracle_identity_case_without_keepdim() {
+    let a = norm_neg_inf_oracle_input();
+    let mut y = norm(&a, Some(f64::NEG_INFINITY), None, false);
+    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+    let scalar = (&y * &cotangent).reduce_sum(&axes);
+    let mut grad = scalar.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+
+    assert_f64_eq(get_f64_data(&results[0])[0], 16.527183497626066);
+    assert_tensor_f64_eq(
+        get_f64_data(&results[1]),
+        &[
+            -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+            0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+    );
+}
+
+#[test]
+fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
+    let a = norm_neg_inf_oracle_input();
+    let direction = TracedTensor::from_tensor(f64_tensor(
+        vec![5, 5],
+        vec![
+            0.17548577202687607,
+            -0.08038046416504352,
+            -0.09593884869015058,
+            0.09944469922788578,
+            -0.00430783457831506,
+            -0.17894488376803996,
+            0.27160227582436686,
+            0.15082825691690627,
+            -0.1849797984995558,
+            -0.27123041745011045,
+            0.3051659515141916,
+            -0.35910913963528646,
+            0.29007282185641586,
+            0.0532052721557607,
+            0.002230017953854305,
+            -0.1526866859550694,
+            0.024401036746981766,
+            -0.02631195518935404,
+            -0.20424801159758899,
+            0.10520118272166035,
+            0.41011263558409017,
+            -0.07375746729542286,
+            0.06648016535187662,
+            -0.23967231054325988,
+            0.29217435382015194,
+        ],
+    ));
+    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+
+    let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
+    let mut jvp = y.jvp(&a, &direction);
+    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let scalar = (&y * &cotangent).reduce_sum(&axes);
+    let mut grad = scalar.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut jvp, &mut grad]).unwrap();
+
+    assert_f64_eq(get_f64_data(&results[0])[0], -0.5591327894020484);
+    assert_tensor_f64_eq(
+        get_f64_data(&results[1]),
+        &[
+            -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+            0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+    );
+}
+
+#[test]
+fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() {
+    let a = norm_neg_inf_oracle_input();
+    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+    let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
+    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let scalar = (&y * &cotangent).reduce_sum(&axes);
+    let mut grad = scalar.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut grad]).unwrap();
+
+    assert_tensor_f64_eq(
+        get_f64_data(&results[0]),
+        &[
+            -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
+            0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+    );
+}
+
+#[test]
+fn norm_neg_inf_grad_matches_oracle_identity_case_with_keepdim() {
+    let a = norm_neg_inf_oracle_input();
+    let mut y = norm(&a, Some(f64::NEG_INFINITY), None, true);
+    let axes: Vec<usize> = (0..y.shape.len()).collect();
+    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![1, 1], vec![-1.0]));
+    let scalar = (&y * &cotangent).reduce_sum(&axes);
+    let mut grad = scalar.grad(&a).unwrap();
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+
+    assert_tensor_f64_eq(get_f64_data(&results[0]), &[16.527183497626066]);
+    assert_tensor_f64_eq(
+        get_f64_data(&results[1]),
+        &[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+        ],
+    );
+}
+
+fn norm_neg_inf_oracle_input() -> TracedTensor {
+    TracedTensor::from_tensor(f64_tensor(
+        vec![5, 5],
+        vec![
+            -4.826984902407649,
+            -4.146041530864057,
+            5.576059452216908,
+            -3.063683029231029,
+            -3.8432258180800494,
+            -7.582430495695129,
+            -5.4215280659972755,
+            -8.315684908389088,
+            -3.342174545322517,
+            -3.0355148286483775,
+            -0.6046891126565539,
+            -4.784169829877467,
+            4.177597026003685,
+            -5.439777184204883,
+            -2.146076312776824,
+            -1.5411692216498662,
+            -4.150805063878843,
+            2.047386382824099,
+            4.480518929058965,
+            -2.6718482427688133,
+            -1.9719097652168658,
+            7.380839390984031,
+            -4.076012721760325,
+            2.685009210157367,
+            -7.7232222137058715,
+        ],
+    ))
+}
+
 fn assert_f64_eq(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1.0e-10,

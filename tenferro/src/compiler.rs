@@ -27,6 +27,7 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                     shape: shape.clone(),
                     dims: dims.clone(),
                 },
+                StdTensorOp::Convert { to, .. } => StableHloOp::Convert { to: *to },
                 StdTensorOp::Constant { dtype, bytes } => StableHloOp::Constant {
                     dtype: *dtype,
                     bytes: bytes.clone(),
@@ -111,6 +112,11 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
             };
             let dtype = match &instr.op {
                 StdTensorOp::Constant { dtype, .. } => *dtype,
+                StdTensorOp::Convert { to, .. } => *to,
+                StdTensorOp::Eig { input_dtype, .. } => match input_dtype {
+                    DType::F32 | DType::C32 => DType::C32,
+                    DType::F64 | DType::C64 => DType::C64,
+                },
                 _ => DType::F64,
             };
             StableHloInstruction {
@@ -203,6 +209,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                     shape: shape.clone(),
                     dims: dims.clone(),
                 },
+                StableHloOp::Convert { to } => ExecOp::Convert { to: *to },
                 StableHloOp::ReduceSum { axes } => ExecOp::ReduceSum { axes: axes.clone() },
                 StableHloOp::ReduceProd { axes } => ExecOp::ReduceProd { axes: axes.clone() },
                 StableHloOp::ReduceMax { axes } => ExecOp::ReduceMax { axes: axes.clone() },

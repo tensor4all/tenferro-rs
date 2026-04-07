@@ -98,6 +98,9 @@ macro_rules! impl_stub_backend {
             ) -> Tensor {
                 todo!(concat!($label, " broadcast_in_dim"))
             }
+            fn convert(&mut self, _input: &Tensor, _to: crate::DType) -> Tensor {
+                todo!(concat!($label, " convert"))
+            }
             fn extract_diagonal(
                 &mut self,
                 _input: &Tensor,
