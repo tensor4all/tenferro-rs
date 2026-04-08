@@ -724,7 +724,7 @@ fn broadcast_batch_scalar_to_leading_axis(input: &TracedTensor, shape: &[usize])
 fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
     let rank = lhs.rank;
     let batch_dims: Vec<usize> = (2..rank).collect();
-    let out = lhs.dot_general(
+    lhs.dot_general(
         rhs,
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
@@ -734,20 +734,7 @@ fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> Tra
             lhs_rank: rank,
             rhs_rank: rank,
         },
-    );
-    if rank <= 2 {
-        return out;
-    }
-    out.transpose(&matmul_output_perm(rank))
-}
-
-fn matmul_output_perm(rank: usize) -> Vec<usize> {
-    let batch_ndim = rank - 2;
-    let mut perm = Vec::with_capacity(rank);
-    perm.push(batch_ndim);
-    perm.push(batch_ndim + 1);
-    perm.extend(0..batch_ndim);
-    perm
+    )
 }
 
 fn matrix_transpose_perm(rank: usize) -> Vec<usize> {

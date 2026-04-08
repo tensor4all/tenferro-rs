@@ -1,5 +1,9 @@
 /// DotGeneral dimension configuration.
 ///
+/// The output shape is `[lhs_free..., rhs_free..., batch...]` (col-major
+/// batch-trailing convention). Batch dims have the largest stride so that
+/// each batch slice occupies a contiguous block of memory.
+///
 /// # Examples
 ///
 /// ```ignore

@@ -1234,12 +1234,11 @@ fn matmul_fixed(
     rhs: ValRef<StdTensorOp>,
     rank: usize,
 ) -> LocalValId {
-    let out = builder.add_op(
+    builder.add_op(
         StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
         vec![lhs, rhs],
         OpMode::Primal,
-    )[0];
-    transpose_matmul_output_fixed(builder, out, rank)
+    )[0]
 }
 
 fn matmul_linear(
@@ -1249,12 +1248,11 @@ fn matmul_linear(
     active_mask: Vec<bool>,
     rank: usize,
 ) -> LocalValId {
-    let out = builder.add_op(
+    builder.add_op(
         StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
         vec![lhs, rhs],
         OpMode::Linear { active_mask },
-    )[0];
-    transpose_matmul_output_linear(builder, out, rank)
+    )[0]
 }
 
 fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
@@ -1540,53 +1538,4 @@ fn take_leading_rows_linear(
         vec![false, true],
         rank,
     )
-}
-
-fn transpose_matmul_output_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    input: LocalValId,
-    rank: usize,
-) -> LocalValId {
-    if rank <= 2 {
-        return input;
-    }
-    fixed_unary(
-        builder,
-        StdTensorOp::Transpose {
-            perm: matmul_output_perm(rank),
-        },
-        ValRef::Local(input),
-    )
-}
-
-fn transpose_matmul_output_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    input: LocalValId,
-    rank: usize,
-) -> LocalValId {
-    if rank <= 2 {
-        return input;
-    }
-    builder.add_op(
-        StdTensorOp::Transpose {
-            perm: matmul_output_perm(rank),
-        },
-        vec![ValRef::Local(input)],
-        OpMode::Linear {
-            active_mask: vec![true],
-        },
-    )[0]
-}
-
-fn matmul_output_perm(rank: usize) -> Vec<usize> {
-    assert!(rank >= 2, "matmul_output_perm expects rank >= 2");
-    if rank == 2 {
-        return vec![0, 1];
-    }
-    let batch_ndim = rank - 2;
-    let mut perm = Vec::with_capacity(rank);
-    perm.push(batch_ndim);
-    perm.push(batch_ndim + 1);
-    perm.extend(0..batch_ndim);
-    perm
 }

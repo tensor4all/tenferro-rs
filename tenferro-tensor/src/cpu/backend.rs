@@ -430,7 +430,7 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 fn matmul_preserve_trailing_batch(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
     let rank = lhs.shape().len();
     let batch_dims: Vec<usize> = (2..rank).collect();
-    let out = backend.dot_general(
+    backend.dot_general(
         lhs,
         rhs,
         &DotGeneralConfig {
@@ -441,17 +441,7 @@ fn matmul_preserve_trailing_batch(backend: &mut CpuBackend, lhs: &Tensor, rhs: &
             lhs_rank: rank,
             rhs_rank: rank,
         },
-    );
-    if rank <= 2 {
-        return out;
-    }
-
-    let batch_ndim = rank - 2;
-    let mut perm = Vec::with_capacity(rank);
-    perm.push(batch_ndim);
-    perm.push(batch_ndim + 1);
-    perm.extend(0..batch_ndim);
-    backend.transpose(&out, &perm)
+    )
 }
 
 fn zeros_like_tensor(input: &Tensor) -> Tensor {
@@ -539,16 +529,16 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
                 .collect();
 
             let mut out_shape = Vec::new();
-            out_shape.extend_from_slice(&batch_shape);
             out_shape.extend_from_slice(&lhs_free_shape);
             out_shape.extend_from_slice(&rhs_free_shape);
+            out_shape.extend_from_slice(&batch_shape);
 
             let out_n: usize = out_shape.iter().product();
             let contract_n: usize = contract_shape.iter().product();
 
             let mut result = TypedTensor::zeros(out_shape.clone());
-            let n_batch = batch_shape.len();
             let n_lhs_free = lhs_free_shape.len();
+            let n_rhs_free = rhs_free_shape.len();
 
             let mut out_idx = vec![0usize; out_shape.len()];
             let mut lhs_idx = vec![0usize; lhs_rank];
@@ -558,9 +548,9 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
             for flat_out in 0..out_n {
                 flat_to_multi(flat_out, &out_shape, &mut out_idx);
 
-                let batch_vals = &out_idx[..n_batch];
-                let lhs_free_vals = &out_idx[n_batch..n_batch + n_lhs_free];
-                let rhs_free_vals = &out_idx[n_batch + n_lhs_free..];
+                let lhs_free_vals = &out_idx[..n_lhs_free];
+                let rhs_free_vals = &out_idx[n_lhs_free..n_lhs_free + n_rhs_free];
+                let batch_vals = &out_idx[n_lhs_free + n_rhs_free..];
 
                 for (bi, &ld) in config.lhs_batch_dims.iter().enumerate() {
                     lhs_idx[ld] = batch_vals[bi];

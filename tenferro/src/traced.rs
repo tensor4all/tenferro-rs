@@ -760,14 +760,14 @@ impl TracedTensor {
         let out_shape_hint = match (&self.shape_hint, &other.shape_hint) {
             (Some(lhs_shape), Some(rhs_shape)) => {
                 let mut out_shape = Vec::with_capacity(out_rank);
-                for &d in &config.lhs_batch_dims {
-                    out_shape.push(lhs_shape[d]);
-                }
                 for &d in &lhs_free {
                     out_shape.push(lhs_shape[d]);
                 }
                 for &d in &rhs_free {
                     out_shape.push(rhs_shape[d]);
+                }
+                for &d in &config.lhs_batch_dims {
+                    out_shape.push(lhs_shape[d]);
                 }
                 Some(out_shape)
             }

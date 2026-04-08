@@ -1,6 +1,7 @@
 use num_traits::{One, Zero};
 
 use crate::config::DotGeneralConfig;
+use crate::cpu::structural::typed_transpose;
 use crate::types::{col_major_strides, Buffer, TypedTensor};
 
 #[cfg(feature = "cpu-blas")]
@@ -49,6 +50,50 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
         expected = strides[i].checked_mul(shapes[i] as isize)?;
     }
     Some((shapes.iter().product(), base_stride))
+}
+
+/// Compute permutations that reorder lhs/rhs into canonical GEMM layout.
+///
+/// Canonical col-major layouts (batch trailing):
+/// - lhs: `[free..., contract..., batch...]`
+/// - rhs: `[contract..., free..., batch...]`
+fn canonical_gemm_layout(config: &DotGeneralConfig) -> (Vec<usize>, Vec<usize>, DotGeneralConfig) {
+    let lhs_free: Vec<usize> = (0..config.lhs_rank)
+        .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
+        .collect();
+    let rhs_free: Vec<usize> = (0..config.rhs_rank)
+        .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
+        .collect();
+
+    let mut lhs_perm = Vec::with_capacity(config.lhs_rank);
+    lhs_perm.extend_from_slice(&lhs_free);
+    lhs_perm.extend_from_slice(&config.lhs_contracting_dims);
+    lhs_perm.extend_from_slice(&config.lhs_batch_dims);
+
+    let mut rhs_perm = Vec::with_capacity(config.rhs_rank);
+    rhs_perm.extend_from_slice(&config.rhs_contracting_dims);
+    rhs_perm.extend_from_slice(&rhs_free);
+    rhs_perm.extend_from_slice(&config.rhs_batch_dims);
+
+    let nf_lhs = lhs_free.len();
+    let nc = config.lhs_contracting_dims.len();
+    let nb = config.lhs_batch_dims.len();
+    let nf_rhs = rhs_free.len();
+
+    let new_config = DotGeneralConfig {
+        lhs_contracting_dims: (nf_lhs..nf_lhs + nc).collect(),
+        rhs_contracting_dims: (0..nc).collect(),
+        lhs_batch_dims: (nf_lhs + nc..nf_lhs + nc + nb).collect(),
+        rhs_batch_dims: (nc + nf_rhs..nc + nf_rhs + nb).collect(),
+        lhs_rank: config.lhs_rank,
+        rhs_rank: config.rhs_rank,
+    };
+
+    (lhs_perm, rhs_perm, new_config)
+}
+
+fn is_identity_perm(perm: &[usize]) -> bool {
+    perm.iter().enumerate().all(|(i, &p)| i == p)
 }
 
 fn analyse_gemm<T>(
@@ -123,21 +168,21 @@ fn analyse_gemm<T>(
     let (_, b_bs) = try_fuse_dims(&batch_shapes, &rhs_batch_strides)?;
 
     let mut out_shape = Vec::new();
-    out_shape.extend_from_slice(&batch_shapes);
     out_shape.extend_from_slice(&lhs_free_shapes);
     out_shape.extend_from_slice(&rhs_free_shapes);
+    out_shape.extend_from_slice(&batch_shapes);
 
     let out_strides = col_major_strides(&out_shape);
-    let nb = batch_shapes.len();
     let nm = lhs_free_shapes.len();
-    let out_m_shapes = &out_shape[nb..nb + nm];
-    let out_m_strides = &out_strides[nb..nb + nm];
+    let nn = rhs_free_shapes.len();
+    let out_m_shapes = &out_shape[..nm];
+    let out_m_strides = &out_strides[..nm];
     #[cfg(feature = "cpu-faer")]
-    let out_n_shapes = &out_shape[nb + nm..];
+    let out_n_shapes = &out_shape[nm..nm + nn];
     #[cfg(feature = "cpu-faer")]
-    let out_n_strides = &out_strides[nb + nm..];
-    let out_b_shapes = &out_shape[..nb];
-    let out_b_strides = &out_strides[..nb];
+    let out_n_strides = &out_strides[nm..nm + nn];
+    let out_b_shapes = &out_shape[nm + nn..];
+    let out_b_strides = &out_strides[nm + nn..];
 
     let (_, c_rs) = try_fuse_dims(out_m_shapes, out_m_strides)?;
     #[cfg(feature = "cpu-faer")]
@@ -174,8 +219,24 @@ pub(crate) fn dot_general<T>(
 where
     T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
 {
-    typed_faer_gemm(lhs, rhs, config)
-        .unwrap_or_else(|| todo!("unsupported dot_general layout for cpu-faer"))
+    if let Some(result) = typed_faer_gemm(lhs, rhs, config) {
+        return result;
+    }
+    let (lhs_perm, rhs_perm, new_config) = canonical_gemm_layout(config);
+    let lhs_canon = if is_identity_perm(&lhs_perm) {
+        std::borrow::Cow::Borrowed(lhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm))
+    };
+    let rhs_canon = if is_identity_perm(&rhs_perm) {
+        std::borrow::Cow::Borrowed(rhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm))
+    };
+    // Canonical layout guarantees contiguous dim groups in col-major,
+    // so analyse_gemm / try_fuse_dims will always succeed here.
+    typed_faer_gemm(&lhs_canon, &rhs_canon, &new_config)
+        .unwrap_or_else(|| unreachable!("canonical layout is always fusable"))
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -249,8 +310,24 @@ pub(crate) fn dot_general<T>(
 where
     T: BlasGemm + Copy + Clone + Zero + One,
 {
-    typed_blas_gemm(lhs, rhs, config)
-        .unwrap_or_else(|| todo!("unsupported dot_general layout for cpu-blas"))
+    if let Some(result) = typed_blas_gemm(lhs, rhs, config) {
+        return result;
+    }
+    let (lhs_perm, rhs_perm, new_config) = canonical_gemm_layout(config);
+    let lhs_canon = if is_identity_perm(&lhs_perm) {
+        std::borrow::Cow::Borrowed(lhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm))
+    };
+    let rhs_canon = if is_identity_perm(&rhs_perm) {
+        std::borrow::Cow::Borrowed(rhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm))
+    };
+    // Canonical layout guarantees contiguous dim groups in col-major,
+    // so analyse_gemm / try_fuse_dims will always succeed here.
+    typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config)
+        .unwrap_or_else(|| unreachable!("canonical layout is always fusable"))
 }
 
 #[cfg(feature = "cpu-blas")]

@@ -61,7 +61,7 @@ fn semiring_backend_batched_gemm_handles_batch_and_contract_dimensions() {
     assert_eq!(out.shape, vec![2, 2, 2]);
     assert_eq!(
         out.host_data(),
-        &[23.0, 271.0, 34.0, 298.0, 31.0, 311.0, 46.0, 342.0]
+        &[23.0, 34.0, 31.0, 46.0, 271.0, 298.0, 311.0, 342.0]
     );
 }
 
