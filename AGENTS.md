@@ -149,6 +149,11 @@ python3 scripts/check-docs-site.py
 
 If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
 
+Additionally, verify the following before pushing:
+
+- **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
+- **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`. Stale documentation is worse than no documentation.
+
 ### PR Creation Rules
 
 - PRs to `main` must be created using `gh pr create`
