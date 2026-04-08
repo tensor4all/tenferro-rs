@@ -1,7 +1,14 @@
 ---
-title: "tenferro-rs Design Documents"
+title: "tenferro-rs Documentation"
 ---
 
-Architecture and design documents for the tenferro-rs tensor computation library.
+Documentation for the tenferro-rs tensor computation library.
 
-Use the sidebar to navigate between documents.
+## Sections
+
+- **[Getting Started](getting-started/)** — Installation, tutorials, and examples
+- **[Architecture](architecture/)** — Design rationale for each subsystem
+- **[Specification](spec/)** — Normative specs: op catalog, backend contract, AD contract
+- **[Implementation Design](design/)** — Implementation-focused design notes
+- **[Oracle Replay](oracle/)** — AD correctness validation via oracle database
+- **[Reference](reference/)** — External system surveys and comparisons
