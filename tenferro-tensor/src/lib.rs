@@ -15,6 +15,7 @@
 pub mod backend;
 pub mod config;
 pub mod cpu;
+pub mod error;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 pub mod types;
@@ -27,6 +28,7 @@ pub mod rocm;
 
 pub use backend::*;
 pub use config::*;
+pub use error::*;
 pub use types::*;
 
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
