@@ -37,62 +37,96 @@ pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor
 /// let mut backend = CpuBackend::new();
 /// ```
 pub trait TensorBackend {
-    fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn neg(&mut self, input: &Tensor) -> Tensor;
-    fn conj(&mut self, input: &Tensor) -> Tensor;
-    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn abs(&mut self, input: &Tensor) -> Tensor;
-    fn sign(&mut self, input: &Tensor) -> Tensor;
-    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> Tensor;
-    fn select(&mut self, pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> Tensor;
-    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor;
+    fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
+    fn select(
+        &mut self,
+        pred: &Tensor,
+        on_true: &Tensor,
+        on_false: &Tensor,
+    ) -> crate::Result<Tensor>;
+    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
 
-    fn exp(&mut self, input: &Tensor) -> Tensor;
-    fn log(&mut self, input: &Tensor) -> Tensor;
-    fn sin(&mut self, input: &Tensor) -> Tensor;
-    fn cos(&mut self, input: &Tensor) -> Tensor;
-    fn tanh(&mut self, input: &Tensor) -> Tensor;
-    fn sqrt(&mut self, input: &Tensor) -> Tensor;
-    fn rsqrt(&mut self, input: &Tensor) -> Tensor;
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor;
-    fn expm1(&mut self, input: &Tensor) -> Tensor;
-    fn log1p(&mut self, input: &Tensor) -> Tensor;
+    fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn log(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor>;
 
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> Tensor;
-    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> Tensor;
-    fn broadcast_in_dim(&mut self, input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor;
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> Tensor;
-    fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
-    fn embed_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor;
-    fn tril(&mut self, input: &Tensor, k: i64) -> Tensor;
-    fn triu(&mut self, input: &Tensor, k: i64) -> Tensor;
+    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
+    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
+    fn broadcast_in_dim(
+        &mut self,
+        input: &Tensor,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<Tensor>;
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor>;
+    fn extract_diagonal(
+        &mut self,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor>;
+    fn embed_diagonal(
+        &mut self,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor>;
+    fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
 
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
-    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
-    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
+    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
-    fn dot_general(&mut self, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor;
+    fn dot_general(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor>;
 
-    fn gather(&mut self, operand: &Tensor, start_indices: &Tensor, config: &GatherConfig)
-        -> Tensor;
+    fn gather(
+        &mut self,
+        operand: &Tensor,
+        start_indices: &Tensor,
+        config: &GatherConfig,
+    ) -> crate::Result<Tensor>;
     fn scatter(
         &mut self,
         operand: &Tensor,
         scatter_indices: &Tensor,
         updates: &Tensor,
         config: &ScatterConfig,
-    ) -> Tensor;
-    fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> Tensor;
-    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor;
-    fn pad(&mut self, input: &Tensor, config: &PadConfig) -> Tensor;
-    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> Tensor;
-    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> Tensor;
+    ) -> crate::Result<Tensor>;
+    fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
+    fn dynamic_slice(
+        &mut self,
+        input: &Tensor,
+        starts: &Tensor,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor>;
+    fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
+    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
+    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
-    fn cholesky(&mut self, input: &Tensor) -> Tensor;
+    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor>;
     fn triangular_solve(
         &mut self,
         a: &Tensor,
@@ -101,13 +135,13 @@ pub trait TensorBackend {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    ) -> Tensor;
-    fn lu(&mut self, input: &Tensor) -> Vec<Tensor>;
-    fn svd(&mut self, input: &Tensor) -> Vec<Tensor>;
-    fn qr(&mut self, input: &Tensor) -> Vec<Tensor>;
-    fn eigh(&mut self, input: &Tensor) -> Vec<Tensor>;
-    fn eig(&mut self, input: &Tensor) -> Vec<Tensor>;
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor;
+    ) -> crate::Result<Tensor>;
+    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor>;
 }
 
 /// Algebra-generic backend over typed tensors.
@@ -128,13 +162,13 @@ pub trait SemiringBackend<Alg: Semiring> {
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
         config: &DotGeneralConfig,
-    ) -> TypedTensor<Alg::Scalar>;
+    ) -> crate::Result<TypedTensor<Alg::Scalar>>;
 
     fn add(
         &mut self,
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
-    ) -> TypedTensor<Alg::Scalar> {
+    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
         assert_eq!(lhs.shape, rhs.shape, "add: shape mismatch");
         let mut out = typed_array(&lhs.shape, Alg::zero());
         zip_map2_into(
@@ -144,14 +178,14 @@ pub trait SemiringBackend<Alg: Semiring> {
             |x, y| Alg::add(x, y),
         )
         .expect("semiring add");
-        tensor_from_array(out)
+        Ok(tensor_from_array(out))
     }
 
     fn mul(
         &mut self,
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
-    ) -> TypedTensor<Alg::Scalar> {
+    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
         assert_eq!(lhs.shape, rhs.shape, "mul: shape mismatch");
         let mut out = typed_array(&lhs.shape, Alg::zero());
         zip_map2_into(
@@ -161,16 +195,16 @@ pub trait SemiringBackend<Alg: Semiring> {
             |x, y| Alg::mul(x, y),
         )
         .expect("semiring mul");
-        tensor_from_array(out)
+        Ok(tensor_from_array(out))
     }
 
     fn reduce_sum(
         &mut self,
         input: &TypedTensor<Alg::Scalar>,
         axes: &[usize],
-    ) -> TypedTensor<Alg::Scalar> {
+    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
         if axes.is_empty() {
-            return input.clone();
+            return Ok(input.clone());
         }
 
         let output_shape: Vec<usize> = input
@@ -198,6 +232,6 @@ pub trait SemiringBackend<Alg: Semiring> {
             )
             .expect("semiring reduce_sum");
         }
-        TypedTensor::from_vec(output_shape, current.into_data())
+        Ok(TypedTensor::from_vec(output_shape, current.into_data()))
     }
 }

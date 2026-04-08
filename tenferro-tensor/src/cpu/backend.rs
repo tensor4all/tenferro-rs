@@ -118,144 +118,169 @@ impl CpuBackend {
 }
 
 impl TensorBackend for CpuBackend {
-    fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| elementwise::add(lhs, rhs))
+    fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::add(lhs, rhs)))
     }
 
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| elementwise::mul(lhs, rhs))
+    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::mul(lhs, rhs)))
     }
 
-    fn neg(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| elementwise::neg(input))
+    fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::neg(input)))
     }
 
-    fn conj(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| elementwise::conj(input))
+    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::conj(input)))
     }
 
-    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| elementwise::div(lhs, rhs))
+    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::div(lhs, rhs)))
     }
 
-    fn abs(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| elementwise::abs(input))
+    fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::abs(input)))
     }
 
-    fn sign(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| elementwise::sign(input))
+    fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::sign(input)))
     }
 
-    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| elementwise::maximum(lhs, rhs))
+    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::maximum(lhs, rhs)))
     }
 
-    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| elementwise::minimum(lhs, rhs))
+    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::minimum(lhs, rhs)))
     }
 
-    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> Tensor {
-        self.install(|| elementwise::compare(lhs, rhs, dir))
+    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::compare(lhs, rhs, dir)))
     }
 
-    fn select(&mut self, pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> Tensor {
-        self.install(|| elementwise::select(pred, on_true, on_false))
+    fn select(
+        &mut self,
+        pred: &Tensor,
+        on_true: &Tensor,
+        on_false: &Tensor,
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::select(pred, on_true, on_false)))
     }
 
-    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> Tensor {
-        self.install(|| elementwise::clamp(input, lower, upper))
+    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| elementwise::clamp(input, lower, upper)))
     }
 
-    fn exp(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::exp(input))
+    fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::exp(input)))
     }
 
-    fn log(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::log(input))
+    fn log(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::log(input)))
     }
 
-    fn sin(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::sin(input))
+    fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::sin(input)))
     }
 
-    fn cos(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::cos(input))
+    fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::cos(input)))
     }
 
-    fn tanh(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::tanh(input))
+    fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::tanh(input)))
     }
 
-    fn sqrt(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::sqrt(input))
+    fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::sqrt(input)))
     }
 
-    fn rsqrt(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::rsqrt(input))
+    fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::rsqrt(input)))
     }
 
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-        self.install(|| analytic::pow(lhs, rhs))
+    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::pow(lhs, rhs)))
     }
 
-    fn expm1(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::expm1(input))
+    fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::expm1(input)))
     }
 
-    fn log1p(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| analytic::log1p(input))
+    fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| analytic::log1p(input)))
     }
 
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> Tensor {
-        self.install(|| structural::transpose(input, perm))
+    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::transpose(input, perm)))
     }
 
-    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> Tensor {
-        self.install(|| structural::reshape(input, shape))
+    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::reshape(input, shape)))
     }
 
-    fn broadcast_in_dim(&mut self, input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor {
-        self.install(|| structural::broadcast_in_dim(input, shape, dims))
+    fn broadcast_in_dim(
+        &mut self,
+        input: &Tensor,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::broadcast_in_dim(input, shape, dims)))
     }
 
-    fn convert(&mut self, input: &Tensor, to: crate::DType) -> Tensor {
-        self.install(|| structural::convert(input, to))
+    fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::convert(input, to)))
     }
 
-    fn extract_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
-        self.install(|| structural::extract_diagonal(input, axis_a, axis_b))
+    fn extract_diagonal(
+        &mut self,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::extract_diagonal(input, axis_a, axis_b)))
     }
 
-    fn embed_diagonal(&mut self, input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
-        self.install(|| structural::embed_diagonal(input, axis_a, axis_b))
+    fn embed_diagonal(
+        &mut self,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::embed_diagonal(input, axis_a, axis_b)))
     }
 
-    fn tril(&mut self, input: &Tensor, k: i64) -> Tensor {
-        self.install(|| structural::tril(input, k))
+    fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::tril(input, k)))
     }
 
-    fn triu(&mut self, input: &Tensor, k: i64) -> Tensor {
-        self.install(|| structural::triu(input, k))
+    fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+        Ok(self.install(|| structural::triu(input, k)))
     }
 
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {
-        self.install(|| reduction::reduce_sum(input, axes))
+    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| reduction::reduce_sum(input, axes)))
     }
 
-    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {
-        self.install(|| reduction::reduce_prod(input, axes))
+    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| reduction::reduce_prod(input, axes)))
     }
 
-    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {
-        self.install(|| reduction::reduce_max(input, axes))
+    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| reduction::reduce_max(input, axes)))
     }
 
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {
-        self.install(|| reduction::reduce_min(input, axes))
+    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| reduction::reduce_min(input, axes)))
     }
 
-    fn dot_general(&mut self, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor {
-        self.install(|| dispatch_binary!(lhs, rhs, |a, b| gemm::dot_general(a, b, config)))
+    fn dot_general(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| dispatch_binary!(lhs, rhs, |a, b| gemm::dot_general(a, b, config))))
     }
 
     fn gather(
@@ -263,8 +288,8 @@ impl TensorBackend for CpuBackend {
         operand: &Tensor,
         start_indices: &Tensor,
         config: &GatherConfig,
-    ) -> Tensor {
-        self.install(|| indexing::gather(operand, start_indices, config))
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::gather(operand, start_indices, config)))
     }
 
     fn scatter(
@@ -273,37 +298,42 @@ impl TensorBackend for CpuBackend {
         scatter_indices: &Tensor,
         updates: &Tensor,
         config: &ScatterConfig,
-    ) -> Tensor {
-        self.install(|| indexing::scatter(operand, scatter_indices, updates, config))
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::scatter(operand, scatter_indices, updates, config)))
     }
 
-    fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> Tensor {
-        self.install(|| indexing::slice(input, config))
+    fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::slice(input, config)))
     }
 
-    fn dynamic_slice(&mut self, input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor {
-        self.install(|| indexing::dynamic_slice(input, starts, slice_sizes))
+    fn dynamic_slice(
+        &mut self,
+        input: &Tensor,
+        starts: &Tensor,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::dynamic_slice(input, starts, slice_sizes)))
     }
 
-    fn pad(&mut self, input: &Tensor, config: &PadConfig) -> Tensor {
-        self.install(|| indexing::pad(input, config))
+    fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::pad(input, config)))
     }
 
-    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> Tensor {
-        self.install(|| indexing::concatenate(inputs, axis))
+    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::concatenate(inputs, axis)))
     }
 
-    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> Tensor {
-        self.install(|| indexing::reverse(input, axes))
+    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        Ok(self.install(|| indexing::reverse(input, axes)))
     }
 
-    fn cholesky(&mut self, input: &Tensor) -> Tensor {
-        self.install(|| match input {
+    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        Ok(self.install(|| match input {
             Tensor::F64(t) => Tensor::F64(linalg::cholesky(t)),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => Tensor::C64(linalg::cholesky(t)),
             _ => todo!("cholesky: unsupported dtype"),
-        })
+        }))
     }
 
     fn triangular_solve(
@@ -314,8 +344,8 @@ impl TensorBackend for CpuBackend {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    ) -> Tensor {
-        self.install(|| match (a, b) {
+    ) -> crate::Result<Tensor> {
+        Ok(self.install(|| match (a, b) {
             (Tensor::F64(a), Tensor::F64(b)) => Tensor::F64(linalg::triangular_solve(
                 a,
                 b,
@@ -334,73 +364,76 @@ impl TensorBackend for CpuBackend {
                 unit_diagonal,
             )),
             _ => todo!("triangular_solve: unsupported dtype"),
-        })
+        }))
     }
 
-    fn lu(&mut self, input: &Tensor) -> Vec<Tensor> {
-        self.install(|| match input {
+    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        Ok(self.install(|| match input {
             Tensor::F64(t) => linalg::lu(t).into_iter().map(Tensor::F64).collect(),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::lu(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("lu: unsupported dtype"),
-        })
+        }))
     }
 
-    fn svd(&mut self, input: &Tensor) -> Vec<Tensor> {
-        self.install(|| match input {
+    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        Ok(self.install(|| match input {
             Tensor::F64(t) => linalg::svd(t).into_iter().map(Tensor::F64).collect(),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::svd(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("svd: unsupported dtype"),
-        })
+        }))
     }
 
-    fn qr(&mut self, input: &Tensor) -> Vec<Tensor> {
-        self.install(|| match input {
+    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        Ok(self.install(|| match input {
             Tensor::F64(t) => linalg::qr(t).into_iter().map(Tensor::F64).collect(),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::qr(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("qr: unsupported dtype"),
-        })
+        }))
     }
 
-    fn eigh(&mut self, input: &Tensor) -> Vec<Tensor> {
-        self.install(|| match input {
+    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        Ok(self.install(|| match input {
             Tensor::F64(t) => linalg::eigh(t).into_iter().map(Tensor::F64).collect(),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::eigh(t).into_iter().map(Tensor::C64).collect(),
             _ => todo!("eigh: unsupported dtype"),
-        })
+        }))
     }
 
-    fn eig(&mut self, input: &Tensor) -> Vec<Tensor> {
-        self.install(|| linalg::eig(input))
+    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        Ok(self.install(|| linalg::eig(input)))
     }
 
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> Tensor {
+    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return zeros_like_tensor(b);
+            return Ok(zeros_like_tensor(b));
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            (self.reshape(b, &matrix_rhs_shape), Some(b.shape().to_vec()))
+            (
+                self.reshape(b, &matrix_rhs_shape)?,
+                Some(b.shape().to_vec()),
+            )
         } else {
             (b.clone(), None)
         };
 
-        let outputs = self.lu(a);
+        let outputs = self.lu(a)?;
         let p = &outputs[0];
         let l = &outputs[1];
         let u = &outputs[2];
         assert_nonsingular_u(u);
 
-        let pb = matmul_preserve_trailing_batch(self, p, &rhs);
-        let z = self.triangular_solve(l, &pb, true, true, false, true);
-        let x = self.triangular_solve(u, &z, true, false, false, false);
+        let pb = matmul_preserve_trailing_batch(self, p, &rhs)?;
+        let z = self.triangular_solve(l, &pb, true, true, false, true)?;
+        let x = self.triangular_solve(u, &z, true, false, false, false)?;
         if let Some(shape) = restore_shape {
             self.reshape(&x, &shape)
         } else {
-            x
+            Ok(x)
         }
     }
 }
@@ -427,7 +460,11 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     Some(rhs_shape)
 }
 
-fn matmul_preserve_trailing_batch(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+fn matmul_preserve_trailing_batch(
+    backend: &mut CpuBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     let rank = lhs.shape().len();
     let batch_dims: Vec<usize> = (2..rank).collect();
     backend.dot_general(
@@ -494,8 +531,8 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
         config: &DotGeneralConfig,
-    ) -> TypedTensor<Alg::Scalar> {
-        self.install(|| {
+    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
+        Ok(self.install(|| {
             assert_eq!(
                 config.lhs_contracting_dims.len(),
                 config.rhs_contracting_dims.len()
@@ -581,7 +618,7 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
             }
 
             result
-        })
+        }))
     }
 }
 

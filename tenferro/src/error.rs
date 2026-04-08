@@ -36,6 +36,10 @@ pub enum Error {
     #[error("grad requires a scalar output, got shape {shape:?}")]
     NonScalarGrad { shape: Vec<usize> },
 
+    /// Runtime tensor execution failed in the backend layer.
+    #[error(transparent)]
+    TensorRuntime(#[from] tenferro_tensor::Error),
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),

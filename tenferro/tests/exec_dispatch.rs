@@ -1,5 +1,6 @@
 use num_complex::Complex64;
 use tenferro::buffer_pool::BufferPool;
+use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_algebra::Standard;
 use tenferro_ops::dim_expr::DimExpr;
@@ -80,119 +81,161 @@ fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
 #[derive(Default)]
 struct FakeTensorBackend {
     calls: Vec<&'static str>,
+    error_on: Option<&'static str>,
 }
 
 impl FakeTensorBackend {
-    fn result(&mut self, name: &'static str, value: f64) -> Tensor {
+    fn result(&mut self, name: &'static str, value: f64) -> tenferro_tensor::Result<Tensor> {
         self.calls.push(name);
-        scalar_tensor(value)
+        if self.error_on == Some(name) {
+            return Err(tenferro_tensor::Error::BackendFailure {
+                op: name,
+                message: "injected failure".into(),
+            });
+        }
+        Ok(scalar_tensor(value))
     }
 }
 
 impl TensorBackend for FakeTensorBackend {
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("add", 1.0)
     }
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("mul", 2.0)
     }
-    fn neg(&mut self, _input: &Tensor) -> Tensor {
+    fn neg(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("neg", 3.0)
     }
-    fn conj(&mut self, _input: &Tensor) -> Tensor {
+    fn conj(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("conj", 4.0)
     }
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("div", 5.0)
     }
-    fn abs(&mut self, _input: &Tensor) -> Tensor {
+    fn abs(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("abs", 6.0)
     }
-    fn sign(&mut self, _input: &Tensor) -> Tensor {
+    fn sign(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("sign", 7.0)
     }
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("maximum", 8.0)
     }
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("minimum", 9.0)
     }
-    fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> Tensor {
+    fn compare(
+        &mut self,
+        _lhs: &Tensor,
+        _rhs: &Tensor,
+        _dir: &CompareDir,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("compare", 10.0)
     }
-    fn select(&mut self, _pred: &Tensor, _on_true: &Tensor, _on_false: &Tensor) -> Tensor {
+    fn select(
+        &mut self,
+        _pred: &Tensor,
+        _on_true: &Tensor,
+        _on_false: &Tensor,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("select", 11.0)
     }
-    fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> Tensor {
+    fn clamp(
+        &mut self,
+        _input: &Tensor,
+        _lower: &Tensor,
+        _upper: &Tensor,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("clamp", 12.0)
     }
-    fn exp(&mut self, _input: &Tensor) -> Tensor {
+    fn exp(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("exp", 13.0)
     }
-    fn log(&mut self, _input: &Tensor) -> Tensor {
+    fn log(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("log", 14.0)
     }
-    fn sin(&mut self, _input: &Tensor) -> Tensor {
+    fn sin(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("sin", 15.0)
     }
-    fn cos(&mut self, _input: &Tensor) -> Tensor {
+    fn cos(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("cos", 16.0)
     }
-    fn tanh(&mut self, _input: &Tensor) -> Tensor {
+    fn tanh(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("tanh", 17.0)
     }
-    fn sqrt(&mut self, _input: &Tensor) -> Tensor {
+    fn sqrt(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("sqrt", 18.0)
     }
-    fn rsqrt(&mut self, _input: &Tensor) -> Tensor {
+    fn rsqrt(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("rsqrt", 19.0)
     }
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> Tensor {
+    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("pow", 20.0)
     }
-    fn expm1(&mut self, _input: &Tensor) -> Tensor {
+    fn expm1(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("expm1", 21.0)
     }
-    fn log1p(&mut self, _input: &Tensor) -> Tensor {
+    fn log1p(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("log1p", 22.0)
     }
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> Tensor {
+    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("transpose", 23.0)
     }
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> Tensor {
+    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reshape", 24.0)
     }
-    fn broadcast_in_dim(&mut self, _input: &Tensor, _shape: &[usize], _dims: &[usize]) -> Tensor {
+    fn broadcast_in_dim(
+        &mut self,
+        _input: &Tensor,
+        _shape: &[usize],
+        _dims: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("broadcast_in_dim", 25.0)
     }
-    fn convert(&mut self, _input: &Tensor, _to: DType) -> Tensor {
+    fn convert(&mut self, _input: &Tensor, _to: DType) -> tenferro_tensor::Result<Tensor> {
         self.result("convert", 25.5)
     }
-    fn extract_diagonal(&mut self, _input: &Tensor, _axis_a: usize, _axis_b: usize) -> Tensor {
+    fn extract_diagonal(
+        &mut self,
+        _input: &Tensor,
+        _axis_a: usize,
+        _axis_b: usize,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("extract_diagonal", 26.0)
     }
-    fn embed_diagonal(&mut self, _input: &Tensor, _axis_a: usize, _axis_b: usize) -> Tensor {
+    fn embed_diagonal(
+        &mut self,
+        _input: &Tensor,
+        _axis_a: usize,
+        _axis_b: usize,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("embed_diagonal", 27.0)
     }
-    fn tril(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+    fn tril(&mut self, _input: &Tensor, _k: i64) -> tenferro_tensor::Result<Tensor> {
         self.result("tril", 27.5)
     }
-    fn triu(&mut self, _input: &Tensor, _k: i64) -> Tensor {
+    fn triu(&mut self, _input: &Tensor, _k: i64) -> tenferro_tensor::Result<Tensor> {
         self.result("triu", 27.75)
     }
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
+    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_sum", 28.0)
     }
-    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
+    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_prod", 29.0)
     }
-    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
+    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_max", 30.0)
     }
-    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
+    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_min", 31.0)
     }
-    fn dot_general(&mut self, _lhs: &Tensor, _rhs: &Tensor, _config: &DotGeneralConfig) -> Tensor {
+    fn dot_general(
+        &mut self,
+        _lhs: &Tensor,
+        _rhs: &Tensor,
+        _config: &DotGeneralConfig,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("dot_general", 32.0)
     }
     fn gather(
@@ -200,7 +243,7 @@ impl TensorBackend for FakeTensorBackend {
         _operand: &Tensor,
         _start_indices: &Tensor,
         _config: &GatherConfig,
-    ) -> Tensor {
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("gather", 33.0)
     }
     fn scatter(
@@ -209,10 +252,10 @@ impl TensorBackend for FakeTensorBackend {
         _scatter_indices: &Tensor,
         _updates: &Tensor,
         _config: &ScatterConfig,
-    ) -> Tensor {
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("scatter", 34.0)
     }
-    fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> Tensor {
+    fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> tenferro_tensor::Result<Tensor> {
         self.result("slice", 35.0)
     }
     fn dynamic_slice(
@@ -220,19 +263,23 @@ impl TensorBackend for FakeTensorBackend {
         _input: &Tensor,
         _starts: &Tensor,
         _slice_sizes: &[usize],
-    ) -> Tensor {
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("dynamic_slice", 36.0)
     }
-    fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> Tensor {
+    fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> tenferro_tensor::Result<Tensor> {
         self.result("pad", 37.0)
     }
-    fn concatenate(&mut self, _inputs: &[&Tensor], _axis: usize) -> Tensor {
+    fn concatenate(
+        &mut self,
+        _inputs: &[&Tensor],
+        _axis: usize,
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("concatenate", 38.0)
     }
-    fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> Tensor {
+    fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reverse", 39.0)
     }
-    fn cholesky(&mut self, _input: &Tensor) -> Tensor {
+    fn cholesky(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("cholesky", 40.0)
     }
     fn triangular_solve(
@@ -243,33 +290,33 @@ impl TensorBackend for FakeTensorBackend {
         _lower: bool,
         _transpose_a: bool,
         _unit_diagonal: bool,
-    ) -> Tensor {
+    ) -> tenferro_tensor::Result<Tensor> {
         self.result("triangular_solve", 40.5)
     }
-    fn lu(&mut self, _input: &Tensor) -> Vec<Tensor> {
+    fn lu(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("lu");
-        vec![
+        Ok(vec![
             scalar_tensor(40.75),
             scalar_tensor(41.0),
             scalar_tensor(41.25),
             scalar_tensor(41.5),
-        ]
+        ])
     }
-    fn svd(&mut self, _input: &Tensor) -> Vec<Tensor> {
+    fn svd(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("svd");
-        vec![scalar_tensor(42.0), scalar_tensor(42.5)]
+        Ok(vec![scalar_tensor(42.0), scalar_tensor(42.5)])
     }
-    fn qr(&mut self, _input: &Tensor) -> Vec<Tensor> {
+    fn qr(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("qr");
-        vec![scalar_tensor(43.0), scalar_tensor(43.5)]
+        Ok(vec![scalar_tensor(43.0), scalar_tensor(43.5)])
     }
-    fn eigh(&mut self, _input: &Tensor) -> Vec<Tensor> {
+    fn eigh(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("eigh");
-        vec![scalar_tensor(44.0), scalar_tensor(44.5)]
+        Ok(vec![scalar_tensor(44.0), scalar_tensor(44.5)])
     }
-    fn eig(&mut self, _input: &Tensor) -> Vec<Tensor> {
+    fn eig(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("eig");
-        vec![
+        Ok(vec![
             Tensor::C64(TypedTensor::from_vec(
                 vec![],
                 vec![Complex64::new(45.0, 0.5)],
@@ -278,9 +325,9 @@ impl TensorBackend for FakeTensorBackend {
                 vec![],
                 vec![Complex64::new(45.5, -0.5)],
             )),
-        ]
+        ])
     }
-    fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> Tensor {
+    fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("solve", 44.0)
     }
 }
@@ -411,7 +458,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             .collect();
         let mut pool = BufferPool::new();
 
-        let outputs = eval_exec_ir(&mut backend, &program, inputs, &mut pool);
+        let outputs = eval_exec_ir(&mut backend, &program, inputs, &mut pool).unwrap();
 
         assert_eq!(backend.calls, vec![expected_call]);
         assert_eq!(outputs.len(), 1);
@@ -439,7 +486,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool);
+    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool).unwrap();
 
     assert!(backend.calls.is_empty());
     assert_eq!(outputs.len(), 1);
@@ -470,11 +517,60 @@ fn eval_exec_ir_materializes_complex_constants() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool);
+    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool).unwrap();
 
     assert!(backend.calls.is_empty());
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_c64_value(&outputs[0]), value);
+}
+
+#[test]
+fn eval_exec_ir_propagates_backend_errors() {
+    let mut backend = FakeTensorBackend {
+        calls: Vec::new(),
+        error_on: Some("add"),
+    };
+    let mut pool = BufferPool::new();
+    let err = eval_exec_ir(
+        &mut backend,
+        &single_instruction_program(ExecOp::Add, 2),
+        vec![scalar_tensor(1.0), scalar_tensor(2.0)],
+        &mut pool,
+    )
+    .unwrap_err();
+
+    assert_eq!(backend.calls, vec!["add"]);
+    assert!(matches!(
+        err,
+        Error::TensorRuntime(tenferro_tensor::Error::BackendFailure { op: "add", .. })
+    ));
+}
+
+#[test]
+fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
+    let mut backend = FakeTensorBackend::default();
+    let mut pool = BufferPool::new();
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::Add,
+            input_slots: vec![0, 1],
+            output_slots: vec![2],
+            dtype: DType::F64,
+            last_use: vec![false, false],
+        }],
+        input_slots: vec![0],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let err =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap_err();
+
+    assert!(backend.calls.is_empty());
+    assert!(matches!(
+        err,
+        Error::TensorRuntime(tenferro_tensor::Error::MissingValue { slot: 1 })
+    ));
 }
 
 fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecProgram {
@@ -506,7 +602,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         4,
     );
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    let outputs =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
     assert_eq!(backend.calls, vec!["lu"]);
     assert_eq!(outputs.len(), 4);
     assert_eq!(scalar_value(&outputs[0]), 40.75);
@@ -525,7 +622,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    let outputs =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
     assert_eq!(backend.calls, vec!["svd"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 42.0);
@@ -542,7 +640,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    let outputs =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
     assert_eq!(backend.calls, vec!["qr"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 43.0);
@@ -559,7 +658,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    let outputs =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
     assert_eq!(backend.calls, vec!["eigh"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 44.0);
@@ -576,7 +676,8 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool);
+    let outputs =
+        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
     assert_eq!(backend.calls, vec!["eig"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_c64_value(&outputs[0]), Complex64::new(45.0, 0.5));
@@ -614,7 +715,8 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
         &program,
         vec![scalar_tensor(1.0), scalar_tensor(2.0)],
         &mut pool,
-    );
+    )
+    .unwrap();
 
     assert_eq!(backend.calls, vec!["add", "neg"]);
     assert_eq!(outputs.len(), 1);
@@ -630,21 +732,24 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
         &mut backend,
         &single_instruction_program(ExecOp::Add, 2),
         vec![typed_scalar(2.0), typed_scalar(3.0)],
-    );
+    )
+    .unwrap();
     assert_eq!(add_out[0].host_data(), &[5.0]);
 
     let mul_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
         &single_instruction_program(ExecOp::Multiply, 2),
         vec![typed_scalar(2.0), typed_scalar(3.0)],
-    );
+    )
+    .unwrap();
     assert_eq!(mul_out[0].host_data(), &[6.0]);
 
     let reduce_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
         &single_instruction_program(ExecOp::ReduceSum { axes: vec![0] }, 1),
         vec![TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])],
-    );
+    )
+    .unwrap();
     assert_eq!(reduce_out[0].shape, vec![2]);
     assert_eq!(reduce_out[0].host_data(), &[3.0, 7.0]);
 
@@ -655,7 +760,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             vec![2, 3],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         )],
-    );
+    )
+    .unwrap();
     assert_eq!(permute_out[0].shape, vec![3, 2]);
     assert_eq!(permute_out[0].host_data(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 
@@ -671,7 +777,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             vec![2, 3],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         )],
-    );
+    )
+    .unwrap();
     assert_eq!(reshape_out[0].shape, vec![3, 2]);
     assert_eq!(reshape_out[0].host_data(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
@@ -685,7 +792,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             1,
         ),
         vec![TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0])],
-    );
+    )
+    .unwrap();
     assert_eq!(broadcast_out[0].shape, vec![3, 2]);
     assert_eq!(
         broadcast_out[0].host_data(),
@@ -705,7 +813,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             vec![3, 3],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
         )],
-    );
+    )
+    .unwrap();
     assert_eq!(extract_out[0].shape, vec![3]);
     assert_eq!(extract_out[0].host_data(), &[1.0, 5.0, 9.0]);
 
@@ -719,7 +828,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             1,
         ),
         vec![TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0])],
-    );
+    )
+    .unwrap();
     assert_eq!(embed_out[0].shape, vec![3, 3]);
     assert_eq!(
         embed_out[0].host_data(),
@@ -743,7 +853,8 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
             TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
             TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]),
         ],
-    );
+    )
+    .unwrap();
     assert_eq!(gemm_out[0].shape, vec![2, 2]);
     assert_eq!(gemm_out[0].host_data(), &[23.0, 34.0, 31.0, 46.0]);
 }
