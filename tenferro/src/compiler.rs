@@ -188,7 +188,12 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
     let mut program = stablehlo.clone();
     dot_dimension_sorter(&mut program);
     reduction_simplification(&mut program);
-    dot_decomposer(&mut program);
+    // dot_decomposer is disabled: the CPU GEMM backend handles non-canonical
+    // layouts via canonical_gemm_layout fallback in gemm/mod.rs, which
+    // transposes only the unfusable operand(s). The decomposer has a known
+    // bug where it doesn't update downstream Permute instructions after
+    // rewriting DotGeneral dimension numbers.
+    // dot_decomposer(&mut program);
     transpose_folding(&mut program);
 
     let instructions: Vec<ExecInstruction> = program
