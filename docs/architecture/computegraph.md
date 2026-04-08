@@ -1,7 +1,5 @@
-# v2 computegraph-rs Design
+# computegraph-rs Design
 
-**Date:** 2026-04-04
-**Status:** Draft
 **Repo:** computegraph-rs (new)
 **Parent:** `../index.md`
 

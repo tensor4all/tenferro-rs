@@ -1,7 +1,5 @@
-# v2 chainrules-rs Design
+# chainrules-rs Design
 
-**Date:** 2026-04-03
-**Status:** Draft
 **Repo:** chainrules-rs
 **Parent:** `../index.md`
 **Depends on:** `computegraph-rs`
@@ -15,12 +13,12 @@
 linearization and transpose rules. It contains no graph infrastructure and no
 concrete primitives.
 
-This is the v2 counterpart of the AD behavior that JAX stores in
+This is the counterpart of the AD behavior that JAX stores in
 `primitive_jvps` and `primitive_transposes`. The information is the same kind
 of information, but the representation is different:
 
 - JAX: global registries keyed by primitive object
-- v2: methods on the concrete primitive type itself
+- tenferro: methods on the concrete primitive type itself
 
 ---
 
@@ -52,7 +50,7 @@ The intended mental model is close to JAX `linearize`:
 
 - JAX `linearize` applies a primitive's JVP rule and emits a new composition of
   JAX primitives in a jaxpr
-- v2 `PrimitiveOp::linearize` emits a new composition of downstream concrete
+- `PrimitiveOp::linearize` emits a new composition of downstream concrete
   primitives into a fragment
 
 ---
