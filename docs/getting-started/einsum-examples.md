@@ -9,7 +9,7 @@ The `einsum` function builds a lazy graph; call `.eval(&mut engine)` to execute.
 use tenferro::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
-use tenferro_tensor::cpu::CpuBackend;
+use tenferro::CpuBackend;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 // For nested notation and contraction trees:
@@ -252,10 +252,10 @@ let mut result = einsum_with(
 Build a `ContractionTree` from external optimization and reuse it:
 
 ```rust,ignore
-let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+let subs = Subscripts::new(&[&[0u32, 1], &[1, 2], &[2, 3]], &[0u32, 3]);
 let tree = ContractionTree::from_pairs(
     &subs,
-    &[&[2, 3], &[3, 4], &[4, 5]],
+    &[&[2, 2], &[2, 2], &[2, 2]],
     &[(1, 2), (0, 3)],
 ).unwrap();
 

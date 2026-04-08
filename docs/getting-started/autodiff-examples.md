@@ -96,6 +96,20 @@ let loss = y.reduce_sum(&[0, 1]);
 let grad_a = loss.grad(&a).unwrap();
 ```
 
+### Multi-input gradients
+
+Compute gradients of the same loss with respect to multiple inputs using
+`eval_all`:
+
+```rust,ignore
+// Compute gradients w.r.t. multiple inputs
+let mut grad_a = loss.grad(&a).unwrap();
+let mut grad_b = loss.grad(&b).unwrap();
+
+let mut engine = Engine::new(CpuBackend::new());
+let results = eval_all(&mut engine, &mut [&mut grad_a, &mut grad_b]).unwrap();
+```
+
 ## VJP (vector-Jacobian product)
 
 `vjp` computes the reverse-mode derivative for non-scalar outputs,
@@ -296,7 +310,7 @@ Available free functions (imported from `tenferro`):
 | `det(&a)` | `scalar` | Determinant |
 | `slogdet(&a)` | `(sign, log_abs_det)` | Sign and log-absolute-determinant |
 | `lu(&a)` | `(P, L, U, parity)` | LU decomposition |
-| `norm(&a, ord, axes, keepdim)` | `scalar` | Matrix/vector norm |
+| `norm(&a, ord, dim, keepdim)` | `scalar` | Matrix/vector norm (`ord: Option<f64>`, `dim: Option<&[usize]>`) |
 | `pinv(&a)` | `A_pinv` | Moore-Penrose pseudoinverse |
 
 Multi-output functions return tuples of `TracedTensor`. Use `eval_all` to
