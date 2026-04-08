@@ -114,4 +114,4 @@ backend boundary. PyTorch-style API families may exist publicly, but backend
 contracts are intentionally smaller and more Rust-structured.
 
 For the broader family-level parity and backlog view, see
-[reference/pytorch-dense-cpu-parity.md](./reference/pytorch-dense-cpu-parity.md).
+[reference/pytorch-dense-cpu-parity.md](../reference/pytorch-dense-cpu-parity.md).

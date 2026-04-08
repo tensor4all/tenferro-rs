@@ -3,8 +3,12 @@ project:
   output-dir: ../target/docs-site/design
   render:
     - index.md
+    - getting-started/**/*.md
+    - architecture/**/*.md
+    - spec/**/*.md
     - design/**/*.md
-    - AD/**/*.md
+    - oracle/**/*.md
+    - reference/**/*.md
 
 format:
   html:
@@ -14,15 +18,36 @@ format:
     html-math-method: katex
 
 website:
-  title: "tenferro-rs Design Docs"
+  title: "tenferro-rs Documentation"
   sidebar:
     style: docked
     contents:
       - index.md
-      - section: "Core Design"
+      - section: "Getting Started"
+        contents:
+          - getting-started/index.md
+          - getting-started/quick-start.md
+          - getting-started/einsum-examples.md
+          - getting-started/autodiff-examples.md
+      - section: "Architecture"
+        contents:
+          - architecture/index.md
+          - architecture/tenferro-crates.md
+          - architecture/computegraph.md
+          - architecture/chainrules.md
+          - architecture/tidu.md
+          - architecture/ad-pipeline.md
+      - section: "Specification"
+        contents:
+          - spec/index.md
+          - spec/primitive-catalog.md
+          - spec/backend-contract.md
+          - spec/ad-contract.md
+          - spec/optimizer-passes.md
+          - spec/tensor-semantics.md
+      - section: "Implementation Design"
         contents:
           - design/index.md
-          - design/architecture.md
           - design/supported-ops.md
           - design/device.md
           - design/tensor.md
@@ -31,35 +56,26 @@ website:
           - design/contraction-pipeline.md
           - design/einsum.md
           - design/einsum-cpu-porting-notes.md
+          - design/einsum-dyadtensor.md
           - design/gpu-backend-design.md
           - design/inplace-indexing.md
-          - design/autodiff.md
           - design/linalg.md
+          - design/linalg-prims.md
           - design/capi.md
           - design/capi-error-handling.md
           - design/testing.md
-      - section: "AD Formula Notes"
+      - section: "Oracle Replay"
         contents:
-          - AD/index.md
-          - AD/scalar_ops.md
-          - AD/svd.md
-          - AD/qr.md
-          - AD/lu.md
-          - AD/cholesky.md
-          - AD/eigen.md
-          - AD/eig.md
-          - AD/inv.md
-          - AD/det.md
-          - AD/solve.md
-          - AD/lstsq.md
-          - AD/pinv.md
-          - AD/matrix_exp.md
-          - AD/norm.md
+          - oracle/index.md
+          - oracle/tensor-ad-oracles-support.md
       - section: "Reference"
         contents:
-          - design/reference/libtorch.md
-          - design/reference/itensor-ecosystem.md
-          - design/reference/einsum-algorithm-comparison.md
-      - section: "Integrations"
-        contents:
-          - design/integrations/burn.md
+          - reference/index.md
+          - reference/jax-primitives.md
+          - reference/stablehlo-primitives.md
+          - reference/jax-stablehlo-needed.md
+          - reference/ad-graph-experiments.md
+          - reference/libtorch.md
+          - reference/itensor-ecosystem.md
+          - reference/einsum-algorithm-comparison.md
+          - reference/pytorch-dense-cpu-parity.md

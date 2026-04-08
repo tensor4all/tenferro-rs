@@ -4,7 +4,7 @@ This document describes how `tenferro-einsum` and the `tenferro` frontend
 layers integrate with the current `tidu` AD engine and `chainrules` scalar
 rule layer.
 
-For the core AD contracts, see [autodiff.md](./autodiff.md). For math
+For the core AD contracts, see [autodiff.md](../architecture/ad-pipeline.md). For math
 derivations, see [AD Formula Notes](../AD/index.md).
 
 ## Scope

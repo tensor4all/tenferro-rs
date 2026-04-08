@@ -136,7 +136,7 @@ AD must remain algebra-aware:
 - API design keeps this extensible by relying on `HasAlgebra` and
   primitive-family contracts rather than hard-coding only standard arithmetic.
 
-See [autodiff.md](./autodiff.md) for the AD architecture design and
+See [autodiff.md](../architecture/ad-pipeline.md) for the AD architecture design and
 [einsum-dyadtensor.md](./einsum-dyadtensor.md) for einsum/frontend integration details.
 
 ---

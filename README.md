@@ -69,6 +69,90 @@ fn main() {
 }
 ```
 
+Basic arithmetic on traced tensors (add, mul, neg):
+
+```rust
+use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
+
+fn main() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![3], vec![4.0, 5.0, 6.0]));
+
+    // Elementwise operations use operator overloading on references
+    let sum = &a + &b;
+    let product = &a * &b;
+    let negated = -&a;
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let mut sum_val = sum;
+    let mut prod_val = product;
+    let mut neg_val = negated;
+    assert_eq!(sum_val.eval(&mut engine).unwrap().shape(), &[3]);
+    assert_eq!(prod_val.eval(&mut engine).unwrap().shape(), &[3]);
+    assert_eq!(neg_val.eval(&mut engine).unwrap().shape(), &[3]);
+}
+```
+
+N-ary einsum with automatic contraction tree optimization:
+
+```rust
+use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
+
+fn main() {
+    let a = TracedTensor::from_tensor(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let b = TracedTensor::from_tensor(f64_tensor(
+        vec![3, 4],
+        (1..=12).map(|x| x as f64).collect(),
+    ));
+    let c = TracedTensor::from_tensor(f64_tensor(
+        vec![4, 2],
+        (1..=8).map(|x| x as f64).collect(),
+    ));
+
+    // Three-operand chain: A[ij] * B[jk] * C[kl] -> D[il]
+    let mut engine = Engine::new(CpuBackend::new());
+    let mut d = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
+
+    let result = d.eval(&mut engine).unwrap();
+    assert_eq!(result.shape(), &[2, 2]);
+}
+```
+
+SVD decomposition via the linalg API:
+
+```rust
+use tenferro::engine::Engine;
+use tenferro::traced::{eval_all, TracedTensor};
+use tenferro::{svd, CpuBackend, Tensor, TypedTensor};
+
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
+
+fn main() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
+    let (mut u, mut s, mut vt) = svd(&a);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(&mut engine, &mut [&mut u, &mut s, &mut vt]).unwrap();
+
+    assert_eq!(results[0].shape(), &[2, 2]); // U
+    assert_eq!(results[1].shape(), &[2]);    // singular values
+    assert_eq!(results[2].shape(), &[2, 2]); // V^T
+}
+```
+
 Compute a gradient through the traced graph:
 
 ```rust
@@ -89,6 +173,13 @@ fn main() {
     assert_eq!(gx.shape(), &[4]);
 }
 ```
+
+## Documentation
+
+- [Getting Started](docs/getting-started/) — tutorials and worked examples
+- [Architecture](docs/architecture/) — design rationale for each subsystem
+- [Specification](docs/spec/) — normative specs for ops, backends, and AD
+- [Implementation Design](docs/design/) — implementation-focused design notes
 
 ## Design Notes
 
@@ -120,5 +211,6 @@ Key types:
 - `Engine` — holds backend + compile cache; triggers evaluation.
 - Public einsum: `tenferro::einsum::einsum(...)`.
 - Multi-output linalg: free functions `tenferro::svd(...)`, `tenferro::qr(...)`, etc.
-See [`docs/design/`](docs/design/) for local design notes and
-`../tensor4all-meta/docs/design-v2/` for the current v2 planning documents.
+See [`docs/architecture/`](docs/architecture/) for design rationale,
+[`docs/spec/`](docs/spec/) for normative specifications, and
+[`docs/design/`](docs/design/) for implementation-focused design notes.
