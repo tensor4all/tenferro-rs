@@ -161,18 +161,14 @@ fn test_batched_gemm() {
     // Batch 1: C1 = A1*B1 = [[9*13+11*14, 9*15+11*16],[10*13+12*14, 10*15+12*16]]
     //             = [[271,311],[298,342]]
     //
-    // Output shape: [batch=2, M=2, N=2]
-    // (batch ++ lhs_free ++ rhs_free)
+    // Output shape: [M=2, N=2, batch=2]
+    // (lhs_free ++ rhs_free ++ batch)
     //
-    // Col-major: dim 0 (batch) has stride 1 (fastest), dim 1 (M) stride 2,
-    // dim 2 (N) stride 4.
-    // data[b + m*2 + n*4]:
-    //   [b=0,m=0,n=0]=23, [b=1,m=0,n=0]=271,
-    //   [b=0,m=1,n=0]=34, [b=1,m=1,n=0]=298,
-    //   [b=0,m=0,n=1]=31, [b=1,m=0,n=1]=311,
-    //   [b=0,m=1,n=1]=46, [b=1,m=1,n=1]=342
+    // Col-major: data[m + n*2 + b*4]:
+    //   batch 0: [23, 34, 31, 46]
+    //   batch 1: [271, 298, 311, 342]
     let data = get_f64_data(result);
-    assert_eq!(data, &[23.0, 271.0, 34.0, 298.0, 31.0, 311.0, 46.0, 342.0]);
+    assert_eq!(data, &[23.0, 34.0, 31.0, 46.0, 271.0, 298.0, 311.0, 342.0]);
 }
 
 #[test]

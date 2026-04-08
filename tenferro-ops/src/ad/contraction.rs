@@ -547,13 +547,13 @@ fn transpose_plan_for_lhs(
     rhs_free: &[usize],
 ) -> (DotGeneralConfig, Vec<usize>) {
     let n_batch = config.lhs_batch_dims.len();
-    let output_rank = n_batch + lhs_free.len() + rhs_free.len();
-    let ct_rhs_free_positions: Vec<usize> = (n_batch + lhs_free.len()..output_rank).collect();
+    let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
+    let ct_rhs_free_positions: Vec<usize> =
+        (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
 
     let rhs_contracting_order =
         compute_free_dims(config.rhs_rank, rhs_free, &config.rhs_batch_dims);
     let mut result_order = Vec::with_capacity(config.lhs_rank);
-    result_order.extend(config.lhs_batch_dims.iter().copied());
     result_order.extend(lhs_free.iter().copied());
     for rhs_dim in rhs_contracting_order {
         let pair_idx = config
@@ -563,12 +563,13 @@ fn transpose_plan_for_lhs(
             .expect("rhs contracting dimension must be paired");
         result_order.push(config.lhs_contracting_dims[pair_idx]);
     }
+    result_order.extend(config.lhs_batch_dims.iter().copied());
 
     (
         DotGeneralConfig {
             lhs_contracting_dims: ct_rhs_free_positions,
             rhs_contracting_dims: rhs_free.to_vec(),
-            lhs_batch_dims: (0..n_batch).collect(),
+            lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
             rhs_batch_dims: config.rhs_batch_dims.clone(),
             lhs_rank: output_rank,
             rhs_rank: config.rhs_rank,
@@ -583,12 +584,11 @@ fn transpose_plan_for_rhs(
     rhs_free: &[usize],
 ) -> (DotGeneralConfig, Vec<usize>) {
     let n_batch = config.lhs_batch_dims.len();
-    let ct_lhs_free_positions: Vec<usize> = (n_batch..n_batch + lhs_free.len()).collect();
+    let ct_lhs_free_positions: Vec<usize> = (0..lhs_free.len()).collect();
 
     let lhs_contracting_order =
         compute_free_dims(config.lhs_rank, lhs_free, &config.lhs_batch_dims);
     let mut result_order = Vec::with_capacity(config.rhs_rank);
-    result_order.extend(config.rhs_batch_dims.iter().copied());
     for lhs_dim in lhs_contracting_order {
         let pair_idx = config
             .lhs_contracting_dims
@@ -598,14 +598,15 @@ fn transpose_plan_for_rhs(
         result_order.push(config.rhs_contracting_dims[pair_idx]);
     }
     result_order.extend(rhs_free.iter().copied());
+    result_order.extend(config.rhs_batch_dims.iter().copied());
 
-    let output_rank = n_batch + lhs_free.len() + rhs_free.len();
+    let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
     (
         DotGeneralConfig {
             lhs_contracting_dims: lhs_free.to_vec(),
             rhs_contracting_dims: ct_lhs_free_positions,
             lhs_batch_dims: config.lhs_batch_dims.clone(),
-            rhs_batch_dims: (0..n_batch).collect(),
+            rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
             lhs_rank: config.lhs_rank,
             rhs_rank: output_rank,
         },

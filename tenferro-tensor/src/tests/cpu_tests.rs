@@ -668,6 +668,53 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
 }
 
 #[test]
+fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
+    let a = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2, 2, 2],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+        ],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2, 2, 2],
+        vec![
+            1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0,
+        ],
+    ));
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![3],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![0, 2],
+            rhs_batch_dims: vec![2, 3],
+            lhs_rank: 4,
+            rhs_rank: 4,
+        },
+    );
+
+    assert_eq!(c.shape(), &[2, 2, 2, 2]);
+    assert_eq!(get_f64(&c, &[0, 0, 0, 0]), 1.0);
+    assert_eq!(get_f64(&c, &[1, 0, 0, 0]), 3.0);
+    assert_eq!(get_f64(&c, &[0, 1, 0, 0]), 9.0);
+    assert_eq!(get_f64(&c, &[1, 1, 0, 0]), 11.0);
+    assert_eq!(get_f64(&c, &[0, 0, 1, 0]), 2.0);
+    assert_eq!(get_f64(&c, &[1, 0, 1, 0]), 4.0);
+    assert_eq!(get_f64(&c, &[0, 1, 1, 0]), 10.0);
+    assert_eq!(get_f64(&c, &[1, 1, 1, 0]), 12.0);
+    assert_eq!(get_f64(&c, &[0, 0, 0, 1]), 5.0);
+    assert_eq!(get_f64(&c, &[1, 0, 0, 1]), 7.0);
+    assert_eq!(get_f64(&c, &[0, 1, 0, 1]), 13.0);
+    assert_eq!(get_f64(&c, &[1, 1, 0, 1]), 15.0);
+    assert_eq!(get_f64(&c, &[0, 0, 1, 1]), 6.0);
+    assert_eq!(get_f64(&c, &[1, 0, 1, 1]), 8.0);
+    assert_eq!(get_f64(&c, &[0, 1, 1, 1]), 14.0);
+    assert_eq!(get_f64(&c, &[1, 1, 1, 1]), 16.0);
+}
+
+#[test]
 fn test_transpose() {
     let t = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],

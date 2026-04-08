@@ -278,11 +278,11 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
             rhs_rank: rhs.shape.len(),
         };
 
-        // DotGeneral output order: batch + lhs_free + rhs_free
-        let result_labels: Vec<u32> = batch_labels
+        // DotGeneral output order: lhs_free + rhs_free + batch (col-major batch trailing)
+        let result_labels: Vec<u32> = lhs_free_labels
             .iter()
-            .chain(lhs_free_labels.iter())
             .chain(rhs_free_labels.iter())
+            .chain(batch_labels.iter())
             .copied()
             .collect();
         let result_shape: Vec<usize> = result_labels.iter().map(|&l| label_to_size(l)).collect();
@@ -362,11 +362,10 @@ fn outer_product<Op: GraphOp + SemiringOps>(
     rhs_free_labels: &[u32],
     label_to_size: &dyn Fn(u32) -> usize,
 ) -> LabeledVal<Op> {
-    // Combined label order: batch + lhs_free + rhs_free
-    let combined_labels: Vec<u32> = batch_labels
+    let combined_labels: Vec<u32> = lhs_free_labels
         .iter()
-        .chain(lhs_free_labels.iter())
         .chain(rhs_free_labels.iter())
+        .chain(batch_labels.iter())
         .copied()
         .collect();
     let combined_shape: Vec<usize> = combined_labels.iter().map(|&l| label_to_size(l)).collect();

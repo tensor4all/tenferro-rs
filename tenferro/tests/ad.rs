@@ -258,15 +258,6 @@ fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
     }
 }
 
-fn matmul_output_perm(rank: usize) -> Vec<usize> {
-    let batch_ndim = rank - 2;
-    let mut perm = Vec::with_capacity(rank);
-    perm.push(batch_ndim);
-    perm.push(batch_ndim + 1);
-    perm.extend(0..batch_ndim);
-    perm
-}
-
 fn add_solve_composition(
     builder: &mut FragmentBuilder<StdTensorOp>,
     a: LocalValId,
@@ -287,17 +278,6 @@ fn add_solve_composition(
         vec![ValRef::Local(lu[0]), ValRef::Local(b)],
         OpMode::Primal,
     )[0];
-    let pb = if rank > 2 {
-        builder.add_op(
-            StdTensorOp::Transpose {
-                perm: matmul_output_perm(rank),
-            },
-            vec![ValRef::Local(pb)],
-            OpMode::Primal,
-        )[0]
-    } else {
-        pb
-    };
     let z = builder.add_op(
         StdTensorOp::TriangularSolve {
             left_side: true,
