@@ -1,0 +1,46 @@
+name: CI_rs_selfhost
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # fork からの PR: GitHub-hosted runner で通常 CI
+  ci-fork:
+    name: CI (fork PR / github-hosted)
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Run unit and integration tests
+        run: cargo nextest run --workspace --release --no-fail-fast
+      - name: Run doc tests
+        run: cargo test --doc --workspace --release
+
+  # PRs from the same repository: run heavy CI on self-hosted runner
+  ci-maintainer:
+    name: CI (same-repo PR / self-hosted heavy)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64]
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../target
+      CARGO_PROFILE_RELEASE_DEBUG: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - name: Run unit and integration tests
+        run: cargo nextest run --workspace --release --no-fail-fast
+      - name: Run doc tests
+        run: cargo test --doc --workspace --release

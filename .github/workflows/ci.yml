@@ -27,18 +27,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
 
-  test-workspace:
-    name: cargo test (workspace)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - name: Run unit and integration tests
-        run: cargo nextest run --workspace --release --no-fail-fast
-      - name: Run doc tests
-        run: cargo test --doc --workspace --release
+  # test-workspace:
+  #   name: cargo test (workspace)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: Swatinem/rust-cache@v2
+  #     - uses: taiki-e/install-action@nextest
+  #     - name: Run unit and integration tests
+  #       run: cargo nextest run --workspace --release --no-fail-fast
+  #     - name: Run doc tests
+  #       run: cargo test --doc --workspace --release
 
   test-inject-blas:
     name: cargo test (blas inject)
