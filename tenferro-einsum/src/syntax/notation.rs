@@ -1,19 +1,19 @@
 use tenferro_device::{Error, Result};
 
+/// Reserved characters that cannot be used as einsum labels.
+const RESERVED_CHARS: &[char] = &[',', '-', '>', '(', ')', ' '];
+
 /// Convert a notation label character to internal `u32`.
 ///
-/// Unicode alphanumeric scalars are accepted and mapped to their scalar value
-/// (`char as u32`). This keeps label syntax aligned with the documented
-/// "Unicode alphanumeric label" contract while still allowing digits,
-/// accented letters, Greek, and CJK characters.
+/// Any Unicode scalar that is not a reserved einsum syntax character
+/// (`,`, `-`, `>`, `(`, `)`, space) is accepted and mapped to its
+/// scalar value (`char as u32`). This allows alphanumeric labels as well
+/// as Unicode symbols (e.g. `×`, `÷`) that tools like opt_einsum
+/// generate when the ASCII label space is exhausted.
 pub(crate) fn char_to_label(c: char) -> Result<u32> {
-    if ('\u{E000}'..='\u{F8FF}').contains(&c) {
-        return Ok(c as u32);
-    }
-
-    if !c.is_alphanumeric() {
+    if RESERVED_CHARS.contains(&c) {
         return Err(Error::InvalidArgument(format!(
-            "invalid einsum label character: {c:?} (U+{:04X}); labels must be Unicode alphanumeric",
+            "invalid einsum label character: {c:?} (U+{:04X}); reserved syntax character",
             c as u32
         )));
     }

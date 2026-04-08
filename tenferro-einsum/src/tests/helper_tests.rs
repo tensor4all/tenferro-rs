@@ -48,15 +48,27 @@ fn char_to_label_accepts_unicode_alphanumeric_and_private_use() {
 }
 
 #[test]
-fn char_to_label_rejects_non_alphanumeric_symbols() {
+fn char_to_label_accepts_unicode_symbols() {
+    assert_eq!(char_to_label('×').unwrap(), '×' as u32);
+    assert_eq!(char_to_label('÷').unwrap(), '÷' as u32);
+    assert_eq!(char_to_label('\u{03A2}').unwrap(), 0x03A2);
+}
+
+#[test]
+fn char_to_label_rejects_reserved_syntax_chars() {
     let err = char_to_label('-').unwrap_err();
     match err {
         Error::InvalidArgument(msg) => {
             assert!(msg.contains("invalid einsum label character"));
-            assert!(msg.contains("Unicode alphanumeric"));
+            assert!(msg.contains("reserved syntax character"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
+    assert!(char_to_label(',').is_err());
+    assert!(char_to_label('>').is_err());
+    assert!(char_to_label('(').is_err());
+    assert!(char_to_label(')').is_err());
+    assert!(char_to_label(' ').is_err());
 }
 
 #[test]
