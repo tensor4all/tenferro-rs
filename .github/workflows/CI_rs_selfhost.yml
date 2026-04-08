@@ -44,3 +44,23 @@ jobs:
         run: cargo nextest run --workspace --release --no-fail-fast
       - name: Run doc tests
         run: cargo test --doc --workspace --release
+
+  # Single check for branch protection: passes when the one runnable path
+  # (fork = ci-fork, same-repo = ci-maintainer) succeeds; the other is skipped.
+  ci-gate:
+    name: CI gate (PR workspace tests)
+    needs: [ci-fork, ci-maintainer]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require fork or same-repo workspace CI
+        env:
+          FORK_RESULT: ${{ needs.ci-fork.result }}
+          MAINTAINER_RESULT: ${{ needs.ci-maintainer.result }}
+        run: |
+          set -euo pipefail
+          if [ "$FORK_RESULT" = "success" ] || [ "$MAINTAINER_RESULT" = "success" ]; then
+            exit 0
+          fi
+          echo "Expected ci-fork or ci-maintainer to succeed; got ci-fork=$FORK_RESULT ci-maintainer=$MAINTAINER_RESULT"
+          exit 1
