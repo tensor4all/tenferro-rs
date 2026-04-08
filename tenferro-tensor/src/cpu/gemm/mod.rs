@@ -57,20 +57,24 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
 /// Canonical col-major layouts (batch trailing):
 /// - lhs: `[free..., contract..., batch...]`
 /// - rhs: `[contract..., free..., batch...]`
-fn canonical_gemm_layout(config: &DotGeneralConfig) -> (Vec<usize>, Vec<usize>, DotGeneralConfig) {
-    let lhs_free: Vec<usize> = (0..config.lhs_rank)
+fn canonical_gemm_layout(
+    config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
+) -> (Vec<usize>, Vec<usize>, DotGeneralConfig) {
+    let lhs_free: Vec<usize> = (0..lhs_rank)
         .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
         .collect();
-    let rhs_free: Vec<usize> = (0..config.rhs_rank)
+    let rhs_free: Vec<usize> = (0..rhs_rank)
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let mut lhs_perm = Vec::with_capacity(config.lhs_rank);
+    let mut lhs_perm = Vec::with_capacity(lhs_rank);
     lhs_perm.extend_from_slice(&lhs_free);
     lhs_perm.extend_from_slice(&config.lhs_contracting_dims);
     lhs_perm.extend_from_slice(&config.lhs_batch_dims);
 
-    let mut rhs_perm = Vec::with_capacity(config.rhs_rank);
+    let mut rhs_perm = Vec::with_capacity(rhs_rank);
     rhs_perm.extend_from_slice(&config.rhs_contracting_dims);
     rhs_perm.extend_from_slice(&rhs_free);
     rhs_perm.extend_from_slice(&config.rhs_batch_dims);
@@ -85,8 +89,8 @@ fn canonical_gemm_layout(config: &DotGeneralConfig) -> (Vec<usize>, Vec<usize>, 
         rhs_contracting_dims: (0..nc).collect(),
         lhs_batch_dims: (nf_lhs + nc..nf_lhs + nc + nb).collect(),
         rhs_batch_dims: (nc + nf_rhs..nc + nf_rhs + nb).collect(),
-        lhs_rank: config.lhs_rank,
-        rhs_rank: config.rhs_rank,
+        lhs_rank,
+        rhs_rank,
     };
 
     (lhs_perm, rhs_perm, new_config)
@@ -222,7 +226,8 @@ where
     if let Some(result) = typed_faer_gemm(lhs, rhs, config) {
         return result;
     }
-    let (lhs_perm, rhs_perm, new_config) = canonical_gemm_layout(config);
+    let (lhs_perm, rhs_perm, new_config) =
+        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -313,7 +318,8 @@ where
     if let Some(result) = typed_blas_gemm(lhs, rhs, config) {
         return result;
     }
-    let (lhs_perm, rhs_perm, new_config) = canonical_gemm_layout(config);
+    let (lhs_perm, rhs_perm, new_config) =
+        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
