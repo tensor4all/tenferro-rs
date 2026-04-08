@@ -1,7 +1,6 @@
 # StableHLO Primitives
 
 **Date:** 2026-04-03
-**Status:** Draft
 **Parent:** `../README.md`
 **Related:** `../spec/primitive-catalog.md`, `../spec/backend-contract.md`, `jax-primitives.md`
 
@@ -13,7 +12,7 @@ This document records the current StableHLO operation inventory and gives a
 short definition of what each op does.
 
 StableHLO itself uses the word "op", not "primitive". This document uses
-"primitive" only to match the naming used elsewhere in `docs/design-v2/`.
+"primitive" only to match the naming used elsewhere in the docs.
 
 The main source is the official specification:
 

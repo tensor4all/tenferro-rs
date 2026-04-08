@@ -1,7 +1,5 @@
-# v2 tidu-rs Design
+# tidu-rs Design
 
-**Date:** 2026-04-03
-**Status:** Draft
 **Repo:** tidu-rs
 **Parent:** `../index.md`
 **Depends on:** `computegraph-rs`, `chainrules-rs`

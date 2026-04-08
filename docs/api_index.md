@@ -1,6 +1,6 @@
 # tenferro-rs API Index
 
-This site documents the current v2 workspace: a 6-crate core for dense,
+This site documents the current workspace: a 6-crate core for dense,
 graph-based tensor computation.
 
 ## Current Workspace

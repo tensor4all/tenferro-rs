@@ -1,7 +1,5 @@
-# v2 AD Architecture
+# AD Architecture
 
-**Date:** 2026-04-01 (rewritten 2026-04-02)
-**Status:** Draft
 **Repos:** chainrules-rs, tidu-rs, tenferro-rs
 **Parent:** `../index.md`
 **Related:** `computegraph.md`, `chainrules.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
@@ -677,10 +675,8 @@ ct_x = [a0 * exp(a0*x0) * ct_y,
 This is the smallest vector example that makes reduction transpose explicit
 without requiring eager merge.
 
-<!-- TODO: The original checker script was at docs/design-v2/examples/vector_ad_examples_check.py
-     in tensor4all-meta. Move to docs/getting-started/ when that section is populated. -->
-A reproducible checker for these two examples was originally in
-`tensor4all-meta/docs/design-v2/examples/vector_ad_examples_check.py`.
+A reproducible checker for these two examples is in
+`scripts/vector_ad_examples_check.py`.
 
 ---
 
@@ -873,35 +869,15 @@ Expected second-order result for `exp(a*x)` with unit seeds:
 
 ---
 
-## X. Roadmap
+## X. Implementation Status
 
-### Phase 1: Scalar fragment AD
+Phases 1–3 (scalar fragment AD, tensor primitives, backend compilation) are
+implemented and tested. Current work focuses on:
 
-- `Fragment<ScalarOp>` plus `ResolvedView<ScalarOp>`
-- `GlobalValKey`, `ValRef`, `OpMode`
-- transforms: `resolve`, `differentiate`, `transpose`, `materialize_merge`
-- primitives: `Add`, `Mul`, `Exp`, `Neg`, `Conj`
-- tests: forward, backward, and second order on `exp(a*x)`
-
-### Phase 2: Tensor primitives
-
-- `StdTensorOp` with full primitive set
-- `Tensor` (type-erased enum) implementing `Operand`
-- vector and reduction transpose rules
-- batched JVP via tensor-valued tangent inputs
-
-### Phase 3: Backend compilation
-
-- `MaterializedGraph -> StableHloProgram`
-- StableHLO lowering of `CompiledProgram<StdTensorOp>`
-- CPU / GPU backends consume only compiled or lowered materialized programs
-
-### Phase 4: Optimization
-
-- logical-DAG-aware checkpoint scheduling
-- partial transpose / cross-country mode
-- late materialization heuristics
-- operator fusion in compiled IR
+- Logical-DAG-aware checkpoint scheduling
+- Partial transpose / cross-country mode
+- Late materialization heuristics
+- Operator fusion in compiled IR
 
 ---
 
@@ -914,4 +890,4 @@ This document unifies and supersedes:
 - chainrules-rs#7: trait unification
 - chainrules-rs#8: DifferentiableOp trait
 - tenferro-rs#616: Traced Tensor + StableHLO IR
-- tenferro-rs#618: tenferro v2 roadmap (AD portions)
+- tenferro-rs#618: tenferro roadmap (AD portions)

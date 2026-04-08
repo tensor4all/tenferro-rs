@@ -1,7 +1,6 @@
 # JAX Primitives
 
 **Date:** 2026-04-03
-**Status:** Draft
 **Parent:** `../README.md`
 **Related:** `../spec/primitive-catalog.md`, `stablehlo-primitives.md`, `../spec/backend-contract.md`
 
@@ -15,7 +14,7 @@ actually does.
 
 The source of truth here is the local checkout at:
 
-- `~/tensor4all/jax`
+- the JAX source repository
 
 This is intentionally **not** a catalog of every frontend helper in JAX.
 It focuses on the primitive layer that sits below `jax.numpy` and `jax.lax`.
@@ -50,7 +49,7 @@ So a JAX primitive is not just a name. It is a bundle of:
 - JVP / transpose / linearization behavior
 
 This registry-based organization is specific to JAX's implementation.
-In the v2 Rust stack, the corresponding AD behavior is expected to live on each
+In tenferro, the corresponding AD behavior is expected to live on each
 concrete primitive through `PrimitiveOp::linearize` and
 `PrimitiveOp::transpose_rule`, not through a mandatory global registry.
 

@@ -1,7 +1,6 @@
-# v2 Backend Architecture
+# Backend Architecture
 
 **Date:** 2026-04-04
-**Status:** Draft
 **Repos:** tenferro-rs
 **Related:** `../architecture/ad-pipeline.md`, `primitive-catalog.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
@@ -104,7 +103,7 @@ executed as-is.
 
 **CudaBackend** is the key backend for tensor network computations where
 bond dimensions change dynamically. It interprets Execution IR op-by-op,
-dispatching to CUDA kernels (reused from tenferro-rs v1). No JIT
+dispatching to CUDA kernels (reused from the previous implementation). No JIT
 compilation, so no recompile on shape change. Individual ops (matmul, SVD)
 are large enough that fusion is not critical.
 
@@ -233,7 +232,7 @@ CompiledProgram<Op>  (StableHLO IR — the single cut point)
           │     Linalg custom_call → LAPACK routines
           │
           ├── CudaBackend (Standard GPU, dynamic shapes; lives in tenferro-tensor)
-          │     TensorBackend impl → CUDA kernels (reused from v1)
+          │     TensorBackend impl → CUDA kernels (reused from previous implementation)
           │
           └── Custom algebra backends (Tropical, p-adic, etc.)
                 TensorBackend impl → user-provided kernels
@@ -406,7 +405,7 @@ for inst in &program.instructions {
 ```
 
 **Buffer pool**: freed buffers are returned to a per-engine pool
-(`TensorBufferPool` in v1) and recycled for future allocations. This avoids
+(`TensorBufferPool` in the previous implementation) and recycled for future allocations. This avoids
 repeated heap allocation in tight loops (e.g., einsum over many contraction
 steps).
 
@@ -477,7 +476,7 @@ fusion optimization, not raw kernel performance.
 ### Memory layout: contiguous column-major
 
 **All tensors are contiguous column-major.** This is a fundamental
-simplification over v1. At eval() time, input pre-processing ensures all
+simplification over the previous implementation. At eval() time, input pre-processing ensures all
 inputs are contiguous column-major before entering the Execution IR engine.
 No stride-aware dispatch is needed -- the engine and all `TensorBackend`
 implementations can assume contiguous column-major layout.
@@ -879,7 +878,7 @@ operations are no longer methods on the data type. Instead:
 
 ### Phase 3: GPU backends
 
-- `CudaBackend`: `TensorBackend` impl with CUDA kernels (reused from v1)
+- `CudaBackend`: `TensorBackend` impl with CUDA kernels (reused from previous implementation)
   - Op-by-op execution on Execution IR, no fusion, dynamic shapes
   - **Milestone**: tensor network on GPU with dynamic bond dimensions
 - XLA backend: takes StableHLO IR directly (no optimizing compiler)
@@ -898,4 +897,4 @@ operations are no longer methods on the data type. Instead:
 ## Superseded Issues (partially)
 
 - tenferro-rs#616: Traced Tensor + StableHLO IR (AD portions → `../architecture/ad-pipeline.md`)
-- tenferro-rs#618: tenferro v2 roadmap (backend portions here, AD portions → `../architecture/ad-pipeline.md`)
+- tenferro-rs#618: tenferro roadmap (backend portions here, AD portions → `../architecture/ad-pipeline.md`)

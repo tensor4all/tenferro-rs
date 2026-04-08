@@ -1,4 +1,4 @@
-# Graph Transform Experiments for `v2 AD Architecture`
+# Graph Transform Experiments for AD Architecture
 
 > **Note:** This document is an early experiment record. The `merge` operation
 > used here was later separated into `resolve` (logical view, cheap) and
