@@ -760,29 +760,58 @@ fn find_producer(program: &StableHloProgram, slot: usize) -> Option<usize> {
 /// Check if a Transpose can be folded into DotGeneral for the given operand.
 ///
 /// Foldability conditions:
-/// - Batch dims must be unchanged by the permutation (perm[d] == d for each
-///   batch dim).
-/// - Exactly 1 contracting dimension.
+/// - The operand's contracting and batch axes must still form a valid
+///   partition after mapping the transposed axes back through `perm`.
+/// - The implied free-axis order must stay stable. In practice this rejects
+///   permutations that reorder free dims, while still allowing moved batch
+///   axes when the role partition is preserved.
 fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[usize]) -> bool {
-    let (batch_dims, contracting_dims) = if operand_idx == 0 {
-        (&config.lhs_batch_dims, &config.lhs_contracting_dims)
+    let (rank, contracting_dims, batch_dims) = if operand_idx == 0 {
+        (
+            config.lhs_rank,
+            config.lhs_contracting_dims.as_slice(),
+            config.lhs_batch_dims.as_slice(),
+        )
     } else {
-        (&config.rhs_batch_dims, &config.rhs_contracting_dims)
+        (
+            config.rhs_rank,
+            config.rhs_contracting_dims.as_slice(),
+            config.rhs_batch_dims.as_slice(),
+        )
     };
 
-    // Batch dims must be fixed points of the permutation.
-    for &d in batch_dims {
-        if d >= perm.len() || perm[d] != d {
-            return false;
-        }
-    }
+    let Some(free_dims) = free_axes(rank, contracting_dims, batch_dims) else {
+        return false;
+    };
+    let Some(mapped_free_dims) = map_axes(&free_dims, perm) else {
+        return false;
+    };
 
-    // Must have exactly 1 contracting dimension.
-    if contracting_dims.len() != 1 {
+    if !is_strictly_increasing(&mapped_free_dims) {
         return false;
     }
 
     true
+}
+
+fn free_axes(rank: usize, contracting_dims: &[usize], batch_dims: &[usize]) -> Option<Vec<usize>> {
+    let mut used = vec![false; rank];
+    for &axis in contracting_dims.iter().chain(batch_dims.iter()) {
+        if axis >= rank || used[axis] {
+            return None;
+        }
+        used[axis] = true;
+    }
+
+    Some((0..rank).filter(|&axis| !used[axis]).collect())
+}
+
+fn map_axes(axes: &[usize], perm: &[usize]) -> Option<Vec<usize>> {
+    axes.iter().map(|&axis| perm.get(axis).copied()).collect()
+}
+
+fn is_strictly_increasing(values: &[usize]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Apply the transpose permutation to DotGeneral dimension numbers.
