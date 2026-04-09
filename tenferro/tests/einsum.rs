@@ -450,6 +450,16 @@ fn einsum_batched_three_matrix_chain_matches_pairwise_reference() {
 
     assert_eq!(direct_result.shape(), reference_result.shape());
     assert_eq!(direct_result.shape(), &[2, 2, 2]);
+    assert_close(
+        get_v2(direct_result, &[0, 0, 0]),
+        61060.0,
+        "batched_chain_manual[0,0,0]",
+    );
+    assert_close(
+        get_v2(direct_result, &[1, 1, 1]),
+        122176.0,
+        "batched_chain_manual[1,1,1]",
+    );
     for b in 0..2 {
         for i in 0..2 {
             for l in 0..2 {
