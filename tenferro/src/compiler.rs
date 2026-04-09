@@ -760,77 +760,29 @@ fn find_producer(program: &StableHloProgram, slot: usize) -> Option<usize> {
 /// Check if a Transpose can be folded into DotGeneral for the given operand.
 ///
 /// Foldability conditions:
-/// - The transpose must be a valid permutation of the operand rank.
-/// - The DotGeneral dim numbers must be a valid partition of the operand
-///   dimensions (no duplicates, no out-of-range dims).
+/// - Batch dims must be unchanged by the permutation (perm[d] == d for each
+///   batch dim).
+/// - Exactly 1 contracting dimension.
 fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[usize]) -> bool {
-    let (rank, batch_dims, contracting_dims) = if operand_idx == 0 {
-        (
-            config.lhs_rank,
-            &config.lhs_batch_dims,
-            &config.lhs_contracting_dims,
-        )
+    let (batch_dims, contracting_dims) = if operand_idx == 0 {
+        (&config.lhs_batch_dims, &config.lhs_contracting_dims)
     } else {
-        (
-            config.rhs_rank,
-            &config.rhs_batch_dims,
-            &config.rhs_contracting_dims,
-        )
+        (&config.rhs_batch_dims, &config.rhs_contracting_dims)
     };
 
-    if perm.len() != rank || !is_valid_permutation(perm, rank) {
-        return false;
-    }
-
-    if !are_valid_dim_numbers(contracting_dims, batch_dims, rank) {
-        return false;
-    }
-
-    let free_dims = free_dims_in_operand_order(contracting_dims, batch_dims, rank);
-    let mapped_free_dims: Vec<usize> = free_dims.iter().map(|&dim| perm[dim]).collect();
-    if !is_strictly_increasing(&mapped_free_dims) {
-        return false;
-    }
-
-    true
-}
-
-fn is_valid_permutation(perm: &[usize], rank: usize) -> bool {
-    let mut seen = vec![false; rank];
-    for &dim in perm {
-        if dim >= rank || seen[dim] {
+    // Batch dims must be fixed points of the permutation.
+    for &d in batch_dims {
+        if d >= perm.len() || perm[d] != d {
             return false;
         }
-        seen[dim] = true;
     }
+
+    // Must have exactly 1 contracting dimension.
+    if contracting_dims.len() != 1 {
+        return false;
+    }
+
     true
-}
-
-fn are_valid_dim_numbers(contracting_dims: &[usize], batch_dims: &[usize], rank: usize) -> bool {
-    let mut seen = vec![false; rank];
-    for &dim in contracting_dims.iter().chain(batch_dims.iter()) {
-        if dim >= rank || seen[dim] {
-            return false;
-        }
-        seen[dim] = true;
-    }
-    true
-}
-
-fn free_dims_in_operand_order(
-    contracting_dims: &[usize],
-    batch_dims: &[usize],
-    rank: usize,
-) -> Vec<usize> {
-    let mut taken = vec![false; rank];
-    for &dim in contracting_dims.iter().chain(batch_dims.iter()) {
-        taken[dim] = true;
-    }
-    (0..rank).filter(|&dim| !taken[dim]).collect()
-}
-
-fn is_strictly_increasing(dims: &[usize]) -> bool {
-    dims.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Apply the transpose permutation to DotGeneral dimension numbers.

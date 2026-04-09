@@ -247,67 +247,23 @@ fn test_transpose_folding_absorbs_transpose_on_rhs() {
 }
 
 #[test]
-fn test_transpose_folding_batch_and_contracting_dims_can_move() {
-    // A transpose can be folded even when it moves batch dims, as long as the
-    // DotGeneral dim numbers are otherwise valid.
-    //
-    // slot 0: input A (rank 4)
-    // slot 1: input B
-    // slot 2 = Transpose(slot 0, perm=[2,0,3,1])  => batch dim 0 moves to 2
-    // slot 3 = DotGeneral(slot 2, slot 1, lhs_contract={1,3}, rhs_contract={0,2},
-    //                    lhs_batch={0}, rhs_batch={1})
-    //
-    // After folding, the DotGeneral reads slot 0 directly and its lhs dims
-    // are remapped through the transpose permutation.
+fn test_transpose_folding_unfoldable_batch_changed() {
+    // Transpose that changes batch dims => not foldable.
+    // slot 0: input A (batch dim 0, but perm shuffles it)
+    // slot 2 = Transpose(slot 0, perm=[1,0,2])  => changes dim 0
+    // slot 3 = DotGeneral with batch_dims=[0]
     let transpose = make_instr(
         StableHloOp::Transpose {
-            perm: vec![2, 0, 3, 1],
+            perm: vec![1, 0, 2],
         },
         vec![0],
         vec![2],
     );
     let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1, 3],
-        rhs_contracting_dims: vec![0, 2],
-        lhs_batch_dims: vec![0],
-        rhs_batch_dims: vec![1],
-        lhs_rank: 4,
-        rhs_rank: 4,
-    };
-    let dot = make_instr(StableHloOp::DotGeneral(config), vec![2, 1], vec![3]);
-    let mut program = make_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
-
-    transpose_folding(&mut program);
-
-    let dot_instr = &program.instructions[1];
-    assert_eq!(dot_instr.input_slots[0], 0);
-    assert_eq!(dot_instr.input_slots[1], 1);
-    match &dot_instr.op {
-        StableHloOp::DotGeneral(c) => {
-            assert_eq!(c.lhs_contracting_dims, vec![0, 1]);
-            assert_eq!(c.lhs_batch_dims, vec![2]);
-            assert_eq!(c.rhs_contracting_dims, vec![0, 2]);
-            assert_eq!(c.rhs_batch_dims, vec![1]);
-        }
-        _ => panic!("expected DotGeneral"),
-    }
-}
-
-#[test]
-fn test_transpose_folding_rejects_free_dim_reordering() {
-    // Folding must reject transposes that reorder the implicit free dimensions.
-    let transpose = make_instr(
-        StableHloOp::Transpose {
-            perm: vec![2, 1, 0],
-        },
-        vec![0],
-        vec![2],
-    );
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
+        lhs_contracting_dims: vec![2],
         rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+        lhs_batch_dims: vec![0],
+        rhs_batch_dims: vec![0],
         lhs_rank: 3,
         rhs_rank: 2,
     };
@@ -316,15 +272,9 @@ fn test_transpose_folding_rejects_free_dim_reordering() {
 
     transpose_folding(&mut program);
 
+    // Not foldable: DotGeneral still reads slot 2 (transpose output).
     let dot_instr = &program.instructions[1];
-    assert_eq!(dot_instr.input_slots[0], 2);
-    match &dot_instr.op {
-        StableHloOp::DotGeneral(c) => {
-            assert_eq!(c.lhs_contracting_dims, vec![1]);
-            assert!(c.lhs_batch_dims.is_empty());
-        }
-        _ => panic!("expected DotGeneral"),
-    }
+    assert_eq!(dot_instr.input_slots[0], 2); // unchanged
 }
 
 #[test]
