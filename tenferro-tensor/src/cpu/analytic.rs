@@ -3,7 +3,7 @@ use num_traits::{One, Zero};
 use strided_kernel::{map_into, zip_map2_into};
 
 use crate::backend::{tensor_from_array, typed_array, typed_view};
-use crate::types::{dispatch_binary, dispatch_tensor, Tensor, TypedTensor};
+use crate::types::{Tensor, TypedTensor};
 
 trait UnaryAnalyticElem: Copy + Clone + One + Zero {
     fn exp_elem(self) -> Self;
@@ -122,20 +122,32 @@ impl_real_analytic_elem!(f64);
 impl_complex_analytic_elem!(Complex32);
 impl_complex_analytic_elem!(Complex64);
 
+fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: err.to_string(),
+    }
+}
+
 macro_rules! define_unary_analytic_op {
     ($dispatch_fn:ident, $typed_fn:ident, $elem_fn:ident) => {
-        pub fn $dispatch_fn(input: &Tensor) -> Tensor {
-            dispatch_tensor!(input, t => $typed_fn(t))
+        pub fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
+            match input {
+                Tensor::F32(t) => Ok(Tensor::F32($typed_fn(t)?)),
+                Tensor::F64(t) => Ok(Tensor::F64($typed_fn(t)?)),
+                Tensor::C32(t) => Ok(Tensor::C32($typed_fn(t)?)),
+                Tensor::C64(t) => Ok(Tensor::C64($typed_fn(t)?)),
+            }
         }
 
-        fn $typed_fn<T>(input: &TypedTensor<T>) -> TypedTensor<T>
+        fn $typed_fn<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
         where
             T: UnaryAnalyticElem,
         {
             let mut out = typed_array(&input.shape, T::zero());
             map_into(&mut out.view_mut(), &typed_view(input), |x| x.$elem_fn())
-                .expect(stringify!($typed_fn));
-            tensor_from_array(out)
+                .map_err(|err| backend_failure(stringify!($typed_fn), err))?;
+            Ok(tensor_from_array(out))
         }
     };
 }
@@ -150,15 +162,31 @@ define_unary_analytic_op!(rsqrt, typed_rsqrt, rsqrt_elem);
 define_unary_analytic_op!(expm1, typed_expm1, expm1_elem);
 define_unary_analytic_op!(log1p, typed_log1p, log1p_elem);
 
-pub fn pow(lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    dispatch_binary!(lhs, rhs, |a, b| typed_pow(a, b))
+pub fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    match (lhs, rhs) {
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_pow(a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_pow(a, b)?)),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow(a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow(a, b)?)),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "pow",
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        }),
+    }
 }
 
-fn typed_pow<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> TypedTensor<T>
+fn typed_pow<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
     T: PowElem,
 {
-    assert_eq!(lhs.shape, rhs.shape, "pow: shape mismatch");
+    if lhs.shape != rhs.shape {
+        return Err(crate::Error::ShapeMismatch {
+            op: "pow",
+            lhs: lhs.shape.clone(),
+            rhs: rhs.shape.clone(),
+        });
+    }
     let mut out = typed_array(&lhs.shape, T::zero());
     zip_map2_into(
         &mut out.view_mut(),
@@ -166,6 +194,6 @@ where
         &typed_view(rhs),
         |x, y| x.pow_elem(y),
     )
-    .expect("typed_pow");
-    tensor_from_array(out)
+    .map_err(|err| backend_failure("pow", err))?;
+    Ok(tensor_from_array(out))
 }

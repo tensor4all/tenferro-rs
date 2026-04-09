@@ -27,6 +27,43 @@ pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor
     TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
 }
 
+fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: err.to_string(),
+    }
+}
+
+fn validate_axis_list(
+    op: &'static str,
+    role: &'static str,
+    axes: &[usize],
+    rank: usize,
+) -> crate::Result<()> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+        }
+        if seen[axis] {
+            return Err(crate::Error::DuplicateAxis { op, axis, role });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+fn validate_binary_shapes(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::Result<()> {
+    if lhs != rhs {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: lhs.to_vec(),
+            rhs: rhs.to_vec(),
+        });
+    }
+    Ok(())
+}
+
 /// Standard runtime backend over dynamic [`Tensor`] values.
 ///
 /// # Examples
@@ -169,7 +206,7 @@ pub trait SemiringBackend<Alg: Semiring> {
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
     ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        assert_eq!(lhs.shape, rhs.shape, "add: shape mismatch");
+        validate_binary_shapes("add", &lhs.shape, &rhs.shape)?;
         let mut out = typed_array(&lhs.shape, Alg::zero());
         zip_map2_into(
             &mut out.view_mut(),
@@ -177,7 +214,7 @@ pub trait SemiringBackend<Alg: Semiring> {
             &typed_view(rhs),
             |x, y| Alg::add(x, y),
         )
-        .expect("semiring add");
+        .map_err(|err| backend_failure("add", err))?;
         Ok(tensor_from_array(out))
     }
 
@@ -186,7 +223,7 @@ pub trait SemiringBackend<Alg: Semiring> {
         lhs: &TypedTensor<Alg::Scalar>,
         rhs: &TypedTensor<Alg::Scalar>,
     ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        assert_eq!(lhs.shape, rhs.shape, "mul: shape mismatch");
+        validate_binary_shapes("mul", &lhs.shape, &rhs.shape)?;
         let mut out = typed_array(&lhs.shape, Alg::zero());
         zip_map2_into(
             &mut out.view_mut(),
@@ -194,7 +231,7 @@ pub trait SemiringBackend<Alg: Semiring> {
             &typed_view(rhs),
             |x, y| Alg::mul(x, y),
         )
-        .expect("semiring mul");
+        .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     }
 
@@ -203,6 +240,7 @@ pub trait SemiringBackend<Alg: Semiring> {
         input: &TypedTensor<Alg::Scalar>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<Alg::Scalar>> {
+        validate_axis_list("reduce_sum", "axes", axes, input.shape.len())?;
         if axes.is_empty() {
             return Ok(input.clone());
         }
@@ -218,7 +256,7 @@ pub trait SemiringBackend<Alg: Semiring> {
         let strides = col_major_strides(&input.shape);
         let mut current =
             StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
-                .expect("semiring reduce input");
+                .map_err(|err| backend_failure("reduce_sum", err))?;
 
         let mut sorted_axes = axes.to_vec();
         sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
@@ -230,7 +268,7 @@ pub trait SemiringBackend<Alg: Semiring> {
                 |a, b| Alg::add(a, b),
                 Alg::zero(),
             )
-            .expect("semiring reduce_sum");
+            .map_err(|err| backend_failure("reduce_sum", err))?;
         }
         Ok(TypedTensor::from_vec(output_shape, current.into_data()))
     }

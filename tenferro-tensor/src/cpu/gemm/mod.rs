@@ -3,6 +3,7 @@ use num_traits::{One, Zero};
 use crate::config::DotGeneralConfig;
 use crate::cpu::structural::typed_transpose;
 use crate::types::{col_major_strides, Buffer, TypedTensor};
+use crate::Error;
 
 #[cfg(feature = "cpu-blas")]
 mod blas_gemm;
@@ -32,6 +33,140 @@ struct GemmDims {
     c_cs: isize,
     c_bs: isize,
     out_shape: Vec<usize>,
+}
+
+fn validate_axis_list(
+    op: &'static str,
+    role: &'static str,
+    axes: &[usize],
+    rank: usize,
+) -> crate::Result<()> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(Error::AxisOutOfBounds { op, axis, rank });
+        }
+        if seen[axis] {
+            return Err(Error::DuplicateAxis { op, axis, role });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+fn validate_role_disjoint(
+    op: &'static str,
+    first_role: &'static str,
+    first_axes: &[usize],
+    second_role: &'static str,
+    second_axes: &[usize],
+) -> crate::Result<()> {
+    for &axis in first_axes {
+        if second_axes.contains(&axis) {
+            return Err(Error::AxisRoleConflict {
+                op,
+                axis,
+                first_role,
+                second_role,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_dot_general<T>(
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<()> {
+    const OP: &str = "dot_general";
+
+    if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
+        return Err(Error::InvalidConfig {
+            op: OP,
+            message: "lhs/rhs contracting dim counts differ".into(),
+        });
+    }
+    if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
+        return Err(Error::InvalidConfig {
+            op: OP,
+            message: "lhs/rhs batch dim counts differ".into(),
+        });
+    }
+
+    let lhs_rank = lhs.shape.len();
+    let rhs_rank = rhs.shape.len();
+    if config.lhs_rank != lhs_rank {
+        return Err(Error::RankMismatch {
+            op: OP,
+            expected: config.lhs_rank,
+            actual: lhs_rank,
+        });
+    }
+    if config.rhs_rank != rhs_rank {
+        return Err(Error::RankMismatch {
+            op: OP,
+            expected: config.rhs_rank,
+            actual: rhs_rank,
+        });
+    }
+    validate_axis_list(
+        OP,
+        "lhs_contracting",
+        &config.lhs_contracting_dims,
+        lhs_rank,
+    )?;
+    validate_axis_list(
+        OP,
+        "rhs_contracting",
+        &config.rhs_contracting_dims,
+        rhs_rank,
+    )?;
+    validate_axis_list(OP, "lhs_batch", &config.lhs_batch_dims, lhs_rank)?;
+    validate_axis_list(OP, "rhs_batch", &config.rhs_batch_dims, rhs_rank)?;
+    validate_role_disjoint(
+        OP,
+        "lhs_contracting",
+        &config.lhs_contracting_dims,
+        "lhs_batch",
+        &config.lhs_batch_dims,
+    )?;
+    validate_role_disjoint(
+        OP,
+        "rhs_contracting",
+        &config.rhs_contracting_dims,
+        "rhs_batch",
+        &config.rhs_batch_dims,
+    )?;
+
+    for (&lhs_axis, &rhs_axis) in config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&config.rhs_contracting_dims)
+    {
+        if lhs.shape[lhs_axis] != rhs.shape[rhs_axis] {
+            return Err(Error::InvalidConfig {
+                op: OP,
+                message: format!(
+                    "contracting dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
+                    lhs.shape[lhs_axis], rhs.shape[rhs_axis]
+                ),
+            });
+        }
+    }
+    for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
+        if lhs.shape[lhs_axis] != rhs.shape[rhs_axis] {
+            return Err(Error::InvalidConfig {
+                op: OP,
+                message: format!(
+                    "batch dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
+                    lhs.shape[lhs_axis], rhs.shape[rhs_axis]
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> {
@@ -219,29 +354,30 @@ pub(crate) fn dot_general<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
 {
+    validate_dot_general(lhs, rhs, config)?;
     if let Some(result) = typed_faer_gemm(lhs, rhs, config) {
-        return result;
+        return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
         canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm))
+        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
         std::borrow::Cow::Borrowed(rhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm))
+        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
-    // Canonical layout guarantees contiguous dim groups in col-major,
-    // so analyse_gemm / try_fuse_dims will always succeed here.
-    typed_faer_gemm(&lhs_canon, &rhs_canon, &new_config)
-        .unwrap_or_else(|| unreachable!("canonical layout is always fusable"))
+    typed_faer_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    })
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -311,12 +447,13 @@ pub(crate) fn dot_general<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: BlasGemm + Copy + Clone + Zero + One,
 {
+    validate_dot_general(lhs, rhs, config)?;
     if let Some(result) = typed_blas_gemm(lhs, rhs, config) {
-        return result;
+        return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
         canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
@@ -330,10 +467,10 @@ where
     } else {
         std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm))
     };
-    // Canonical layout guarantees contiguous dim groups in col-major,
-    // so analyse_gemm / try_fuse_dims will always succeed here.
-    typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config)
-        .unwrap_or_else(|| unreachable!("canonical layout is always fusable"))
+    typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    })
 }
 
 #[cfg(feature = "cpu-blas")]

@@ -67,7 +67,7 @@ fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], index: usize, h: f64
 fn wide_qr_r_sum(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 5], data.to_vec());
-    let outputs = TensorBackend::qr(&mut backend, &input);
+    let outputs = TensorBackend::qr(&mut backend, &input).unwrap();
     get_f64_data(&outputs[1]).iter().sum()
 }
 

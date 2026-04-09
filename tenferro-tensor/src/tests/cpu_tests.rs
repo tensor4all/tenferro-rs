@@ -1,4 +1,3 @@
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
@@ -292,7 +291,7 @@ fn test_reshape() {
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let r = reshape(&t, &[3, 2]);
+    let r = reshape(&t, &[3, 2]).unwrap();
     assert_eq!(r.shape(), &[3, 2]);
     assert_eq!(get_f64(&r, &[0, 0]), 1.0);
     assert_eq!(get_f64(&r, &[1, 0]), 2.0);
@@ -309,8 +308,8 @@ fn test_add_mul() {
         vec![2, 2],
         vec![10.0, 20.0, 30.0, 40.0],
     ));
-    let sum = add(&a, &b);
-    let prod = mul(&a, &b);
+    let sum = add(&a, &b).unwrap();
+    let prod = mul(&a, &b).unwrap();
 
     assert_eq!(get_f64(&sum, &[0, 0]), 11.0);
     assert_eq!(get_f64(&sum, &[1, 0]), 22.0);
@@ -328,10 +327,10 @@ fn test_add_mul_rank0_broadcast() {
     let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
     let tensor = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
 
-    let scalar_plus_tensor = add(&scalar, &tensor);
-    let tensor_plus_scalar = add(&tensor, &scalar);
-    let scalar_times_tensor = mul(&scalar, &tensor);
-    let tensor_times_scalar = mul(&tensor, &scalar);
+    let scalar_plus_tensor = add(&scalar, &tensor).unwrap();
+    let tensor_plus_scalar = add(&tensor, &scalar).unwrap();
+    let scalar_times_tensor = mul(&scalar, &tensor).unwrap();
+    let tensor_times_scalar = mul(&tensor, &scalar).unwrap();
 
     for actual in [&scalar_plus_tensor, &tensor_plus_scalar] {
         assert_eq!(actual.shape(), &[2, 2]);
@@ -358,8 +357,8 @@ fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
 
-    let scalar_times_tensor = mul(&scalar, &tensor);
-    let tensor_times_scalar = mul(&tensor, &scalar);
+    let scalar_times_tensor = mul(&scalar, &tensor).unwrap();
+    let tensor_times_scalar = mul(&tensor, &scalar).unwrap();
 
     for actual in [&scalar_times_tensor, &tensor_times_scalar] {
         assert_eq!(actual.shape(), &[2]);
@@ -378,7 +377,7 @@ fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
-    let output = mul(&scalar, &tensor);
+    let output = mul(&scalar, &tensor).unwrap();
 
     assert_c64_close(get_c64(&output, &[0]), Complex64::new(4.0, 3.0));
     assert_c64_close(get_c64(&output, &[1]), Complex64::new(-5.5, 4.0));
@@ -413,13 +412,13 @@ fn test_reduce_sum() {
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let r = reduce_sum(&t, &[0]);
+    let r = reduce_sum(&t, &[0]).unwrap();
     assert_eq!(r.shape(), &[3]);
     assert_eq!(get_f64(&r, &[0]), 3.0);
     assert_eq!(get_f64(&r, &[1]), 7.0);
     assert_eq!(get_f64(&r, &[2]), 11.0);
 
-    let all = reduce_sum(&t, &[0, 1]);
+    let all = reduce_sum(&t, &[0, 1]).unwrap();
     assert!(all.shape().is_empty());
     assert_eq!(get_f64(&all, &[]), 21.0);
 }
@@ -431,13 +430,13 @@ fn test_reduce_prod() {
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
 
-    let r = reduce_prod(&t, &[0]);
+    let r = reduce_prod(&t, &[0]).unwrap();
     assert_eq!(r.shape(), &[3]);
     assert_eq!(get_f64(&r, &[0]), 2.0);
     assert_eq!(get_f64(&r, &[1]), 12.0);
     assert_eq!(get_f64(&r, &[2]), 30.0);
 
-    let all = reduce_prod(&t, &[0, 1]);
+    let all = reduce_prod(&t, &[0, 1]).unwrap();
     assert!(all.shape().is_empty());
     assert_eq!(get_f64(&all, &[]), 720.0);
 }
@@ -449,22 +448,22 @@ fn test_reduce_max_and_min() {
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
 
-    let max_cols = reduce_max(&t, &[0]);
+    let max_cols = reduce_max(&t, &[0]).unwrap();
     assert_eq!(max_cols.shape(), &[3]);
     assert_eq!(get_f64(&max_cols, &[0]), 2.0);
     assert_eq!(get_f64(&max_cols, &[1]), 4.0);
     assert_eq!(get_f64(&max_cols, &[2]), 6.0);
 
-    let max_all = reduce_max(&t, &[0, 1]);
+    let max_all = reduce_max(&t, &[0, 1]).unwrap();
     assert!(max_all.shape().is_empty());
     assert_eq!(get_f64(&max_all, &[]), 6.0);
 
-    let min_rows = reduce_min(&t, &[1]);
+    let min_rows = reduce_min(&t, &[1]).unwrap();
     assert_eq!(min_rows.shape(), &[2]);
     assert_eq!(get_f64(&min_rows, &[0]), 1.0);
     assert_eq!(get_f64(&min_rows, &[1]), 2.0);
 
-    let min_all = reduce_min(&t, &[0, 1]);
+    let min_all = reduce_min(&t, &[0, 1]).unwrap();
     assert!(min_all.shape().is_empty());
     assert_eq!(get_f64(&min_all, &[]), 1.0);
 }
@@ -477,18 +476,18 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
     ));
     let mut backend = CpuBackend::new();
 
-    let prod = backend.reduce_prod(&t, &[0]);
+    let prod = backend.reduce_prod(&t, &[0]).unwrap();
     assert_eq!(prod.shape(), &[3]);
     assert_eq!(get_f64(&prod, &[0]), 2.0);
     assert_eq!(get_f64(&prod, &[1]), 12.0);
     assert_eq!(get_f64(&prod, &[2]), 30.0);
 
-    let max = backend.reduce_max(&t, &[1]);
+    let max = backend.reduce_max(&t, &[1]).unwrap();
     assert_eq!(max.shape(), &[2]);
     assert_eq!(get_f64(&max, &[0]), 5.0);
     assert_eq!(get_f64(&max, &[1]), 6.0);
 
-    let min = backend.reduce_min(&t, &[0, 1]);
+    let min = backend.reduce_min(&t, &[0, 1]).unwrap();
     assert!(min.shape().is_empty());
     assert_eq!(get_f64(&min, &[]), 1.0);
 }
@@ -500,14 +499,16 @@ fn test_slice() {
         (1..=16).map(|value| value as f64).collect(),
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.slice(
-        &input,
-        &SliceConfig {
-            starts: vec![1, 1],
-            limits: vec![3, 3],
-            strides: vec![1, 1],
-        },
-    );
+    let out = backend
+        .slice(
+            &input,
+            &SliceConfig {
+                starts: vec![1, 1],
+                limits: vec![3, 3],
+                strides: vec![1, 1],
+            },
+        )
+        .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(get_f64(&out, &[0, 0]), 6.0);
@@ -523,7 +524,7 @@ fn test_reverse_axis_zero() {
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.reverse(&input, &[0]);
+    let out = backend.reverse(&input, &[0]).unwrap();
 
     assert_eq!(out.shape(), &[2, 3]);
     assert_eq!(get_f64(&out, &[0, 0]), 2.0);
@@ -545,7 +546,7 @@ fn test_concatenate_axis_zero() {
         vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.concatenate(&[&lhs, &rhs], 0);
+    let out = backend.concatenate(&[&lhs, &rhs], 0).unwrap();
 
     assert_eq!(out.shape(), &[4, 3]);
     assert_eq!(get_f64(&out, &[0, 0]), 1.0);
@@ -575,18 +576,20 @@ fn test_dot_general_matmul() {
         ],
     ));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
-        },
-    );
+    let c = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+                lhs_rank: 2,
+                rhs_rank: 2,
+            },
+        )
+        .unwrap();
     assert_eq!(c.shape(), &[2, 4]);
     assert_eq!(get_f64(&c, &[0, 0]), 38.0);
     assert_eq!(get_f64(&c, &[1, 0]), 83.0);
@@ -601,18 +604,20 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
     let b = Tensor::F64(TypedTensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![0],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 1,
-            rhs_rank: 1,
-        },
-    );
+    let c = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![0],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+                lhs_rank: 1,
+                rhs_rank: 1,
+            },
+        )
+        .unwrap();
     assert!(c.shape().is_empty());
     assert_eq!(get_f64(&c, &[]), 32.0);
 }
@@ -622,18 +627,20 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
     let b = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
-        },
-    );
+    let c = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+                lhs_rank: 2,
+                rhs_rank: 2,
+            },
+        )
+        .unwrap();
 
     assert_eq!(c.shape(), &[0, 0]);
     match c {
@@ -647,18 +654,20 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![2, 0], Vec::new()));
     let b = Tensor::F64(TypedTensor::from_vec(vec![0, 3], Vec::new()));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
-        },
-    );
+    let c = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+                lhs_rank: 2,
+                rhs_rank: 2,
+            },
+        )
+        .unwrap();
 
     assert_eq!(c.shape(), &[2, 3]);
     match c {
@@ -682,18 +691,20 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
         ],
     ));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![3],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![0, 2],
-            rhs_batch_dims: vec![2, 3],
-            lhs_rank: 4,
-            rhs_rank: 4,
-        },
-    );
+    let c = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![3],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![0, 2],
+                rhs_batch_dims: vec![2, 3],
+                lhs_rank: 4,
+                rhs_rank: 4,
+            },
+        )
+        .unwrap();
 
     assert_eq!(c.shape(), &[2, 2, 2, 2]);
     assert_eq!(get_f64(&c, &[0, 0, 0, 0]), 1.0);
@@ -715,7 +726,7 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
 }
 
 #[test]
-fn test_dot_general_fallback_uses_actual_runtime_rank_for_canonical_layout() {
+fn test_dot_general_rejects_stale_rank_metadata() {
     let a = Tensor::F64(TypedTensor::from_vec(
         vec![2, 2, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -725,24 +736,29 @@ fn test_dot_general_fallback_uses_actual_runtime_rank_for_canonical_layout() {
         vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
     ));
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![0, 2],
-            rhs_batch_dims: vec![1, 2],
-            lhs_rank: 4,
-            rhs_rank: 4,
-        },
-    );
+    let err = backend
+        .dot_general(
+            &a,
+            &b,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![0, 2],
+                rhs_batch_dims: vec![1, 2],
+                lhs_rank: 4,
+                rhs_rank: 4,
+            },
+        )
+        .unwrap_err();
 
-    assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(get_f64(&c, &[0, 0]), 31.0);
-    assert_eq!(get_f64(&c, &[1, 0]), 84.0);
-    assert_eq!(get_f64(&c, &[0, 1]), 225.0);
-    assert_eq!(get_f64(&c, &[1, 1]), 344.0);
+    assert!(matches!(
+        err,
+        crate::Error::RankMismatch {
+            op: "dot_general",
+            expected: 4,
+            actual: 3,
+        }
+    ));
 }
 
 #[test]
@@ -751,7 +767,7 @@ fn test_transpose() {
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let tr = transpose(&t, &[1, 0]);
+    let tr = transpose(&t, &[1, 0]).unwrap();
     assert_eq!(tr.shape(), &[3, 2]);
     assert_eq!(get_f64(&tr, &[0, 0]), 1.0);
     assert_eq!(get_f64(&tr, &[0, 1]), 2.0);
@@ -764,14 +780,14 @@ fn test_transpose() {
 #[test]
 fn test_broadcast_in_dim() {
     let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
-    let broadcast = broadcast_in_dim(&scalar, &[3], &[]);
+    let broadcast = broadcast_in_dim(&scalar, &[3], &[]).unwrap();
     assert_eq!(broadcast.shape(), &[3]);
     assert_eq!(get_f64(&broadcast, &[0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1]), 5.0);
     assert_eq!(get_f64(&broadcast, &[2]), 5.0);
 
     let v = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let m = broadcast_in_dim(&v, &[3, 2], &[0]);
+    let m = broadcast_in_dim(&v, &[3, 2], &[0]).unwrap();
     assert_eq!(m.shape(), &[3, 2]);
     for j in 0..2 {
         assert_eq!(get_f64(&m, &[0, j]), 1.0);
@@ -786,7 +802,7 @@ fn test_tril_3x3() {
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
-    let lower = tril(&t, 0);
+    let lower = tril(&t, 0).unwrap();
     assert_eq!(lower.shape(), &[3, 3]);
     assert_eq!(
         match &lower {
@@ -803,7 +819,7 @@ fn test_triu_3x3() {
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
-    let upper = triu(&t, 0);
+    let upper = triu(&t, 0).unwrap();
     assert_eq!(upper.shape(), &[3, 3]);
     assert_eq!(
         match &upper {
@@ -818,14 +834,14 @@ fn test_triu_3x3() {
 fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
     let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2, 0], Vec::new()));
 
-    let lower = tril(&t, 0);
+    let lower = tril(&t, 0).unwrap();
     assert_eq!(lower.shape(), &[2, 2, 0]);
     match lower {
         Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
         _ => panic!("expected f64 tensor"),
     }
 
-    let upper = triu(&t, 0);
+    let upper = triu(&t, 0).unwrap();
     assert_eq!(upper.shape(), &[2, 2, 0]);
     match upper {
         Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
@@ -836,11 +852,11 @@ fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
 #[test]
 fn test_neg_and_conj() {
     let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, -7.0]));
-    let n = neg(&t);
+    let n = neg(&t).unwrap();
     assert_eq!(get_f64(&n, &[0]), -3.0);
     assert_eq!(get_f64(&n, &[1]), 7.0);
 
-    let c = conj(&t);
+    let c = conj(&t).unwrap();
     assert_eq!(get_f64(&c, &[0]), 3.0);
     assert_eq!(get_f64(&c, &[1]), -7.0);
 }
@@ -850,12 +866,12 @@ fn test_cpu_backend_analytic_ops_real() {
     let mut backend = CpuBackend::new();
 
     let exp_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
-    let exp_out = backend.exp(&exp_input);
+    let exp_out = backend.exp(&exp_input).unwrap();
     assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
     assert_f64_close(get_f64(&exp_out, &[1]), std::f64::consts::E);
 
     let log_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
-    let log_out = backend.log(&log_input);
+    let log_out = backend.log(&log_input).unwrap();
     assert_f64_close(get_f64(&log_out, &[0]), 0.0);
     assert_f64_close(get_f64(&log_out, &[1]), 4.0_f64.ln());
 
@@ -863,28 +879,28 @@ fn test_cpu_backend_analytic_ops_real() {
         vec![2],
         vec![0.0, std::f64::consts::FRAC_PI_2],
     ));
-    let sin_out = backend.sin(&trig_input);
-    let cos_out = backend.cos(&trig_input);
+    let sin_out = backend.sin(&trig_input).unwrap();
+    let cos_out = backend.cos(&trig_input).unwrap();
     assert_f64_close(get_f64(&sin_out, &[0]), 0.0);
     assert_f64_close(get_f64(&sin_out, &[1]), 1.0);
     assert_f64_close(get_f64(&cos_out, &[0]), 1.0);
     assert_f64_close(get_f64(&cos_out, &[1]), 0.0);
 
     let tanh_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
-    let tanh_out = backend.tanh(&tanh_input);
+    let tanh_out = backend.tanh(&tanh_input).unwrap();
     assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
     assert_f64_close(get_f64(&tanh_out, &[1]), 1.0_f64.tanh());
 
     let sqrt_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
-    let sqrt_out = backend.sqrt(&sqrt_input);
-    let rsqrt_out = backend.rsqrt(&sqrt_input);
+    let sqrt_out = backend.sqrt(&sqrt_input).unwrap();
+    let rsqrt_out = backend.rsqrt(&sqrt_input).unwrap();
     assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&sqrt_out, &[1]), 2.0);
     assert_f64_close(get_f64(&rsqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&rsqrt_out, &[1]), 0.5);
 
-    let expm1_out = backend.expm1(&exp_input);
-    let log1p_out = backend.log1p(&log_input);
+    let expm1_out = backend.expm1(&exp_input).unwrap();
+    let log1p_out = backend.log1p(&log_input).unwrap();
     assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
     assert_f64_close(get_f64(&expm1_out, &[1]), 1.0_f64.exp_m1());
     assert_f64_close(get_f64(&log1p_out, &[0]), 2.0_f64.ln());
@@ -892,7 +908,7 @@ fn test_cpu_backend_analytic_ops_real() {
 
     let pow_base = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 9.0]));
     let pow_exp = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 0.5]));
-    let pow_out = backend.pow(&pow_base, &pow_exp);
+    let pow_out = backend.pow(&pow_base, &pow_exp).unwrap();
     assert_f64_close(get_f64(&pow_out, &[0]), 8.0);
     assert_f64_close(get_f64(&pow_out, &[1]), 3.0);
 }
@@ -905,7 +921,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         vec![2],
         vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 1.0)],
     ));
-    let exp_out = backend.exp(&exp_input);
+    let exp_out = backend.exp(&exp_input).unwrap();
     assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&exp_out, &[1]), Complex64::new(1.0, 1.0).exp());
 
@@ -913,7 +929,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, -0.5)],
     ));
-    let log_out = backend.log(&log_input);
+    let log_out = backend.log(&log_input).unwrap();
     assert_c64_close(get_c64(&log_out, &[0]), Complex64::new(1.0, 0.0).ln());
     assert_c64_close(get_c64(&log_out, &[1]), Complex64::new(2.0, -0.5).ln());
 
@@ -921,9 +937,9 @@ fn test_cpu_backend_analytic_ops_complex() {
         vec![2],
         vec![Complex64::new(0.0, 0.0), Complex64::new(0.5, -0.25)],
     ));
-    let sin_out = backend.sin(&trig_input);
-    let cos_out = backend.cos(&trig_input);
-    let tanh_out = backend.tanh(&trig_input);
+    let sin_out = backend.sin(&trig_input).unwrap();
+    let cos_out = backend.cos(&trig_input).unwrap();
+    let tanh_out = backend.tanh(&trig_input).unwrap();
     assert_c64_close(get_c64(&sin_out, &[0]), Complex64::new(0.0, 0.0).sin());
     assert_c64_close(get_c64(&sin_out, &[1]), Complex64::new(0.5, -0.25).sin());
     assert_c64_close(get_c64(&cos_out, &[0]), Complex64::new(0.0, 0.0).cos());
@@ -935,8 +951,8 @@ fn test_cpu_backend_analytic_ops_complex() {
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(4.0, 3.0)],
     ));
-    let sqrt_out = backend.sqrt(&sqrt_input);
-    let rsqrt_out = backend.rsqrt(&sqrt_input);
+    let sqrt_out = backend.sqrt(&sqrt_input).unwrap();
+    let rsqrt_out = backend.rsqrt(&sqrt_input).unwrap();
     assert_c64_close(get_c64(&sqrt_out, &[0]), Complex64::new(1.0, 0.0).sqrt());
     assert_c64_close(get_c64(&sqrt_out, &[1]), Complex64::new(4.0, 3.0).sqrt());
     assert_c64_close_tol(
@@ -950,8 +966,8 @@ fn test_cpu_backend_analytic_ops_complex() {
         1.0e-12,
     );
 
-    let expm1_out = backend.expm1(&exp_input);
-    let log1p_out = backend.log1p(&log_input);
+    let expm1_out = backend.expm1(&exp_input).unwrap();
+    let log1p_out = backend.log1p(&log_input).unwrap();
     assert_c64_close(
         get_c64(&expm1_out, &[0]),
         Complex64::new(0.0, 0.0).exp() - Complex64::new(1.0, 0.0),
@@ -977,7 +993,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         vec![2],
         vec![Complex64::new(2.0, 0.0), Complex64::new(0.5, 0.25)],
     ));
-    let pow_out = backend.pow(&pow_base, &pow_exp);
+    let pow_out = backend.pow(&pow_base, &pow_exp).unwrap();
     assert_c64_close(
         get_c64(&pow_out, &[0]),
         Complex64::new(1.0, 1.0).powc(Complex64::new(2.0, 0.0)),
@@ -994,7 +1010,7 @@ fn test_extract_diagonal() {
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
-    let d = extract_diagonal(&square, 0, 1);
+    let d = extract_diagonal(&square, 0, 1).unwrap();
     assert_eq!(d.shape(), &[3]);
     assert_eq!(get_f64(&d, &[0]), 1.0);
     assert_eq!(get_f64(&d, &[1]), 5.0);
@@ -1004,7 +1020,7 @@ fn test_extract_diagonal() {
         vec![2, 3, 3],
         (1..=18).map(|x| x as f64).collect(),
     ));
-    let diag = extract_diagonal(&cube, 1, 2);
+    let diag = extract_diagonal(&cube, 1, 2).unwrap();
     assert_eq!(diag.shape(), &[2, 3]);
     assert_eq!(get_f64(&diag, &[0, 0]), 1.0);
     assert_eq!(get_f64(&diag, &[1, 1]), 10.0);
@@ -1014,7 +1030,7 @@ fn test_extract_diagonal() {
 #[test]
 fn test_embed_diagonal() {
     let v = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let m = embed_diagonal(&v, 0, 1);
+    let m = embed_diagonal(&v, 0, 1).unwrap();
     assert_eq!(m.shape(), &[3, 3]);
     assert_eq!(get_f64(&m, &[0, 0]), 1.0);
     assert_eq!(get_f64(&m, &[1, 1]), 2.0);
@@ -1028,7 +1044,7 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
     let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
     let mut backend = CpuBackend::new();
-    let out = TensorBackend::add(&mut backend, &a, &b);
+    let out = TensorBackend::add(&mut backend, &a, &b).unwrap();
     assert_eq!(get_f64(&out, &[0]), 4.0);
     assert_eq!(get_f64(&out, &[1]), 6.0);
 }
@@ -1044,62 +1060,62 @@ fn test_tier2_elementwise_ops_real() {
     let upper = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 0.25, 4.0]));
     let mut backend = CpuBackend::new();
 
-    let div = backend.div(&lhs, &rhs);
+    let div = backend.div(&lhs, &rhs).unwrap();
     assert_eq!(get_f64(&div, &[0]), 4.0);
     assert_eq!(get_f64(&div, &[1]), -0.4);
     assert_eq!(get_f64(&div, &[2]), 3.0);
 
-    let abs = backend.abs(&lhs);
+    let abs = backend.abs(&lhs).unwrap();
     assert_eq!(get_f64(&abs, &[0]), 8.0);
     assert_eq!(get_f64(&abs, &[1]), 2.0);
     assert_eq!(get_f64(&abs, &[2]), 9.0);
 
-    let sign = backend.sign(&lhs);
+    let sign = backend.sign(&lhs).unwrap();
     assert_eq!(get_f64(&sign, &[0]), 1.0);
     assert_eq!(get_f64(&sign, &[1]), -1.0);
     assert_eq!(get_f64(&sign, &[2]), 1.0);
 
-    let maximum = backend.maximum(&lhs, &rhs);
+    let maximum = backend.maximum(&lhs, &rhs).unwrap();
     assert_eq!(get_f64(&maximum, &[0]), 8.0);
     assert_eq!(get_f64(&maximum, &[1]), 5.0);
     assert_eq!(get_f64(&maximum, &[2]), 9.0);
 
-    let minimum = backend.minimum(&lhs, &rhs);
+    let minimum = backend.minimum(&lhs, &rhs).unwrap();
     assert_eq!(get_f64(&minimum, &[0]), 2.0);
     assert_eq!(get_f64(&minimum, &[1]), -2.0);
     assert_eq!(get_f64(&minimum, &[2]), 3.0);
 
-    let eq = backend.compare(&lhs, &rhs, &CompareDir::Eq);
+    let eq = backend.compare(&lhs, &rhs, &CompareDir::Eq).unwrap();
     assert_eq!(get_f64(&eq, &[0]), 0.0);
     assert_eq!(get_f64(&eq, &[1]), 0.0);
     assert_eq!(get_f64(&eq, &[2]), 0.0);
 
-    let lt = backend.compare(&lhs, &rhs, &CompareDir::Lt);
+    let lt = backend.compare(&lhs, &rhs, &CompareDir::Lt).unwrap();
     assert_eq!(get_f64(&lt, &[0]), 0.0);
     assert_eq!(get_f64(&lt, &[1]), 1.0);
     assert_eq!(get_f64(&lt, &[2]), 0.0);
 
-    let le = backend.compare(&lhs, &rhs, &CompareDir::Le);
+    let le = backend.compare(&lhs, &rhs, &CompareDir::Le).unwrap();
     assert_eq!(get_f64(&le, &[0]), 0.0);
     assert_eq!(get_f64(&le, &[1]), 1.0);
     assert_eq!(get_f64(&le, &[2]), 0.0);
 
-    let gt = backend.compare(&lhs, &rhs, &CompareDir::Gt);
+    let gt = backend.compare(&lhs, &rhs, &CompareDir::Gt).unwrap();
     assert_eq!(get_f64(&gt, &[0]), 1.0);
     assert_eq!(get_f64(&gt, &[1]), 0.0);
     assert_eq!(get_f64(&gt, &[2]), 1.0);
 
-    let ge = backend.compare(&lhs, &rhs, &CompareDir::Ge);
+    let ge = backend.compare(&lhs, &rhs, &CompareDir::Ge).unwrap();
     assert_eq!(get_f64(&ge, &[0]), 1.0);
     assert_eq!(get_f64(&ge, &[1]), 0.0);
     assert_eq!(get_f64(&ge, &[2]), 1.0);
 
-    let select = backend.select(&pred, &on_true, &on_false);
+    let select = backend.select(&pred, &on_true, &on_false).unwrap();
     assert_eq!(get_f64(&select, &[0]), 1.0);
     assert_eq!(get_f64(&select, &[1]), 20.0);
     assert_eq!(get_f64(&select, &[2]), 30.0);
 
-    let clamp = backend.clamp(&lhs, &lower, &upper);
+    let clamp = backend.clamp(&lhs, &lower, &upper).unwrap();
     assert_eq!(get_f64(&clamp, &[0]), 1.0);
     assert_eq!(get_f64(&clamp, &[1]), -1.0);
     assert_eq!(get_f64(&clamp, &[2]), 4.0);
@@ -1121,19 +1137,19 @@ fn test_tier2_elementwise_ops_complex() {
     ));
     let mut backend = CpuBackend::new();
 
-    let abs = backend.abs(&input);
+    let abs = backend.abs(&input).unwrap();
     assert_c64_close(get_c64(&abs, &[0]), Complex64::new(5.0, 0.0));
     assert_c64_close(get_c64(&abs, &[1]), Complex64::new(0.0, 0.0));
 
-    let sign = backend.sign(&input);
+    let sign = backend.sign(&input).unwrap();
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 
-    let maximum = backend.maximum(&lhs, &rhs);
+    let maximum = backend.maximum(&lhs, &rhs).unwrap();
     assert_c64_close(get_c64(&maximum, &[0]), Complex64::new(3.0, 4.0));
     assert_c64_close(get_c64(&maximum, &[1]), Complex64::new(0.0, 2.0));
 
-    let minimum = backend.minimum(&lhs, &rhs);
+    let minimum = backend.minimum(&lhs, &rhs).unwrap();
     assert_c64_close(get_c64(&minimum, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&minimum, &[1]), Complex64::new(1.0, 0.0));
 }
@@ -1150,7 +1166,7 @@ fn test_batched_cholesky() {
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.cholesky(&input);
+    let out = backend.cholesky(&input).unwrap();
 
     assert_eq!(out.shape(), &[3, 3, 2]);
     for batch_idx in 0..2 {
@@ -1174,7 +1190,7 @@ fn test_batched_svd() {
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.svd(&input);
+    let out = backend.svd(&input).unwrap();
 
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].shape(), &[4, 3, 2]);
@@ -1202,7 +1218,7 @@ fn test_batched_qr() {
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
     let mut backend = CpuBackend::new();
-    let out = backend.qr(&input);
+    let out = backend.qr(&input).unwrap();
 
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].shape(), &[3, 2, 2]);
@@ -1235,7 +1251,7 @@ fn test_batched_solve() {
     ));
 
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b);
+    let x = backend.solve(&a, &b).unwrap();
 
     assert_eq!(x.shape(), &[3, 1, 2]);
     for batch_idx in 0..2 {
@@ -1257,7 +1273,9 @@ fn test_triangular_solve_lower() {
     let b = Tensor::F64(TypedTensor::from_vec(vec![3, 1], b_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let x = backend.triangular_solve(&l, &b, true, true, false, false);
+    let x = backend
+        .triangular_solve(&l, &b, true, true, false, false)
+        .unwrap();
 
     assert_eq!(x.shape(), &[3, 1]);
     let x_data = match &x {
@@ -1278,7 +1296,9 @@ fn test_triangular_solve_right_side_unit_transpose() {
     let b = Tensor::F64(TypedTensor::from_vec(vec![1, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let x = backend.triangular_solve(&a, &b, false, true, true, true);
+    let x = backend
+        .triangular_solve(&a, &b, false, true, true, true)
+        .unwrap();
 
     assert_eq!(x.shape(), &[1, 2]);
     let x_data = match &x {
@@ -1323,14 +1343,9 @@ fn test_triangular_solve_covers_all_real_branch_combinations() {
                     let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data));
                     let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], b_data));
                     let mut backend = CpuBackend::new();
-                    let x = backend.triangular_solve(
-                        &a,
-                        &b,
-                        left_side,
-                        lower,
-                        transpose_a,
-                        unit_diagonal,
-                    );
+                    let x = backend
+                        .triangular_solve(&a, &b, left_side, lower, transpose_a, unit_diagonal)
+                        .unwrap();
 
                     let x_data = match &x {
                         Tensor::F64(inner) => inner.host_data(),
@@ -1376,7 +1391,7 @@ fn test_batched_complex_solve() {
     ));
 
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b);
+    let x = backend.solve(&a, &b).unwrap();
 
     assert_eq!(x.shape(), &[2, 1, 2]);
     for batch_idx in 0..2 {
@@ -1398,7 +1413,7 @@ fn test_real_solve_non_batched() {
     let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let x = backend.solve(&a, &b);
+    let x = backend.solve(&a, &b).unwrap();
 
     let x_data = match &x {
         Tensor::F64(inner) => inner.host_data(),
@@ -1414,7 +1429,7 @@ fn test_real_solve_non_batched() {
 fn test_real_lu_returns_permutation_factors_and_parity() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
     let mut backend = CpuBackend::new();
-    let outputs = backend.lu(&input);
+    let outputs = backend.lu(&input).unwrap();
 
     assert_eq!(outputs.len(), 4);
     let p = matrix_f64_from_tensor(&outputs[0], 2, 2);
@@ -1434,7 +1449,7 @@ fn test_real_lu_returns_permutation_factors_and_parity() {
 fn test_real_eig_returns_complex_outputs() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
     let mut backend = CpuBackend::new();
-    let outputs = backend.eig(&input);
+    let outputs = backend.eig(&input).unwrap();
 
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].shape(), &[2]);
@@ -1472,7 +1487,7 @@ fn test_batched_complex_eigh() {
     ));
 
     let mut backend = CpuBackend::new();
-    let out = backend.eigh(&input);
+    let out = backend.eigh(&input).unwrap();
 
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].shape(), &[2, 2]);
@@ -1504,7 +1519,7 @@ fn test_real_eigh() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let out = backend.eigh(&input);
+    let out = backend.eigh(&input).unwrap();
 
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].shape(), &[2]);
@@ -1528,20 +1543,26 @@ fn test_real_eigh() {
 }
 
 #[test]
-#[should_panic(expected = "cholesky: matrix is not positive definite")]
-fn test_real_cholesky_panics_for_non_positive_definite_input() {
+fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 2.0, 1.0]));
     let mut backend = CpuBackend::new();
-    let _ = backend.cholesky(&input);
+    let err = backend.cholesky(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "cholesky", .. }
+    ));
 }
 
 #[test]
-#[should_panic(expected = "solve: singular matrix")]
-fn test_real_solve_panics_for_singular_matrix() {
+fn test_real_solve_returns_error_for_singular_matrix() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
     let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 1.0]));
     let mut backend = CpuBackend::new();
-    let _ = backend.solve(&a, &b);
+    let err = backend.solve(&a, &b).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "solve", .. }
+    ));
 }
 
 #[test]
@@ -1556,7 +1577,7 @@ fn test_complex_cholesky() {
     let input = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a.clone()));
 
     let mut backend = CpuBackend::new();
-    let out = backend.cholesky(&input);
+    let out = backend.cholesky(&input).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     let l_out = matrix_c64_from_tensor(&out, 2, 2);
@@ -1567,8 +1588,7 @@ fn test_complex_cholesky() {
 }
 
 #[test]
-#[should_panic(expected = "cholesky: matrix is not positive definite")]
-fn test_complex_cholesky_panics_for_non_positive_definite_input() {
+fn test_complex_cholesky_returns_error_for_non_positive_definite_input() {
     let input = Tensor::C64(TypedTensor::from_vec(
         vec![2, 2],
         vec![
@@ -1579,7 +1599,11 @@ fn test_complex_cholesky_panics_for_non_positive_definite_input() {
         ],
     ));
     let mut backend = CpuBackend::new();
-    let _ = backend.cholesky(&input);
+    let err = backend.cholesky(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "cholesky", .. }
+    ));
 }
 
 #[test]
@@ -1595,7 +1619,7 @@ fn test_complex_qr() {
     let input = Tensor::C64(TypedTensor::from_vec(vec![3, 2], input_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let out = backend.qr(&input);
+    let out = backend.qr(&input).unwrap();
 
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].shape(), &[3, 2]);
@@ -1621,7 +1645,7 @@ fn test_complex_svd() {
     ];
     let input = Tensor::C64(TypedTensor::from_vec(vec![3, 2], input_data.clone()));
     let mut backend = CpuBackend::new();
-    let out = backend.svd(&input);
+    let out = backend.svd(&input).unwrap();
 
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].shape(), &[3, 2]);
@@ -1650,7 +1674,9 @@ fn test_complex_triangular_solve_right_side_unit_transpose() {
     let b = Tensor::C64(TypedTensor::from_vec(vec![1, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
-    let x = backend.triangular_solve(&a, &b, false, true, true, true);
+    let x = backend
+        .triangular_solve(&a, &b, false, true, true, true)
+        .unwrap();
 
     assert_eq!(x.shape(), &[1, 2]);
     let x_data = match &x {
@@ -1710,14 +1736,9 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
                     let a = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a_data));
                     let b = Tensor::C64(TypedTensor::from_vec(vec![2, 2], b_data));
                     let mut backend = CpuBackend::new();
-                    let x = backend.triangular_solve(
-                        &a,
-                        &b,
-                        left_side,
-                        lower,
-                        transpose_a,
-                        unit_diagonal,
-                    );
+                    let x = backend
+                        .triangular_solve(&a, &b, left_side, lower, transpose_a, unit_diagonal)
+                        .unwrap();
 
                     let x_data = match &x {
                         Tensor::C64(inner) => inner.host_data(),
@@ -1733,8 +1754,7 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
 }
 
 #[test]
-#[should_panic(expected = "solve: singular matrix")]
-fn test_complex_solve_panics_for_singular_matrix() {
+fn test_complex_solve_returns_error_for_singular_matrix() {
     let a = Tensor::C64(TypedTensor::from_vec(
         vec![2, 2],
         vec![
@@ -1749,7 +1769,11 @@ fn test_complex_solve_panics_for_singular_matrix() {
         vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
     ));
     let mut backend = CpuBackend::new();
-    let _ = backend.solve(&a, &b);
+    let err = backend.solve(&a, &b).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "solve", .. }
+    ));
 }
 
 #[test]
@@ -1908,7 +1932,7 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
         strides: vec![2, 2],
     };
     let mut backend = CpuBackend::new();
-    let sliced = backend.slice(&input, &config);
+    let sliced = backend.slice(&input, &config).unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
     assert_eq!(get_f64(&sliced, &[0, 0]), 1.0);
     assert_eq!(get_f64(&sliced, &[1, 0]), 3.0);
@@ -1918,13 +1942,13 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
     let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![3.0, 4.0]));
     let c = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![5.0, 6.0]));
-    let concatenated = backend.concatenate(&[&a, &b, &c], 1);
+    let concatenated = backend.concatenate(&[&a, &b, &c], 1).unwrap();
     assert_eq!(concatenated.shape(), &[2, 3]);
     assert_eq!(get_f64(&concatenated, &[0, 0]), 1.0);
     assert_eq!(get_f64(&concatenated, &[1, 1]), 4.0);
     assert_eq!(get_f64(&concatenated, &[0, 2]), 5.0);
 
-    let reversed = backend.reverse(&input, &[0, 1]);
+    let reversed = backend.reverse(&input, &[0, 1]).unwrap();
     assert_eq!(reversed.shape(), &[4, 3]);
     assert_eq!(get_f64(&reversed, &[0, 0]), 12.0);
     assert_eq!(get_f64(&reversed, &[3, 2]), 1.0);
@@ -1964,7 +1988,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
     ];
 
     for (input, to) in cases {
-        let output = backend.convert(input, to);
+        let output = backend.convert(input, to).unwrap();
         assert_eq!(output.shape(), &[2]);
         assert_eq!(output.dtype(), to);
 
@@ -2014,7 +2038,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
 }
 
 #[test]
-fn test_backend_linalg_panics_for_unsupported_dtypes() {
+fn test_backend_linalg_returns_errors_for_unsupported_dtypes() {
     let mut backend = CpuBackend::new();
     let f32_matrix = Tensor::F32(TypedTensor::from_vec(
         vec![2, 2],
@@ -2031,14 +2055,13 @@ fn test_backend_linalg_panics_for_unsupported_dtypes() {
         ],
     ));
 
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.cholesky(&f32_matrix))).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.svd(&f32_matrix))).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.qr(&f32_matrix))).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.eigh(&f32_matrix))).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.solve(&f32_matrix, &f32_rhs))).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| {
-        backend.triangular_solve(&f32_matrix, &f32_rhs, true, true, false, false)
-    }))
-    .is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| backend.cholesky(&c32_matrix))).is_err());
+    assert!(backend.cholesky(&f32_matrix).is_err());
+    assert!(backend.svd(&f32_matrix).is_err());
+    assert!(backend.qr(&f32_matrix).is_err());
+    assert!(backend.eigh(&f32_matrix).is_err());
+    assert!(backend.solve(&f32_matrix, &f32_rhs).is_err());
+    assert!(backend
+        .triangular_solve(&f32_matrix, &f32_rhs, true, true, false, false)
+        .is_err());
+    assert!(backend.cholesky(&c32_matrix).is_err());
 }

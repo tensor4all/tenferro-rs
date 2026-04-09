@@ -61,6 +61,7 @@ fn eval_fragment(
         })
         .collect();
     eval_semiring_ir::<_, TropicalAlgebra>(backend, &exec, inputs)
+        .unwrap()
         .into_iter()
         .next()
         .expect("semiring output")
@@ -114,9 +115,9 @@ fn tropical_default_semiring_ops_work_on_cpu_backend() {
     let b = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let mut backend = CpuBackend::new();
 
-    let sum = SemiringBackend::<TropicalAlgebra>::add(&mut backend, &a, &b);
-    let prod = SemiringBackend::<TropicalAlgebra>::mul(&mut backend, &a, &b);
-    let reduced = SemiringBackend::<TropicalAlgebra>::reduce_sum(&mut backend, &a, &[0]);
+    let sum = SemiringBackend::<TropicalAlgebra>::add(&mut backend, &a, &b).unwrap();
+    let prod = SemiringBackend::<TropicalAlgebra>::mul(&mut backend, &a, &b).unwrap();
+    let reduced = SemiringBackend::<TropicalAlgebra>::reduce_sum(&mut backend, &a, &[0]).unwrap();
 
     assert_eq!(sum.host_data(), &[5.0, 6.0, 7.0, 8.0]);
     assert_eq!(prod.host_data(), &[6.0, 8.0, 10.0, 12.0]);

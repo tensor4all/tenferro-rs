@@ -461,9 +461,9 @@ where
                 get(&slots, &inst.input_slots, 0)?,
                 get(&slots, &inst.input_slots, 1)?,
                 config,
-            )?,
+            ),
             ExecOp::ReduceSum { axes } => {
-                backend.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)?
+                backend.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)
             }
             ExecOp::ExtractDiag { axis_a, axis_b } => {
                 typed_extract_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)
@@ -474,14 +474,14 @@ where
             ExecOp::Add => backend.add(
                 get(&slots, &inst.input_slots, 0)?,
                 get(&slots, &inst.input_slots, 1)?,
-            )?,
+            ),
             ExecOp::Multiply => backend.mul(
                 get(&slots, &inst.input_slots, 0)?,
                 get(&slots, &inst.input_slots, 1)?,
-            )?,
+            ),
             _ => panic!("non-semiring op in semiring program: {:?}", inst.op),
         };
-        slots[inst.output_slots[0]] = Some(result);
+        slots[inst.output_slots[0]] = Some(result?);
     }
 
     program

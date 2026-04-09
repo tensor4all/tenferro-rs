@@ -328,7 +328,7 @@ fn eval_fragment_outputs(
         .collect();
     let mut backend = CpuBackend::new();
     let mut pool = BufferPool::new();
-    eval_exec_ir(&mut backend, &exec, inputs, &mut pool)
+    eval_exec_ir(&mut backend, &exec, inputs, &mut pool).unwrap()
 }
 
 fn scalar_f64_tensor(value: f64) -> Tensor {
@@ -999,15 +999,15 @@ fn eval_f64_reduction_op(op: &StdTensorOp, data: &[f64]) -> Vec<f64> {
     let output = match op {
         StdTensorOp::ReduceProd { axes, input_shape } => {
             let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
-            backend.reduce_prod(&input, axes)
+            backend.reduce_prod(&input, axes).unwrap()
         }
         StdTensorOp::ReduceMax { axes, input_shape } => {
             let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
-            backend.reduce_max(&input, axes)
+            backend.reduce_max(&input, axes).unwrap()
         }
         StdTensorOp::ReduceMin { axes, input_shape } => {
             let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
-            backend.reduce_min(&input, axes)
+            backend.reduce_min(&input, axes).unwrap()
         }
         _ => panic!("expected reduction op"),
     };
@@ -1060,53 +1060,57 @@ fn transpose_primal_unary_op_with_inputs(
 fn sum_svd_values(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
     get_f64_data(&outputs[1]).iter().sum()
 }
 
 fn sum_svd_uv_product(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
     let product =
-        TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config());
+        TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config())
+            .unwrap();
     get_f64_data(&product).iter().sum()
 }
 
 fn sum_svd_reconstruction(data: &[f64], shape: [usize; 2]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(shape.to_vec(), data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
-    let diag_s = TensorBackend::embed_diagonal(&mut backend, &outputs[1], 0, 1);
-    let us = TensorBackend::dot_general(&mut backend, &outputs[0], &diag_s, &matmul_config());
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
+    let diag_s = TensorBackend::embed_diagonal(&mut backend, &outputs[1], 0, 1).unwrap();
+    let us =
+        TensorBackend::dot_general(&mut backend, &outputs[0], &diag_s, &matmul_config()).unwrap();
     let reconstructed =
-        TensorBackend::dot_general(&mut backend, &us, &outputs[2], &matmul_config());
+        TensorBackend::dot_general(&mut backend, &us, &outputs[2], &matmul_config()).unwrap();
     get_f64_data(&reconstructed).iter().sum()
 }
 
 fn sum_eigh_values(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::eigh(&mut backend, &input);
+    let outputs = TensorBackend::eigh(&mut backend, &input).unwrap();
     get_f64_data(&outputs[0]).iter().sum()
 }
 
 fn sum_eigh_projector(data: &[f64], weights: &[f64], probe: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::eigh(&mut backend, &input);
+    let outputs = TensorBackend::eigh(&mut backend, &input).unwrap();
     let diag =
-        TensorBackend::embed_diagonal(&mut backend, &f64_tensor(vec![2], weights.to_vec()), 0, 1);
+        TensorBackend::embed_diagonal(&mut backend, &f64_tensor(vec![2], weights.to_vec()), 0, 1)
+            .unwrap();
     let weighted_vectors =
-        TensorBackend::dot_general(&mut backend, &outputs[1], &diag, &matmul_config());
-    let vt = TensorBackend::transpose(&mut backend, &outputs[1], &[1, 0]);
+        TensorBackend::dot_general(&mut backend, &outputs[1], &diag, &matmul_config()).unwrap();
+    let vt = TensorBackend::transpose(&mut backend, &outputs[1], &[1, 0]).unwrap();
     let projector =
-        TensorBackend::dot_general(&mut backend, &weighted_vectors, &vt, &matmul_config());
+        TensorBackend::dot_general(&mut backend, &weighted_vectors, &vt, &matmul_config()).unwrap();
     let weighted = TensorBackend::mul(
         &mut backend,
         &projector,
         &f64_tensor(vec![2, 2], probe.to_vec()),
-    );
+    )
+    .unwrap();
     get_f64_data(&weighted).iter().sum()
 }
 
@@ -1114,7 +1118,7 @@ fn sum_solve(a: &[f64], b: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let a_tensor = f64_tensor(vec![2, 2], a.to_vec());
     let b_tensor = f64_tensor(vec![2, 1], b.to_vec());
-    let out = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor);
+    let out = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor).unwrap();
     get_f64_data(&out).iter().sum()
 }
 
@@ -1130,28 +1134,29 @@ fn sum_triangular_solve(a: &[f64], b: &[f64]) -> f64 {
         true,
         false,
         false,
-    );
+    )
+    .unwrap();
     get_f64_data(&out).iter().sum()
 }
 
 fn sum_cholesky(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![3, 3], data.to_vec());
-    let output = TensorBackend::cholesky(&mut backend, &input);
+    let output = TensorBackend::cholesky(&mut backend, &input).unwrap();
     get_f64_data(&output).iter().sum()
 }
 
 fn sum_qr_r(data: &[f64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = f64_tensor(vec![3, 2], data.to_vec());
-    let outputs = TensorBackend::qr(&mut backend, &input);
+    let outputs = TensorBackend::qr(&mut backend, &input).unwrap();
     get_f64_data(&outputs[1]).iter().sum()
 }
 
 fn sum_qr_r_real_parts_complex(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![3, 2], data.to_vec());
-    let outputs = TensorBackend::qr(&mut backend, &input);
+    let outputs = TensorBackend::qr(&mut backend, &input).unwrap();
     sum_real_parts(get_c64_data(&outputs[1]))
 }
 
@@ -1162,30 +1167,31 @@ fn sum_real_parts(values: &[Complex64]) -> f64 {
 fn sum_svd_values_complex(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
     sum_real_parts(get_c64_data(&outputs[1]))
 }
 
 fn sum_svd_values_complex_3x3(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![3, 3], data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
     sum_real_parts(get_c64_data(&outputs[1]))
 }
 
 fn sum_svd_uv_product_real_parts_complex(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![3, 3], data.to_vec());
-    let outputs = TensorBackend::svd(&mut backend, &input);
+    let outputs = TensorBackend::svd(&mut backend, &input).unwrap();
     let product =
-        TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config());
+        TensorBackend::dot_general(&mut backend, &outputs[0], &outputs[2], &matmul_config())
+            .unwrap();
     sum_real_parts(get_c64_data(&product))
 }
 
 fn sum_eigh_values_complex(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::eigh(&mut backend, &input);
+    let outputs = TensorBackend::eigh(&mut backend, &input).unwrap();
     sum_real_parts(get_c64_data(&outputs[0]))
 }
 
@@ -1196,27 +1202,29 @@ fn sum_eigh_projector_real_parts_complex(
 ) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![2, 2], data.to_vec());
-    let outputs = TensorBackend::eigh(&mut backend, &input);
+    let outputs = TensorBackend::eigh(&mut backend, &input).unwrap();
     let diag =
-        TensorBackend::embed_diagonal(&mut backend, &c64_tensor(vec![2], weights.to_vec()), 0, 1);
+        TensorBackend::embed_diagonal(&mut backend, &c64_tensor(vec![2], weights.to_vec()), 0, 1)
+            .unwrap();
     let weighted_vectors =
-        TensorBackend::dot_general(&mut backend, &outputs[1], &diag, &matmul_config());
-    let vectors_conj = TensorBackend::conj(&mut backend, &outputs[1]);
-    let vh = TensorBackend::transpose(&mut backend, &vectors_conj, &[1, 0]);
+        TensorBackend::dot_general(&mut backend, &outputs[1], &diag, &matmul_config()).unwrap();
+    let vectors_conj = TensorBackend::conj(&mut backend, &outputs[1]).unwrap();
+    let vh = TensorBackend::transpose(&mut backend, &vectors_conj, &[1, 0]).unwrap();
     let projector =
-        TensorBackend::dot_general(&mut backend, &weighted_vectors, &vh, &matmul_config());
+        TensorBackend::dot_general(&mut backend, &weighted_vectors, &vh, &matmul_config()).unwrap();
     let weighted = TensorBackend::mul(
         &mut backend,
         &projector,
         &c64_tensor(vec![2, 2], probe.to_vec()),
-    );
+    )
+    .unwrap();
     sum_real_parts(get_c64_data(&weighted))
 }
 
 fn sum_cholesky_real_parts_complex(data: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let input = c64_tensor(vec![2, 2], data.to_vec());
-    let output = TensorBackend::cholesky(&mut backend, &input);
+    let output = TensorBackend::cholesky(&mut backend, &input).unwrap();
     sum_real_parts(get_c64_data(&output))
 }
 
@@ -1224,7 +1232,7 @@ fn sum_solve_real_parts_complex(a: &[Complex64], b: &[Complex64]) -> f64 {
     let mut backend = CpuBackend::new();
     let a_tensor = c64_tensor(vec![2, 2], a.to_vec());
     let b_tensor = c64_tensor(vec![2, 1], b.to_vec());
-    let output = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor);
+    let output = TensorBackend::solve(&mut backend, &a_tensor, &b_tensor).unwrap();
     sum_real_parts(get_c64_data(&output))
 }
 
@@ -1240,7 +1248,8 @@ fn sum_triangular_solve_real_parts_complex(a: &[Complex64], b: &[Complex64]) -> 
         true,
         false,
         false,
-    );
+    )
+    .unwrap();
     sum_real_parts(get_c64_data(&output))
 }
 

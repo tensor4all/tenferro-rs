@@ -1,25 +1,115 @@
 use num_complex::{Complex32, Complex64};
-use strided_kernel::{copy_into, map_into, StridedView};
-
 use num_traits::Zero;
+use strided_kernel::{copy_into, map_into, Identity, StridedView};
 
 use crate::{
-    types::{dispatch_tensor, flat_to_multi, Tensor, TypedTensor},
+    types::{flat_to_multi, Tensor, TypedTensor},
     DType,
 };
 
 use super::{tensor_from_array, typed_array, typed_view};
 
-pub fn transpose(input: &Tensor, perm: &[usize]) -> Tensor {
-    dispatch_tensor!(input, t => typed_transpose(t, perm))
+fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: err.to_string(),
+    }
 }
 
-pub fn reshape(input: &Tensor, shape: &[usize]) -> Tensor {
-    dispatch_tensor!(input, t => typed_reshape(t, shape))
+fn validate_rank(op: &'static str, expected: usize, actual: usize) -> crate::Result<()> {
+    if expected != actual {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected,
+            actual,
+        });
+    }
+    Ok(())
 }
 
-pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> Tensor {
-    dispatch_tensor!(input, t => typed_broadcast_in_dim(t, shape, dims))
+fn validate_axis(op: &'static str, axis: usize, rank: usize) -> crate::Result<()> {
+    if axis >= rank {
+        return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+    }
+    Ok(())
+}
+
+fn validate_axes_distinct(op: &'static str, axis_a: usize, axis_b: usize) -> crate::Result<()> {
+    if axis_a == axis_b {
+        return Err(crate::Error::DuplicateAxis {
+            op,
+            axis: axis_a,
+            role: "axes",
+        });
+    }
+    Ok(())
+}
+
+fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
+    validate_rank(op, rank, perm.len())?;
+    let mut seen = vec![false; rank];
+    for &axis in perm {
+        validate_axis(op, axis, rank)?;
+        if seen[axis] {
+            return Err(crate::Error::DuplicateAxis {
+                op,
+                axis,
+                role: "perm",
+            });
+        }
+        seen[axis] = true;
+    }
+    Ok(())
+}
+
+fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, T, Identity>> {
+    match &tensor.buffer {
+        crate::Buffer::Host(data) => {
+            let strides = crate::col_major_strides(&tensor.shape);
+            StridedView::new(data, &tensor.shape, &strides, 0)
+                .map_err(|err| backend_failure("structural", err))
+        }
+        crate::Buffer::Backend(_) => Err(crate::Error::BackendFailure {
+            op: "structural",
+            message: "backend buffers are not supported for structural CPU helpers".into(),
+        }),
+    }
+}
+
+fn copy_view_to_array<T: Copy + Clone>(
+    op: &'static str,
+    mut out: strided_kernel::StridedArray<T>,
+    src: &StridedView<'_, T>,
+) -> crate::Result<TypedTensor<T>> {
+    copy_into(&mut out.view_mut(), src).map_err(|err| backend_failure(op, err))?;
+    Ok(tensor_from_array(out))
+}
+
+pub fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_transpose(t, perm)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_transpose(t, perm)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_transpose(t, perm)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_transpose(t, perm)?)),
+    }
+}
+
+pub fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_reshape(t, shape)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_reshape(t, shape)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_reshape(t, shape)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_reshape(t, shape)?)),
+    }
+}
+
+pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_broadcast_in_dim(t, shape, dims)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_broadcast_in_dim(t, shape, dims)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_broadcast_in_dim(t, shape, dims)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_broadcast_in_dim(t, shape, dims)?)),
+    }
 }
 
 pub fn convert(input: &Tensor, to: DType) -> Tensor {
@@ -51,71 +141,124 @@ pub fn convert(input: &Tensor, to: DType) -> Tensor {
     }
 }
 
-pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
-    dispatch_tensor!(input, t => typed_extract_diagonal(t, axis_a, axis_b))
+pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_extract_diagonal(t, axis_a, axis_b)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_extract_diagonal(t, axis_a, axis_b)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_extract_diagonal(t, axis_a, axis_b)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_extract_diagonal(t, axis_a, axis_b)?)),
+    }
 }
 
-pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> Tensor {
-    dispatch_tensor!(input, t => typed_embed_diagonal(t, axis_a, axis_b))
+pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_embed_diagonal(t, axis_a, axis_b)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_embed_diagonal(t, axis_a, axis_b)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_embed_diagonal(t, axis_a, axis_b)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_embed_diagonal(t, axis_a, axis_b)?)),
+    }
 }
 
-pub fn tril(input: &Tensor, k: i64) -> Tensor {
-    dispatch_tensor!(input, t => typed_tril(t, k))
+pub fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_tril(t, k)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_tril(t, k)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_tril(t, k)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_tril(t, k)?)),
+    }
 }
 
-pub fn triu(input: &Tensor, k: i64) -> Tensor {
-    dispatch_tensor!(input, t => typed_triu(t, k))
+pub fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_triu(t, k)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_triu(t, k)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_triu(t, k)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_triu(t, k)?)),
+    }
 }
 
 pub fn typed_transpose<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
-) -> TypedTensor<T> {
-    let src = typed_view(tensor);
-    let permuted = src.permute(perm).expect("transpose perm");
-    let mut out = typed_array(permuted.dims(), T::zero());
-    copy_into(&mut out.view_mut(), &permuted).expect("transpose copy");
-    tensor_from_array(out)
+) -> crate::Result<TypedTensor<T>> {
+    validate_permutation("transpose", perm, tensor.shape.len())?;
+    let src = host_view(tensor)?;
+    let permuted = src
+        .permute(perm)
+        .map_err(|err| backend_failure("transpose", err))?;
+    let out = typed_array(permuted.dims(), T::zero());
+    copy_view_to_array("transpose", out, &permuted)
 }
 
-pub fn typed_reshape<T: Clone>(tensor: &TypedTensor<T>, shape: &[usize]) -> TypedTensor<T> {
+pub fn typed_reshape<T: Clone>(
+    tensor: &TypedTensor<T>,
+    shape: &[usize],
+) -> crate::Result<TypedTensor<T>> {
     let old_n: usize = tensor.shape.iter().product();
     let new_n: usize = shape.iter().product();
-    assert_eq!(old_n, new_n, "reshape: element count mismatch");
-    TypedTensor {
+    if old_n != new_n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "reshape",
+            lhs: tensor.shape.clone(),
+            rhs: shape.to_vec(),
+        });
+    }
+    Ok(TypedTensor {
         buffer: tensor.buffer.clone(),
         shape: shape.to_vec(),
         placement: tensor.placement.clone(),
-    }
+    })
 }
 
 pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
-) -> TypedTensor<T> {
-    assert_eq!(
-        dims.len(),
-        tensor.shape.len(),
-        "broadcast_in_dim rank mismatch"
-    );
+) -> crate::Result<TypedTensor<T>> {
+    validate_rank("broadcast_in_dim", tensor.shape.len(), dims.len())?;
+    let mut seen = vec![false; shape.len()];
     let mut base_dims = vec![1usize; shape.len()];
     let mut base_strides = vec![0isize; shape.len()];
     let source_strides = crate::col_major_strides(&tensor.shape);
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
-        base_dims[dst_axis] = tensor.shape[src_axis];
+        validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
+        if seen[dst_axis] {
+            return Err(crate::Error::DuplicateAxis {
+                op: "broadcast_in_dim",
+                axis: dst_axis,
+                role: "dims",
+            });
+        }
+        seen[dst_axis] = true;
+        let source_dim = tensor.shape[src_axis];
+        let target_dim = shape[dst_axis];
+        if source_dim != target_dim && source_dim != 1 {
+            return Err(crate::Error::ShapeMismatch {
+                op: "broadcast_in_dim",
+                lhs: tensor.shape.clone(),
+                rhs: shape.to_vec(),
+            });
+        }
+        base_dims[dst_axis] = source_dim;
         base_strides[dst_axis] = source_strides[src_axis];
     }
-    let base: StridedView<'_, T> = match &tensor.buffer {
-        crate::Buffer::Host(data) => {
-            StridedView::new(data, &base_dims, &base_strides, 0).expect("broadcast base view")
+    let base: StridedView<'_, T, Identity> = match &tensor.buffer {
+        crate::Buffer::Host(data) => StridedView::new(data, &base_dims, &base_strides, 0)
+            .map_err(|err| backend_failure("broadcast_in_dim", err))?,
+        crate::Buffer::Backend(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "broadcast_in_dim",
+                message: "backend buffers are not supported for structural CPU helpers".into(),
+            })
         }
-        crate::Buffer::Backend(_) => todo!("broadcast_in_dim for backend buffers"),
     };
-    let broadcast = base.broadcast(shape).expect("broadcast shape");
+    let broadcast: StridedView<'_, T, Identity> = base
+        .broadcast(shape)
+        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
     let mut out = typed_array(shape, T::zero());
-    copy_into(&mut out.view_mut(), &broadcast).expect("broadcast copy");
-    tensor_from_array(out)
+    copy_into(&mut out.view_mut(), &broadcast)
+        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
+    Ok(tensor_from_array(out))
 }
 
 fn typed_convert<S, T>(tensor: &TypedTensor<S>, f: impl Fn(S) -> T) -> TypedTensor<T>
@@ -132,28 +275,33 @@ pub fn typed_extract_diagonal<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
-) -> TypedTensor<T> {
-    let diag = typed_view(tensor)
+) -> crate::Result<TypedTensor<T>> {
+    validate_axis("extract_diagonal", axis_a, tensor.shape.len())?;
+    validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
+    validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
+
+    let diag = host_view(tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .expect("diagonal_view");
+        .map_err(|err| backend_failure("extract_diagonal", err))?;
     let mut out = typed_array(diag.dims(), T::zero());
-    copy_into(&mut out.view_mut(), &diag).expect("extract_diagonal copy");
-    tensor_from_array(out)
+    copy_into(&mut out.view_mut(), &diag)
+        .map_err(|err| backend_failure("extract_diagonal", err))?;
+    Ok(tensor_from_array(out))
 }
 
 pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
-) -> TypedTensor<T> {
-    assert!(
-        axis_a < tensor.shape.len(),
-        "embed_diagonal: axis_a out of range"
-    );
-    assert!(
-        axis_b <= tensor.shape.len(),
-        "embed_diagonal: axis_b must be <= rank"
-    );
+) -> crate::Result<TypedTensor<T>> {
+    validate_axis("embed_diagonal", axis_a, tensor.shape.len())?;
+    if axis_b > tensor.shape.len() {
+        return Err(crate::Error::AxisOutOfBounds {
+            op: "embed_diagonal",
+            axis: axis_b,
+            rank: tensor.shape.len(),
+        });
+    }
 
     let n = tensor.shape[axis_a];
     let mut out_shape = tensor.shape.clone();
@@ -164,6 +312,16 @@ pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
     let out_rank = out.shape.len();
     let mut in_idx = vec![0usize; in_rank];
     let mut out_idx = vec![0usize; out_rank];
+
+    let input_data = match &tensor.buffer {
+        crate::Buffer::Host(data) => data,
+        crate::Buffer::Backend(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "embed_diagonal",
+                message: "backend buffers are not supported for structural CPU helpers".into(),
+            })
+        }
+    };
 
     for flat in 0..tensor.n_elements() {
         flat_to_multi(flat, &tensor.shape, &mut in_idx);
@@ -177,16 +335,22 @@ pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
                 src_axis += 1;
             }
         }
-        *out.get_mut(&out_idx) = *tensor.get(&in_idx);
+        *out.get_mut(&out_idx) = input_data[flat];
     }
-    out
+    Ok(out)
 }
 
-pub fn typed_tril<T: Copy + Zero + Clone>(tensor: &TypedTensor<T>, k: i64) -> TypedTensor<T> {
+pub fn typed_tril<T: Copy + Zero + Clone>(
+    tensor: &TypedTensor<T>,
+    k: i64,
+) -> crate::Result<TypedTensor<T>> {
     typed_triangular_mask(tensor, k, false)
 }
 
-pub fn typed_triu<T: Copy + Zero + Clone>(tensor: &TypedTensor<T>, k: i64) -> TypedTensor<T> {
+pub fn typed_triu<T: Copy + Zero + Clone>(
+    tensor: &TypedTensor<T>,
+    k: i64,
+) -> crate::Result<TypedTensor<T>> {
     typed_triangular_mask(tensor, k, true)
 }
 
@@ -194,23 +358,33 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     tensor: &TypedTensor<T>,
     k: i64,
     upper: bool,
-) -> TypedTensor<T> {
-    assert!(
-        tensor.shape.len() >= 2,
-        "triangular mask: expected rank >= 2, got {}",
-        tensor.shape.len()
-    );
+) -> crate::Result<TypedTensor<T>> {
+    if tensor.shape.len() < 2 {
+        return Err(crate::Error::RankMismatch {
+            op: if upper { "triu" } else { "tril" },
+            expected: 2,
+            actual: tensor.shape.len(),
+        });
+    }
 
     let rows = tensor.shape[0];
     let cols = tensor.shape[1];
     if tensor.shape.contains(&0) {
-        return tensor.clone();
+        return Ok(tensor.clone());
     }
 
     let batch_count: usize = tensor.shape[2..].iter().product();
     let block_size = rows * cols;
     let mut out = tensor.clone();
-    let data = out.host_data_mut();
+    let data = match &mut out.buffer {
+        crate::Buffer::Host(data) => data,
+        crate::Buffer::Backend(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: if upper { "triu" } else { "tril" },
+                message: "backend buffers are not supported for structural CPU helpers".into(),
+            })
+        }
+    };
 
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;
@@ -229,5 +403,5 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
         }
     }
 
-    out
+    Ok(out)
 }
