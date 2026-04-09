@@ -460,12 +460,12 @@ where
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm))
+        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
         std::borrow::Cow::Borrowed(rhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm))
+        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
     typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
         op: "dot_general",

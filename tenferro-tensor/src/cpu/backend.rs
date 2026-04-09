@@ -353,13 +353,18 @@ impl TensorBackend for CpuBackend {
 
     fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         self.install(|| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("cholesky", || linalg::cholesky(t))
+                .and_then(|result| result)
+                .map(Tensor::F64),
+            #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => {
-                catch_backend_panic("cholesky", || linalg::cholesky(t))?.map(Tensor::F64)
+                catch_backend_panic("cholesky", || linalg::cholesky(t)).map(Tensor::F64)
             }
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => {
-                catch_backend_panic("cholesky", || linalg::cholesky(t))?.map(Tensor::C64)
-            }
+            Tensor::C64(t) => catch_backend_panic("cholesky", || linalg::cholesky(t))
+                .and_then(|result| result)
+                .map(Tensor::C64),
             _ => Err(unsupported_dtype("cholesky", input.dtype())),
         })
     }
