@@ -1,12 +1,16 @@
-// TODO: Unimplemented einsum optimizations
+// TODO: Remaining einsum optimizations
 //
-// The current v2 einsum builder produces correct but unoptimized IR.
-// The following optimizations from v1 / the spec are not yet implemented:
+// The current v2 einsum lowering is correct and already removes some
+// intermediate permutations by keeping N-ary intermediates in canonical dot
+// order. The following optimizations from v1 / the spec are still partial or
+// not yet implemented:
 //
 // Compiler passes (spec: optimizer-passes.md):
-//   - TransposeFolding: absorb Transpose into DotGeneral dimension_numbers.
+//   - TransposeFolding: partially absorb Transpose into DotGeneral
+//     dimension_numbers when the free/contract/batch axis order remains
+//     compatible with the lowering.
 //     v1 equivalent: lazy permutation (dispatch.rs:446-454).
-//     Impact: eliminates physical copies for permuted GEMM inputs.
+//     Impact: eliminates physical copies for supported permuted GEMM inputs.
 //   - DotDimensionSorter: sort contracting dims to avoid transposes.
 //     v1 equivalent: implicit (modes already ordered).
 //   - DotDecomposer: canonicalize DotGeneral to [batch, M, K] × [batch, K, N].
@@ -179,9 +183,10 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
     builder: &mut FragmentBuilder<Op>,
     lhs: &LabeledVal<Op>,
     rhs: &LabeledVal<Op>,
-    output_labels: &[u32],
+    survive_labels: &[u32],
+    reorder_result: bool,
 ) -> LabeledVal<Op> {
-    let output_set: HashSet<u32> = output_labels.iter().copied().collect();
+    let survive_set: HashSet<u32> = survive_labels.iter().copied().collect();
     let rhs_label_set: HashSet<u32> = rhs.labels.iter().copied().collect();
     let lhs_label_set: HashSet<u32> = lhs.labels.iter().copied().collect();
 
@@ -189,13 +194,13 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
     let lhs_reduce: HashSet<u32> = lhs
         .labels
         .iter()
-        .filter(|l| !rhs_label_set.contains(l) && !output_set.contains(l))
+        .filter(|l| !rhs_label_set.contains(l) && !survive_set.contains(l))
         .copied()
         .collect();
     let rhs_reduce: HashSet<u32> = rhs
         .labels
         .iter()
-        .filter(|l| !lhs_label_set.contains(l) && !output_set.contains(l))
+        .filter(|l| !lhs_label_set.contains(l) && !survive_set.contains(l))
         .copied()
         .collect();
 
@@ -214,7 +219,7 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
     // Preserve order from lhs for batch and contracting
     for &l in &lhs.labels {
         if rhs_label_set.contains(&l) {
-            if output_set.contains(&l) {
+            if survive_set.contains(&l) {
                 if !batch_labels.contains(&l) {
                     batch_labels.push(l);
                 }
@@ -311,15 +316,19 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
         )
     };
 
-    // Reorder to match output_labels if needed
+    if !reorder_result {
+        return result;
+    }
+
+    // Reorder to match the caller-visible order if needed.
     let current_labels = &result.labels;
     if current_labels.is_empty() {
         return result;
     }
 
-    // Filter output_labels to those present in result (to handle final reduction later)
+    // Filter survivor labels to those present in result (to handle final reduction later)
     let result_label_set: HashSet<u32> = current_labels.iter().copied().collect();
-    let target_labels: Vec<u32> = output_labels
+    let target_labels: Vec<u32> = survive_labels
         .iter()
         .filter(|l| result_label_set.contains(l))
         .copied()
@@ -499,7 +508,14 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         // Use the step's intermediate output subscripts so that labels needed
         // by later contractions are preserved (not pre-reduced away).
         let (_, _, step_out_labels) = tree.step_subscripts(step_idx).unwrap();
-        let result = binary_contract(builder, &labeled[left], &labeled[right], step_out_labels);
+        let is_last = step_idx + 1 == tree.step_count();
+        let result = binary_contract(
+            builder,
+            &labeled[left],
+            &labeled[right],
+            step_out_labels,
+            is_last,
+        );
         // Push intermediate as new entry in labeled
         labeled.push(result);
     }
