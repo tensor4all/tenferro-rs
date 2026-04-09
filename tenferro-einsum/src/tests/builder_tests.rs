@@ -123,6 +123,38 @@ fn fragment_hadamard_ij_ij_ij() {
 }
 
 #[test]
+fn fragment_batched_chain_avoids_intermediate_transpose() {
+    let subs = Subscripts::parse("bik,bkj,bjl->bil").expect("bad notation");
+    let shapes = [&[2, 3, 4][..], &[2, 4, 5][..], &[2, 5, 6][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (3, 2)]).unwrap();
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key(0));
+    let b = builder.add_input(input_key(1));
+    let c = builder.add_input(input_key(2));
+
+    let result = build_einsum_fragment(
+        &mut builder,
+        &tree,
+        &[ValRef::Local(a), ValRef::Local(b), ValRef::Local(c)],
+        &[vec![2, 3, 4], vec![2, 4, 5], vec![2, 5, 6]],
+    );
+
+    builder.set_outputs(vec![match &result {
+        ValRef::Local(id) => *id,
+        _ => panic!("expected local"),
+    }]);
+    let fragment = builder.build();
+    let transpose_count = fragment
+        .ops()
+        .iter()
+        .filter(|node| matches!(node.op, StdTensorOp::Transpose { .. }))
+        .count();
+
+    assert_eq!(transpose_count, 1, "expected only the final transpose");
+}
+
+#[test]
 fn tree_binary() {
     let tree = make_tree("ij,jk->ik", &[&[2, 3], &[3, 4]]);
     assert_eq!(tree.step_count(), 1);
