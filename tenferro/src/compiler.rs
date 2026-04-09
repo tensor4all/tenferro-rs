@@ -760,11 +760,12 @@ fn find_producer(program: &StableHloProgram, slot: usize) -> Option<usize> {
 /// Check if a Transpose can be folded into DotGeneral for the given operand.
 ///
 /// Foldability conditions:
-/// - The operand's contracting and batch axes must still form a valid
+/// - The operand's free, contracting, and batch axes must still form a valid
 ///   partition after mapping the transposed axes back through `perm`.
-/// - The implied free-axis order must stay stable. In practice this rejects
-///   permutations that reorder free dims, while still allowing moved batch
-///   axes when the role partition is preserved.
+/// - The relative order within each role group must stay stable. In practice
+///   this rejects permutations that reorder free dims, contracting dims, or
+///   batch dims, while still allowing moved batch axes when the role
+///   partition is preserved.
 fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[usize]) -> bool {
     let (rank, contracting_dims, batch_dims) = if operand_idx == 0 {
         (
@@ -780,18 +781,17 @@ fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[
         )
     };
 
-    let Some(free_dims) = free_axes(rank, contracting_dims, batch_dims) else {
-        return false;
-    };
-    let Some(mapped_free_dims) = map_axes(&free_dims, perm) else {
-        return false;
-    };
-
-    if !is_strictly_increasing(&mapped_free_dims) {
+    if perm.len() != rank || !is_valid_permutation(perm, rank) {
         return false;
     }
 
-    true
+    let Some(free_dims) = free_axes(rank, contracting_dims, batch_dims) else {
+        return false;
+    };
+
+    is_role_group_order_preserved(&free_dims, perm)
+        && is_role_group_order_preserved(contracting_dims, perm)
+        && is_role_group_order_preserved(batch_dims, perm)
 }
 
 fn free_axes(rank: usize, contracting_dims: &[usize], batch_dims: &[usize]) -> Option<Vec<usize>> {
@@ -806,8 +806,26 @@ fn free_axes(rank: usize, contracting_dims: &[usize], batch_dims: &[usize]) -> O
     Some((0..rank).filter(|&axis| !used[axis]).collect())
 }
 
+fn is_valid_permutation(perm: &[usize], rank: usize) -> bool {
+    let mut seen = vec![false; rank];
+    for &axis in perm {
+        if axis >= rank || seen[axis] {
+            return false;
+        }
+        seen[axis] = true;
+    }
+    true
+}
+
 fn map_axes(axes: &[usize], perm: &[usize]) -> Option<Vec<usize>> {
     axes.iter().map(|&axis| perm.get(axis).copied()).collect()
+}
+
+fn is_role_group_order_preserved(axes: &[usize], perm: &[usize]) -> bool {
+    let Some(mapped_axes) = map_axes(axes, perm) else {
+        return false;
+    };
+    is_strictly_increasing(&mapped_axes)
 }
 
 fn is_strictly_increasing(values: &[usize]) -> bool {
