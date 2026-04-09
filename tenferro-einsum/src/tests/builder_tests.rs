@@ -152,6 +152,10 @@ fn fragment_batched_chain_avoids_intermediate_transpose() {
         .count();
 
     assert_eq!(transpose_count, 1, "expected only the final transpose");
+    match &fragment.ops().last().expect("fragment should have ops").op {
+        StdTensorOp::Transpose { perm } => assert_eq!(perm, &vec![2, 0, 1]),
+        other => panic!("expected final transpose, got {other:?}"),
+    }
 }
 
 #[test]
