@@ -1,12 +1,16 @@
-// TODO: Unimplemented einsum optimizations
+// TODO: Remaining einsum optimizations
 //
-// The current v2 einsum builder produces correct but unoptimized IR.
-// The following optimizations from v1 / the spec are not yet implemented:
+// The current v2 einsum lowering is correct and already removes some
+// intermediate permutations by keeping N-ary intermediates in canonical dot
+// order. The following optimizations from v1 / the spec are still partial or
+// not yet implemented:
 //
 // Compiler passes (spec: optimizer-passes.md):
-//   - TransposeFolding: absorb Transpose into DotGeneral dimension_numbers.
+//   - TransposeFolding: partially absorb Transpose into DotGeneral
+//     dimension_numbers when the free/contract/batch axis order remains
+//     compatible with the lowering.
 //     v1 equivalent: lazy permutation (dispatch.rs:446-454).
-//     Impact: eliminates physical copies for permuted GEMM inputs.
+//     Impact: eliminates physical copies for supported permuted GEMM inputs.
 //   - DotDimensionSorter: sort contracting dims to avoid transposes.
 //     v1 equivalent: implicit (modes already ordered).
 //   - DotDecomposer: canonicalize DotGeneral to [batch, M, K] × [batch, K, N].

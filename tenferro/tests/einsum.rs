@@ -423,6 +423,46 @@ fn einsum_three_matrices() {
     }
 }
 
+#[test]
+fn einsum_batched_three_matrix_chain_matches_pairwise_reference() {
+    // "bik,bkj,bjl->bil" — batched three-matrix chain with deterministic data.
+    let a = f64_tensor(vec![2, 2, 3], (1..=12).map(|x| x as f64).collect());
+    let b = f64_tensor(vec![2, 3, 4], (13..=36).map(|x| x as f64).collect());
+    let c = f64_tensor(vec![2, 4, 2], (37..=52).map(|x| x as f64).collect());
+
+    let mut direct_engine = Engine::new(CpuBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut direct = einsum(&mut direct_engine, &[&ta, &tb, &tc], "bik,bkj,bjl->bil").unwrap();
+    let direct_result = direct.eval(&mut direct_engine).unwrap();
+
+    let mut pairwise_engine = Engine::new(CpuBackend::new());
+    let pa = TracedTensor::from_tensor(a);
+    let pb = TracedTensor::from_tensor(b);
+    let pc = TracedTensor::from_tensor(c);
+    let mut first = einsum(&mut pairwise_engine, &[&pa, &pb], "bik,bkj->bij").unwrap();
+    let first_result = first.eval(&mut pairwise_engine).unwrap().clone();
+    let first_tensor = TracedTensor::from_tensor(first_result);
+    let mut reference =
+        einsum(&mut pairwise_engine, &[&first_tensor, &pc], "bij,bjl->bil").unwrap();
+    let reference_result = reference.eval(&mut pairwise_engine).unwrap();
+
+    assert_eq!(direct_result.shape(), reference_result.shape());
+    assert_eq!(direct_result.shape(), &[2, 2, 2]);
+    for b in 0..2 {
+        for i in 0..2 {
+            for l in 0..2 {
+                assert_close(
+                    get_v2(direct_result, &[b, i, l]),
+                    get_v2(reference_result, &[b, i, l]),
+                    &format!("batched_chain[{b},{i},{l}]"),
+                );
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Group 4: Contraction tree / path tests
 // ============================================================================
