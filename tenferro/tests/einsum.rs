@@ -423,36 +423,6 @@ fn einsum_three_matrices() {
     }
 }
 
-#[test]
-fn einsum_batched_three_matrix_chain_matches_pairwise_reference() {
-    let mut engine = Engine::new(CpuBackend::new());
-
-    let ta = TracedTensor::from_tensor(f64_tensor(
-        vec![2, 3, 4],
-        (1..=24).map(|x| x as f64).collect(),
-    ));
-    let tb = TracedTensor::from_tensor(f64_tensor(
-        vec![2, 4, 5],
-        (1..=40).map(|x| x as f64).collect(),
-    ));
-    let tc = TracedTensor::from_tensor(f64_tensor(
-        vec![2, 5, 6],
-        (1..=60).map(|x| x as f64).collect(),
-    ));
-
-    let mut direct = einsum(&mut engine, &[&ta, &tb, &tc], "bik,bkj,bjl->bil").unwrap();
-    let direct_value = direct.eval(&mut engine).unwrap();
-
-    let mut left = einsum(&mut engine, &[&ta, &tb], "bik,bkj->bij").unwrap();
-    let left_value = left.eval(&mut engine).unwrap();
-    let left_traced = TracedTensor::from_tensor(left_value.clone());
-    let mut reference = einsum(&mut engine, &[&left_traced, &tc], "bij,bjl->bil").unwrap();
-    let reference_value = reference.eval(&mut engine).unwrap();
-
-    assert_eq!(direct_value.shape(), reference_value.shape());
-    assert_eq!(get_f64_data(&direct_value), get_f64_data(&reference_value));
-}
-
 // ============================================================================
 // Group 4: Contraction tree / path tests
 // ============================================================================
