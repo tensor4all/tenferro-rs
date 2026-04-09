@@ -1,7 +1,5 @@
-# v2 tenferro-rs Internal Design
+# tenferro-rs Internal Design
 
-**Date:** 2026-04-04
-**Status:** Draft
 **Repo:** tenferro-rs
 **Parent:** `../index.md`
 **Related:** `computegraph.md`, `chainrules.md`, `tidu.md`, `../spec/backend-contract.md`, `../spec/primitive-catalog.md`
@@ -11,21 +9,20 @@
 ## I. Purpose
 
 This document defines the internal crate structure and type design of
-tenferro-rs v2. The key design driver is that **all computation is
+tenferro-rs. The key design driver is that **all computation is
 graph-based**: every operation (einsum, linalg, elementwise) produces nodes in
 a `Fragment<Op>`, and execution is always lazy through
 `materialize_merge -> compile -> eval`.
 
 ---
 
-## II. v1 to v2 Transformation
+## II. Architecture Migration
 
-### What disappears
+### Removed crates
 
-v1 organizes around eager execution families and tape-based AD. In v2 these
-are replaced by the graph + fragment model:
+The previous architecture organized around eager execution families and tape-based AD. These were replaced by the graph + fragment model:
 
-| v1 crate | v2 | Reason |
+| Previous crate | Current | Reason |
 |---|---|---|
 | `internal/ad-core` | deleted | Fragment replaces tape |
 | `internal/ad-ops` | → `tenferro-ops` PrimitiveOp impl | AD rules live on TensorOp |
@@ -39,9 +36,9 @@ are replaced by the graph + fragment model:
 | `tenferro-capi` | deferred | Phase 4+ |
 | `extension/*` | deferred | |
 
-### What remains
+### Retained crates
 
-| v1 crate | v2 crate | Notes |
+| Previous crate | Current crate | Notes |
 |---|---|---|
 | `tenferro-device` | `tenferro-device` | Mostly unchanged |
 | `tenferro-algebra` | `tenferro-algebra` | Mostly unchanged |
@@ -99,17 +96,15 @@ AD trait (`PrimitiveOp`): [`spec/ad-contract.md`](../spec/ad-contract.md).
 `SemiringOp<T>` is a generic wrapper around `SemiringOpKind` that implements
 `GraphOp` only (not `EvalGraphOp`). It delegates algebraic ops to free
 functions in `host_ops` (dispatched through `TensorBackend`) and structural
-ops to generic `TensorData` functions. `PrimitiveOp` is **not** implemented
--- no AD for custom algebras.
+ops to algebra-independent free functions for structural operations.
+`PrimitiveOp` is **not** implemented -- no AD for custom algebras.
 
 Canonical definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV).
 
-Users extend tenferro by implementing `TensorBackend` (algebraic ops +
-kernel dispatch) and `TensorData` (buffer access) for their tensor type,
-then use `SemiringOp<MyTensor>` as the op type. Structural ops (`transpose`,
-`reshape`, `broadcast_in_dim`) are provided automatically.
-
-Canonical `TensorData` definition: [`spec/tensor-semantics.md`](../spec/tensor-semantics.md).
+Users extend tenferro by implementing `SemiringBackend<Alg>` (algebraic ops +
+kernel dispatch) for their algebra type, then use `SemiringOp<Alg>` as the op
+type. Structural ops (`transpose`, `reshape`, `broadcast_in_dim`) are provided
+automatically by the execution engine.
 
 ---
 
@@ -206,23 +201,23 @@ CompiledProgram<StdTensorOp>
     ↓
 StableHloProgram (Rust struct, in-process)    ← CUT POINT
     │
-    ├── XlaBackend:  StableHLO → XLA directly (unchanged)
+    ├── (planned) XLA backend: StableHLO → XLA directly
     │
     └── CpuBackend: StableHLO → optimizing compiler → ExecProgram
                          → generic execution engine → TensorBackend trait
 ```
 
-XLA consumes StableHLO directly (it already does its own optimization).
-All other backends go through the optimizing compiler to produce a
-`ExecProgram`, which a generic engine interprets by dispatching to
-backend traits.
+The architecture supports pluggable backends at the StableHLO cut point.
+Currently, `CpuBackend` goes through the optimizing compiler to produce an
+`ExecProgram`, which a generic engine interprets by dispatching to backend
+traits. An XLA backend path is planned but not yet implemented.
 
 For custom algebras (`SemiringOp<T>`), the same 2-level structure applies:
 `SemiringOp<T>` lowers to the same `StableHloOp` types, then to `ExecProgram`.
 **Note:** for custom algebra, the ops have semiring-specific semantics (Add=⊕,
-Mul=⊗). This IR is **not** serializable to StableHLO MLIR — the XLA path is
-not available. Custom algebra always goes through the optimizing compiler →
-Execution IR → stride-aware engine path.
+Mul=⊗). This IR is **not** serializable to StableHLO MLIR. Custom algebra
+always goes through the optimizing compiler → Execution IR → stride-aware
+engine path.
 
 ### StableHLO IR representation
 
@@ -269,24 +264,25 @@ depending on the dispatch category.
 `TensorBackend` (defined in tenferro-tensor) is the single backend trait
 that encapsulates kernel dispatch. It provides required methods
 (`batched_gemm`, `reduce_sum`) and optional fast-path methods (`contract`,
-`elementwise_mul`, `elementwise_add`). `CpuBackend` and `CudaBackend` both
-live in tenferro-tensor and implement `TensorBackend`.
+`elementwise_mul`, `elementwise_add`). `CpuBackend` lives in tenferro-tensor and implements `TensorBackend`.
+`CudaBackend` exists as a partial stub (feature-gated, not yet fully
+implemented).
 
 Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
 ### Standard and custom algebra backends
 
-Two standard backends are provided: `CpuBackend` (StableHLO -> optimizing
-compiler -> ExecProgram -> generic engine -> faer/BLAS/LAPACK) and
-`XlaBackend` (StableHLO -> XLA directly). Custom algebra backends implement
-`TensorBackend` with a minimum of `batched_gemm` + `reduce_sum`.
+The standard backend is `CpuBackend` (StableHLO -> optimizing compiler ->
+ExecProgram -> generic engine -> faer/BLAS/LAPACK). An XLA backend path
+(StableHLO -> XLA directly) is planned but not yet implemented. Custom
+algebra backends implement `SemiringBackend<Alg>` with a minimum of `gemm()`.
 
-`Backend<Op>` is the top-level entry point that orchestrates
+`Engine<B: TensorBackend>` is the top-level entry point that orchestrates
 lowering + compilation + execution. `TensorBackend` (in tenferro-tensor)
 is the kernel-level trait that backend authors implement to provide kernels.
 
 See [`spec/backend-contract.md`](../spec/backend-contract.md) for the
-canonical relationship between `Backend<Op>` and `TensorBackend`.
+canonical trait signatures.
 
 ### Backend dispatch in Engine
 
@@ -320,11 +316,13 @@ let result = backend.eval_program(&prog, &input_tensors);
 
 ```rust
 struct TracedTensor {
-    shape: Vec<usize>,
+    id: TracedTensorId,
+    rank: usize,
     dtype: DType,
     fragment: Arc<Fragment<StdTensorOp>>,
     val: LocalValId,
     data: Option<Tensor>,
+    // ... internal fields omitted
 }
 ```
 
@@ -336,7 +334,7 @@ impl TracedTensor {
     fn from(tensor: Tensor) -> Self;
 
     /// Lazy evaluation (single output, no intermediate sharing)
-    fn eval(&mut self, engine: &mut Engine) -> &Tensor;
+    fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor>;
 
     /// VJP: differentiate → transpose (via tidu-rs), still lazy
     fn grad(&self, wrt: &TracedTensor) -> TracedTensor;
@@ -345,13 +343,14 @@ impl TracedTensor {
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
 }
 
-impl Engine {
-    /// Evaluate multiple outputs together.
-    /// All fragments are resolved into one MaterializedGraph, so shared
-    /// intermediate nodes (primal values needed by both output and gradient)
-    /// are computed only once via GlobalValKey deduplication.
-    fn eval_all(&mut self, outputs: &mut [&mut TracedTensor]) -> Vec<&Tensor>;
-}
+/// Evaluate multiple outputs together.
+/// All fragments are resolved into one MaterializedGraph, so shared
+/// intermediate nodes (primal values needed by both output and gradient)
+/// are computed only once via GlobalValKey deduplication.
+fn eval_all<B: TensorBackend>(
+    engine: &mut Engine<B>,
+    outputs: &mut [&mut TracedTensor],
+) -> Result<Vec<Tensor>>;
 ```
 
 `eval_all` is the recommended API when primal outputs and their derivatives
@@ -398,8 +397,8 @@ The `Operand` trait has been **removed** from computegraph-rs entirely.
 ### TensorBackend -- standard algebra, full op set
 
 `TensorBackend` (defined in tenferro-tensor) covers all ops for standard
-algebra. Operates on `Tensor` (type-erased). `CpuBackend` and `CudaBackend`
-implement this trait.
+algebra. Operates on `Tensor` (type-erased). `CpuBackend` implements this trait. `CudaBackend` is a partial
+stub (feature-gated).
 
 Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
@@ -429,14 +428,14 @@ directly.
 
 ### tenferro-device
 
-Defines the v2 placement vocabulary and shared runtime errors. `Placement`
+Defines the placement vocabulary and shared runtime errors. `Placement`
 contains `memory_kind` plus `resident_device`, while `ComputeDevice` remains a
 separate notion for execution. Public memory kinds follow JAX/XLA-style names:
 `Device`, `PinnedHost`, `UnpinnedHost`, and `Other(String)`.
 
 ### tenferro-algebra
 
-Unchanged from v1. `SemiringAlgebra` trait, `StandardAlgebra`, scalar type
+Provides `SemiringAlgebra` trait, `StandardAlgebra`, scalar type
 constraints.
 
 ### tenferro-tensor
@@ -499,7 +498,6 @@ Top-level facade:
 - `Engine` (compilation cache, backend dispatch via `TensorBackend` from
   tenferro-tensor, einsum cache, custom_call registry)
 - Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
-- `Backend<Op>` trait
 - `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
 - `lower_to_stablehlo()` (`CompiledProgram<StdTensorOp>` → `StableHloProgram`,
   flat 1:1 mapping, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
@@ -509,47 +507,23 @@ Top-level facade:
   - TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough passes
   - Algebra-agnostic — same passes for standard and custom algebras
 - `ExecProgram`, `ExecOp`, `ExecInstruction`
-- Generic execution engine: `execute_exec()` — interprets `ExecProgram`,
+- Generic execution engine: `eval_exec_ir()` — interprets `ExecProgram`,
   dispatches to `TensorBackend` methods (from tenferro-tensor)
-- Standard backends:
+- Standard backend:
   - `CpuBackend` (in tenferro-tensor) — StableHLO → optimizing compiler →
     ExecProgram → generic engine → faer/BLAS/LAPACK
-  - `XlaBackend` — StableHLO → XLA directly (unchanged)
 
 Depends on: all of the above + tidu-rs.
 
 ---
 
-## XIII. Roadmap
+## XIII. Implementation Status
 
-### Phase 1: Scalar fragment AD
+Phases 1–3 (scalar fragment AD, tensor primitives + einsum, linalg + backends)
+are implemented and tested. Current work focuses on:
 
-- computegraph-rs: Fragment, resolve, materialize_merge, compile, eval
-- chainrules-rs: PrimitiveOp trait
-- tidu-rs: differentiate, transpose
-- tenferro-ops: scalar subset of StdTensorOp (Add, Mul, Exp, Neg, Conj)
-- tenferro: minimal Engine with CPU eval
-- Tests: forward, backward, second order on `exp(a*x)`
-
-### Phase 2: Tensor primitives + einsum
-
-- tenferro-ops: full StdTensorOp (DotGeneral, ReduceSum, BroadcastInDim, ...)
-- tenferro-ops: SemiringOp\<T\>, SemiringOps trait
-- tenferro-tensor: Tensor, DType, TensorBackend, CpuBackend
-- tenferro-einsum: contraction path + Fragment construction
-- Tests: vector AD examples, einsum correctness
-
-### Phase 3: Linalg + backends
-
-- tenferro-ops: SVD, QR, Cholesky PrimitiveOp impls (in ad/linalg.rs)
-- tenferro: StableHLO lowering, XLA backend
-- tenferro: CPU backend with faer/BLAS
-- Tests: linalg AD, StableHLO round-trip
-
-### Phase 4: Custom algebra + optimization
-
-- SemiringOp\<T\> end-to-end with Tropical
-- Custom GPU backend (reuse v1 CUDA kernels)
-- tenferro-capi (C FFI for Julia/Python)
+- Custom algebra end-to-end (tropical semiring)
+- GPU backend expansion (CUDA kernels)
+- C-API (FFI for Julia/Python)
 - Logical-DAG-aware checkpoint scheduling
 - Operator fusion in compiled IR

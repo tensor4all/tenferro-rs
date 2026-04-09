@@ -1,7 +1,6 @@
-# v2 Primitive Catalog
+# Primitive Catalog
 
 **Date:** 2026-04-04
-**Status:** Draft
 **Parent:** `../index.md`
 **Related:** `backend-contract.md`, `tensor-semantics.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
@@ -11,11 +10,11 @@
 
 This document answers the question:
 
-> What exactly counts as a "primitive" or "instruction" in the v2 design at each
+> What exactly counts as a "primitive" or "instruction" in the current design at each
 > level of the IR hierarchy, and what does each op mean?
 
 **Normative status:** this file is the **source of truth** for the primitive
-and instruction-set vocabulary that tenferro v2 is expected to implement at
+and instruction-set vocabulary that tenferro is expected to implement at
 all levels. If another design document has a shorter summary and the two
 disagree, this file wins.
 
@@ -137,7 +136,7 @@ engine. Input tensors may be contiguous with arbitrary axis ordering; the
 engine inspects strides and adjusts dispatch accordingly (e.g., BLAS trans
 flags for transposed inputs).
 
-### What tenferro v2 is expected to implement
+### What tenferro is expected to implement
 
 From this document's point of view, the implementation target is:
 
@@ -318,7 +317,7 @@ StableHLO):
 This keeps the Tenferro IR vocabulary aligned with StableHLO (which has no
 Trace/Diag ops) and avoids adding non-standard primitives. The einsum engine
 already handles repeated-index patterns (`ii->i`, `ii->`) internally via
-diagonal extraction in v1 (`dispatch.rs` diagonal plan).
+diagonal extraction in the previous (`dispatch.rs` diagonal plan).
 
 ---
 
@@ -361,7 +360,7 @@ See `../reference/stablehlo-primitives.md` for the StableHLO-facing reference an
 | `Expm1` | `exp(x) - 1` |
 | `Log1p` | `log(1 + x)` |
 
-The table above is the canonical v2 analytic seed set. Additional analytic ops
+The table above is the canonical analytic seed set. Additional analytic ops
 may be added later, but they are not part of the current required list unless
 this document is updated.
 
@@ -415,7 +414,7 @@ primitives that satisfy `PrimitiveOp` closure.
 | `While` | Loop while a condition remains true |
 | `Scan` | Structured loop with carried state and stacked outputs |
 
-These are intentionally future-facing and are not required for the initial v2
+These are intentionally future-facing and are not required for the initial
 vertical slice.
 
 ---
@@ -425,7 +424,7 @@ vertical slice.
 When there is a choice, the Tenferro IR vocabulary should prefer the
 StableHLO-style name and semantics:
 
-| Prefer in v2 | Instead of |
+| Preferred | Instead of |
 |--------------|------------|
 | `DotGeneral` | `einsum` or `dot` as a primitive |
 | `BroadcastInDim` | implicit broadcasting or generic `broadcast` primitive |
@@ -482,7 +481,7 @@ This is useful for two reasons:
 
 ## VIII. Implementation Note
 
-This catalog defines the **semantic vocabulary at all IR levels** that the v2
+This catalog defines the **semantic vocabulary at all IR levels** that the
 graph, AD stack, and execution engine talk about.
 
 - The **Tenferro IR** (Section IV) defines the graph-level vocabulary for

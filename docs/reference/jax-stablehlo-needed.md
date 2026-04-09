@@ -1,7 +1,6 @@
 # JAX/StableHLO Primitives Needed For tenferro
 
 **Date:** 2026-04-03
-**Status:** Draft
 **Parent:** `../README.md`
 **Related:** `jax-primitives.md`, `stablehlo-primitives.md`, `../spec/primitive-catalog.md`
 
@@ -11,7 +10,7 @@
 
 This note answers a narrower question than `../spec/primitive-catalog.md`:
 
-> If tenferro v2 wants to reuse JAX's `linearize` design with minimal changes,
+> If tenferro wants to reuse JAX's `linearize` design with minimal changes,
 > which JAX primitives must tenferro expose, and which StableHLO ops are
 > needed below that layer?
 
@@ -57,7 +56,7 @@ The most relevant source files were:
 ## III. Phase-1 StableHLO Target Set
 
 The first concrete implementation target is **not** the JAX primitive list.
-Those JAX-like primitives will all be new v2 primitives anyway.
+Those JAX-like primitives will all be new primitives anyway.
 
 What actually has to run at the backend layer is a StableHLO-level vocabulary.
 For the target feature set (`einsum`, `lu`, `solve`, `qr`, `svd`), the
@@ -117,7 +116,7 @@ usually treats as tensor primitives:
 - `triu`
 - `eye`
 
-These exist today, but they are **tensor/view APIs**, not first-class v2
+These exist today, but they are **tensor/view APIs**, not first-class
 tensor primitives with their own `linearize` / `transpose_rule`
 implementations.
 
@@ -265,15 +264,15 @@ This is the table that matters for implementation planning.
 
 ## VI. JAX-like Primitive Layer To Add Above StableHLO
 
-These are the **new v2 primitives** to add so that tenferro is close enough to
+These are the **new primitives** to add so that tenferro is close enough to
 JAX for `linearize`-style formulas, but they should be read as a layer
 *above* the StableHLO implementation target.
 
 AD helpers:
 
-- ~~`add_jaxvals_p` / `add_any`~~ — not needed in v2; cotangent accumulation
+- ~~`add_jaxvals_p` / `add_any`~~ — not needed; cotangent accumulation
   uses the standard `Add` primitive
-- ~~`zeros_like_p`~~ — not needed in v2; zero propagation is handled via
+- ~~`zeros_like_p`~~ — not needed; zero propagation is handled via
   `Option<LocalValId>` (None = zero tangent) at the graph level
 - `stop_gradient_p`
 
@@ -312,7 +311,7 @@ For JAX, the reference implementation uses:
 - `primitive_jvps`
 - `primitive_transposes`
 
-For the v2 Rust stack, the aligned form is:
+For tenferro, the aligned form is:
 
 - each concrete tenferro primitive implements
   `PrimitiveOp::linearize`
@@ -325,7 +324,7 @@ For the v2 Rust stack, the aligned form is:
 ### Helper kernels that may exist below the public primitive layer
 
 These are useful lowering helpers, but they do **not** need to be part of the
-public v2 primitive catalog:
+public primitive catalog:
 
 - `geqrf_p`
 - `geqp3_p`
@@ -341,12 +340,12 @@ to port JAX's pure fallback algorithms instead of lowering `lu_p`, `qr_p`, and
 ## VII. Design Consequence
 
 If the target is really "copy JAX `linearize` into tenferro with minimal
-semantic change", then tenferro v2 should be described in two distinct layers:
+semantic change", then tenferro should be described in two distinct layers:
 
 1. a **new JAX-like primitive layer**
    - this is what `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule`
      talk about
-   - these primitives are new v2 definitions, not the current tenferro family
+   - these primitives are new definitions, not the current tenferro family
      enums
 2. a **StableHLO lowering layer**
    - this is the concrete implementation target for backend execution
@@ -354,7 +353,7 @@ semantic change", then tenferro v2 should be described in two distinct layers:
 
 So the correct planning order is:
 
-1. decide the new v2 primitive layer
+1. decide the new primitive layer
 2. decide which StableHLO ops are implemented directly
 3. decide which structured ops stay above StableHLO and lower to `custom_call`
 4. map current tenferro families and kernels into that new layering

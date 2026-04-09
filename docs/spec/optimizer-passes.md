@@ -1,7 +1,6 @@
-# v2 Optimizing Compiler: Pass Design
+# Optimizing Compiler: Pass Design
 
 **Date:** 2026-04-04
-**Status:** Draft
 **Parent:** `../index.md`
 **Related:** `primitive-catalog.md`, `backend-contract.md`, `../architecture/tenferro-crates.md`
 
@@ -9,25 +8,25 @@
 
 ## I. Purpose
 
-This document specifies the optimization passes in tenferro v2's optimizing
+This document specifies the optimization passes in tenferro's optimizing
 compiler. The compiler transforms StableHLO IR into Execution IR for non-XLA
 backends.
 
 The pass design is based on two sources:
 
 1. **XLA's HLO optimization pipeline** (`xla/service/gpu/gpu_compiler.cc`)
-2. **tenferro v1's einsum execution optimizations** (`tenferro-einsum/src/`)
+2. **the previous einsum execution optimizations** (`tenferro-einsum/src/`)
 
 The goal is to adopt the minimum set of XLA-style passes that covers the
-performance characteristics of v1's hand-tuned execution engine.
+performance characteristics of the previous hand-tuned execution engine.
 
 ---
 
-## II. v1 Optimizations and Required v2 Passes
+## II. Previous Optimizations and Required Passes
 
 ### Mapping table
 
-| v1 optimization | v1 location | What it does | v2 pass needed |
+| Previous optimization | Previous location | What it does | Pass needed |
 |----------------|-------------|--------------|---------------|
 | Lazy permutation | `dispatch.rs:446-454` | Return non-contiguous view instead of physical copy after GEMM | TransposeFolding |
 | Fusability check | `layout.rs:1-33` | Check if dim groups can collapse into one GEMM dimension without copy | DotDecomposer |
@@ -39,7 +38,7 @@ performance characteristics of v1's hand-tuned execution engine.
 | Buffer pooling | `execute.rs:232-247` | Reuse buffers via Arc refcount + pool | Execution engine (liveness + pool) |
 | Backend fast-path | `dispatch.rs:195-218` | Delegate to cuTENSOR etc. | SemiringFastPath trait |
 
-### Minimum passes for v2
+### Minimum passes
 
 1. **DotDimensionSorter** — sort contracting dims to minimize transposes
 2. **TransposeFolding** — absorb Transpose into DotGeneral dimension_numbers
@@ -171,8 +170,8 @@ After:  dot(A, B)
         // perm={1,0} applied: dim 1 → perm[1] = 0
 ```
 
-**Why this covers v1's lazy permutation:** In v1, the einsum engine defers
-permutations as stride rewrites and only materializes at GEMM time. In v2,
+**Why this covers the previous lazy permutation:** Previously, the einsum engine defers
+permutations as stride rewrites and only materializes at GEMM time. Now,
 TransposeFolding achieves the same effect at the IR level — the Transpose
 instruction is eliminated and the GEMM (DotGeneral) directly reads the
 original layout through adjusted dimension_numbers.
@@ -269,14 +268,14 @@ Step 3: canonical dot([1024,512], [512,1024]) → [1024, 1024]
 Step 4: Reshape → [32, 32, 1024]
 ```
 
-**Why this covers v1's fusability check:** In v1, `try_fuse_group_in_target_order`
+**Why this covers the previous fusability check:** Previously, `try_fuse_group_in_target_order`
 checks if dimension groups can collapse into single GEMM dimensions. DotDecomposer
 does the same via Reshape — multiple non-contracting dims are fused into M, multiple
 contracting dims are fused into K. If the underlying strides happen to be
 contiguous, Reshape is a no-op in the Execution IR.
 
-**Why this covers v1's partial materialization:** In v1,
-`prepare_one_operand` copies only the unfusable dimension group. In v2,
+**Why this covers the previous partial materialization:** Previously,
+`prepare_one_operand` copies only the unfusable dimension group. In the current design,
 DotDecomposer inserts a Transpose only for the axis group that needs
 reordering. TransposeFolding may absorb it; otherwise the Execution IR
 emits a Permute (physical copy) only for that operand.
@@ -330,7 +329,7 @@ ReductionSimplification verifies this order is preserved after
 other transforms (e.g., if a prior pass reordered instructions).
 ```
 
-**Why this covers v1's pre-reduction:** v1 calls `execute_reduce_with_plan`
+**Why this covers the previous pre-reduction:** Previously, `execute_reduce_with_plan` was called
 for unique-only axes before GEMM (`dispatch.rs:121-139`). This pass does the
 same at the IR level.
 
@@ -389,9 +388,9 @@ Execution IR (output, stride-aware engine dispatch)
 
 ---
 
-## V. Comparison: v1 Execution vs v2 Compiled
+## V. Comparison: Previous Execution vs Compiled
 
-| Step | v1 (runtime, per-contraction) | v2 (compile-time, on IR) |
+| Step | Previous (runtime, per-contraction) | Current (compile-time, on IR) |
 |------|-------------------------------|--------------------------|
 | Axis classification | `classify.rs:12-54` at plan time | DotDecomposer identifies batch/contracting/non-contracting |
 | Dim sorting | implicit (modes already ordered) | DotDimensionSorter |
@@ -402,8 +401,8 @@ Execution IR (output, stride-aware engine dispatch)
 | Direct output write | c_direct path checks output fusability | TransposeFolding on output Transpose |
 | Buffer reuse | `TensorBufferPool` + `try_into_data_vec` | Liveness analysis + buffer pool (execution engine) |
 
-**Key difference:** v1 makes these decisions at runtime per contraction step.
-v2 makes them at compile time on the full IR graph, which enables cross-step
+**Key difference:** The previous design made these decisions at runtime per contraction step.
+The current design makes them at compile time on the full IR graph, which enables cross-step
 optimization (e.g., a Transpose inserted by one DotDecomposer step may be
 absorbed by a subsequent DotGeneral via TransposeFolding).
 
@@ -414,10 +413,10 @@ absorbed by a subsequent DotGeneral via TransposeFolding).
 | XLA pass | Reason for exclusion |
 |----------|---------------------|
 | DotMerger | Merges dots sharing an operand. Useful for XLA's JIT but not needed for step-by-step interpreter. |
-| TransposeFolding for Convolution | No convolution support in v2 initial scope. |
+| TransposeFolding for Convolution | No convolution support in initial scope. |
 | AlgebraicSimplifier (full) | Most patterns are XLA-specific. We adopt only ReductionSimplification. |
 | LayoutAssignment | XLA-specific. Engine-produced data is column-major; inputs are stride-aware. |
-| Kernel fusion | No kernel fusion in v2's step-by-step interpreter. |
+| Kernel fusion | No kernel fusion in the step-by-step interpreter. |
 
 These can be added later if needed (e.g., DotMerger when implementing
 checkpoint scheduling or operator fusion).
@@ -440,7 +439,7 @@ Each pass should preserve program semantics. Test strategy:
 
 ### Profiling
 
-The v1 profiling counters (`PREPARE_ZEROCOPY`, `PREPARE_FALLBACK`,
+The previous profiling counters (`PREPARE_ZEROCOPY`, `PREPARE_FALLBACK`,
 `PREPARE_FALLBACK_ELEMS`, `GEMM_NS`, `PERMUTE_NS`) should have equivalents:
 - Count of Transpose instructions before/after TransposeFolding
 - Count of Permute instructions in final Execution IR

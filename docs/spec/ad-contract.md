@@ -1,7 +1,6 @@
 # AD Contract
 
 **Date:** 2026-04-04
-**Status:** Draft
 **Parent:** [`../index.md`](../index.md)
 **Related:** [`primitive-catalog.md`](primitive-catalog.md), [`../architecture/chainrules.md`](../architecture/chainrules.md), [`../architecture/tidu.md`](../architecture/tidu.md)
 

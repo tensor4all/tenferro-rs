@@ -1,9 +1,7 @@
-# v2 Tensor Design: Structure and Einsum
+# Tensor Design: Structure and Einsum
 
 **Date:** 2026-04-04
-**Status:** Draft
 **Parent:** `../index.md`
-<!-- TODO: ../examples/tensor-api-pseudocode.md was in tensor4all-meta; move to getting-started when populated -->
 **Related:** `../architecture/ad-pipeline.md`
 
 ---
@@ -75,12 +73,12 @@ context.
 All tensors are **contiguous column-major** (Fortran order). There is no
 `strides` field — the shape alone determines the layout.
 
-**Why v1 used arbitrary strides:** In v1's eager execution model, lazy
+**Why the previous design used arbitrary strides:** In the previous eager execution model, lazy
 transpose was implemented via zero-copy stride permutation. This avoided
 data movement for operations like `.t()` and `.permute()` by simply
 reinterpreting the strides without copying memory.
 
-**Why v2 removes strides:** v2 compiles operations as a group (Fragment /
+**Why the current design removes strides:** tenferro compiles operations as a group (Fragment /
 IR) and optimizes at the IR level. For example, `TransposeFolding` absorbs
 `Transpose` nodes into `DotGeneral` contracting/batch dimensions, eliminating
 the transpose entirely. With compiled mode, stride tricks at the tensor level
