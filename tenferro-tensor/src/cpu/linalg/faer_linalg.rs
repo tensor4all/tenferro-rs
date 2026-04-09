@@ -5,7 +5,7 @@ use crate::{Buffer, Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone {
     fn parity_one() -> Self;
-    fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self>;
+    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>>;
     fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn triangular_solve_2d(
         a: &TypedTensor<Self>,
@@ -149,10 +149,14 @@ fn transpose_col_major_data<T: Copy>(data: &[T], rows: usize, cols: usize) -> Ve
     transposed
 }
 
-fn batched_single<T, F>(input: &TypedTensor<T>, core_rank: usize, op: F) -> TypedTensor<T>
+fn batched_single<T, F>(
+    input: &TypedTensor<T>,
+    core_rank: usize,
+    op: F,
+) -> crate::Result<TypedTensor<T>>
 where
     T: Clone,
-    F: Fn(&TypedTensor<T>) -> TypedTensor<T>,
+    F: Fn(&TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
 {
     let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_single");
     if batch_shape.is_empty() {
@@ -177,7 +181,7 @@ where
             input.host_data()[start..end].to_vec(),
             input,
         );
-        let batch_output = op(&batch_input);
+        let batch_output = op(&batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
             assert_eq!(
@@ -195,7 +199,7 @@ where
 
     let mut out_shape = out_core_shape.expect("batched_single: missing output shape");
     out_shape.extend_from_slice(batch_shape);
-    tensor_from_vec_with_template(out_shape, out_data, input)
+    Ok(tensor_from_vec_with_template(out_shape, out_data, input))
 }
 
 fn batched_multi<T, F>(input: &TypedTensor<T>, core_rank: usize, op: F) -> Vec<TypedTensor<T>>
@@ -412,14 +416,19 @@ impl FaerLinalg for f64 {
         1.0
     }
 
-    fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
+    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky");
         let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
         let chol = match mat.llt(Side::Lower) {
             Ok(chol) => chol,
-            Err(_) => panic!("cholesky: matrix is not positive definite"),
+            Err(_) => {
+                return Err(crate::Error::BackendFailure {
+                    op: "cholesky",
+                    message: "matrix is not positive definite".into(),
+                });
+            }
         };
-        tensor_from_mat(chol.L(), vec![n, n], input)
+        Ok(tensor_from_mat(chol.L(), vec![n, n], input))
     }
 
     fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
@@ -660,14 +669,19 @@ impl FaerLinalg for Complex64 {
         Complex64::new(1.0, 0.0)
     }
 
-    fn cholesky_2d(input: &TypedTensor<Self>) -> TypedTensor<Self> {
+    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky");
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
         let chol = match mat.llt(Side::Lower) {
             Ok(chol) => chol,
-            Err(_) => panic!("cholesky: matrix is not positive definite"),
+            Err(_) => {
+                return Err(crate::Error::BackendFailure {
+                    op: "cholesky",
+                    message: "matrix is not positive definite".into(),
+                });
+            }
         };
-        tensor_from_mat(chol.L(), vec![n, n], input)
+        Ok(tensor_from_mat(chol.L(), vec![n, n], input))
     }
 
     fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
@@ -912,9 +926,13 @@ impl FaerLinalg for Complex64 {
     }
 }
 
-pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> TypedTensor<T> {
+pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
-        return tensor_from_vec_with_template(input.shape.clone(), Vec::new(), input);
+        return Ok(tensor_from_vec_with_template(
+            input.shape.clone(),
+            Vec::new(),
+            input,
+        ));
     }
     batched_single(input, 2, T::cholesky_2d)
 }

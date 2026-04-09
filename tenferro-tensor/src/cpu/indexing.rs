@@ -66,7 +66,16 @@ pub fn scatter(
 }
 
 pub fn slice(input: &Tensor, config: &SliceConfig) -> Tensor {
-    dispatch_tensor!(input, tensor => typed_slice(tensor, config))
+    try_slice(input, config).expect("slice")
+}
+
+pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(tensor) => Ok(Tensor::F32(typed_slice(tensor, config)?)),
+        Tensor::F64(tensor) => Ok(Tensor::F64(typed_slice(tensor, config)?)),
+        Tensor::C32(tensor) => Ok(Tensor::C32(typed_slice(tensor, config)?)),
+        Tensor::C64(tensor) => Ok(Tensor::C64(typed_slice(tensor, config)?)),
+    }
 }
 
 pub fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor {
@@ -75,7 +84,16 @@ pub fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> 
 }
 
 pub fn pad(input: &Tensor, config: &PadConfig) -> Tensor {
-    dispatch_tensor!(input, t => typed_pad(t, config))
+    try_pad(input, config).expect("pad")
+}
+
+pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(tensor) => Ok(Tensor::F32(typed_pad(tensor, config)?)),
+        Tensor::F64(tensor) => Ok(Tensor::F64(typed_pad(tensor, config)?)),
+        Tensor::C32(tensor) => Ok(Tensor::C32(typed_pad(tensor, config)?)),
+        Tensor::C64(tensor) => Ok(Tensor::C64(typed_pad(tensor, config)?)),
+    }
 }
 
 pub fn concatenate(inputs: &[&Tensor], axis: usize) -> Tensor {
@@ -90,11 +108,32 @@ pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
     dispatch_tensor!(input, tensor => typed_reverse(tensor, axes))
 }
 
-fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) -> TypedTensor<T> {
+fn typed_slice<T: Copy + Clone>(
+    input: &TypedTensor<T>,
+    config: &SliceConfig,
+) -> crate::Result<TypedTensor<T>> {
     let rank = input.shape.len();
-    assert_eq!(config.starts.len(), rank, "slice: starts rank mismatch");
-    assert_eq!(config.limits.len(), rank, "slice: limits rank mismatch");
-    assert_eq!(config.strides.len(), rank, "slice: strides rank mismatch");
+    if config.starts.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "slice",
+            expected: rank,
+            actual: config.starts.len(),
+        });
+    }
+    if config.limits.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "slice",
+            expected: rank,
+            actual: config.limits.len(),
+        });
+    }
+    if config.strides.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "slice",
+            expected: rank,
+            actual: config.strides.len(),
+        });
+    }
 
     let out_shape: Vec<usize> = input
         .shape
@@ -104,13 +143,29 @@ fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) ->
             let start = config.starts[axis];
             let limit = config.limits[axis];
             let stride = config.strides[axis];
-            assert!(start <= limit, "slice: start exceeds limit on axis {axis}");
-            assert!(limit <= dim, "slice: limit out of bounds on axis {axis}");
-            assert!(stride > 0, "slice: stride must be positive on axis {axis}");
+            if start > limit {
+                return Err(crate::Error::InvalidConfig {
+                    op: "slice",
+                    message: format!("start exceeds limit on axis {axis}"),
+                });
+            }
+            if limit > dim {
+                return Err(crate::Error::AxisOutOfBounds {
+                    op: "slice",
+                    axis,
+                    rank,
+                });
+            }
+            if stride == 0 {
+                return Err(crate::Error::InvalidConfig {
+                    op: "slice",
+                    message: format!("stride must be positive on axis {axis}"),
+                });
+            }
             let span = limit - start;
-            (span + stride - 1) / stride
+            Ok((span + stride - 1) / stride)
         })
-        .collect();
+        .collect::<crate::Result<Vec<_>>>()?;
 
     let out_len: usize = out_shape.iter().product();
     let mut out_data = Vec::with_capacity(out_len);
@@ -125,7 +180,7 @@ fn typed_slice<T: Copy + Clone>(input: &TypedTensor<T>, config: &SliceConfig) ->
         out_data.push(*input.get(&in_idx));
     }
 
-    TypedTensor::from_vec(out_shape, out_data)
+    Ok(TypedTensor::from_vec(out_shape, out_data))
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
@@ -581,36 +636,53 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
     out
 }
 
-fn typed_pad<T: Copy + Clone + Zero>(input: &TypedTensor<T>, config: &PadConfig) -> TypedTensor<T> {
-    assert_eq!(
-        config.edge_padding_low.len(),
-        input.shape.len(),
-        "pad: edge_padding_low rank mismatch"
-    );
-    assert_eq!(
-        config.edge_padding_high.len(),
-        input.shape.len(),
-        "pad: edge_padding_high rank mismatch"
-    );
-    assert_eq!(
-        config.interior_padding.len(),
-        input.shape.len(),
-        "pad: interior_padding rank mismatch"
-    );
+fn typed_pad<T: Copy + Clone + Zero>(
+    input: &TypedTensor<T>,
+    config: &PadConfig,
+) -> crate::Result<TypedTensor<T>> {
+    let rank = input.shape.len();
+    if config.edge_padding_low.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "pad",
+            expected: rank,
+            actual: config.edge_padding_low.len(),
+        });
+    }
+    if config.edge_padding_high.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "pad",
+            expected: rank,
+            actual: config.edge_padding_high.len(),
+        });
+    }
+    if config.interior_padding.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "pad",
+            expected: rank,
+            actual: config.interior_padding.len(),
+        });
+    }
 
     let mut out_shape = Vec::with_capacity(input.shape.len());
     for axis in 0..input.shape.len() {
-        assert!(
-            config.interior_padding[axis] >= 0,
-            "pad: interior padding must be non-negative"
-        );
+        if config.interior_padding[axis] < 0 {
+            return Err(crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("interior padding must be non-negative on axis {axis}"),
+            });
+        }
         let base = if input.shape[axis] == 0 {
             0
         } else {
             (input.shape[axis] as i64 - 1) * (config.interior_padding[axis] + 1) + 1
         };
         let dim = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
-        out_shape.push(usize::try_from(dim).expect("pad: negative output dimension"));
+        out_shape.push(
+            usize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
+                op: "pad",
+                message: format!("negative output dimension on axis {axis}"),
+            })?,
+        );
     }
 
     let mut out = TypedTensor::zeros(out_shape.clone());
@@ -634,5 +706,5 @@ fn typed_pad<T: Copy + Clone + Zero>(input: &TypedTensor<T>, config: &PadConfig)
         }
     }
 
-    out
+    Ok(out)
 }

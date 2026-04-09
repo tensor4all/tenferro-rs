@@ -14,14 +14,19 @@ fn semiring_backend_default_add_mul_and_reduce_sum_work_for_standard_f64() {
     let lhs = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let rhs = f64_tensor(vec![2, 2], vec![10.0, 20.0, 30.0, 40.0]);
 
-    let sum = <CpuBackend as SemiringBackend<Standard<f64>>>::add(&mut backend, &lhs, &rhs);
-    let prod = <CpuBackend as SemiringBackend<Standard<f64>>>::mul(&mut backend, &lhs, &rhs);
+    let sum =
+        <CpuBackend as SemiringBackend<Standard<f64>>>::add(&mut backend, &lhs, &rhs).unwrap();
+    let prod =
+        <CpuBackend as SemiringBackend<Standard<f64>>>::mul(&mut backend, &lhs, &rhs).unwrap();
     let reduced =
-        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[1]);
+        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[1])
+            .unwrap();
     let scalar =
-        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[0, 1]);
+        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[0, 1])
+            .unwrap();
     let unchanged =
-        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[]);
+        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &lhs, &[])
+            .unwrap();
 
     assert_eq!(sum.host_data(), &[11.0, 22.0, 33.0, 44.0]);
     assert_eq!(prod.host_data(), &[10.0, 40.0, 90.0, 160.0]);
@@ -56,7 +61,8 @@ fn semiring_backend_batched_gemm_handles_batch_and_contract_dimensions() {
             lhs_rank: 3,
             rhs_rank: 3,
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(out.shape, vec![2, 2, 2]);
     assert_eq!(
@@ -83,7 +89,8 @@ fn semiring_backend_batched_gemm_inner_product_returns_rank0_scalar() {
             lhs_rank: 1,
             rhs_rank: 1,
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(out.shape, vec![]);
     assert_eq!(out.host_data(), &[32.0]);

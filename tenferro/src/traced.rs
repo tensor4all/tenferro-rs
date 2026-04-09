@@ -285,7 +285,7 @@ impl TracedTensor {
             &cached_exec,
             input_tensors,
             &mut engine.buffer_pool,
-        );
+        )?;
         if results.len() != 1 {
             return Err(Error::Internal(format!(
                 "expected 1 output, got {}",
@@ -1200,12 +1200,12 @@ pub fn eval_all<B: TensorBackend>(
     }
 
     let cached_exec = engine.get_or_compile(exec);
-    let results = eval_exec_ir(
+    let results: Vec<Tensor> = eval_exec_ir(
         &mut engine.backend,
         &cached_exec,
         input_tensors,
         &mut engine.buffer_pool,
-    );
+    )?;
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
         tt.data = Some(result.clone());

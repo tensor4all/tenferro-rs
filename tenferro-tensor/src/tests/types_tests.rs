@@ -6,6 +6,7 @@ use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
     MemoryKind, Placement, Tensor, TypedTensor,
 };
+use crate::Error;
 
 #[test]
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
@@ -129,4 +130,15 @@ fn memory_kind_variants_are_constructible() {
     assert!(matches!(kinds[1], MemoryKind::PinnedHost));
     assert!(matches!(kinds[2], MemoryKind::UnpinnedHost));
     assert!(matches!(kinds[3], MemoryKind::Other(_)));
+}
+
+#[test]
+fn runtime_error_formats_include_op_name() {
+    let err = Error::AxisOutOfBounds {
+        op: "dot_general",
+        axis: 2,
+        rank: 1,
+    };
+
+    assert!(err.to_string().contains("dot_general"));
 }

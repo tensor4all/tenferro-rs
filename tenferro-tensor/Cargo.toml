@@ -25,6 +25,7 @@ num-complex.workspace = true
 rayon = "1"
 tenferro-algebra = { path = "../tenferro-algebra" }
 strided-kernel.workspace = true
+thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }
 cblas-inject = { workspace = true, optional = true }

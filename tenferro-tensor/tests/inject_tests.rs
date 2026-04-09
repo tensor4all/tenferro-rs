@@ -85,7 +85,7 @@ fn provider_inject_dot_general_uses_registered_blas() {
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
-        Tensor::F64(inner) => assert_eq!(inner.host_data(), &[19.0, 43.0, 22.0, 50.0]),
+        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[19.0, 43.0, 22.0, 50.0]),
         _ => panic!("expected f64 tensor"),
     }
 }
