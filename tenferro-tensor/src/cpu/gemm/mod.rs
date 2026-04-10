@@ -1,8 +1,9 @@
 use num_traits::{One, Zero};
+use std::sync::Arc;
 
 use crate::config::DotGeneralConfig;
 use crate::cpu::structural::typed_transpose;
-use crate::types::{col_major_strides, Buffer, TypedTensor};
+use crate::types::{col_major_strides, Buffer, LayoutOrder, TypedTensor};
 use crate::Error;
 
 #[cfg(feature = "cpu-blas")]
@@ -235,6 +236,17 @@ fn is_identity_perm(perm: &[usize]) -> bool {
     perm.iter().enumerate().all(|(i, &p)| i == p)
 }
 
+fn materialize_canonical_input<T>(tensor: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Default,
+{
+    if tensor.is_contiguous_col_major() {
+        Ok(tensor.clone())
+    } else {
+        tensor.to_contiguous(LayoutOrder::ColumnMajor)
+    }
+}
+
 fn analyse_gemm<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -250,8 +262,8 @@ fn analyse_gemm<T>(
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides = col_major_strides(&lhs.shape);
-    let rhs_strides = col_major_strides(&rhs.shape);
+    let lhs_strides = lhs.strides.clone();
+    let rhs_strides = rhs.strides.clone();
 
     let batch_shapes: Vec<usize> = config
         .lhs_batch_dims
@@ -356,7 +368,7 @@ pub(crate) fn dot_general<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + Copy + Clone + Default + Zero + One + PartialEq,
 {
     validate_dot_general(lhs, rhs, config)?;
     if let Some(result) = typed_faer_gemm(lhs, rhs, config) {
@@ -365,14 +377,14 @@ where
     let (lhs_perm, rhs_perm, new_config) =
         canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
-        std::borrow::Cow::Borrowed(lhs)
+        materialize_canonical_input(lhs)?
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
+        materialize_canonical_input(&typed_transpose(lhs, &lhs_perm)?)?
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
-        std::borrow::Cow::Borrowed(rhs)
+        materialize_canonical_input(rhs)?
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
+        materialize_canonical_input(&typed_transpose(rhs, &rhs_perm)?)?
     };
     typed_faer_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
         op: "dot_general",
@@ -387,14 +399,17 @@ fn typed_faer_gemm<T>(
     config: &DotGeneralConfig,
 ) -> Option<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + Copy + Clone + Default + Zero + One + PartialEq,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
     let out_n: usize = dims.out_shape.iter().product();
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        let out_shape = dims.out_shape;
         return Some(TypedTensor {
-            buffer: Buffer::Host(vec![T::zero(); out_n]),
-            shape: dims.out_shape,
+            buffer: Buffer::Host(Arc::new(vec![T::zero(); out_n])),
+            strides: col_major_strides(&out_shape),
+            shape: out_shape,
+            offset: 0,
             placement: lhs.placement.clone(),
         });
     }
@@ -412,8 +427,8 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = batch as isize * dims.a_bs;
-        let b_off = batch as isize * dims.b_bs;
+        let a_off = lhs.offset + batch as isize * dims.a_bs;
+        let b_off = rhs.offset + batch as isize * dims.b_bs;
         let c_off = batch as isize * dims.c_bs;
         unsafe {
             T::strided_gemm(
@@ -435,9 +450,12 @@ where
         }
     }
 
+    let out_shape = dims.out_shape;
     Some(TypedTensor {
-        buffer: Buffer::Host(out_data),
-        shape: dims.out_shape,
+        buffer: Buffer::Host(Arc::new(out_data)),
+        strides: col_major_strides(&out_shape),
+        shape: out_shape,
+        offset: 0,
         placement: lhs.placement.clone(),
     })
 }
@@ -449,7 +467,7 @@ pub(crate) fn dot_general<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + Copy + Clone + Zero + One,
+    T: BlasGemm + Copy + Clone + Default + Zero + One,
 {
     validate_dot_general(lhs, rhs, config)?;
     if let Some(result) = typed_blas_gemm(lhs, rhs, config) {
@@ -458,14 +476,14 @@ where
     let (lhs_perm, rhs_perm, new_config) =
         canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
-        std::borrow::Cow::Borrowed(lhs)
+        materialize_canonical_input(lhs)?
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
+        materialize_canonical_input(&typed_transpose(lhs, &lhs_perm)?)?
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
-        std::borrow::Cow::Borrowed(rhs)
+        materialize_canonical_input(rhs)?
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
+        materialize_canonical_input(&typed_transpose(rhs, &rhs_perm)?)?
     };
     typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
         op: "dot_general",
@@ -480,14 +498,17 @@ fn typed_blas_gemm<T>(
     config: &DotGeneralConfig,
 ) -> Option<TypedTensor<T>>
 where
-    T: BlasGemm + Copy + Clone + Zero + One,
+    T: BlasGemm + Copy + Clone + Default + Zero + One,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
     let out_n: usize = dims.out_shape.iter().product();
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        let out_shape = dims.out_shape;
         return Some(TypedTensor {
-            buffer: Buffer::Host(vec![T::zero(); out_n]),
-            shape: dims.out_shape,
+            buffer: Buffer::Host(Arc::new(vec![T::zero(); out_n])),
+            strides: col_major_strides(&out_shape),
+            shape: out_shape,
+            offset: 0,
             placement: lhs.placement.clone(),
         });
     }
@@ -511,8 +532,8 @@ where
     let c_block = dims.m * dims.n;
 
     for batch in 0..dims.batch_total {
-        let a_start = (batch as isize * dims.a_bs) as usize;
-        let b_start = (batch as isize * dims.b_bs) as usize;
+        let a_start = usize::try_from(lhs.offset + batch as isize * dims.a_bs).ok()?;
+        let b_start = usize::try_from(rhs.offset + batch as isize * dims.b_bs).ok()?;
         let c_start = (batch as isize * dims.c_bs) as usize;
         T::contiguous_gemm(
             T::one(),
@@ -526,9 +547,12 @@ where
         );
     }
 
+    let out_shape = dims.out_shape;
     Some(TypedTensor {
-        buffer: Buffer::Host(out),
-        shape: dims.out_shape,
+        buffer: Buffer::Host(Arc::new(out)),
+        strides: col_major_strides(&out_shape),
+        shape: out_shape,
+        offset: 0,
         placement: lhs.placement.clone(),
     })
 }

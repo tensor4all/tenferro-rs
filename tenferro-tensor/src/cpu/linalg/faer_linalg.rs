@@ -1,7 +1,7 @@
 use faer::{diag::DiagRef, MatMut, MatRef, Par, Side};
 use num_complex::Complex64;
 
-use crate::{Buffer, Tensor, TypedTensor};
+use crate::{Buffer, LayoutOrder, Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone {
     fn parity_one() -> Self;
@@ -37,9 +37,25 @@ fn tensor_from_vec_with_template<T: Clone, U>(
     template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
     TypedTensor {
-        buffer: Buffer::Host(data),
+        buffer: Buffer::Host(data.into()),
+        strides: crate::col_major_strides(&shape),
+        offset: 0,
         shape,
         placement: template.placement.clone(),
+    }
+}
+
+fn with_col_major_input<T, R>(input: &TypedTensor<T>, f: impl FnOnce(&TypedTensor<T>) -> R) -> R
+where
+    T: Copy + Default,
+{
+    if input.is_contiguous_col_major() {
+        f(input)
+    } else {
+        let materialized = input
+            .to_contiguous(LayoutOrder::ColumnMajor)
+            .expect("linalg input materialization must succeed");
+        f(&materialized)
     }
 }
 
@@ -926,51 +942,57 @@ impl FaerLinalg for Complex64 {
     }
 }
 
-pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
-        return Ok(tensor_from_vec_with_template(
-            input.shape.clone(),
-            Vec::new(),
-            input,
-        ));
-    }
-    batched_single(input, 2, T::cholesky_2d)
+pub(crate) fn cholesky<T: FaerLinalg + Default>(
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>> {
+    with_col_major_input(input, |input| {
+        if has_zero_dim(&input.shape) {
+            return Ok(tensor_from_vec_with_template(
+                input.shape.clone(),
+                Vec::new(),
+                input,
+            ));
+        }
+        batched_single(input, 2, T::cholesky_2d)
+    })
 }
 
-pub(crate) fn lu<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
-        let m = input.shape[0];
-        let n = input.shape[1];
-        let k = m.min(n);
-        let batch_shape = &input.shape[2..];
-        let parity_elements: usize = batch_shape.iter().product::<usize>().max(1);
-        return vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, m, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                batch_shape.to_vec(),
-                vec![T::parity_one(); parity_elements],
-                input,
-            ),
-        ];
-    }
-    batched_multi(input, 2, T::lu_2d)
+pub(crate) fn lu<T: FaerLinalg + Default>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    with_col_major_input(input, |input| {
+        if has_zero_dim(&input.shape) {
+            let m = input.shape[0];
+            let n = input.shape[1];
+            let k = m.min(n);
+            let batch_shape = &input.shape[2..];
+            let parity_elements: usize = batch_shape.iter().product::<usize>().max(1);
+            return vec![
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(m, m, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(m, k, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(k, n, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    batch_shape.to_vec(),
+                    vec![T::parity_one(); parity_elements],
+                    input,
+                ),
+            ];
+        }
+        batched_multi(input, 2, T::lu_2d)
+    })
 }
 
-pub(crate) fn triangular_solve<T: FaerLinalg>(
+pub(crate) fn triangular_solve<T: FaerLinalg + Default>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -978,81 +1000,91 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> TypedTensor<T> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
-    }
-    batched_binary(a, b, 2, 2, |a, b| {
-        T::triangular_solve_2d(a, b, left_side, lower, transpose_a, unit_diagonal)
+    with_col_major_input(a, |a| {
+        with_col_major_input(b, |b| {
+            if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+                return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+            }
+            batched_binary(a, b, 2, 2, |a, b| {
+                T::triangular_solve_2d(a, b, left_side, lower, transpose_a, unit_diagonal)
+            })
+        })
     })
 }
 
-pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
-        let k = m.min(n);
-        return vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                vector_with_batch_shape(k, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                input,
-            ),
-        ];
-    }
-    batched_multi(input, 2, T::svd_2d)
+pub(crate) fn svd<T: FaerLinalg + Default>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    with_col_major_input(input, |input| {
+        if has_zero_dim(&input.shape) {
+            let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
+            let m = matrix_shape[0];
+            let n = matrix_shape[1];
+            let k = m.min(n);
+            return vec![
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(m, k, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    vector_with_batch_shape(k, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(k, n, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+            ];
+        }
+        batched_multi(input, 2, T::svd_2d)
+    })
 }
 
-pub(crate) fn qr<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr");
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
-        let k = m.min(n);
-        return vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                input,
-            ),
-        ];
-    }
-    batched_multi(input, 2, T::qr_2d)
+pub(crate) fn qr<T: FaerLinalg + Default>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    with_col_major_input(input, |input| {
+        if has_zero_dim(&input.shape) {
+            let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr");
+            let m = matrix_shape[0];
+            let n = matrix_shape[1];
+            let k = m.min(n);
+            return vec![
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(m, k, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(k, n, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+            ];
+        }
+        batched_multi(input, 2, T::qr_2d)
+    })
 }
 
-pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
-        let n = input.shape[0];
-        let batch_shape = &input.shape[2..];
-        return vec![
-            tensor_from_vec_with_template(
-                vector_with_batch_shape(n, batch_shape),
-                Vec::new(),
-                input,
-            ),
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(n, n, batch_shape),
-                Vec::new(),
-                input,
-            ),
-        ];
-    }
-    batched_multi(input, 2, T::eigh_2d)
+pub(crate) fn eigh<T: FaerLinalg + Default>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+    with_col_major_input(input, |input| {
+        if has_zero_dim(&input.shape) {
+            let n = input.shape[0];
+            let batch_shape = &input.shape[2..];
+            return vec![
+                tensor_from_vec_with_template(
+                    vector_with_batch_shape(n, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+                tensor_from_vec_with_template(
+                    matrix_with_batch_shape(n, n, batch_shape),
+                    Vec::new(),
+                    input,
+                ),
+            ];
+        }
+        batched_multi(input, 2, T::eigh_2d)
+    })
 }
 
 fn eig_real_2d(input: &TypedTensor<f64>) -> Vec<TypedTensor<Complex64>> {
@@ -1084,30 +1116,47 @@ fn eig_complex_2d(input: &TypedTensor<Complex64>) -> Vec<TypedTensor<Complex64>>
 }
 
 pub(crate) fn eig(input: &Tensor) -> Vec<Tensor> {
-    if has_zero_dim(input.shape()) {
-        let n = input.shape()[0];
-        let batch_shape = &input.shape()[2..];
-        return vec![
-            Tensor::C64(TypedTensor::from_vec(
-                vector_with_batch_shape(n, batch_shape),
-                Vec::new(),
-            )),
-            Tensor::C64(TypedTensor::from_vec(
-                matrix_with_batch_shape(n, n, batch_shape),
-                Vec::new(),
-            )),
-        ];
-    }
-
     match input {
-        Tensor::F64(t) => batched_multi_convert(t, 2, eig_real_2d)
-            .into_iter()
-            .map(Tensor::C64)
-            .collect(),
-        Tensor::C64(t) => batched_multi_convert(t, 2, eig_complex_2d)
-            .into_iter()
-            .map(Tensor::C64)
-            .collect(),
+        Tensor::F64(t) => with_col_major_input(t, |t| {
+            if has_zero_dim(&t.shape) {
+                let n = t.shape[0];
+                let batch_shape = &t.shape[2..];
+                return vec![
+                    Tensor::C64(TypedTensor::from_vec(
+                        vector_with_batch_shape(n, batch_shape),
+                        Vec::new(),
+                    )),
+                    Tensor::C64(TypedTensor::from_vec(
+                        matrix_with_batch_shape(n, n, batch_shape),
+                        Vec::new(),
+                    )),
+                ];
+            }
+            batched_multi_convert(t, 2, eig_real_2d)
+                .into_iter()
+                .map(Tensor::C64)
+                .collect()
+        }),
+        Tensor::C64(t) => with_col_major_input(t, |t| {
+            if has_zero_dim(&t.shape) {
+                let n = t.shape[0];
+                let batch_shape = &t.shape[2..];
+                return vec![
+                    Tensor::C64(TypedTensor::from_vec(
+                        vector_with_batch_shape(n, batch_shape),
+                        Vec::new(),
+                    )),
+                    Tensor::C64(TypedTensor::from_vec(
+                        matrix_with_batch_shape(n, n, batch_shape),
+                        Vec::new(),
+                    )),
+                ];
+            }
+            batched_multi_convert(t, 2, eig_complex_2d)
+                .into_iter()
+                .map(Tensor::C64)
+                .collect()
+        }),
         _ => todo!("eig: unsupported dtype"),
     }
 }

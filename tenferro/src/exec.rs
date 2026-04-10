@@ -1,6 +1,7 @@
 use super::buffer_pool::BufferPool;
 use crate::error::Result;
 use num_complex::{Complex32, Complex64};
+use std::sync::Arc;
 use tenferro_algebra::Semiring;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::cpu::structural::{
@@ -420,8 +421,12 @@ fn reclaim_tensor_buffer(tensor: Tensor, pool: &mut BufferPool) {
 }
 
 fn extract_host_bytes<T>(typed: TypedTensor<T>) -> Option<Vec<u8>> {
+    if !typed.is_contiguous_col_major() {
+        return None;
+    }
     match typed.buffer {
         Buffer::Host(data) => {
+            let data = Arc::try_unwrap(data).ok()?;
             let mut data = std::mem::ManuallyDrop::new(data);
             let ptr = data.as_mut_ptr() as *mut u8;
             let len = data.len() * std::mem::size_of::<T>();

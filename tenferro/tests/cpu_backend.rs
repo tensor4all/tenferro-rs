@@ -6,7 +6,7 @@ use tenferro::buffer_pool::BufferPool;
 use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
-use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, LayoutOrder, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
@@ -16,16 +16,24 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec(shape, data))
 }
 
-fn get_f64_data(t: &Tensor) -> &[f64] {
+fn get_f64_data(t: &Tensor) -> Vec<f64> {
     match t {
-        Tensor::F64(inner) => inner.host_data(),
+        Tensor::F64(inner) => inner
+            .to_contiguous(LayoutOrder::ColumnMajor)
+            .unwrap()
+            .host_data()
+            .to_vec(),
         _ => panic!("expected F64"),
     }
 }
 
-fn get_f32_data(t: &Tensor) -> &[f32] {
+fn get_f32_data(t: &Tensor) -> Vec<f32> {
     match t {
-        Tensor::F32(inner) => inner.host_data(),
+        Tensor::F32(inner) => inner
+            .to_contiguous(LayoutOrder::ColumnMajor)
+            .unwrap()
+            .host_data()
+            .to_vec(),
         _ => panic!("expected F32"),
     }
 }
@@ -266,6 +274,13 @@ fn test_buffer_pool_allocate_fresh() {
     let mut pool = BufferPool::new();
     let buf = pool.allocate(64);
     assert_eq!(buf.len(), 64);
+    assert!(pool.is_empty());
+}
+
+#[test]
+fn test_buffer_pool_default_is_empty() {
+    let pool = BufferPool::default();
+    assert_eq!(pool.len(), 0);
     assert!(pool.is_empty());
 }
 

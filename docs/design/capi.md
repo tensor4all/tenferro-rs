@@ -1,7 +1,19 @@
 # C-API (FFI)
 
-C-API for Julia, Python (JAX, PyTorch), and other languages. Exposes
-tensor lifecycle, einsum, SVD (with AD rules), and DLPack interop.
+The main workspace does not currently ship an active `tenferro-capi` crate.
+This document is a design note for when the FFI layer is reintroduced.
+
+The important current contract is simpler than the historical design below:
+
+- internal tensors are stride-aware
+- FFI is an explicit materialization boundary
+- exported dense tensors must be column-major contiguous unless the external
+  ABI explicitly states another layout
+- imported tensors must validate or normalize layout explicitly instead of
+  assuming arbitrary incoming pointers already match the runtime contract
+
+The older design notes below are retained as background for lifecycle, error,
+and DLPack considerations.
 
 ---
 

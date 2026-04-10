@@ -15,7 +15,9 @@ path.
 - CPU execution is implemented and tested.
 - GPU support is partial and experimental. CUDA symbols exist, but coverage is
   incomplete and ROCm remains mostly stubbed.
-- Tensor storage is dense, contiguous, and column-major.
+- Tensor values are dense and stride-aware. New host allocations default to
+  column-major layout, and explicit materialization chooses row-major or
+  column-major output when needed.
 
 Legacy facade, internal, FFI, and extension crates were removed from the main
 tree on April 6, 2026 to keep the repository aligned with the current 6-crate
@@ -178,8 +180,8 @@ fn main() {
 
 - [Getting Started](docs/getting-started/) — tutorials and worked examples
 - [Architecture](docs/architecture/) — design rationale for each subsystem
-- [Specification](docs/spec/) — normative specs for ops, backends, and AD
-- [Implementation Design](docs/design/) — implementation-focused design notes
+- [Implementation Design](docs/design/) — current implementation-focused design notes
+- [Specification](docs/spec/) — legacy low-level notes that are being retired from source-of-truth status
 
 ## Design Notes
 
@@ -206,11 +208,10 @@ architecture and ChainRules.jl's derivative contract. The key original contribut
 
 Key types:
 
-- `Tensor` — concrete dense runtime value (col-major storage).
+- `Tensor` — concrete dense runtime value with stride-aware host layout metadata.
 - `TracedTensor` — lazy graph-aware wrapper for computation and AD.
 - `Engine` — holds backend + compile cache; triggers evaluation.
 - Public einsum: `tenferro::einsum::einsum(...)`.
 - Multi-output linalg: free functions `tenferro::svd(...)`, `tenferro::qr(...)`, etc.
-See [`docs/architecture/`](docs/architecture/) for design rationale,
-[`docs/spec/`](docs/spec/) for normative specifications, and
-[`docs/design/`](docs/design/) for implementation-focused design notes.
+See [`docs/architecture/`](docs/architecture/) for design rationale and
+[`docs/design/`](docs/design/) for current implementation-focused design notes.
