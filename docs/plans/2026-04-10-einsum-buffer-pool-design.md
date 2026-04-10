@@ -16,23 +16,38 @@ for every intermediate result:
 
 These allocations hit the system allocator on every einsum step. For repeated
 evaluations (e.g., optimization loops, AD backward passes), the same buffer
-sizes are allocated and freed repeatedly.
+sizes are allocated and freed repeatedly. Furthermore, `vec![T::zero(); n]`
+zero-initializes the entire buffer, which is wasteful since GEMM with
+`Accum::Replace` (beta=0) overwrites every element.
 
 ### Current state
 
 tenferro-rs has a `BufferPool` at `tenferro/src/buffer_pool.rs`:
-- `BufferPool` stores `Vec<(usize, Vec<u8>)>` — capacity-keyed, no alignment.
+- Stores `Vec<(usize, Vec<u8>)>` — type-erased, no alignment awareness.
 - `eval_exec_ir` (tenferro/src/exec.rs:168) receives `pool: &mut BufferPool`.
 - After each instruction, `reclaim_last_use_inputs` extracts `Vec<u8>` from
   dead `TypedTensor` slots via `extract_host_bytes` and returns them to pool.
 - **Pool is reclaim-only**: no backend method ever calls `pool.allocate()`.
 - Pool lives in `Engine` (tenferro crate), not accessible from `tenferro-tensor`.
+- `Vec<u8>` ↔ `Vec<T>` conversion requires unsafe alignment handling.
 
 ### strided-rs reference
 
-strided-rs uses a thread-local `BufferPool` (`BTreeMap<usize, Vec<Vec<T>>>`)
-with `pool_acquire(pool, &dims)` / `pool_release`. Intermediates are allocated
-from the pool and returned after each binary einsum step.
+strided-rs uses **typed pools** — no type-erasure, no alignment problem:
+
+```rust
+pub struct BufferPool {
+    f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
+    c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
+}
+```
+
+Key properties:
+- `pool_acquire` returns **uninitialized** buffers (`col_major_uninit`).
+  Safety: `einsum2_into` with `beta=0` writes every output element before reading.
+- `pool_release` returns `Vec<T>` directly — no type-erasure.
+- Best-fit allocation via `BTreeMap::range(total..)`.
+- No zero-initialization overhead.
 
 ## Design
 
@@ -44,173 +59,153 @@ tenferro (crate)
     eval_exec_ir(backend, program, inputs)
       ├── ExecOp::BatchedGemm → backend.dot_general(lhs, rhs, config)
       │     └── CpuBackend::dot_general
-      │           └── gemm::dot_general_with_pool(&mut self.buffers, lhs, rhs, config)
-      │                 ├── typed_faer_gemm_with_pool(pool, ...) → output from pool
+      │           └── install_with_pool(|buffers| gemm::dot_general_pooled(buffers, ...))
+      │                 ├── typed_faer_gemm_pooled(pool, ...) → output from pool (uninit)
       │                 └── canonical fallback → copy buffer from pool
-      ├── ExecOp::Permute → backend.transpose(input, perm)
-      │     └── structural::transpose → output from pool
-      └── reclaim_last_use_inputs → backend.buffers.release(...)
+      └── reclaim_last_use_inputs → backend.reclaim_buffer(tensor)
 
 tenferro-tensor (crate)
-  buffer_pool.rs        ← NEW: moved from tenferro, with alignment support
+  buffer_pool.rs        ← NEW: typed per-dtype pools, no Vec<u8>
   cpu/backend.rs        ← CpuBackend { pool, buffers }
   cpu/gemm/mod.rs       ← pool-aware GEMM functions
 ```
 
-### Step 1: Create `BufferPool` in `tenferro-tensor`
+### Step 1: Create typed `BufferPool` in `tenferro-tensor`
 
 New file: `tenferro-tensor/src/buffer_pool.rs`
 
+Following strided-rs's design — typed pools, no type-erasure, no alignment issues.
+
 ```rust
 use std::collections::BTreeMap;
+use num_complex::{Complex32, Complex64};
 
-/// Alignment-aware buffer pool for reusing heap allocations.
+/// Typed buffer pool for reusing tensor allocations without type-erasure.
 ///
-/// Buffers are keyed by alignment so that an f64 buffer (align 8) is never
-/// handed to an f32 request (align 4). Within each alignment bin, best-fit
-/// allocation selects the smallest buffer with sufficient capacity.
+/// Each scalar type (f64, f32, Complex64, Complex32) has its own pool,
+/// keyed by element count. Buffers are returned **uninitialized** — callers
+/// must write every element before reading.
+///
+/// Design follows strided-rs's BufferPool: typed storage, best-fit via BTreeMap,
+/// no Vec<u8> conversion, no alignment concerns.
 pub struct BufferPool {
-    /// alignment → Vec<(capacity_bytes, buffer)>
-    bins: BTreeMap<usize, Vec<(usize, Vec<u8>)>>,
+    f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
+    f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
+    c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
+    c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
 }
 ```
 
-**Public API:**
+**Public API via sealed trait:**
+
+```rust
+/// Sealed trait for typed buffer pool access. Implemented for f64, f32,
+/// Complex64, Complex32.
+pub trait PoolScalar: Copy + Sized + Send + private::Sealed {
+    /// Acquire a Vec<Self> with `len` elements from the pool.
+    /// Contents are UNDEFINED. Caller must write every element before reading.
+    ///
+    /// # Safety
+    /// The returned vector has length set to `len` but contents are
+    /// uninitialized. This is sound for Copy types (no drop glue),
+    /// but reading before writing is undefined behavior.
+    unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self>;
+
+    /// Return a Vec<Self> to the pool for future reuse.
+    fn pool_release(pool: &mut BufferPool, buf: Vec<Self>);
+}
+
+mod private {
+    pub trait Sealed {}
+    impl Sealed for f64 {}
+    impl Sealed for f32 {}
+    impl Sealed for num_complex::Complex64 {}
+    impl Sealed for num_complex::Complex32 {}
+}
+```
+
+**Implementation for each type (macro):**
+
+```rust
+macro_rules! impl_pool_scalar {
+    ($ty:ty, $field:ident) => {
+        impl PoolScalar for $ty {
+            unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<$ty> {
+                match take_best_fit(&mut pool.$field, len) {
+                    Some(mut buf) => {
+                        buf.set_len(len);  // no zero-fill
+                        buf
+                    }
+                    None => {
+                        let mut buf = Vec::with_capacity(len);
+                        buf.set_len(len);  // no zero-fill
+                        buf
+                    }
+                }
+            }
+
+            fn pool_release(pool: &mut BufferPool, buf: Vec<$ty>) {
+                let cap = buf.capacity();
+                if cap > 0 {
+                    pool.$field.entry(cap).or_default().push(buf);
+                }
+            }
+        }
+    };
+}
+
+impl_pool_scalar!(f64, f64_pool);
+impl_pool_scalar!(f32, f32_pool);
+impl_pool_scalar!(Complex64, c64_pool);
+impl_pool_scalar!(Complex32, c32_pool);
+```
+
+**Best-fit helper (same as strided-rs):**
+
+```rust
+fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Option<Vec<T>> {
+    let key = *pool.range(len..).next()?.0;
+    let vecs = pool.get_mut(&key)?;
+    let buf = vecs.pop();
+    if vecs.is_empty() {
+        pool.remove(&key);
+    }
+    buf
+}
+```
+
+**Other methods:**
 
 ```rust
 impl BufferPool {
-    pub fn new() -> Self;
-
-    /// Acquire a raw buffer with at least `size_bytes` and correct `align`.
-    /// Returns Vec<u8> with len == size_bytes (zero-filled on fresh alloc,
-    /// resized on reuse). Reuses best-fit from pool if available.
-    pub fn acquire(&mut self, size_bytes: usize, align: usize) -> Vec<u8>;
-
-    /// Return a raw buffer to the pool.
-    pub fn release(&mut self, buf: Vec<u8>, align: usize);
-
-    /// Acquire a typed Vec<T> with `len` elements, zero-initialized.
-    pub fn acquire_vec<T: Copy + num_traits::Zero>(&mut self, len: usize) -> Vec<T>;
-
-    /// Return a typed Vec<T> to the pool.
-    pub fn release_vec<T>(&mut self, vec: Vec<T>);
-
-    pub fn len(&self) -> usize;
-    pub fn is_empty(&self) -> bool;
-}
-```
-
-**`acquire` implementation (best-fit):**
-
-```rust
-pub fn acquire(&mut self, size_bytes: usize, align: usize) -> Vec<u8> {
-    if let Some(bin) = self.bins.get_mut(&align) {
-        // Find smallest buffer with capacity >= size_bytes
-        let best = bin.iter().enumerate()
-            .filter(|(_, (cap, _))| *cap >= size_bytes)
-            .min_by_key(|(_, (cap, _))| *cap)
-            .map(|(idx, _)| idx);
-        if let Some(idx) = best {
-            let (_, mut buf) = bin.swap_remove(idx);
-            buf.resize(size_bytes, 0);
-            return buf;
+    pub fn new() -> Self {
+        Self {
+            f64_pool: BTreeMap::new(),
+            f32_pool: BTreeMap::new(),
+            c64_pool: BTreeMap::new(),
+            c32_pool: BTreeMap::new(),
         }
     }
-    vec![0u8; size_bytes]
-}
-```
 
-**`acquire_vec<T>` / `release_vec<T>` — safe typed wrappers:**
+    pub fn len(&self) -> usize {
+        self.f64_pool.values().map(|v| v.len()).sum::<usize>()
+            + self.f32_pool.values().map(|v| v.len()).sum::<usize>()
+            + self.c64_pool.values().map(|v| v.len()).sum::<usize>()
+            + self.c32_pool.values().map(|v| v.len()).sum::<usize>()
+    }
 
-```rust
-pub fn acquire_vec<T: Copy + num_traits::Zero>(&mut self, len: usize) -> Vec<T> {
-    let byte_len = len * std::mem::size_of::<T>();
-    let align = std::mem::align_of::<T>();
-    let raw = self.acquire(byte_len, align);
-    let mut typed = raw_to_typed::<T>(raw);
-    typed.resize(len, T::zero());
-    typed
-}
-
-pub fn release_vec<T>(&mut self, vec: Vec<T>) {
-    let align = std::mem::align_of::<T>();
-    let raw = typed_to_raw(vec);
-    self.release(raw, align);
-}
-```
-
-**Vec<u8> ↔ Vec<T> conversion (unsafe helpers, private):**
-
-```rust
-/// Convert Vec<u8> to Vec<T>. The input must have been allocated with
-/// compatible alignment (guaranteed by acquire keying on align).
-fn raw_to_typed<T>(mut raw: Vec<u8>) -> Vec<T> {
-    let ptr = raw.as_mut_ptr();
-    let byte_cap = raw.capacity();
-    let byte_len = raw.len();
-    std::mem::forget(raw);
-
-    let elem_size = std::mem::size_of::<T>();
-    // Safety: alignment is guaranteed by pool keying.
-    // Vec<u8> allocated with align >= align_of::<T>().
-    // However, the standard allocator aligns Vec<u8> to 1.
-    // We must use Layout-aware allocation. See note below.
-    unsafe {
-        Vec::from_raw_parts(
-            ptr as *mut T,
-            byte_len / elem_size,
-            byte_cap / elem_size,
-        )
+    pub fn is_empty(&self) -> bool {
+        self.f64_pool.is_empty()
+            && self.f32_pool.is_empty()
+            && self.c64_pool.is_empty()
+            && self.c32_pool.is_empty()
     }
 }
 
-fn typed_to_raw<T>(mut vec: Vec<T>) -> Vec<u8> {
-    let ptr = vec.as_mut_ptr();
-    let len = vec.len();
-    let cap = vec.capacity();
-    std::mem::forget(vec);
-
-    let elem_size = std::mem::size_of::<T>();
-    unsafe {
-        Vec::from_raw_parts(
-            ptr as *mut u8,
-            len * elem_size,
-            cap * elem_size,
-        )
-    }
+impl Default for BufferPool {
+    fn default() -> Self { Self::new() }
 }
 ```
-
-**CRITICAL: Alignment safety**
-
-`Vec<u8>` allocated by the standard allocator has alignment 1, which is
-insufficient for `f64` (align 8) or `Complex64` (align 8). Two options:
-
-**(A) Always allocate as `Vec<T>` and store as `Vec<u8>` only for pool storage.**
-The pool receives buffers that were originally `Vec<T>` (via `release_vec`),
-so their allocation alignment matches `T`. Fresh allocations in `acquire_vec`
-create `Vec<T>` directly, then convert.
-
-```rust
-pub fn acquire_vec<T: Copy + num_traits::Zero>(&mut self, len: usize) -> Vec<T> {
-    let byte_len = len * std::mem::size_of::<T>();
-    let align = std::mem::align_of::<T>();
-    if let Some(raw) = self.try_acquire(byte_len, align) {
-        // raw was originally a Vec<T>, alignment preserved
-        let mut typed = raw_to_typed::<T>(raw);
-        typed.resize(len, T::zero());
-        typed
-    } else {
-        // Fresh allocation as Vec<T> — correct alignment guaranteed
-        vec![T::zero(); len]
-    }
-}
-```
-
-**(B) Use `std::alloc::Layout`-aware allocation for fresh buffers.**
-
-Option (A) is simpler and sufficient — the pool only reuses buffers that
-originated as `Vec<T>`. This is the recommended approach.
 
 ### Step 2: Add `BufferPool` to `CpuBackend`
 
@@ -219,7 +214,7 @@ originated as `Vec<T>`. This is the recommended approach.
 
 pub struct CpuBackend {
     pub(crate) pool: Arc<rayon::ThreadPool>,     // rayon thread pool (existing)
-    pub(crate) buffers: BufferPool,              // NEW: buffer pool
+    pub(crate) buffers: BufferPool,              // NEW: typed buffer pool
 }
 
 impl CpuBackend {
@@ -239,21 +234,40 @@ impl CpuBackend {
 }
 ```
 
-### Step 3: Pool-aware `dot_general`
+### Step 3: `install_with_pool` helper
 
-**Problem**: The current `dot_general` impl dispatches through
-`self.install(|| gemm::dot_general(a, b, config))`. The `install` method runs
-the closure on the rayon thread pool, requiring `Send`. `&mut BufferPool` is
-not `Send`-safe across rayon tasks.
+The existing `self.install(|| ...)` runs closures on the rayon thread pool
+via `self.pool.install(op)`, which is required for faer's `Par::rayon(0)` to
+use the correct thread pool. However, `&mut BufferPool` cannot be passed into
+the `Send`-requiring closure.
 
-**Solution**: Extract pool-using code outside the rayon `install` closure, or
-pass pool into the closure (BufferPool is `Send` if we own it, but `&mut` refs
-across rayon boundaries require care).
+Solution: temporarily move `BufferPool` into the closure via `std::mem::take`:
 
-Simplest approach: **do not use `install` for `dot_general`**. The GEMM kernel
-(faer/BLAS) already manages its own parallelism internally. The rayon pool
-in `install` is for strided-kernel operations. For `dot_general`, run on the
-calling thread with direct `&mut self.buffers` access:
+```rust
+impl CpuBackend {
+    /// Run `op` on the rayon thread pool with mutable access to the buffer pool.
+    /// BufferPool is temporarily moved into the closure (Send) and moved back.
+    fn install_with_pool<R: Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> R + Send,
+    ) -> R {
+        let mut buffers = std::mem::take(&mut self.buffers);
+        let (result, returned) = self.pool.install(|| {
+            let r = op(&mut buffers);
+            (r, buffers)
+        });
+        self.buffers = returned;
+        result
+    }
+}
+```
+
+This preserves the rayon thread pool context (so `Par::rayon(0)` in faer uses
+the correct pool) while allowing `&mut BufferPool` access inside the closure.
+
+Operations that don't need the pool continue to use `self.install(|| ...)`.
+
+### Step 4: Pool-aware `dot_general`
 
 ```rust
 // tenferro-tensor/src/cpu/backend.rs
@@ -264,21 +278,17 @@ fn dot_general(
     rhs: &Tensor,
     config: &DotGeneralConfig,
 ) -> crate::Result<Tensor> {
-    match (lhs, rhs) {
-        (Tensor::F64(a), Tensor::F64(b)) => {
-            gemm::dot_general_pooled(&mut self.buffers, a, b, config).map(Tensor::F64)
-        }
-        (Tensor::F32(a), Tensor::F32(b)) => {
-            gemm::dot_general_pooled(&mut self.buffers, a, b, config).map(Tensor::F32)
-        }
-        (Tensor::C64(a), Tensor::C64(b)) => {
-            gemm::dot_general_pooled(&mut self.buffers, a, b, config).map(Tensor::C64)
-        }
-        (Tensor::C32(a), Tensor::C32(b)) => {
-            gemm::dot_general_pooled(&mut self.buffers, a, b, config).map(Tensor::C32)
-        }
+    self.install_with_pool(|buffers| match (lhs, rhs) {
+        (Tensor::F64(a), Tensor::F64(b)) =>
+            gemm::dot_general_pooled(buffers, a, b, config).map(Tensor::F64),
+        (Tensor::F32(a), Tensor::F32(b)) =>
+            gemm::dot_general_pooled(buffers, a, b, config).map(Tensor::F32),
+        (Tensor::C64(a), Tensor::C64(b)) =>
+            gemm::dot_general_pooled(buffers, a, b, config).map(Tensor::C64),
+        (Tensor::C32(a), Tensor::C32(b)) =>
+            gemm::dot_general_pooled(buffers, a, b, config).map(Tensor::C32),
         _ => Err(crate::Error::DTypeMismatch { ... }),
-    }
+    })
 }
 ```
 
@@ -292,41 +302,41 @@ pub(crate) fn dot_general_pooled<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     validate_dot_general(lhs, rhs, config)?;
 
-    // Fast path: try strided GEMM (no copy needed)
     if let Some(result) = typed_faer_gemm_pooled(buffers, lhs, rhs, config) {
         return Ok(result);
     }
 
-    // Slow path: canonical layout fallback
+    // Canonical fallback
     let (lhs_perm, rhs_perm, new_config) =
         canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
-
     let lhs_t;
     let lhs_ref = if is_identity_perm(&lhs_perm) {
         lhs
     } else {
-        lhs_t = typed_transpose(lhs, &lhs_perm)?;  // TODO: pool this too
+        lhs_t = typed_transpose(lhs, &lhs_perm)?;
         &lhs_t
     };
-
     let rhs_t;
     let rhs_ref = if is_identity_perm(&rhs_perm) {
         rhs
     } else {
-        rhs_t = typed_transpose(rhs, &rhs_perm)?;  // TODO: pool this too
+        rhs_t = typed_transpose(rhs, &rhs_perm)?;
         &rhs_t
     };
 
     typed_faer_gemm_pooled(buffers, lhs_ref, rhs_ref, &new_config)
-        .ok_or_else(|| Error::BackendFailure { ... })
+        .ok_or_else(|| Error::BackendFailure {
+            op: "dot_general",
+            message: "CPU GEMM requires host-backed canonical inputs".into(),
+        })
 }
 ```
 
-**Output buffer from pool:**
+**Output buffer from pool (uninit):**
 
 ```rust
 fn typed_faer_gemm_pooled<T>(
@@ -336,15 +346,23 @@ fn typed_faer_gemm_pooled<T>(
     config: &DotGeneralConfig,
 ) -> Option<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
     let out_n: usize = dims.out_shape.iter().product();
 
-    // === CHANGE: use pool instead of vec![T::zero(); out_n] ===
-    let mut out_data: Vec<T> = buffers.acquire_vec(out_n);
+    if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        return Some(TypedTensor {
+            buffer: Buffer::Host(vec![T::zero(); out_n]),
+            shape: dims.out_shape,
+            placement: lhs.placement.clone(),
+        });
+    }
 
-    // ... (existing GEMM logic unchanged) ...
+    // SAFETY: GEMM with Accum::Replace (beta=0) writes every output element.
+    let mut out_data: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
+
+    // ... existing GEMM kernel (unchanged) ...
 
     Some(TypedTensor {
         buffer: Buffer::Host(out_data),
@@ -354,43 +372,47 @@ where
 }
 ```
 
-### Step 4: Reclaim path in `eval_exec_ir`
+### Step 5: Reclaim path in `eval_exec_ir`
 
-**Current** (tenferro/src/exec.rs):
-- `eval_exec_ir` takes `pool: &mut BufferPool` (engine-level pool)
-- `reclaim_last_use_inputs` calls `extract_host_bytes` → `pool.return_buffer`
-- `extract_host_bytes` converts `Vec<T>` → `Vec<u8>` via unsafe ptr reinterpret
+Add `reclaim_buffer` to `TensorBackend` trait (default no-op for GPU backends):
 
-**Change**: Replace engine-level pool with backend's pool.
-
-Option A — Access through `TensorBackend` trait (adds method):
 ```rust
+// tenferro-tensor/src/backend.rs
+
 pub trait TensorBackend {
     // ... existing methods ...
-    fn reclaim_buffer(&mut self, tensor: Tensor) { /* default: drop */ }
+
+    /// Reclaim a tensor's buffer for potential reuse.
+    /// Default implementation drops the tensor. CPU backend returns buffer to pool.
+    fn reclaim_buffer(&mut self, _tensor: Tensor) {}
 }
+```
+
+```rust
+// tenferro-tensor/src/cpu/backend.rs
 
 impl TensorBackend for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        reclaim_tensor_into_pool(tensor, &mut self.buffers);
+        match tensor {
+            Tensor::F64(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::F32(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::C64(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::C32(t) => reclaim_typed(&mut self.buffers, t),
+        }
+    }
+}
+
+fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
+    if let Buffer::Host(data) = typed.buffer {
+        T::pool_release(pool, data);
     }
 }
 ```
 
-Option B — Keep engine-level pool as pass-through (minimal change):
-```rust
-// eval_exec_ir still takes pool: &mut BufferPool
-// Engine::buffer_pool now delegates to backend.buffers
-// Requires BufferPool to be the same type in both crates
-```
-
-**Recommended: Option A** — cleaner separation. The `TensorBackend` trait gets
-one new method with a default no-op implementation. GPU backends ignore it.
-`eval_exec_ir` calls `backend.reclaim_buffer(tensor)` instead of
-`pool.return_buffer(extract_host_bytes(tensor))`.
+**Update `eval_exec_ir`:**
 
 ```rust
-// tenferro/src/exec.rs — CHANGED
+// tenferro/src/exec.rs
 
 pub fn eval_exec_ir<B: TensorBackend>(
     backend: &mut B,
@@ -398,12 +420,17 @@ pub fn eval_exec_ir<B: TensorBackend>(
     inputs: Vec<Tensor>,
     // pool parameter REMOVED
 ) -> Result<Vec<Tensor>> {
-    // ...
+    let mut slots: Vec<Option<Tensor>> = vec![None; program.n_slots];
+    for (i, tensor) in inputs.into_iter().enumerate() {
+        slots[program.input_slots[i]] = Some(tensor);
+    }
+
     for inst in &program.instructions {
         let result = match &inst.op { /* ... unchanged ... */ };
         slots[inst.output_slots[0]] = Some(result);
         reclaim_last_use_inputs(&mut slots, inst, backend);
     }
+
     // ...
 }
 
@@ -422,31 +449,28 @@ fn reclaim_last_use_inputs<B: TensorBackend>(
 }
 ```
 
-### Step 5: Remove engine-level `BufferPool`
+### Step 6: Remove engine-level `BufferPool`
 
 - Delete `tenferro/src/buffer_pool.rs`
-- Remove `buffer_pool` field from `Engine`
-- Remove `buffer_pool_len()` public API (or delegate to backend)
-- Update all callers of `eval_exec_ir` to drop the pool parameter
-
-**Files affected:**
-- `tenferro/src/lib.rs` — remove `pub mod buffer_pool`
-- `tenferro/src/engine.rs` — remove `buffer_pool` field, update `eval` calls
-- `tenferro/src/traced.rs` — update `eval_exec_ir` call sites
-- `tenferro/tests/cpu_backend.rs` — update pool tests
+- Remove `pub mod buffer_pool` from `tenferro/src/lib.rs`
+- Remove `buffer_pool: BufferPool` field from `Engine`
+- Remove `buffer_pool_len()` public API (or delegate to
+  `self.backend.buffers.len()`)
+- Update `eval_exec_ir` call sites in `tenferro/src/traced.rs` and
+  `tenferro/src/engine.rs` to drop the pool parameter
 
 ## Scope
 
 **In scope:**
-- `BufferPool` in `tenferro-tensor` with alignment-aware bins
+- Typed `BufferPool` in `tenferro-tensor` (f64, f32, c64, c32 pools)
 - `CpuBackend.buffers` field
-- Pool-aware `dot_general` (output buffer from pool)
+- `install_with_pool` helper for rayon + pool access
+- Pool-aware `dot_general` (uninit output buffer from pool)
 - `TensorBackend::reclaim_buffer` for reclaim path
 - Remove engine-level `BufferPool`
 
 **Out of scope (future work):**
-- Pool for `canonical_gemm_layout` copy buffers (the `typed_transpose` calls
-  inside the fallback path — marked with TODO above)
+- Pool for `canonical_gemm_layout` copy buffers (typed_transpose in fallback)
 - Pool for `ExecOp::Permute` (transpose in exec IR)
 - Linalg operations (svd, qr, cholesky, etc.)
 - Elementwise and reduction operations
@@ -460,29 +484,33 @@ fn reclaim_last_use_inputs<B: TensorBackend>(
 
 ### Pool behavior tests (new)
 - `buffer_pool::tests::acquire_release_reuse` — acquire, release, re-acquire
-  returns same capacity buffer.
-- `buffer_pool::tests::alignment_separation` — f64 buffer (align 8) not reused
-  for f32 request (align 4).
-- `buffer_pool::tests::best_fit` — pool with [100, 200, 300] byte buffers;
-  request for 150 returns the 200-byte buffer.
-- `buffer_pool::tests::fresh_alloc_fallback` — when pool is empty, fresh
-  allocation succeeds.
+  returns same capacity buffer (check pointer equality).
+- `buffer_pool::tests::best_fit` — pool with buffers of capacity [100, 200, 300];
+  request for 150 returns the capacity-200 buffer.
+- `buffer_pool::tests::type_separation` — f64 and f32 pools are independent.
+- `buffer_pool::tests::fresh_alloc_fallback` — empty pool allocates fresh.
+- `buffer_pool::tests::uninit_no_zero_fill` — acquired buffer contents are not
+  necessarily zero (test that we're not wasting cycles on initialization).
 - Integration: repeated `einsum("bij,bjk,bkl->bil", A, B, C)` calls; after
   first call, `backend.buffers.len() > 0` (buffers recycled).
 
 ### Performance (manual/benchmark)
 - Steady-state: no new allocations after first einsum evaluation.
-- Repeated N-ary einsum should show reduced allocation overhead.
+- No zero-initialization overhead for GEMM output buffers.
 
 ## Migration checklist
 
-1. Create `tenferro-tensor/src/buffer_pool.rs` with `BufferPool`
-2. Add `buffers: BufferPool` to `CpuBackend`
-3. Add `dot_general_pooled` in `gemm/mod.rs`
-4. Wire `CpuBackend::dot_general` to use `dot_general_pooled`
-5. Add `reclaim_buffer` to `TensorBackend` trait (default no-op)
-6. Implement `reclaim_buffer` for `CpuBackend`
-7. Update `eval_exec_ir` to use `backend.reclaim_buffer` instead of pool param
-8. Remove `tenferro/src/buffer_pool.rs` and engine-level pool
-9. Update all call sites and tests
-10. Add new pool unit tests and integration test
+1. Create `tenferro-tensor/src/buffer_pool.rs` with typed `BufferPool` +
+   `PoolScalar` trait
+2. Add `pub mod buffer_pool` to `tenferro-tensor/src/lib.rs`
+3. Add `buffers: BufferPool` to `CpuBackend`
+4. Add `install_with_pool` helper to `CpuBackend`
+5. Add `dot_general_pooled` / `typed_faer_gemm_pooled` in `gemm/mod.rs`
+6. Wire `CpuBackend::dot_general` to use `install_with_pool` +
+   `dot_general_pooled`
+7. Add `reclaim_buffer` to `TensorBackend` trait (default no-op)
+8. Implement `reclaim_buffer` for `CpuBackend`
+9. Update `eval_exec_ir` to use `backend.reclaim_buffer`, drop pool param
+10. Remove `tenferro/src/buffer_pool.rs` and engine-level pool
+11. Update all call sites in `engine.rs`, `traced.rs`, tests
+12. Add new pool unit tests and integration test
