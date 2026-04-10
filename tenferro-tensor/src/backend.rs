@@ -179,6 +179,21 @@ pub trait TensorBackend {
     fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor>;
+
+    /// Reclaim a tensor buffer for backend-specific reuse.
+    ///
+    /// Backends that do not pool buffers can ignore the tensor and let it drop.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// backend.reclaim_buffer(tensor);
+    /// ```
+    fn reclaim_buffer(&mut self, _tensor: Tensor) {}
 }
 
 /// Algebra-generic backend over typed tensors.

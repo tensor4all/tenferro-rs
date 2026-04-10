@@ -280,12 +280,7 @@ impl TracedTensor {
 
         // Use compile cache: store or retrieve the ExecProgram.
         let cached_exec = engine.get_or_compile(exec);
-        let mut results = eval_exec_ir(
-            &mut engine.backend,
-            &cached_exec,
-            input_tensors,
-            &mut engine.buffer_pool,
-        )?;
+        let mut results = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
         if results.len() != 1 {
             return Err(Error::Internal(format!(
                 "expected 1 output, got {}",
@@ -1200,12 +1195,7 @@ pub fn eval_all<B: TensorBackend>(
     }
 
     let cached_exec = engine.get_or_compile(exec);
-    let results: Vec<Tensor> = eval_exec_ir(
-        &mut engine.backend,
-        &cached_exec,
-        input_tensors,
-        &mut engine.buffer_pool,
-    )?;
+    let results: Vec<Tensor> = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
         tt.data = Some(result.clone());

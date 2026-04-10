@@ -1,5 +1,6 @@
 use num_traits::{One, Zero};
 
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::DotGeneralConfig;
 use crate::cpu::structural::typed_transpose;
 use crate::types::{col_major_strides, Buffer, TypedTensor};
@@ -351,15 +352,16 @@ fn analyse_gemm<T>(
 
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn dot_general<T>(
+    buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_faer_gemm(lhs, rhs, config) {
+    if let Some(result) = typed_faer_gemm(buffers, lhs, rhs, config) {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -374,20 +376,23 @@ where
     } else {
         std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
-    typed_faer_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    typed_faer_gemm(buffers, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
+        Error::BackendFailure {
+            op: "dot_general",
+            message: "CPU GEMM requires host-backed canonical inputs".into(),
+        }
     })
 }
 
 #[cfg(feature = "cpu-faer")]
 fn typed_faer_gemm<T>(
+    buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
 ) -> Option<TypedTensor<T>>
 where
-    T: FaerGemm + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
     let out_n: usize = dims.out_shape.iter().product();
@@ -408,7 +413,8 @@ where
         Buffer::Backend(_) => return None,
     };
 
-    let mut out_data = vec![T::zero(); out_n];
+    // SAFETY: this GEMM path uses beta = 0 and overwrites every output element.
+    let mut out_data: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
@@ -444,15 +450,16 @@ where
 
 #[cfg(feature = "cpu-blas")]
 pub(crate) fn dot_general<T>(
+    buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
     validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_blas_gemm(lhs, rhs, config) {
+    if let Some(result) = typed_blas_gemm(buffers, lhs, rhs, config) {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -467,20 +474,23 @@ where
     } else {
         std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
-    typed_blas_gemm(&lhs_canon, &rhs_canon, &new_config).ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    typed_blas_gemm(buffers, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
+        Error::BackendFailure {
+            op: "dot_general",
+            message: "CPU GEMM requires host-backed canonical inputs".into(),
+        }
     })
 }
 
 #[cfg(feature = "cpu-blas")]
 fn typed_blas_gemm<T>(
+    buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
 ) -> Option<TypedTensor<T>>
 where
-    T: BlasGemm + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
     let out_n: usize = dims.out_shape.iter().product();
@@ -505,7 +515,8 @@ where
         Buffer::Backend(_) => return None,
     };
 
-    let mut out = vec![T::zero(); dims.out_shape.iter().product()];
+    // SAFETY: each batch GEMM writes its full `c_block` slice with beta = 0.
+    let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let a_block = dims.m * dims.k;
     let b_block = dims.k * dims.n;
     let c_block = dims.m * dims.n;

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tenferro::buffer_pool::BufferPool;
 
 use chainrules_core::ADKey;
 use computegraph::compile::compile;
@@ -327,8 +326,7 @@ fn eval_fragment_outputs(
         })
         .collect();
     let mut backend = CpuBackend::new();
-    let mut pool = BufferPool::new();
-    eval_exec_ir(&mut backend, &exec, inputs, &mut pool).unwrap()
+    eval_exec_ir(&mut backend, &exec, inputs).unwrap()
 }
 
 fn scalar_f64_tensor(value: f64) -> Tensor {

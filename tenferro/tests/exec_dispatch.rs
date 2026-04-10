@@ -1,5 +1,4 @@
 use num_complex::Complex64;
-use tenferro::buffer_pool::BufferPool;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_algebra::Standard;
@@ -82,6 +81,7 @@ fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
 struct FakeTensorBackend {
     calls: Vec<&'static str>,
     error_on: Option<&'static str>,
+    reclaimed: usize,
 }
 
 impl FakeTensorBackend {
@@ -330,6 +330,10 @@ impl TensorBackend for FakeTensorBackend {
     fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("solve", 44.0)
     }
+
+    fn reclaim_buffer(&mut self, _tensor: Tensor) {
+        self.reclaimed += 1;
+    }
 }
 
 #[test]
@@ -456,9 +460,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         let inputs = (0..n_inputs)
             .map(|idx| scalar_tensor(idx as f64 + 1.0))
             .collect();
-        let mut pool = BufferPool::new();
-
-        let outputs = eval_exec_ir(&mut backend, &program, inputs, &mut pool).unwrap();
+        let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
 
         assert_eq!(backend.calls, vec![expected_call]);
         assert_eq!(outputs.len(), 1);
@@ -469,7 +471,6 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
 #[test]
 fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
     let mut backend = FakeTensorBackend::default();
-    let mut pool = BufferPool::new();
     let program = ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::Constant {
@@ -486,7 +487,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![]).unwrap();
 
     assert!(backend.calls.is_empty());
     assert_eq!(outputs.len(), 1);
@@ -496,7 +497,6 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
 #[test]
 fn eval_exec_ir_materializes_complex_constants() {
     let mut backend = FakeTensorBackend::default();
-    let mut pool = BufferPool::new();
     let value = Complex64::new(1.5, -2.0);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&value.re.to_le_bytes());
@@ -517,7 +517,7 @@ fn eval_exec_ir_materializes_complex_constants() {
         n_slots: 1,
     };
 
-    let outputs = eval_exec_ir(&mut backend, &program, vec![], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![]).unwrap();
 
     assert!(backend.calls.is_empty());
     assert_eq!(outputs.len(), 1);
@@ -529,13 +529,12 @@ fn eval_exec_ir_propagates_backend_errors() {
     let mut backend = FakeTensorBackend {
         calls: Vec::new(),
         error_on: Some("add"),
+        reclaimed: 0,
     };
-    let mut pool = BufferPool::new();
     let err = eval_exec_ir(
         &mut backend,
         &single_instruction_program(ExecOp::Add, 2),
         vec![scalar_tensor(1.0), scalar_tensor(2.0)],
-        &mut pool,
     )
     .unwrap_err();
 
@@ -549,7 +548,6 @@ fn eval_exec_ir_propagates_backend_errors() {
 #[test]
 fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
     let mut backend = FakeTensorBackend::default();
-    let mut pool = BufferPool::new();
     let program = ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::Add,
@@ -563,8 +561,7 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
         n_slots: 3,
     };
 
-    let err =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap_err();
+    let err = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap_err();
 
     assert!(backend.calls.is_empty());
     assert!(matches!(
@@ -592,7 +589,6 @@ fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecPr
 #[test]
 fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     let mut backend = FakeTensorBackend::default();
-    let mut pool = BufferPool::new();
 
     // LU: 1 input, 4 outputs
     let program = multi_output_program(
@@ -602,8 +598,7 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         4,
     );
-    let outputs =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["lu"]);
     assert_eq!(outputs.len(), 4);
     assert_eq!(scalar_value(&outputs[0]), 40.75);
@@ -612,7 +607,6 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     assert_eq!(scalar_value(&outputs[3]), 41.5);
 
     backend.calls.clear();
-    pool = BufferPool::new();
 
     // SVD: 1 input, 2 outputs (fake returns 2)
     let program = multi_output_program(
@@ -622,15 +616,13 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["svd"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 42.0);
     assert_eq!(scalar_value(&outputs[1]), 42.5);
 
     backend.calls.clear();
-    pool = BufferPool::new();
 
     // QR: 1 input, 2 outputs
     let program = multi_output_program(
@@ -640,15 +632,13 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["qr"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 43.0);
     assert_eq!(scalar_value(&outputs[1]), 43.5);
 
     backend.calls.clear();
-    pool = BufferPool::new();
 
     // Eigh: 1 input, 2 outputs
     let program = multi_output_program(
@@ -658,15 +648,13 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["eigh"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_value(&outputs[0]), 44.0);
     assert_eq!(scalar_value(&outputs[1]), 44.5);
 
     backend.calls.clear();
-    pool = BufferPool::new();
 
     // Eig: 1 input, 2 outputs
     let program = multi_output_program(
@@ -676,8 +664,7 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
         1,
         2,
     );
-    let outputs =
-        eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)], &mut pool).unwrap();
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["eig"]);
     assert_eq!(outputs.len(), 2);
     assert_eq!(scalar_c64_value(&outputs[0]), Complex64::new(45.0, 0.5));
@@ -709,19 +696,17 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
     };
 
     let mut backend = FakeTensorBackend::default();
-    let mut pool = BufferPool::new();
     let outputs = eval_exec_ir(
         &mut backend,
         &program,
         vec![scalar_tensor(1.0), scalar_tensor(2.0)],
-        &mut pool,
     )
     .unwrap();
 
     assert_eq!(backend.calls, vec!["add", "neg"]);
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 3.0);
-    assert_eq!(pool.len(), 3);
+    assert_eq!(backend.reclaimed, 3);
 }
 
 #[test]

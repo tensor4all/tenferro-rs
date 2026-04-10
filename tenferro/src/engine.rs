@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::buffer_pool::BufferPool;
 use super::exec::ExecProgram;
 use tenferro_einsum::ContractionTree;
-use tenferro_tensor::TensorBackend;
+use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
 
 /// Cache key derived from the compiled graph topology.
 ///
@@ -40,7 +39,7 @@ fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
     }
 }
 
-/// Execution engine holding the backend, compile cache, and buffer pool.
+/// Execution engine holding the backend and compile caches.
 ///
 /// # Examples
 ///
@@ -53,7 +52,6 @@ fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 pub struct Engine<B: TensorBackend> {
     pub(crate) backend: B,
     pub(crate) compile_cache: HashMap<CacheKey, ExecProgram>,
-    pub(crate) buffer_pool: BufferPool,
     pub(crate) einsum_cache: HashMap<(String, Vec<Vec<usize>>), Arc<ContractionTree>>,
 }
 
@@ -72,23 +70,8 @@ impl<B: TensorBackend> Engine<B> {
         Self {
             backend,
             compile_cache: HashMap::new(),
-            buffer_pool: BufferPool::new(),
             einsum_cache: HashMap::new(),
         }
-    }
-
-    /// Number of reusable host buffers currently retained by the engine.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro::{CpuBackend, Engine};
-    ///
-    /// let engine = Engine::new(CpuBackend::new());
-    /// assert_eq!(engine.buffer_pool_len(), 0);
-    /// ```
-    pub fn buffer_pool_len(&self) -> usize {
-        self.buffer_pool.len()
     }
 
     /// Number of cached einsum contraction trees currently retained by the engine.
@@ -112,5 +95,21 @@ impl<B: TensorBackend> Engine<B> {
     pub(crate) fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
         let key = compute_cache_key(&exec);
         self.compile_cache.entry(key).or_insert(exec).clone()
+    }
+}
+
+impl Engine<CpuBackend> {
+    /// Number of reusable typed host buffers currently retained by the CPU backend.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// assert_eq!(engine.buffer_pool_len(), 0);
+    /// ```
+    pub fn buffer_pool_len(&self) -> usize {
+        self.backend.buffer_pool_len()
     }
 }
