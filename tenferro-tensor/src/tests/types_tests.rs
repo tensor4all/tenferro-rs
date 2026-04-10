@@ -1,10 +1,11 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, Tensor, TypedTensor,
+    LayoutOrder, MemoryKind, Placement, Tensor, TypedTensor,
 };
 use crate::Error;
 
@@ -34,6 +35,97 @@ fn typed_tensor_rank_zero_access_and_mutation_work() {
 }
 
 #[test]
+fn cloned_host_tensors_use_copy_on_write_for_mutation() {
+    let original = TypedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let mut cloned = original.clone();
+
+    cloned.host_data_mut()[0] = 9.0;
+
+    assert_eq!(original.host_data(), &[1.0, 2.0]);
+    assert_eq!(cloned.host_data(), &[9.0, 2.0]);
+}
+
+#[test]
+fn typed_tensor_constructors_populate_stride_metadata() {
+    let scalar = TypedTensor::from_vec(vec![], vec![1.25_f64]);
+    assert_eq!(scalar.strides(), &[] as &[isize]);
+    assert_eq!(scalar.offset(), 0);
+    assert!(scalar.is_contiguous_col_major());
+    assert!(scalar.is_contiguous_row_major());
+
+    let matrix = TypedTensor::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(matrix.strides(), &[1, 2]);
+    assert_eq!(matrix.offset(), 0);
+    assert!(matrix.is_contiguous_col_major());
+    assert!(!matrix.is_contiguous_row_major());
+}
+
+#[test]
+fn typed_tensor_contiguity_predicates_distinguish_layouts() {
+    let col_major = TypedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    assert!(col_major.is_contiguous_col_major());
+    assert!(!col_major.is_contiguous_row_major());
+
+    let row_major = TypedTensor {
+        buffer: Buffer::Host(Arc::new(vec![1.0_f64; 6])),
+        shape: vec![2, 3],
+        strides: vec![3, 1],
+        offset: 0,
+        placement: Placement {
+            memory_kind: MemoryKind::UnpinnedHost,
+            resident_device: None,
+        },
+    };
+    assert!(!row_major.is_contiguous_col_major());
+    assert!(row_major.is_contiguous_row_major());
+
+    let non_contiguous = TypedTensor {
+        buffer: Buffer::Host(Arc::new(vec![1.0_f64; 12])),
+        shape: vec![2, 3],
+        strides: vec![2, 4],
+        offset: 1,
+        placement: Placement {
+            memory_kind: MemoryKind::UnpinnedHost,
+            resident_device: None,
+        },
+    };
+    assert!(!non_contiguous.is_contiguous_col_major());
+    assert!(!non_contiguous.is_contiguous_row_major());
+}
+
+#[test]
+fn typed_tensor_to_contiguous_supports_row_and_column_major() {
+    let source = TypedTensor {
+        buffer: Buffer::Host(Arc::new(vec![
+            1.0_f64, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0, 5.0, 0.0, 6.0,
+        ])),
+        shape: vec![2, 3],
+        strides: vec![2, 4],
+        offset: 0,
+        placement: Placement {
+            memory_kind: MemoryKind::UnpinnedHost,
+            resident_device: None,
+        },
+    };
+
+    let col_major = source.to_contiguous(LayoutOrder::ColumnMajor).unwrap();
+    assert!(col_major.is_contiguous_col_major());
+    assert_eq!(col_major.strides(), &[1, 2]);
+    assert_eq!(*col_major.get(&[0, 0]), 1.0);
+    assert_eq!(*col_major.get(&[1, 0]), 2.0);
+    assert_eq!(*col_major.get(&[0, 1]), 3.0);
+    assert_eq!(*col_major.get(&[1, 2]), 6.0);
+
+    let row_major = source.to_contiguous(LayoutOrder::RowMajor).unwrap();
+    assert!(row_major.is_contiguous_row_major());
+    assert_eq!(row_major.strides(), &[3, 1]);
+    assert_eq!(*row_major.get(&[0, 0]), 1.0);
+    assert_eq!(*row_major.get(&[1, 0]), 2.0);
+    assert_eq!(*row_major.get(&[0, 1]), 3.0);
+    assert_eq!(*row_major.get(&[1, 2]), 6.0);
+}
+
+#[test]
 fn typed_tensor_panics_cover_length_and_indexing_errors() {
     let mismatched = catch_unwind(|| TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0]));
     assert!(mismatched.is_err());
@@ -58,6 +150,8 @@ fn backend_buffers_panic_when_host_access_is_requested() {
     let tensor = TypedTensor {
         buffer: Buffer::Backend(BufferHandle::<f64>::new(7)),
         shape: vec![1],
+        strides: vec![1],
+        offset: 0,
         placement: placement.clone(),
     };
     assert_eq!(
@@ -71,6 +165,8 @@ fn backend_buffers_panic_when_host_access_is_requested() {
     let mut mutable_tensor = TypedTensor {
         buffer: Buffer::Backend(BufferHandle::<f64>::new(8)),
         shape: vec![1],
+        strides: vec![1],
+        offset: 0,
         placement,
     };
     let host_data_mut = catch_unwind(AssertUnwindSafe(|| {

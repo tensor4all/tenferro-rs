@@ -6,8 +6,8 @@ use tenferro_algebra::Standard;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor, TensorBackend, TypedTensor,
+    CompareDir, DType, DotGeneralConfig, GatherConfig, LayoutOrder, PadConfig, ScatterConfig,
+    SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
@@ -20,16 +20,24 @@ fn scalar_tensor(value: f64) -> Tensor {
 
 fn scalar_value(tensor: &Tensor) -> f64 {
     match tensor {
-        Tensor::F64(inner) => inner.host_data()[0],
+        Tensor::F64(inner) => *inner.get(&[]),
         other => panic!("expected scalar f64 tensor, got {other:?}"),
     }
 }
 
 fn scalar_c64_value(tensor: &Tensor) -> Complex64 {
     match tensor {
-        Tensor::C64(inner) => inner.host_data()[0],
+        Tensor::C64(inner) => *inner.get(&[]),
         other => panic!("expected scalar c64 tensor, got {other:?}"),
     }
+}
+
+fn logical_f64_data(tensor: &TypedTensor<f64>) -> Vec<f64> {
+    tensor
+        .to_contiguous(LayoutOrder::ColumnMajor)
+        .unwrap()
+        .host_data()
+        .to_vec()
 }
 
 fn typed_scalar(value: f64) -> TypedTensor<f64> {
@@ -734,7 +742,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
         vec![typed_scalar(2.0), typed_scalar(3.0)],
     )
     .unwrap();
-    assert_eq!(add_out[0].host_data(), &[5.0]);
+    assert_eq!(logical_f64_data(&add_out[0]), &[5.0]);
 
     let mul_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -742,7 +750,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
         vec![typed_scalar(2.0), typed_scalar(3.0)],
     )
     .unwrap();
-    assert_eq!(mul_out[0].host_data(), &[6.0]);
+    assert_eq!(logical_f64_data(&mul_out[0]), &[6.0]);
 
     let reduce_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -751,7 +759,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     )
     .unwrap();
     assert_eq!(reduce_out[0].shape, vec![2]);
-    assert_eq!(reduce_out[0].host_data(), &[3.0, 7.0]);
+    assert_eq!(logical_f64_data(&reduce_out[0]), &[3.0, 7.0]);
 
     let permute_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -763,7 +771,10 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     )
     .unwrap();
     assert_eq!(permute_out[0].shape, vec![3, 2]);
-    assert_eq!(permute_out[0].host_data(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    assert_eq!(
+        logical_f64_data(&permute_out[0]),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
 
     let reshape_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -780,7 +791,10 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     )
     .unwrap();
     assert_eq!(reshape_out[0].shape, vec![3, 2]);
-    assert_eq!(reshape_out[0].host_data(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(
+        logical_f64_data(&reshape_out[0]),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
 
     let broadcast_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -796,7 +810,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     .unwrap();
     assert_eq!(broadcast_out[0].shape, vec![3, 2]);
     assert_eq!(
-        broadcast_out[0].host_data(),
+        logical_f64_data(&broadcast_out[0]).as_slice(),
         &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
     );
 
@@ -816,7 +830,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     )
     .unwrap();
     assert_eq!(extract_out[0].shape, vec![3]);
-    assert_eq!(extract_out[0].host_data(), &[1.0, 5.0, 9.0]);
+    assert_eq!(logical_f64_data(&extract_out[0]), &[1.0, 5.0, 9.0]);
 
     let embed_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
@@ -832,7 +846,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     .unwrap();
     assert_eq!(embed_out[0].shape, vec![3, 3]);
     assert_eq!(
-        embed_out[0].host_data(),
+        logical_f64_data(&embed_out[0]).as_slice(),
         &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]
     );
 
@@ -856,7 +870,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     )
     .unwrap();
     assert_eq!(gemm_out[0].shape, vec![2, 2]);
-    assert_eq!(gemm_out[0].host_data(), &[23.0, 34.0, 31.0, 46.0]);
+    assert_eq!(logical_f64_data(&gemm_out[0]), &[23.0, 34.0, 31.0, 46.0]);
 }
 
 #[test]

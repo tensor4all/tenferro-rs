@@ -11,7 +11,7 @@ use crate::cpu::{
     extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
     reduce_sum, reshape, scatter, select, sign, transpose, tril, triu, CpuBackend,
 };
-use crate::types::{DType, Tensor, TypedTensor};
+use crate::types::{DType, LayoutOrder, Tensor, TypedTensor};
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
@@ -307,12 +307,38 @@ fn test_reshape() {
     ));
     let r = reshape(&t, &[3, 2]).unwrap();
     assert_eq!(r.shape(), &[3, 2]);
+    match &r {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[1, 3]);
+            assert_eq!(inner.offset(), 0);
+            assert!(inner.is_contiguous_col_major());
+        }
+        _ => panic!("expected F64 tensor"),
+    }
     assert_eq!(get_f64(&r, &[0, 0]), 1.0);
     assert_eq!(get_f64(&r, &[1, 0]), 2.0);
     assert_eq!(get_f64(&r, &[2, 0]), 3.0);
     assert_eq!(get_f64(&r, &[0, 1]), 4.0);
     assert_eq!(get_f64(&r, &[1, 1]), 5.0);
     assert_eq!(get_f64(&r, &[2, 1]), 6.0);
+}
+
+#[test]
+fn test_reshape_preserves_row_major_metadata() {
+    let source = TypedTensor::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let row_major = source.to_contiguous(LayoutOrder::RowMajor).unwrap();
+    assert!(row_major.is_contiguous_row_major());
+
+    let r = reshape(&Tensor::F64(row_major), &[3, 2]).unwrap();
+    assert_eq!(r.shape(), &[3, 2]);
+    match &r {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[2, 1]);
+            assert_eq!(inner.offset(), 0);
+            assert!(inner.is_contiguous_row_major());
+        }
+        _ => panic!("expected F64 tensor"),
+    }
 }
 
 #[test]
@@ -783,6 +809,15 @@ fn test_transpose() {
     ));
     let tr = transpose(&t, &[1, 0]).unwrap();
     assert_eq!(tr.shape(), &[3, 2]);
+    match &tr {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[2, 1]);
+            assert_eq!(inner.offset(), 0);
+            assert!(!inner.is_contiguous_col_major());
+            assert!(inner.is_contiguous_row_major());
+        }
+        _ => panic!("expected F64 tensor"),
+    }
     assert_eq!(get_f64(&tr, &[0, 0]), 1.0);
     assert_eq!(get_f64(&tr, &[0, 1]), 2.0);
     assert_eq!(get_f64(&tr, &[1, 0]), 3.0);
@@ -796,6 +831,13 @@ fn test_broadcast_in_dim() {
     let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
     let broadcast = broadcast_in_dim(&scalar, &[3], &[]).unwrap();
     assert_eq!(broadcast.shape(), &[3]);
+    match &broadcast {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[0]);
+            assert_eq!(inner.offset(), 0);
+        }
+        _ => panic!("expected F64 tensor"),
+    }
     assert_eq!(get_f64(&broadcast, &[0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1]), 5.0);
     assert_eq!(get_f64(&broadcast, &[2]), 5.0);
@@ -803,10 +845,84 @@ fn test_broadcast_in_dim() {
     let v = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
     let m = broadcast_in_dim(&v, &[3, 2], &[0]).unwrap();
     assert_eq!(m.shape(), &[3, 2]);
+    match &m {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[1, 0]);
+            assert_eq!(inner.offset(), 0);
+        }
+        _ => panic!("expected F64 tensor"),
+    }
     for j in 0..2 {
         assert_eq!(get_f64(&m, &[0, j]), 1.0);
         assert_eq!(get_f64(&m, &[1, j]), 2.0);
         assert_eq!(get_f64(&m, &[2, j]), 3.0);
+    }
+}
+
+#[test]
+fn test_reshape_accepts_fully_broadcast_scalar_view() {
+    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
+    let broadcast = broadcast_in_dim(&scalar, &[3, 2], &[]).unwrap();
+    let reshaped = reshape(&broadcast, &[6]).unwrap();
+
+    assert_eq!(reshaped.shape(), &[6]);
+    match &reshaped {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[0]);
+            assert_eq!(inner.offset(), 0);
+        }
+        _ => panic!("expected f64 tensor"),
+    }
+    for i in 0..6 {
+        assert_eq!(get_f64(&reshaped, &[i]), 5.0);
+    }
+}
+
+#[test]
+fn test_reshape_accepts_singleton_insertion_for_noncontiguous_view() {
+    let base = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2, 5],
+        (0..20).map(|idx| idx as f64).collect(),
+    ));
+    let transposed = transpose(&base, &[2, 0, 1]).unwrap();
+    let reshaped = reshape(&transposed, &[5, 1, 2, 2]).unwrap();
+
+    assert_eq!(reshaped.shape(), &[5, 1, 2, 2]);
+    match &reshaped {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[4, 0, 1, 2]);
+            assert_eq!(inner.offset(), 0);
+        }
+        _ => panic!("expected f64 tensor"),
+    }
+    for i in 0..5 {
+        for j in 0..2 {
+            for k in 0..2 {
+                assert_eq!(
+                    get_f64(&reshaped, &[i, 0, j, k]),
+                    get_f64(&transposed, &[i, j, k])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_reshape_materializes_mixed_stride_broadcast_input() {
+    let vector = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let non_contiguous = broadcast_in_dim(&vector, &[3, 2], &[0]).unwrap();
+    let reshaped = reshape(&non_contiguous, &[6]).unwrap();
+
+    assert_eq!(reshaped.shape(), &[6]);
+    match &reshaped {
+        Tensor::F64(inner) => {
+            assert_eq!(inner.strides(), &[1]);
+            assert_eq!(inner.offset(), 0);
+        }
+        _ => panic!("expected f64 tensor"),
+    }
+    for (index, expected) in [1.0, 2.0, 3.0, 1.0, 2.0, 3.0].into_iter().enumerate() {
+        assert_eq!(get_f64(&reshaped, &[index]), expected);
     }
 }
 
@@ -2005,6 +2121,30 @@ fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
 }
 
 #[test]
+fn test_real_cholesky_accepts_row_major_view() {
+    let base = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]));
+    let row_major_view = transpose(&base, &[1, 0]).unwrap();
+    match &row_major_view {
+        Tensor::F64(inner) => {
+            assert!(inner.is_contiguous_row_major());
+            assert!(!inner.is_contiguous_col_major());
+        }
+        _ => panic!("expected f64 tensor"),
+    }
+
+    let mut backend = CpuBackend::new();
+    let out = backend.cholesky(&row_major_view).unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    let l = matrix_f64_from_tensor(&out, 2, 2);
+    let recon = matmul_f64(&l, &transpose_f64(&l, 2, 2), 2, 2, 2);
+    let expected = matrix_f64_from_tensor(&base, 2, 2);
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-10);
+    }
+}
+
+#[test]
 fn test_real_solve_returns_error_for_singular_matrix() {
     let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
     let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 1.0]));
@@ -2263,6 +2403,26 @@ fn test_gather_with_implicit_index_vector_dim() {
     assert_eq!(get_f64(&out, &[0]), 50.0);
     assert_eq!(get_f64(&out, &[1]), 20.0);
     assert_eq!(get_f64(&out, &[2]), 10.0);
+}
+
+#[test]
+fn test_gather_accepts_transposed_index_tensor() {
+    let operand = Tensor::F64(TypedTensor::from_vec(vec![4], vec![10.0, 20.0, 30.0, 40.0]));
+    let starts_base = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![2.0, 0.0]));
+    let start_indices = transpose(&starts_base, &[1, 0]).unwrap();
+    let config = GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 0,
+        slice_sizes: vec![1],
+    };
+
+    let out = gather(&operand, &start_indices, &config);
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(get_f64(&out, &[0]), 30.0);
+    assert_eq!(get_f64(&out, &[1]), 10.0);
 }
 
 #[test]

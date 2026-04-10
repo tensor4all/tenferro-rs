@@ -1,8 +1,8 @@
 # Implementation Design Notes
 
-Implementation-focused design notes for specific subsystems. For high-level
-architecture see [Architecture](../architecture/). For normative specs see
-[Specification](../spec/).
+Implementation-focused design notes for specific subsystems. These notes are
+kept current with the code for low-level behavior and runtime contracts. For
+high-level structure see [Architecture](../architecture/).
 
 ## Core Design
 

@@ -1,5 +1,6 @@
 use num_complex::Complex64;
 use tenferro::Tensor;
+use tenferro_tensor::LayoutOrder;
 
 use crate::decode::{complex_tensor_data_as_col_major, tensor_data_as_col_major, TensorData};
 
@@ -50,9 +51,17 @@ pub fn compare_tensor(
     match actual {
         Tensor::F64(inner) => {
             let expected_data = tensor_data_as_col_major(expected)?;
-            allclose(inner.host_data(), &expected_data, rtol, atol)
+            let actual = inner
+                .to_contiguous(LayoutOrder::ColumnMajor)
+                .map_err(|err| err.to_string())?;
+            allclose(actual.host_data(), &expected_data, rtol, atol)
         }
-        Tensor::C64(inner) => compare_complex64(inner.host_data(), expected, rtol, atol),
+        Tensor::C64(inner) => {
+            let actual = inner
+                .to_contiguous(LayoutOrder::ColumnMajor)
+                .map_err(|err| err.to_string())?;
+            compare_complex64(actual.host_data(), expected, rtol, atol)
+        }
         _ => Err(format!(
             "unsupported actual tensor dtype {:?}",
             actual.dtype()

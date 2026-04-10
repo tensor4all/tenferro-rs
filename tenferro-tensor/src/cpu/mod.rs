@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 pub mod analytic;
 pub mod backend;
 pub mod elementwise;
@@ -23,10 +25,8 @@ pub use structural::{
 
 pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     match &tensor.buffer {
-        Buffer::Host(data) => {
-            let strides = col_major_strides(&tensor.shape);
-            StridedView::new(data, &tensor.shape, &strides, 0).expect("contiguous host tensor")
-        }
+        Buffer::Host(data) => StridedView::new(data, &tensor.shape, &tensor.strides, tensor.offset)
+            .expect("valid host tensor view"),
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
     }
 }
@@ -39,5 +39,11 @@ pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T>
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
-    TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
+    TypedTensor {
+        buffer: Buffer::Host(Arc::new(array.data().to_vec())),
+        shape: array.dims().to_vec(),
+        strides: array.strides().to_vec(),
+        offset: array.view().offset(),
+        placement: crate::types::default_placement(),
+    }
 }

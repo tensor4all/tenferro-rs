@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use strided_kernel::{col_major_strides, reduce_axis, zip_map2_into, StridedArray, StridedView};
 use tenferro_algebra::Semiring;
 
@@ -8,10 +10,8 @@ use crate::{Buffer, Tensor, TypedTensor};
 
 pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     match &tensor.buffer {
-        Buffer::Host(data) => {
-            let strides = col_major_strides(&tensor.shape);
-            StridedView::new(data, &tensor.shape, &strides, 0).expect("contiguous host tensor")
-        }
+        Buffer::Host(data) => StridedView::new(data, &tensor.shape, &tensor.strides, tensor.offset)
+            .expect("valid host tensor view"),
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
     }
 }
@@ -24,7 +24,13 @@ pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T>
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
-    TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
+    TypedTensor {
+        buffer: Buffer::Host(Arc::new(array.data().to_vec())),
+        shape: array.dims().to_vec(),
+        strides: array.strides().to_vec(),
+        offset: array.view().offset(),
+        placement: crate::types::default_placement(),
+    }
 }
 
 fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
@@ -253,10 +259,13 @@ pub trait SemiringBackend<Alg: Semiring> {
             .map(|(_, &dim)| dim)
             .collect();
 
-        let strides = col_major_strides(&input.shape);
-        let mut current =
-            StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
-                .map_err(|err| backend_failure("reduce_sum", err))?;
+        let mut current = StridedArray::from_parts(
+            input.host_data().to_vec(),
+            &input.shape,
+            &input.strides,
+            input.offset,
+        )
+        .map_err(|err| backend_failure("reduce_sum", err))?;
 
         let mut sorted_axes = axes.to_vec();
         sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
