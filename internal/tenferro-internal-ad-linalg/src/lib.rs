@@ -46,11 +46,9 @@ pub mod results {
 #[doc(hidden)]
 pub mod __typed_ad {
     pub use crate::ops::linalg::ad::{
-        cholesky_ad, det_ad, eig_ad, eigen_ad, inv_ad, lstsq_ad, lu_ad, matrix_exp_ad, norm_ad,
-        pinv_ad, qr_ad, slogdet_ad, solve_ad, solve_triangular_ad, svd_ad, CholeskyAdBuilder,
-        DetAdBuilder, EigAdBuilder, EigenAdBuilder, InvAdBuilder, LstsqAdBuilder, LuAdBuilder,
-        MatrixExpAdBuilder, NormAdBuilder, PinvAdBuilder, QrAdBuilder, SlogdetAdBuilder,
-        SolveAdBuilder, SolveTriangularAdBuilder, SvdAdBuilder,
+        cholesky_ad, det_ad, eig_ad, eigen_ad, inv_ad, lstsq_ad, lu_ad, qr_ad, slogdet_ad, svd_ad,
+        CholeskyAdBuilder, DetAdBuilder, EigAdBuilder, EigenAdBuilder, InvAdBuilder,
+        LstsqAdBuilder, LuAdBuilder, QrAdBuilder, SlogdetAdBuilder, SvdAdBuilder,
     };
 }
 

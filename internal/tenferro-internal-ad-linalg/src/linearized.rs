@@ -2535,11 +2535,20 @@ impl LinearizedOp<DynTensor> for SvdLinearized {
 }
 
 pub fn solve_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynValue> {
-    SolveOp.apply_one(&[a, b])
+    let primals: Vec<&DynTensor> = [a.primal(), b.primal()].to_vec();
+    let mut outputs = SolveOp.primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("SolveOp: expected one output".into())
+    })?))
 }
 
 pub fn lstsq_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynLstsqValues> {
-    let mut outputs = LstsqOp.apply(&[a, b])?;
+    let primals: Vec<&DynTensor> = [a.primal(), b.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = LstsqOp
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 2 {
         return Err(AutodiffError::InvalidArgument(format!(
             "LstsqOp expected 2 outputs, got {}",
@@ -2569,23 +2578,44 @@ pub fn lstsq_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynLstsqValues> 
 }
 
 pub fn solve_triangular_dyn_value(a: &DynValue, b: &DynValue, upper: bool) -> AdResult<DynValue> {
-    SolveTriangularOp::new(upper).apply_one(&[a, b])
+    let primals: Vec<&DynTensor> = [a.primal(), b.primal()].to_vec();
+    let mut outputs = SolveTriangularOp::new(upper).primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("SolveTriangularOp: expected one output".into())
+    })?))
 }
 
 pub fn norm_dyn_value(input: &DynValue, kind: NormKind) -> AdResult<DynValue> {
-    NormOp::new(kind).apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = NormOp::new(kind).primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("NormOp: expected one output".into())
+    })?))
 }
 
 pub fn det_dyn_value(input: &DynValue) -> AdResult<DynValue> {
-    DetOp.apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = DetOp.primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("DetOp: expected one output".into())
+    })?))
 }
 
 pub fn inv_dyn_value(input: &DynValue) -> AdResult<DynValue> {
-    InvOp.apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = InvOp.primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("InvOp: expected one output".into())
+    })?))
 }
 
 pub fn slogdet_dyn_value(input: &DynValue) -> AdResult<DynSlogdetValues> {
-    let mut outputs = SlogdetOp.apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = SlogdetOp
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 2 {
         return Err(AutodiffError::InvalidArgument(format!(
             "SlogdetOp expected 2 outputs, got {}",
@@ -2602,11 +2632,20 @@ pub fn slogdet_dyn_value(input: &DynValue) -> AdResult<DynSlogdetValues> {
 }
 
 pub fn cholesky_dyn_value(input: &DynValue) -> AdResult<DynValue> {
-    CholeskyOp.apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = CholeskyOp.primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("CholeskyOp: expected one output".into())
+    })?))
 }
 
 pub fn lu_dyn_value(input: &DynValue, pivot: LuPivot) -> AdResult<DynLuValues> {
-    let mut outputs = LuOp::new(pivot).apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = LuOp::new(pivot)
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 3 {
         return Err(AutodiffError::InvalidArgument(format!(
             "LuOp expected 3 outputs, got {}",
@@ -2626,7 +2665,12 @@ pub fn lu_dyn_value(input: &DynValue, pivot: LuPivot) -> AdResult<DynLuValues> {
 }
 
 pub fn qr_dyn_value(input: &DynValue) -> AdResult<DynQrValues> {
-    let mut outputs = QrOp.apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = QrOp
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 2 {
         return Err(AutodiffError::InvalidArgument(format!(
             "QrOp expected 2 outputs, got {}",
@@ -2643,7 +2687,12 @@ pub fn qr_dyn_value(input: &DynValue) -> AdResult<DynQrValues> {
 }
 
 pub fn svd_dyn_value(input: &DynValue, options: Option<SvdOptions>) -> AdResult<DynSvdValues> {
-    let mut outputs = SvdOp::new(options).apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = SvdOp::new(options)
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 3 {
         return Err(AutodiffError::InvalidArgument(format!(
             "SvdOp expected 3 outputs, got {}",
@@ -2663,7 +2712,12 @@ pub fn svd_dyn_value(input: &DynValue, options: Option<SvdOptions>) -> AdResult<
 }
 
 pub fn eig_dyn_value(input: &DynValue) -> AdResult<DynEigValues> {
-    let mut outputs = EigOp.apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = EigOp
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 2 {
         return Err(AutodiffError::InvalidArgument(format!(
             "EigOp expected 2 outputs, got {}",
@@ -2680,7 +2734,12 @@ pub fn eig_dyn_value(input: &DynValue) -> AdResult<DynEigValues> {
 }
 
 pub fn eigen_dyn_value(input: &DynValue) -> AdResult<DynEigenValues> {
-    let mut outputs = EigenOp.apply(&[input])?;
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs: Vec<DynValue> = EigenOp
+        .primal(&primals)?
+        .into_iter()
+        .map(tidu::Value::new)
+        .collect();
     if outputs.len() != 2 {
         return Err(AutodiffError::InvalidArgument(format!(
             "EigenOp expected 2 outputs, got {}",
@@ -2697,9 +2756,17 @@ pub fn eigen_dyn_value(input: &DynValue) -> AdResult<DynEigenValues> {
 }
 
 pub fn pinv_dyn_value(input: &DynValue, rcond: Option<f64>) -> AdResult<DynValue> {
-    PInvOp::new(rcond).apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = PInvOp::new(rcond).primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("PInvOp: expected one output".into())
+    })?))
 }
 
 pub fn matrix_exp_dyn_value(input: &DynValue) -> AdResult<DynValue> {
-    MatrixExpOp.apply_one(&[input])
+    let primals: Vec<&DynTensor> = [input.primal()].to_vec();
+    let mut outputs = MatrixExpOp.primal(&primals)?;
+    Ok(tidu::Value::new(outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("MatrixExpOp: expected one output".into())
+    })?))
 }

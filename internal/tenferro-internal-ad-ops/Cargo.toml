@@ -20,9 +20,13 @@ tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 tenferro-linalg = { path = "../../tenferro-linalg" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-prims = { path = "../../tenferro-prims" }
 chainrules-core.workspace = true
+chainrules.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
+tidu.workspace = true
 
 [dev-dependencies]
 tenferro-prims = { path = "../../tenferro-prims" }

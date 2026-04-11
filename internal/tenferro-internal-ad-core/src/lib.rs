@@ -9,6 +9,7 @@
 
 mod core;
 mod dyn_ad_tensor;
+pub mod linearized;
 pub mod ops;
 mod registry;
 mod tape;
@@ -22,6 +23,7 @@ pub use dyn_ad_tensor::{
     DynAdTensor, DynAdTensorBorrowTyped, DynAdTensorMutRef, DynAdTensorRef, DynAdTensorRefTyped,
     DynAdTensorTyped,
 };
+pub use linearized::{CheckpointHint, LinearizableOp, LinearizedOp};
 #[doc(hidden)]
 pub use ops::*;
 pub use registry::{register_closure_rule, register_mixed_rule, register_rule};
@@ -29,10 +31,7 @@ pub use tape::pullback;
 pub use tensor::AdTensor;
 #[doc(hidden)]
 pub use tensor::AdTensorSnapshot;
-pub use tidu::{
-    AdResult, AutodiffError, CheckpointHint, LinearizableOp, LinearizedOp, Schema, SlotSchema,
-    Value,
-};
+pub use tidu::{AdResult, AutodiffError, Schema, SlotSchema, Value};
 pub use value::{new_dyn_value, new_reverse_leaf, DynValue};
 
 #[cfg(test)]

@@ -8,8 +8,12 @@
 //! ```
 
 mod core;
+pub mod linearized;
+pub(crate) mod math;
 pub(crate) mod ops;
 mod runtime;
+pub(crate) mod structured;
+pub mod tape;
 
 pub(crate) use core::DynTensor;
 pub use tenferro_internal_ad_core::AdMode;
