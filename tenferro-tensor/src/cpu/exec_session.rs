@@ -20,24 +20,34 @@ macro_rules! delegate {
     };
 }
 
-/// Unary linalg returning single Tensor (f64/c64 only).
+/// Unary linalg returning single Tensor — faer path (returns Result).
+#[cfg(feature = "cpu-faer")]
 macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             match input {
-                #[cfg(feature = "cpu-faer")]
                 Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
                 })
                 .and_then(|r| r)
                 .map(Tensor::F64),
-                #[cfg(feature = "cpu-faer")]
                 Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
                 })
                 .and_then(|r| r)
                 .map(Tensor::C64),
-                #[cfg(feature = "cpu-blas")]
+                _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
+            }
+        }
+    };
+}
+
+/// Unary linalg returning single Tensor — blas path (no inner Result).
+#[cfg(feature = "cpu-blas")]
+macro_rules! linalg_single {
+    ($name:ident) => {
+        fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+            match input {
                 Tensor::F64(t) => {
                     catch_backend_panic(stringify!($name), || linalg::$name(self.buffers, t))
                         .map(Tensor::F64)
@@ -48,26 +58,36 @@ macro_rules! linalg_single {
     };
 }
 
-/// Unary linalg returning Vec<Tensor> (f64/c64 only).
+/// Unary linalg returning Vec<Tensor> — faer path.
+#[cfg(feature = "cpu-faer")]
 macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
-                #[cfg(feature = "cpu-faer")]
                 Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
                         .into_iter()
                         .map(Tensor::F64)
                         .collect()
                 }),
-                #[cfg(feature = "cpu-faer")]
                 Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
                         .into_iter()
                         .map(Tensor::C64)
                         .collect()
                 }),
-                #[cfg(feature = "cpu-blas")]
+                _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
+            }
+        }
+    };
+}
+
+/// Unary linalg returning Vec<Tensor> — blas path.
+#[cfg(feature = "cpu-blas")]
+macro_rules! linalg_multi {
+    ($name:ident) => {
+        fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+            match input {
                 Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.buffers, t)
                         .into_iter()
@@ -111,7 +131,7 @@ impl TensorExec for CpuExecSession<'_> {
     delegate!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose(input, perm));
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     delegate!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim(input, shape, dims));
-    delegate!(convert(input: &Tensor, to: crate::DType) => structural::convert(input, to));
+    delegate!(convert(input: &Tensor, to: crate::DType) => Ok(structural::convert(input, to)));
     delegate!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal(input, axis_a, axis_b));
     delegate!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal(input, axis_a, axis_b));
     delegate!(tril(input: &Tensor, k: i64) => structural::tril(input, k));
