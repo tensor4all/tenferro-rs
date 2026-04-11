@@ -107,3 +107,71 @@ pub(crate) fn resolve_and_guard(
     });
     (m_size, n_size)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn resolve_dim_const() {
+        assert_eq!(resolve_dim(&DimExpr::Const(7)), 7);
+    }
+
+    #[test]
+    fn resolve_dim_const_expr() {
+        let expr = DimExpr::min(DimExpr::Const(3), DimExpr::Const(5));
+        assert_eq!(resolve_dim(&expr), 3);
+    }
+
+    #[test]
+    fn resolve_and_guard_records_greater() {
+        let mut ctx = ShapeGuardContext::default();
+        let (m, n) = resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
+        assert_eq!((m, n), (5, 3));
+        assert_eq!(ctx.guards().len(), 1);
+        assert_eq!(
+            ctx.guards()[0],
+            ShapeGuard {
+                dim_a: 5,
+                dim_b: 3,
+                ordering: Ordering::Greater,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_and_guard_records_less() {
+        let mut ctx = ShapeGuardContext::default();
+        let (m, n) = resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
+        assert_eq!((m, n), (2, 4));
+        assert_eq!(ctx.guards()[0].ordering, Ordering::Less);
+    }
+
+    #[test]
+    fn resolve_and_guard_records_equal() {
+        let mut ctx = ShapeGuardContext::default();
+        let (m, n) = resolve_and_guard(&DimExpr::Const(3), &DimExpr::Const(3), &mut ctx);
+        assert_eq!((m, n), (3, 3));
+        assert_eq!(ctx.guards()[0].ordering, Ordering::Equal);
+    }
+
+    #[test]
+    fn guards_accumulate() {
+        let mut ctx = ShapeGuardContext::default();
+        resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
+        resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
+        assert_eq!(ctx.guards().len(), 2);
+        assert_eq!(ctx.guards()[0].ordering, Ordering::Greater);
+        assert_eq!(ctx.guards()[1].ordering, Ordering::Less);
+    }
+
+    #[test]
+    fn clear_guards_empties() {
+        let mut ctx = ShapeGuardContext::default();
+        resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
+        assert_eq!(ctx.guards().len(), 1);
+        ctx.clear_guards();
+        assert!(ctx.guards().is_empty());
+    }
+}
