@@ -2546,8 +2546,12 @@ pub fn lstsq_dyn_values(a: &DynValue, b: &DynValue) -> AdResult<DynLstsqValues> 
             outputs.len()
         )));
     }
-    let residuals = outputs.pop().unwrap();
-    let solution = outputs.pop().unwrap();
+    let residuals = outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("LstsqOp: missing residuals output".into())
+    })?;
+    let solution = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("LstsqOp: missing solution output".into()))?;
     let (rank, singular_values) = match a.primal() {
         DynTensor::F32(input) => lstsq_aux_t::<f32>(input),
         DynTensor::F64(input) => lstsq_aux_t::<f64>(input),
@@ -2588,8 +2592,12 @@ pub fn slogdet_dyn_value(input: &DynValue) -> AdResult<DynSlogdetValues> {
             outputs.len()
         )));
     }
-    let logabsdet = outputs.pop().unwrap();
-    let sign = outputs.pop().unwrap();
+    let logabsdet = outputs.pop().ok_or_else(|| {
+        AutodiffError::InvalidArgument("SlogdetOp: missing logabsdet output".into())
+    })?;
+    let sign = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("SlogdetOp: missing sign output".into()))?;
     Ok(DynSlogdetValues { sign, logabsdet })
 }
 
@@ -2605,9 +2613,15 @@ pub fn lu_dyn_value(input: &DynValue, pivot: LuPivot) -> AdResult<DynLuValues> {
             outputs.len()
         )));
     }
-    let u = outputs.pop().unwrap();
-    let l = outputs.pop().unwrap();
-    let p = outputs.pop().unwrap();
+    let u = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("LuOp: missing u output".into()))?;
+    let l = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("LuOp: missing l output".into()))?;
+    let p = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("LuOp: missing p output".into()))?;
     Ok(DynLuValues { p, l, u })
 }
 
@@ -2619,8 +2633,12 @@ pub fn qr_dyn_value(input: &DynValue) -> AdResult<DynQrValues> {
             outputs.len()
         )));
     }
-    let r = outputs.pop().unwrap();
-    let q = outputs.pop().unwrap();
+    let r = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("QrOp: missing r output".into()))?;
+    let q = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("QrOp: missing q output".into()))?;
     Ok(DynQrValues { q, r })
 }
 
@@ -2632,9 +2650,15 @@ pub fn svd_dyn_value(input: &DynValue, options: Option<SvdOptions>) -> AdResult<
             outputs.len()
         )));
     }
-    let vt = outputs.pop().unwrap();
-    let s = outputs.pop().unwrap();
-    let u = outputs.pop().unwrap();
+    let vt = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("SvdOp: missing vt output".into()))?;
+    let s = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("SvdOp: missing s output".into()))?;
+    let u = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("SvdOp: missing u output".into()))?;
     Ok(DynSvdValues { u, s, vt })
 }
 
@@ -2646,8 +2670,12 @@ pub fn eig_dyn_value(input: &DynValue) -> AdResult<DynEigValues> {
             outputs.len()
         )));
     }
-    let vectors = outputs.pop().unwrap();
-    let values = outputs.pop().unwrap();
+    let vectors = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("EigOp: missing vectors output".into()))?;
+    let values = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("EigOp: missing values output".into()))?;
     Ok(DynEigValues { values, vectors })
 }
 
@@ -2659,8 +2687,12 @@ pub fn eigen_dyn_value(input: &DynValue) -> AdResult<DynEigenValues> {
             outputs.len()
         )));
     }
-    let vectors = outputs.pop().unwrap();
-    let values = outputs.pop().unwrap();
+    let vectors = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("EigenOp: missing vectors output".into()))?;
+    let values = outputs
+        .pop()
+        .ok_or_else(|| AutodiffError::InvalidArgument("EigenOp: missing values output".into()))?;
     Ok(DynEigenValues { values, vectors })
 }
 
