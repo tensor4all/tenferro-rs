@@ -4,9 +4,29 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, Tensor, TypedTensor,
+    MemoryKind, Placement, Tensor, TensorScalar, TypedTensor,
 };
 use crate::Error;
+
+fn tensor_scalar_roundtrip<T>(shape: Vec<usize>, data: Vec<T>)
+where
+    T: TensorScalar + PartialEq + std::fmt::Debug,
+{
+    let tensor = T::into_tensor(shape.clone(), data.clone());
+
+    assert_eq!(tensor.shape(), shape.as_slice());
+    assert_eq!(T::try_as_slice(&tensor), Some(data.as_slice()));
+    assert_eq!(tensor.as_slice::<T>(), Some(data.as_slice()));
+}
+
+macro_rules! tensor_scalar_roundtrip_test {
+    ($name:ident, $ty:ty, $shape:expr, $data:expr) => {
+        #[test]
+        fn $name() {
+            tensor_scalar_roundtrip::<$ty>($shape, $data);
+        }
+    };
+}
 
 #[test]
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
@@ -100,6 +120,41 @@ fn tensor_shape_and_dtype_cover_all_variants() {
     assert_eq!(c32_tensor.dtype(), DType::C32);
     assert_eq!(c64_tensor.shape(), &[1, 1]);
     assert_eq!(c64_tensor.dtype(), DType::C64);
+}
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_f32,
+    f32,
+    vec![2],
+    vec![1.25_f32, -2.5_f32]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_f64,
+    f64,
+    vec![2, 1],
+    vec![1.25_f64, -2.5_f64]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_c32,
+    Complex32,
+    vec![2],
+    vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 3.5)]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_c64,
+    Complex64,
+    vec![1, 2],
+    vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 3.5)]
+);
+
+#[test]
+fn tensor_as_slice_returns_none_for_dtype_mismatch() {
+    let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]);
+
+    assert_eq!(tensor.as_slice::<f32>(), None);
 }
 
 #[test]

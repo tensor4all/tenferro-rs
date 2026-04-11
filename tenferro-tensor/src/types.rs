@@ -1,4 +1,4 @@
-use num_complex::Complex;
+use num_complex::{Complex, Complex32, Complex64};
 use num_traits::{One, Zero};
 
 /// Memory location for tensor storage.
@@ -132,6 +132,88 @@ pub enum DType {
     F64,
     C32,
     C64,
+}
+
+/// Sealed trait for scalar types that can be stored in a [`Tensor`].
+///
+/// This trait is implemented for `f64`, `f32`, [`Complex64`], and
+/// [`Complex32`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::TensorScalar;
+///
+/// let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0]);
+/// assert_eq!(tensor.as_slice::<f64>(), Some([1.0, 2.0].as_slice()));
+/// ```
+pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
+    /// Wrap typed data into a [`Tensor`] enum variant.
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
+
+    /// Try to borrow the host data from a [`Tensor`].
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
+}
+
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for f64 {}
+    impl Sealed for f32 {}
+    impl Sealed for num_complex::Complex64 {}
+    impl Sealed for num_complex::Complex32 {}
+}
+
+impl TensorScalar for f64 {
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::F64(TypedTensor::from_vec(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::F64(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+}
+
+impl TensorScalar for f32 {
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::F32(TypedTensor::from_vec(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::F32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+}
+
+impl TensorScalar for Complex64 {
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::C64(TypedTensor::from_vec(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::C64(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+}
+
+impl TensorScalar for Complex32 {
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::C32(TypedTensor::from_vec(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::C32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
 }
 
 /// Dynamic tensor enum over the supported scalar types.
@@ -443,6 +525,23 @@ impl Tensor {
             Tensor::C32(_) => DType::C32,
             Tensor::C64(_) => DType::C64,
         }
+    }
+
+    /// Try to borrow the host data as a typed slice.
+    ///
+    /// Returns `None` if the tensor dtype does not match `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TypedTensor};
+    ///
+    /// let t = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    /// assert_eq!(t.as_slice::<f64>(), Some([1.0, 2.0, 3.0].as_slice()));
+    /// assert_eq!(t.as_slice::<f32>(), None);
+    /// ```
+    pub fn as_slice<T: TensorScalar>(&self) -> Option<&[T]> {
+        T::try_as_slice(self)
     }
 }
 

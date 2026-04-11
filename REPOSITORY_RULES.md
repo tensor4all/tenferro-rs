@@ -40,6 +40,37 @@
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
 - Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
 
+## Documentation Policy
+
+### Source of Truth
+
+- **Source code** is the source of truth for internal design (op catalog, backend contract, AD rules, compilation pipeline).
+- **Online docs** are user-facing only — how to use the `tenferro` facade crate.
+- **AGENTS.md** is the entry point for developers and AI agents. It contains pointers to source code locations.
+- Do NOT duplicate source-code-level information in online docs. If it can be learned by reading the source, put a pointer instead of a copy.
+- Development assumes AI agentic coding. Keep machine-readable sources (code + doc comments) authoritative.
+
+### User-Facing Docs
+
+- User docs target PyTorch/JAX users who interact with the `tenferro` facade crate.
+- All imports must use `use tenferro::{...}` — never reference internal crates (`tenferro-tensor`, `tenferro-ops`, `computegraph`, etc.) in user-facing docs.
+- Do NOT expose internal jargon (Fragment, StableHLO, ExecOp, ValRef, etc.) in user-facing pages.
+- Provide PyTorch/JAX equivalents when introducing tenferro concepts.
+
+### Doc Examples
+
+- Doc examples (`/// # Examples`) must NOT use `ignore` or `no_run` attributes.
+- Every example must compile AND run as a doctest.
+- Use `compile_fail` only for examples that intentionally demonstrate compile errors.
+- If an example cannot run as a doctest, refactor it until it can.
+
+## Generic Over Scalar Type
+
+- Use generic constructors with sealed traits instead of per-type functions.
+- Bad: `TracedTensor::from_f64(...)`, `TracedTensor::from_f32(...)`, etc.
+- Good: `TracedTensor::new<T: TensorScalar>(shape, data)` — type inference selects the variant.
+- Sealed traits (`TensorScalar`, `PoolScalar`, etc.) restrict to supported dtypes (f64, f32, Complex64, Complex32).
+
 ## Public API Convention
 
 - **Unary single-output ops**: methods on `TracedTensor` (e.g., `x.exp()`, `x.reshape(shape)`)

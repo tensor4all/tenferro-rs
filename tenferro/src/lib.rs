@@ -34,7 +34,7 @@ pub use linalg_api::{
 };
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::cpu::CpuBackend;
-pub use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
+pub use tenferro_tensor::{DType, Tensor, TensorBackend, TensorScalar, TypedTensor};
 pub use traced::TracedTensor;
 
 /// Matrix multiplication helper for rank-2 traced tensors.
