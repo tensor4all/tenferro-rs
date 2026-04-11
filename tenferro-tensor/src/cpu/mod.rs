@@ -3,6 +3,7 @@ pub mod analytic;
 pub mod backend;
 pub mod context;
 pub mod elementwise;
+mod exec_session;
 pub mod gemm;
 pub mod indexing;
 pub mod linalg;
