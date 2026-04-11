@@ -167,19 +167,19 @@ pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add(a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add(a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*a.get(&[]));
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
             Ok(Tensor::C32(typed_add(&scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*b.get(&[]));
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
             Ok(Tensor::C32(typed_add(a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*a.get(&[]));
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
             Ok(Tensor::C64(typed_add(&scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*b.get(&[]));
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
             Ok(Tensor::C64(typed_add(a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -197,19 +197,19 @@ pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul(a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul(a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*a.get(&[]));
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
             Ok(Tensor::C32(typed_mul(&scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*b.get(&[]));
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
             Ok(Tensor::C32(typed_mul(a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*a.get(&[]));
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
             Ok(Tensor::C64(typed_mul(&scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(*b.get(&[]));
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
             Ok(Tensor::C64(typed_mul(a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -342,7 +342,7 @@ where
         })?;
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
-        let scalar = *lhs.get(&[]);
+        let scalar = lhs.host_data()[0];
         let mut out = typed_array(&rhs.shape, T::zero());
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar + x).map_err(|err| {
             crate::Error::BackendFailure {
@@ -352,7 +352,7 @@ where
         })?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
-        let scalar = *rhs.get(&[]);
+        let scalar = rhs.host_data()[0];
         let mut out = typed_array(&lhs.shape, T::zero());
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x + scalar).map_err(|err| {
             crate::Error::BackendFailure {
@@ -385,13 +385,13 @@ where
         .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
-        let scalar = *lhs.get(&[]);
+        let scalar = lhs.host_data()[0];
         let mut out = typed_array(&rhs.shape, T::zero());
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar * x)
             .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
-        let scalar = *rhs.get(&[]);
+        let scalar = rhs.host_data()[0];
         let mut out = typed_array(&lhs.shape, T::zero());
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x * scalar)
             .map_err(|err| backend_failure("mul", err))?;

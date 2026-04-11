@@ -18,7 +18,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, LayoutOrder, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 use tidu::{differentiate, transpose, LinearFragment};
 
 const TOL: f64 = 1e-6;
@@ -161,24 +161,16 @@ fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec(shape, data))
 }
 
-fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
+fn get_f64_data(tensor: &Tensor) -> &[f64] {
     match tensor {
-        Tensor::F64(inner) => inner
-            .to_contiguous(LayoutOrder::ColumnMajor)
-            .unwrap()
-            .host_data()
-            .to_vec(),
+        Tensor::F64(inner) => inner.host_data(),
         _ => panic!("expected f64 tensor"),
     }
 }
 
-fn get_c64_data(tensor: &Tensor) -> Vec<Complex64> {
+fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
     match tensor {
-        Tensor::C64(inner) => inner
-            .to_contiguous(LayoutOrder::ColumnMajor)
-            .unwrap()
-            .host_data()
-            .to_vec(),
+        Tensor::C64(inner) => inner.host_data(),
         _ => panic!("expected c64 tensor"),
     }
 }
@@ -199,7 +191,7 @@ fn concrete_dim_shape(shape: &[DimExpr]) -> Vec<usize> {
 
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
     let mut engine = Engine::new(CpuBackend::new());
-    materialize_tensor(traced.eval(&mut engine).unwrap().clone())
+    traced.eval(&mut engine).unwrap().clone()
 }
 
 fn eval_scalar(traced: TracedTensor) -> f64 {
@@ -336,20 +328,7 @@ fn eval_fragment_outputs(
         .collect();
     let mut backend = CpuBackend::new();
     let mut pool = BufferPool::new();
-    eval_exec_ir(&mut backend, &exec, inputs, &mut pool)
-        .unwrap()
-        .into_iter()
-        .map(materialize_tensor)
-        .collect()
-}
-
-fn materialize_tensor(tensor: Tensor) -> Tensor {
-    match tensor {
-        Tensor::F32(inner) => Tensor::F32(inner.to_contiguous(LayoutOrder::ColumnMajor).unwrap()),
-        Tensor::F64(inner) => Tensor::F64(inner.to_contiguous(LayoutOrder::ColumnMajor).unwrap()),
-        Tensor::C32(inner) => Tensor::C32(inner.to_contiguous(LayoutOrder::ColumnMajor).unwrap()),
-        Tensor::C64(inner) => Tensor::C64(inner.to_contiguous(LayoutOrder::ColumnMajor).unwrap()),
-    }
+    eval_exec_ir(&mut backend, &exec, inputs, &mut pool).unwrap()
 }
 
 fn scalar_f64_tensor(value: f64) -> Tensor {
@@ -1181,8 +1160,7 @@ fn sum_qr_r_real_parts_complex(data: &[Complex64]) -> f64 {
     sum_real_parts(get_c64_data(&outputs[1]))
 }
 
-fn sum_real_parts(values: impl AsRef<[Complex64]>) -> f64 {
-    let values = values.as_ref();
+fn sum_real_parts(values: &[Complex64]) -> f64 {
     values.iter().map(|value| value.re).sum()
 }
 
@@ -1275,8 +1253,7 @@ fn sum_triangular_solve_real_parts_complex(a: &[Complex64], b: &[Complex64]) -> 
     sum_real_parts(get_c64_data(&output))
 }
 
-fn assert_close_slice(actual: impl AsRef<[f64]>, expected: &[f64]) {
-    let actual = actual.as_ref();
+fn assert_close_slice(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
     for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
         assert!(
@@ -1286,8 +1263,7 @@ fn assert_close_slice(actual: impl AsRef<[f64]>, expected: &[f64]) {
     }
 }
 
-fn assert_close_slice_c64(actual: impl AsRef<[Complex64]>, expected: &[Complex64]) {
-    let actual = actual.as_ref();
+fn assert_close_slice_c64(actual: &[Complex64], expected: &[Complex64]) {
     assert_eq!(actual.len(), expected.len());
     for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
         assert!(
@@ -1298,22 +1274,16 @@ fn assert_close_slice_c64(actual: impl AsRef<[Complex64]>, expected: &[Complex64
 }
 
 fn assert_jvp_matches_finite_diff(
-    actual: impl AsRef<[f64]>,
+    actual: &[f64],
     base: &[f64],
     tangent: &[f64],
     f: impl Fn(&[f64]) -> Vec<f64>,
 ) {
-    let actual = actual.as_ref();
     let expected = finite_diff_tensor_directional(f, base, tangent, 1e-6);
     assert_close_slice(actual, &expected);
 }
 
-fn assert_grad_matches_finite_diff(
-    actual: impl AsRef<[f64]>,
-    base: &[f64],
-    f: impl Fn(&[f64]) -> f64,
-) {
-    let actual = actual.as_ref();
+fn assert_grad_matches_finite_diff(actual: &[f64], base: &[f64], f: impl Fn(&[f64]) -> f64) {
     assert_eq!(actual.len(), base.len());
     for index in 0..base.len() {
         let expected = finite_diff_scalar(&f, base, index, 1e-6);
@@ -1326,12 +1296,11 @@ fn assert_grad_matches_finite_diff(
 }
 
 fn assert_grad_matches_finite_diff_lhs(
-    actual: impl AsRef<[f64]>,
+    actual: &[f64],
     lhs: &[f64],
     rhs: &[f64],
     f: &impl Fn(&[f64], &[f64]) -> f64,
 ) {
-    let actual = actual.as_ref();
     assert_eq!(actual.len(), lhs.len());
     for index in 0..lhs.len() {
         let expected = finite_diff_scalar_lhs(&f, lhs, rhs, index, 1e-6);
@@ -1344,12 +1313,11 @@ fn assert_grad_matches_finite_diff_lhs(
 }
 
 fn assert_grad_matches_finite_diff_rhs(
-    actual: impl AsRef<[f64]>,
+    actual: &[f64],
     lhs: &[f64],
     rhs: &[f64],
     f: &impl Fn(&[f64], &[f64]) -> f64,
 ) {
-    let actual = actual.as_ref();
     assert_eq!(actual.len(), rhs.len());
     for index in 0..rhs.len() {
         let expected = finite_diff_scalar_rhs(&f, lhs, rhs, index, 1e-6);
@@ -1362,13 +1330,12 @@ fn assert_grad_matches_finite_diff_rhs(
 }
 
 fn assert_grad_matches_complex_finite_diff(
-    actual: impl AsRef<[Complex64]>,
+    actual: &[Complex64],
     base: &[Complex64],
     indices: &[usize],
     tol: f64,
     f: impl Fn(&[Complex64]) -> f64,
 ) {
-    let actual = actual.as_ref();
     for &index in indices {
         let expected = finite_diff_complex(&f, base, index, 1e-6);
         assert!(
@@ -1380,13 +1347,12 @@ fn assert_grad_matches_complex_finite_diff(
 }
 
 fn assert_grad_matches_complex_finite_diff_lhs(
-    actual: impl AsRef<[Complex64]>,
+    actual: &[Complex64],
     lhs: &[Complex64],
     rhs: &[Complex64],
     tol: f64,
     f: &impl Fn(&[Complex64], &[Complex64]) -> f64,
 ) {
-    let actual = actual.as_ref();
     assert_eq!(actual.len(), lhs.len());
     for index in 0..lhs.len() {
         let expected = finite_diff_complex_lhs(f, lhs, rhs, index, 1e-6);
@@ -1399,13 +1365,12 @@ fn assert_grad_matches_complex_finite_diff_lhs(
 }
 
 fn assert_grad_matches_complex_finite_diff_rhs(
-    actual: impl AsRef<[Complex64]>,
+    actual: &[Complex64],
     lhs: &[Complex64],
     rhs: &[Complex64],
     tol: f64,
     f: &impl Fn(&[Complex64], &[Complex64]) -> f64,
 ) {
-    let actual = actual.as_ref();
     assert_eq!(actual.len(), rhs.len());
     for index in 0..rhs.len() {
         let expected = finite_diff_complex_rhs(f, lhs, rhs, index, 1e-6);
@@ -2022,7 +1987,7 @@ fn grad_exp() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| x.exp()).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2041,7 +2006,7 @@ fn grad_log() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| 1.0 / x).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2060,7 +2025,7 @@ fn grad_sin_cos() {
     let sin_grad_tensor = eval_tensor(sin_grad);
     let sin_grad_data = get_f64_data(&sin_grad_tensor);
     let expected_sin: Vec<f64> = x_data.iter().map(|x| x.cos()).collect();
-    assert_close_slice(&sin_grad_data, &expected_sin);
+    assert_close_slice(sin_grad_data, &expected_sin);
 
     let f_sin = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2074,7 +2039,7 @@ fn grad_sin_cos() {
     let cos_grad_tensor = eval_tensor(cos_grad);
     let cos_grad_data = get_f64_data(&cos_grad_tensor);
     let expected_cos: Vec<f64> = x_data.iter().map(|x| -x.sin()).collect();
-    assert_close_slice(&cos_grad_data, &expected_cos);
+    assert_close_slice(cos_grad_data, &expected_cos);
 
     let f_cos = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2105,8 +2070,8 @@ fn grad_div() {
         .zip(y_data.iter())
         .map(|(x, y)| -x / (y * y))
         .collect();
-    assert_close_slice(&grad_x_data, &expected_x);
-    assert_close_slice(&grad_y_data, &expected_y);
+    assert_close_slice(grad_x_data, &expected_x);
+    assert_close_slice(grad_y_data, &expected_y);
 
     let f = |lhs: &[f64], rhs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
@@ -2127,7 +2092,7 @@ fn grad_sqrt() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| 0.5 / x.sqrt()).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2146,7 +2111,7 @@ fn grad_tanh() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| 1.0 - x.tanh().powi(2)).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2167,7 +2132,7 @@ fn grad_pow() {
     let grad_x_tensor = eval_tensor(grad_x);
     let grad_x_data = get_f64_data(&grad_x_tensor);
     let expected_x: Vec<f64> = x_data.iter().map(|x| 2.0 * x).collect();
-    assert_close_slice(&grad_x_data, &expected_x);
+    assert_close_slice(grad_x_data, &expected_x);
 
     let f = |lhs: &[f64], rhs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
@@ -2193,7 +2158,7 @@ fn grad_pow_wrt_exponent() {
         .zip(y_data.iter())
         .map(|(x, y)| x.ln() * x.powf(*y))
         .collect();
-    assert_close_slice(&grad_y_data, &expected_y);
+    assert_close_slice(grad_y_data, &expected_y);
 
     let f = |lhs: &[f64], rhs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], lhs.to_vec()));
@@ -2213,7 +2178,7 @@ fn grad_abs() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected = [-1.0, 1.0, 1.0];
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2231,7 +2196,7 @@ fn grad_sign() {
 
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
-    assert_close_slice(&grad_data, &[0.0, 0.0, 0.0]);
+    assert_close_slice(grad_data, &[0.0, 0.0, 0.0]);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2250,7 +2215,7 @@ fn grad_rsqrt() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| -0.5 / (x * x.sqrt())).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2269,7 +2234,7 @@ fn grad_expm1() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| x.exp()).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2288,7 +2253,7 @@ fn grad_log1p() {
     let grad_tensor = eval_tensor(grad);
     let grad_data = get_f64_data(&grad_tensor);
     let expected: Vec<f64> = x_data.iter().map(|x| 1.0 / (x + 1.0)).collect();
-    assert_close_slice(&grad_data, &expected);
+    assert_close_slice(grad_data, &expected);
 
     let f = |xs: &[f64]| {
         let x = TracedTensor::from_tensor(f64_tensor(vec![3], xs.to_vec()));
@@ -2855,7 +2820,7 @@ fn grad_svd_values_repeated_singular_values_is_finite() {
         f64_tensor(vec![2, 2], a_data),
     );
 
-    for value in get_f64_data(&grad) {
+    for &value in get_f64_data(&grad) {
         assert!(value.is_finite(), "svd gradient not finite: {value}");
     }
 }
@@ -2871,7 +2836,7 @@ fn grad_eigh_values_degenerate_spectrum_is_finite() {
         f64_tensor(vec![2, 2], a_data),
     );
 
-    for value in get_f64_data(&grad) {
+    for &value in get_f64_data(&grad) {
         assert!(value.is_finite(), "eigh gradient not finite: {value}");
     }
 }

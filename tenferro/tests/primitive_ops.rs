@@ -2,19 +2,15 @@ use tenferro::engine::Engine;
 use tenferro::pow;
 use tenferro::traced::{eval_all, TracedTensor};
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, LayoutOrder, Tensor, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
-fn get_f64_data(t: &Tensor) -> Vec<f64> {
+fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
-        Tensor::F64(inner) => inner
-            .to_contiguous(LayoutOrder::ColumnMajor)
-            .unwrap()
-            .host_data()
-            .to_vec(),
+        Tensor::F64(inner) => inner.host_data(),
         _ => panic!("expected F64"),
     }
 }

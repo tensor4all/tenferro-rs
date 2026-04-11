@@ -4,14 +4,6 @@
 
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
 - When the public API changes, check for stale names, stale capability claims, and deleted paths in `README`, rustdoc, and examples before considering the work complete.
-- `docs/design/**` must stay in sync with the current implementation for any subsystem whose behavior or public contract changed in the branch.
-
-## Tensor Layout Guardrails
-
-- Public tensors are stride-aware. Dense column-major storage is the default allocation layout, not a global invariant.
-- Runtime and kernel code must use tensor stride/offset metadata directly instead of reconstructing layout from shape alone.
-- Explicit materialization boundaries must stay explicit. If an operation requires dense column-major input, materialize at that boundary instead of earlier in the pipeline.
-- FFI and C-API boundaries must export column-major contiguous tensors unless the external contract explicitly says otherwise.
 
 ## Oracle Gate
 

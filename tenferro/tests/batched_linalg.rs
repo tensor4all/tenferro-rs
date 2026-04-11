@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
 use tenferro::{cholesky, qr, solve, svd, triangular_solve};
-use tenferro_tensor::{cpu::CpuBackend, LayoutOrder, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 
 const TOL: f64 = 1.0e-9;
 
@@ -10,13 +10,9 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
-fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
+fn get_f64_data(tensor: &Tensor) -> &[f64] {
     match tensor {
-        Tensor::F64(inner) => inner
-            .to_contiguous(LayoutOrder::ColumnMajor)
-            .unwrap()
-            .host_data()
-            .to_vec(),
+        Tensor::F64(inner) => inner.host_data(),
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -25,13 +21,9 @@ fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec(shape, data))
 }
 
-fn get_c64_data(tensor: &Tensor) -> Vec<Complex64> {
+fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
     match tensor {
-        Tensor::C64(inner) => inner
-            .to_contiguous(LayoutOrder::ColumnMajor)
-            .unwrap()
-            .host_data()
-            .to_vec(),
+        Tensor::C64(inner) => inner.host_data(),
         _ => panic!("expected c64 tensor"),
     }
 }
@@ -42,9 +34,7 @@ fn eval(traced: TracedTensor) -> Tensor {
     traced.eval(&mut engine).unwrap().clone()
 }
 
-fn assert_close(actual: impl AsRef<[f64]>, expected: impl AsRef<[f64]>) {
-    let actual = actual.as_ref();
-    let expected = expected.as_ref();
+fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len(), "length mismatch");
     for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
         let diff = (actual - expected).abs();
@@ -55,9 +45,7 @@ fn assert_close(actual: impl AsRef<[f64]>, expected: impl AsRef<[f64]>) {
     }
 }
 
-fn assert_close_c64(actual: impl AsRef<[Complex64]>, expected: impl AsRef<[Complex64]>) {
-    let actual = actual.as_ref();
-    let expected = expected.as_ref();
+fn assert_close_c64(actual: &[Complex64], expected: &[Complex64]) {
     assert_eq!(actual.len(), expected.len(), "length mismatch");
     for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
         let diff = (actual - expected).norm();
@@ -93,24 +81,6 @@ fn solve_supports_batched_vector_rhs() {
         ],
     ));
     let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![4.0, 9.0, 8.0, 20.0]));
-
-    let out = eval(solve(&a, &b));
-
-    assert_eq!(out.shape(), &[2, 2]);
-    assert_close(get_f64_data(&out), &[2.0, 3.0, 2.0, 4.0]);
-}
-
-#[test]
-fn solve_accepts_noncontiguous_batched_vector_rhs() {
-    let a = TracedTensor::from_tensor(f64_tensor(
-        vec![2, 2, 2],
-        vec![
-            2.0, 0.0, 0.0, 3.0, //
-            4.0, 0.0, 0.0, 5.0,
-        ],
-    ));
-    let rhs_base = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![4.0, 8.0, 9.0, 20.0]));
-    let b = rhs_base.transpose(&[1, 0]);
 
     let out = eval(solve(&a, &b));
 

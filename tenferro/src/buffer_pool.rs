@@ -102,20 +102,17 @@ impl BufferPool {
     }
 
     /// Number of buffers currently held in the pool.
-    #[inline(never)]
     pub fn len(&self) -> usize {
         self.pool.len()
     }
 
     /// Whether the pool is empty.
-    #[inline(never)]
     pub fn is_empty(&self) -> bool {
         self.pool.is_empty()
     }
 }
 
 impl Default for BufferPool {
-    #[inline(never)]
     fn default() -> Self {
         Self::new()
     }

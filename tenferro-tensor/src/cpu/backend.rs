@@ -10,7 +10,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::flat_to_multi;
-use crate::{LayoutOrder, Tensor, TypedTensor};
+use crate::{Tensor, TypedTensor};
 
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural};
 
@@ -116,19 +116,6 @@ impl CpuBackend {
         R: Send,
     {
         self.pool.install(op)
-    }
-}
-
-fn materialize_col_major_if_needed(tensor: &Tensor) -> crate::Result<Tensor> {
-    match tensor {
-        Tensor::F32(inner) if inner.is_contiguous_col_major() => Ok(Tensor::F32(inner.clone())),
-        Tensor::F32(inner) => Ok(Tensor::F32(inner.to_contiguous(LayoutOrder::ColumnMajor)?)),
-        Tensor::F64(inner) if inner.is_contiguous_col_major() => Ok(Tensor::F64(inner.clone())),
-        Tensor::F64(inner) => Ok(Tensor::F64(inner.to_contiguous(LayoutOrder::ColumnMajor)?)),
-        Tensor::C32(inner) if inner.is_contiguous_col_major() => Ok(Tensor::C32(inner.clone())),
-        Tensor::C32(inner) => Ok(Tensor::C32(inner.to_contiguous(LayoutOrder::ColumnMajor)?)),
-        Tensor::C64(inner) if inner.is_contiguous_col_major() => Ok(Tensor::C64(inner.clone())),
-        Tensor::C64(inner) => Ok(Tensor::C64(inner.to_contiguous(LayoutOrder::ColumnMajor)?)),
     }
 }
 
@@ -489,9 +476,8 @@ impl TensorBackend for CpuBackend {
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            let rhs_matrix = materialize_col_major_if_needed(b)?;
             (
-                self.reshape(&rhs_matrix, &matrix_rhs_shape)?,
+                self.reshape(b, &matrix_rhs_shape)?,
                 Some(b.shape().to_vec()),
             )
         } else {
@@ -508,8 +494,7 @@ impl TensorBackend for CpuBackend {
         let z = self.triangular_solve(l, &pb, true, true, false, true)?;
         let x = self.triangular_solve(u, &z, true, false, false, false)?;
         if let Some(shape) = restore_shape {
-            let x_matrix = materialize_col_major_if_needed(&x)?;
-            self.reshape(&x_matrix, &shape)
+            self.reshape(&x, &shape)
         } else {
             Ok(x)
         }
@@ -596,19 +581,13 @@ fn validate_nonsingular_u(u: &Tensor) -> crate::Result<()> {
     match u {
         Tensor::F64(t) => {
             let n = t.shape[0].min(t.shape[1]);
-            let batch_shape = &t.shape[2..];
-            let batch_total: usize = batch_shape.iter().product::<usize>().max(1);
-            let mut batch_coord = vec![0usize; batch_shape.len()];
-            let mut diag_idx = vec![0usize; t.shape.len()];
-            for batch_flat in 0..batch_total {
-                if !batch_shape.is_empty() {
-                    flat_to_multi(batch_flat, batch_shape, &mut batch_coord);
-                    diag_idx[2..].copy_from_slice(&batch_coord);
-                }
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
                 for i in 0..n {
-                    diag_idx[0] = i;
-                    diag_idx[1] = i;
-                    let diag = *t.get(&diag_idx);
+                    let diag = batch[i + i * t.shape[0]];
                     if !diag.is_finite() || diag == 0.0 {
                         return Err(crate::Error::BackendFailure {
                             op: "solve",
@@ -621,19 +600,13 @@ fn validate_nonsingular_u(u: &Tensor) -> crate::Result<()> {
         }
         Tensor::C64(t) => {
             let n = t.shape[0].min(t.shape[1]);
-            let batch_shape = &t.shape[2..];
-            let batch_total: usize = batch_shape.iter().product::<usize>().max(1);
-            let mut batch_coord = vec![0usize; batch_shape.len()];
-            let mut diag_idx = vec![0usize; t.shape.len()];
-            for batch_flat in 0..batch_total {
-                if !batch_shape.is_empty() {
-                    flat_to_multi(batch_flat, batch_shape, &mut batch_coord);
-                    diag_idx[2..].copy_from_slice(&batch_coord);
-                }
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
                 for i in 0..n {
-                    diag_idx[0] = i;
-                    diag_idx[1] = i;
-                    let diag = t.get(&diag_idx);
+                    let diag = batch[i + i * t.shape[0]];
                     if !diag.re.is_finite() || !diag.im.is_finite() || diag.norm_sqr() == 0.0 {
                         return Err(crate::Error::BackendFailure {
                             op: "solve",

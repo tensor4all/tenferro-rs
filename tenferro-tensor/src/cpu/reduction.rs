@@ -1,7 +1,7 @@
 use std::ops::{Add, Mul};
 
 use num_traits::{Float, One, Zero};
-use strided_kernel::{reduce_axis, StridedArray};
+use strided_kernel::{col_major_strides, reduce_axis, StridedArray};
 
 use crate::types::{Tensor, TypedTensor};
 
@@ -104,13 +104,10 @@ where
         .map(|(_, &dim)| dim)
         .collect();
 
-    let mut current = StridedArray::from_parts(
-        input.host_data().to_vec(),
-        &input.shape,
-        &input.strides,
-        input.offset,
-    )
-    .map_err(|err| backend_failure(label, err))?;
+    let strides = col_major_strides(&input.shape);
+    let mut current =
+        StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
+            .map_err(|err| backend_failure(label, err))?;
 
     let mut sorted_axes = axes.to_vec();
     sorted_axes.sort_unstable_by(|a, b| b.cmp(a));

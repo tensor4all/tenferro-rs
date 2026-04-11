@@ -1,7 +1,5 @@
 use num_complex::Complex;
 use num_traits::{One, Zero};
-use std::sync::Arc;
-use strided_kernel::{copy_into, Identity, StridedArray, StridedView};
 
 /// Memory location for tensor storage.
 ///
@@ -92,21 +90,17 @@ impl<T> BufferHandle<T> {
 /// # Examples
 ///
 /// ```ignore
-/// use std::sync::Arc;
 /// use tenferro_tensor::Buffer;
 ///
-/// let host = Buffer::Host(Arc::new(vec![1.0_f64, 2.0]));
+/// let host = Buffer::Host(vec![1.0_f64, 2.0]);
 /// ```
 #[derive(Clone, Debug)]
 pub enum Buffer<T> {
-    Host(Arc<Vec<T>>),
+    Host(Vec<T>),
     Backend(BufferHandle<T>),
 }
 
-/// Stride-aware typed tensor storage.
-///
-/// Cloning a host-backed tensor shares the underlying storage handle until a
-/// mutable host access triggers copy-on-write.
+/// Contiguous column-major typed tensor storage.
 ///
 /// # Examples
 ///
@@ -120,25 +114,7 @@ pub enum Buffer<T> {
 pub struct TypedTensor<T> {
     pub buffer: Buffer<T>,
     pub shape: Vec<usize>,
-    pub strides: Vec<isize>,
-    pub offset: isize,
     pub placement: Placement,
-}
-
-/// Dense materialization order.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tensor::LayoutOrder;
-///
-/// let order = LayoutOrder::ColumnMajor;
-/// assert!(matches!(order, LayoutOrder::ColumnMajor));
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LayoutOrder {
-    ColumnMajor,
-    RowMajor,
 }
 
 /// Runtime scalar dtype tag.
@@ -196,26 +172,6 @@ pub fn col_major_strides(shape: &[usize]) -> Vec<isize> {
     strides
 }
 
-/// Row-major strides derived from a shape.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tensor::row_major_strides;
-///
-/// assert_eq!(row_major_strides(&[2, 3]), vec![3, 1]);
-/// ```
-pub fn row_major_strides(shape: &[usize]) -> Vec<isize> {
-    if shape.is_empty() {
-        return vec![];
-    }
-    let mut strides = vec![1isize; shape.len()];
-    for i in (0..shape.len() - 1).rev() {
-        strides[i] = strides[i + 1] * shape[i + 1] as isize;
-    }
-    strides
-}
-
 pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
@@ -237,9 +193,7 @@ impl<T: Clone + Zero> TypedTensor<T> {
     pub fn zeros(shape: Vec<usize>) -> Self {
         let n: usize = shape.iter().product();
         Self {
-            buffer: Buffer::Host(Arc::new(vec![T::zero(); n])),
-            strides: col_major_strides(&shape),
-            offset: 0,
+            buffer: Buffer::Host(vec![T::zero(); n]),
             shape,
             placement: default_placement(),
         }
@@ -260,16 +214,14 @@ impl<T: Clone + One + Zero> TypedTensor<T> {
     pub fn ones(shape: Vec<usize>) -> Self {
         let n: usize = shape.iter().product();
         Self {
-            buffer: Buffer::Host(Arc::new(vec![T::one(); n])),
-            strides: col_major_strides(&shape),
-            offset: 0,
+            buffer: Buffer::Host(vec![T::one(); n]),
             shape,
             placement: default_placement(),
         }
     }
 }
 
-impl<T> TypedTensor<T> {
+impl<T: Clone> TypedTensor<T> {
     /// Create a tensor from a column-major buffer.
     ///
     /// # Examples
@@ -290,68 +242,10 @@ impl<T> TypedTensor<T> {
             n
         );
         Self {
-            buffer: Buffer::Host(Arc::new(data)),
-            strides: col_major_strides(&shape),
-            offset: 0,
+            buffer: Buffer::Host(data),
             shape,
             placement: default_placement(),
         }
-    }
-
-    /// Borrow the logical strides.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
-    /// assert_eq!(t.strides(), &[1, 2]);
-    /// ```
-    pub fn strides(&self) -> &[isize] {
-        &self.strides
-    }
-
-    /// Base offset into the underlying storage.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
-    /// assert_eq!(t.offset(), 0);
-    /// ```
-    pub fn offset(&self) -> isize {
-        self.offset
-    }
-
-    /// Returns true when the tensor is contiguous in column-major order.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
-    /// assert!(t.is_contiguous_col_major());
-    /// ```
-    pub fn is_contiguous_col_major(&self) -> bool {
-        self.offset == 0 && self.strides == col_major_strides(&self.shape)
-    }
-
-    /// Returns true when the tensor is contiguous in row-major order.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
-    /// assert!(t.is_contiguous_row_major());
-    /// ```
-    pub fn is_contiguous_row_major(&self) -> bool {
-        self.offset == 0 && self.strides == row_major_strides(&self.shape)
     }
 
     /// Number of elements in the tensor.
@@ -368,11 +262,7 @@ impl<T> TypedTensor<T> {
         self.shape.iter().product()
     }
 
-    /// Borrow the underlying host storage buffer.
-    ///
-    /// This exposes raw storage order, not logical iteration order. For
-    /// non-contiguous tensors, use [`Self::get`] for indexed access or
-    /// [`Self::to_contiguous`] to materialize a dense layout first.
+    /// Borrow the host buffer.
     ///
     /// # Examples
     ///
@@ -384,15 +274,12 @@ impl<T> TypedTensor<T> {
     /// ```
     pub fn host_data(&self) -> &[T] {
         match &self.buffer {
-            Buffer::Host(v) => v.as_slice(),
+            Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data called on backend buffer"),
         }
     }
 
-    /// Mutably borrow the underlying host storage buffer.
-    ///
-    /// This triggers copy-on-write when the storage handle is shared by cloned
-    /// tensors or metadata-only views.
+    /// Mutably borrow the host buffer.
     ///
     /// # Examples
     ///
@@ -403,17 +290,14 @@ impl<T> TypedTensor<T> {
     /// t.host_data_mut()[0] = 3.0;
     /// assert_eq!(t.host_data(), &[3.0, 0.0]);
     /// ```
-    pub fn host_data_mut(&mut self) -> &mut [T]
-    where
-        T: Clone,
-    {
+    pub fn host_data_mut(&mut self) -> &mut [T] {
         match &mut self.buffer {
-            Buffer::Host(v) => Arc::make_mut(v).as_mut_slice(),
+            Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data_mut called on backend buffer"),
         }
     }
 
-    /// Compute the storage offset for a logical multi-index.
+    /// Compute the linear column-major offset for an index.
     ///
     /// # Examples
     ///
@@ -425,12 +309,14 @@ impl<T> TypedTensor<T> {
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> usize {
         assert_eq!(indices.len(), self.shape.len());
-        let mut offset = self.offset;
+        let mut offset = 0usize;
+        let mut stride = 1usize;
         for (i, &idx) in indices.iter().enumerate() {
             assert!(idx < self.shape[i], "index out of bounds");
-            offset += idx as isize * self.strides[i];
+            offset += idx * stride;
+            stride *= self.shape[i];
         }
-        usize::try_from(offset).expect("tensor offset must be non-negative")
+        offset
     }
 
     /// Borrow a single element by multi-index.
@@ -459,73 +345,9 @@ impl<T> TypedTensor<T> {
     /// *t.get_mut(&[0]) = 7.0;
     /// assert_eq!(t.host_data(), &[7.0]);
     /// ```
-    pub fn get_mut(&mut self, indices: &[usize]) -> &mut T
-    where
-        T: Clone,
-    {
+    pub fn get_mut(&mut self, indices: &[usize]) -> &mut T {
         let off = self.linear_offset(indices);
         &mut self.host_data_mut()[off]
-    }
-}
-
-impl<T: Copy + Default> TypedTensor<T> {
-    /// Materialize the tensor into a dense contiguous buffer in the requested order.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{LayoutOrder, TypedTensor};
-    ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0; 6]);
-    /// let row_major = t.to_contiguous(LayoutOrder::RowMajor).unwrap();
-    /// assert!(row_major.is_contiguous_row_major());
-    /// ```
-    pub fn to_contiguous(&self, order: LayoutOrder) -> crate::Result<Self> {
-        let strides = match order {
-            LayoutOrder::ColumnMajor => col_major_strides(&self.shape),
-            LayoutOrder::RowMajor => row_major_strides(&self.shape),
-        };
-
-        let data = match &self.buffer {
-            Buffer::Host(data) => data,
-            Buffer::Backend(_) => {
-                return Err(crate::Error::BackendFailure {
-                    op: "to_contiguous",
-                    message: "backend buffer materialization is not implemented".into(),
-                });
-            }
-        };
-
-        let src: StridedView<'_, T, Identity> =
-            StridedView::new(data, &self.shape, &self.strides, self.offset).map_err(|err| {
-                crate::Error::BackendFailure {
-                    op: "to_contiguous",
-                    message: err.to_string(),
-                }
-            })?;
-
-        let mut dst = StridedArray::<T>::from_parts(
-            vec![T::default(); self.n_elements()],
-            &self.shape,
-            &strides,
-            0,
-        )
-        .map_err(|err| crate::Error::BackendFailure {
-            op: "to_contiguous",
-            message: err.to_string(),
-        })?;
-        copy_into(&mut dst.view_mut(), &src).map_err(|err| crate::Error::BackendFailure {
-            op: "to_contiguous",
-            message: err.to_string(),
-        })?;
-
-        Ok(Self {
-            buffer: Buffer::Host(Arc::new(dst.into_data())),
-            shape: self.shape.clone(),
-            strides,
-            offset: 0,
-            placement: self.placement.clone(),
-        })
     }
 }
 

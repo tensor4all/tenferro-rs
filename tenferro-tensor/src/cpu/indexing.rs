@@ -299,30 +299,14 @@ struct IndexTensor {
 }
 
 fn index_tensor(tensor: &Tensor) -> IndexTensor {
-    fn collect_values<T: Copy>(t: &TypedTensor<T>) -> Vec<T> {
-        let mut values = Vec::with_capacity(t.n_elements());
-        let mut idx = vec![0usize; t.shape.len()];
-        for flat in 0..t.n_elements() {
-            flat_to_multi(flat, &t.shape, &mut idx);
-            values.push(*t.get(&idx));
-        }
-        values
-    }
-
     match tensor {
         Tensor::F32(t) => IndexTensor {
             shape: t.shape.clone(),
-            values: collect_values(t)
-                .into_iter()
-                .map(|value| value as i64)
-                .collect(),
+            values: t.host_data().iter().map(|&value| value as i64).collect(),
         },
         Tensor::F64(t) => IndexTensor {
             shape: t.shape.clone(),
-            values: collect_values(t)
-                .into_iter()
-                .map(|value| value as i64)
-                .collect(),
+            values: t.host_data().iter().map(|&value| value as i64).collect(),
         },
         Tensor::C32(_) | Tensor::C64(_) => panic!("complex index tensors are not supported"),
     }

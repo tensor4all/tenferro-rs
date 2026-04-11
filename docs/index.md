@@ -8,7 +8,7 @@ Documentation for the tenferro-rs tensor computation library.
 
 - **[Getting Started](getting-started/)** — Installation, tutorials, and examples
 - **[Architecture](architecture/)** — Design rationale for each subsystem
-- **[Implementation Design](design/)** — Current implementation-focused design notes
-- **[Specification](spec/)** — Legacy low-level notes retained while design docs and rustdoc absorb the current source of truth
+- **[Specification](spec/)** — Normative specs: op catalog, backend contract, AD contract
+- **[Implementation Design](design/)** — Implementation-focused design notes
 - **[Oracle Replay](oracle/)** — AD correctness validation via oracle database
 - **[Reference](reference/)** — External system surveys and comparisons
