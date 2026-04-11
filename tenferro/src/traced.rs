@@ -12,7 +12,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
 use tidu::{differentiate, transpose};
 
 use super::compiler::{compile_to_exec, lower_to_stablehlo};
@@ -245,6 +245,20 @@ impl TracedTensor {
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
         }
+    }
+
+    /// Create a traced tensor from shape and data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// assert_eq!(a.rank, 2);
+    /// ```
+    pub fn new<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor(T::into_tensor(shape, data))
     }
 
     pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
