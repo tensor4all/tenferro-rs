@@ -9,7 +9,7 @@ use crate::{
     types::{ConjElem, Tensor, TypedTensor},
 };
 
-use super::{tensor_from_array, typed_array, typed_view};
+use super::{tensor_from_array, typed_array_uninit, typed_view};
 
 macro_rules! dispatch_ternary_result {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -329,7 +329,8 @@ where
     T: Copy + Clone + Zero + Add<Output = T>,
 {
     if lhs.shape == rhs.shape {
-        let mut out = typed_array(&lhs.shape, T::zero());
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view(lhs),
@@ -343,7 +344,8 @@ where
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
         let scalar = lhs.host_data()[0];
-        let mut out = typed_array(&rhs.shape, T::zero());
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar + x).map_err(|err| {
             crate::Error::BackendFailure {
                 op: "add",
@@ -353,7 +355,8 @@ where
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
         let scalar = rhs.host_data()[0];
-        let mut out = typed_array(&lhs.shape, T::zero());
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x + scalar).map_err(|err| {
             crate::Error::BackendFailure {
                 op: "add",
@@ -375,7 +378,8 @@ where
     T: Copy + Clone + Zero + Mul<Output = T>,
 {
     if lhs.shape == rhs.shape {
-        let mut out = typed_array(&lhs.shape, T::zero());
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view(lhs),
@@ -386,13 +390,15 @@ where
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
         let scalar = lhs.host_data()[0];
-        let mut out = typed_array(&rhs.shape, T::zero());
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar * x)
             .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
         let scalar = rhs.host_data()[0];
-        let mut out = typed_array(&lhs.shape, T::zero());
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x * scalar)
             .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
@@ -416,7 +422,8 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = typed_array(&lhs.shape, T::zero());
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -431,7 +438,8 @@ pub fn typed_neg<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Zero + Neg<Output = T>,
 {
-    let mut out = typed_array(&input.shape, T::zero());
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| -x)
         .map_err(|err| backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
@@ -441,7 +449,8 @@ pub fn typed_conj<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Zero + ConjElem,
 {
-    let mut out = typed_array(&input.shape, T::zero());
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.conj_elem())
         .map_err(|err| backend_failure("conj", err))?;
     Ok(tensor_from_array(out))
@@ -451,7 +460,8 @@ pub(crate) fn typed_abs<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<
 where
     T: Tier2Elem,
 {
-    let mut out = typed_array(&input.shape, T::zero());
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.abs_elem())
         .map_err(|err| backend_failure("abs", err))?;
     Ok(tensor_from_array(out))
@@ -461,7 +471,8 @@ pub(crate) fn typed_sign<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor
 where
     T: Tier2Elem,
 {
-    let mut out = typed_array(&input.shape, T::zero());
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.sign_elem())
         .map_err(|err| backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
@@ -481,7 +492,8 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = typed_array(&lhs.shape, T::zero());
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -506,7 +518,8 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = typed_array(&lhs.shape, T::zero());
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -532,7 +545,8 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = typed_array(&lhs.shape, T::zero());
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -565,7 +579,8 @@ where
             rhs: on_false.shape.clone(),
         });
     }
-    let mut out = typed_array(&pred.shape, T::zero());
+    // SAFETY: zip_map3_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&pred.shape) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view(pred),
@@ -599,7 +614,8 @@ where
             rhs: upper.shape.clone(),
         });
     }
-    let mut out = typed_array(&input.shape, T::zero());
+    // SAFETY: zip_map3_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&input.shape) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view(input),

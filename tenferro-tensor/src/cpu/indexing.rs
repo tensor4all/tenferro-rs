@@ -108,6 +108,15 @@ pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
     dispatch_tensor!(input, tensor => typed_reverse(tensor, axes))
 }
 
+fn typed_tensor_uninit<T: Clone>(shape: Vec<usize>) -> TypedTensor<T> {
+    let n: usize = shape.iter().product();
+    let mut data = Vec::with_capacity(n);
+    // SAFETY: callers only use this helper for outputs that are fully written
+    // before any read.
+    unsafe { data.set_len(n) };
+    TypedTensor::from_vec(shape, data)
+}
+
 fn typed_slice<T: Copy + Clone>(
     input: &TypedTensor<T>,
     config: &SliceConfig,
@@ -430,7 +439,7 @@ fn typed_gather<T: Copy + Clone + Zero>(
         }
     }
 
-    let mut out = TypedTensor::zeros(out_shape.clone());
+    let mut out = typed_tensor_uninit(out_shape.clone());
     let mut out_idx = vec![0usize; out_rank];
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut operand_idx = vec![0usize; operand.shape.len()];
@@ -621,7 +630,7 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
     }
 
     let out_shape = slice_sizes.to_vec();
-    let mut out = TypedTensor::zeros(out_shape.clone());
+    let mut out = typed_tensor_uninit(out_shape.clone());
     let mut out_idx = vec![0usize; out_shape.len()];
     let mut input_idx = vec![0usize; out_shape.len()];
 

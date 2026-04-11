@@ -35,11 +35,26 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T> {
     let total: usize = shape.iter().product();
     let strides = col_major_strides(shape);
     StridedArray::from_parts(vec![fill; total], shape, &strides, 0)
         .expect("column-major output array")
+}
+
+/// Create an output array WITHOUT initializing element values.
+///
+/// # Safety
+/// Caller must write every element before reading. The returned array
+/// contains uninitialized data.
+pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
+    let total: usize = shape.iter().product();
+    let strides = col_major_strides(shape);
+    let mut data = Vec::with_capacity(total);
+    // SAFETY: caller guarantees every element is written before any read.
+    unsafe { data.set_len(total) };
+    StridedArray::from_parts(data, shape, &strides, 0).expect("column-major output array")
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {

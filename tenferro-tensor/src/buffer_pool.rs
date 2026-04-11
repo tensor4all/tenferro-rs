@@ -189,6 +189,34 @@ impl BufferPool {
             + self.c32_pool.values().map(Vec::len).sum::<usize>()
     }
 
+    /// Acquire a typed vector with length 0 and at least `cap` capacity.
+    ///
+    /// Returned buffers come from the typed pool when possible and are ready
+    /// for push-based population.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::BufferPool;
+    ///
+    /// let mut pool = BufferPool::new();
+    /// let mut buf = pool.acquire_with_capacity::<f64>(4);
+    /// buf.extend_from_slice(&[1.0, 2.0]);
+    /// assert_eq!(buf.len(), 2);
+    /// assert!(buf.capacity() >= 4);
+    /// ```
+    pub fn acquire_with_capacity<T: PoolScalar>(&mut self, cap: usize) -> Vec<T> {
+        if cap == 0 {
+            return Vec::new();
+        }
+
+        let mut buf = unsafe { T::pool_acquire(self, cap) };
+        // SAFETY: shrinking the length to zero does not read the buffer. The
+        // pool only stores `PoolScalar` values, which are `Copy`.
+        unsafe { buf.set_len(0) };
+        buf
+    }
+
     /// Whether all typed pools are empty.
     ///
     /// # Examples
@@ -272,6 +300,22 @@ mod tests {
     fn zero_len_not_pooled() {
         let mut pool = BufferPool::new();
         <f64 as PoolScalar>::pool_release(&mut pool, Vec::new());
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn acquire_with_capacity_reuses_buffer_as_empty_vec() {
+        let mut pool = BufferPool::new();
+
+        let buf = vec![1.0_f64; 8];
+        let ptr = buf.as_ptr();
+        let cap = buf.capacity();
+        <f64 as PoolScalar>::pool_release(&mut pool, buf);
+
+        let reused = pool.acquire_with_capacity::<f64>(8);
+        assert_eq!(reused.as_ptr(), ptr);
+        assert_eq!(reused.len(), 0);
+        assert_eq!(reused.capacity(), cap);
         assert!(pool.is_empty());
     }
 }

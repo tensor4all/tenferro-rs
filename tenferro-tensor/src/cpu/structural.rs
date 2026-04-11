@@ -7,7 +7,7 @@ use crate::{
     DType,
 };
 
-use super::{tensor_from_array, typed_array, typed_view};
+use super::{tensor_from_array, typed_array_uninit, typed_view};
 
 fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
     crate::Error::BackendFailure {
@@ -186,7 +186,8 @@ pub fn typed_transpose<T: Copy + Zero + Clone>(
     let permuted = src
         .permute(perm)
         .map_err(|err| backend_failure("transpose", err))?;
-    let out = typed_array(permuted.dims(), T::zero());
+    // SAFETY: copy_into overwrites every output element.
+    let out = unsafe { typed_array_uninit(permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted)
 }
 
@@ -255,7 +256,8 @@ pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
         .map_err(|err| backend_failure("broadcast_in_dim", err))?;
-    let mut out = typed_array(shape, T::zero());
+    // SAFETY: copy_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(shape) };
     copy_into(&mut out.view_mut(), &broadcast)
         .map_err(|err| backend_failure("broadcast_in_dim", err))?;
     Ok(tensor_from_array(out))
@@ -266,7 +268,8 @@ where
     S: Copy,
     T: Copy + Clone + Zero,
 {
-    let mut out = typed_array(&tensor.shape, T::zero());
+    // SAFETY: map_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(&tensor.shape) };
     map_into(&mut out.view_mut(), &typed_view(tensor), f).expect("typed_convert");
     tensor_from_array(out)
 }
@@ -283,7 +286,8 @@ pub fn typed_extract_diagonal<T: Copy + Zero + Clone>(
     let diag = host_view(tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
         .map_err(|err| backend_failure("extract_diagonal", err))?;
-    let mut out = typed_array(diag.dims(), T::zero());
+    // SAFETY: copy_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
         .map_err(|err| backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
