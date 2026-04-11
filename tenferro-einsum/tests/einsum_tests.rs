@@ -3331,6 +3331,39 @@ fn einsum_rrule_diagonal_extraction_nonunit_cotangent() {
 }
 
 #[test]
+fn einsum_rrule_trace_scalar_output() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[7.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+    let g = to_col_major_vec(&grads[0]);
+    assert!((g[0] - 7.0).abs() < 1e-12, "grad[0,0]={}", g[0]);
+    assert!((g[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", g[1]);
+    assert!((g[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", g[2]);
+    assert!((g[3] - 7.0).abs() < 1e-12, "grad[1,1]={}", g[3]);
+}
+
+#[test]
+fn einsum_rrule_trace_scalar_3x3() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3], COL)
+        .unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[3, 3]);
+    let g = to_col_major_vec(&grads[0]);
+    assert!((g[0] - 2.0).abs() < 1e-12);
+    assert!((g[1] - 0.0).abs() < 1e-12);
+    assert!((g[2] - 0.0).abs() < 1e-12);
+    assert!((g[4] - 2.0).abs() < 1e-12);
+    assert!((g[5] - 0.0).abs() < 1e-12);
+    assert!((g[8] - 2.0).abs() < 1e-12);
+}
+
+#[test]
 fn einsum_hvp_trace_with_delta_injection() {
     use tenferro_einsum::einsum_hvp;
 
