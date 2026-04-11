@@ -91,6 +91,12 @@ pub enum StdTensorOp {
         slice_sizes: Vec<usize>,
     },
     Pad(PadConfig),
+    /// N-ary einsum kept as a single graph node.
+    /// Contraction path is optimized at execution time from actual input shapes.
+    NaryEinsum {
+        subscripts: String,
+        n_inputs: usize,
+    },
     Concatenate {
         axis: usize,
     },
@@ -301,6 +307,13 @@ impl Hash for StdTensorOp {
             Self::Slice(config) => config.hash(state),
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
             Self::Pad(config) => config.hash(state),
+            Self::NaryEinsum {
+                subscripts,
+                n_inputs,
+            } => {
+                subscripts.hash(state);
+                n_inputs.hash(state);
+            }
             Self::Concatenate { axis } => axis.hash(state),
             Self::Reverse { axes } => axes.hash(state),
             Self::ReduceProd { axes, input_shape }
@@ -374,6 +387,7 @@ impl GraphOp for StdTensorOp {
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
+            Self::NaryEinsum { n_inputs, .. } => *n_inputs,
             Self::Concatenate { .. } => {
                 todo!(
                     "n_inputs not yet implemented for variable-arity op {:?}",
@@ -447,6 +461,7 @@ impl GraphOp for StdTensorOp {
             | Self::Slice(_)
             | Self::DynamicSlice { .. }
             | Self::Pad(_)
+            | Self::NaryEinsum { .. }
             | Self::Reverse { .. }
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }

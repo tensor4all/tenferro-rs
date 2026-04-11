@@ -171,6 +171,35 @@ fn lower_to_stablehlo_and_compile_to_exec_wire_remaining_simple_ops() {
 }
 
 #[test]
+fn lower_to_stablehlo_and_compile_to_exec_wire_nary_einsum() {
+    let program = CompiledProgram {
+        instructions: vec![make_instr(
+            StdTensorOp::NaryEinsum {
+                subscripts: "ij,jk->ik".into(),
+                n_inputs: 2,
+            },
+            vec![0, 1],
+            vec![2],
+        )],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let stablehlo = lower_to_stablehlo(&program);
+    assert!(matches!(
+        stablehlo.instructions[0].op,
+        StableHloOp::NaryEinsum { ref subscripts } if subscripts == "ij,jk->ik"
+    ));
+
+    let exec = compile_to_exec(&stablehlo);
+    assert!(matches!(
+        exec.instructions[0].op,
+        ExecOp::NaryEinsum { ref subscripts } if subscripts == "ij,jk->ik"
+    ));
+}
+
+#[test]
 fn lower_to_stablehlo_and_compile_to_exec_wire_indexing_ops() {
     let gather = GatherConfig {
         offset_dims: vec![],

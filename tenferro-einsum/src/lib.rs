@@ -45,6 +45,7 @@ pub use builder::build_einsum_fragment;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
+pub use util::{build_size_dict, compute_output_shape};
 
 #[cfg(test)]
 mod tests;

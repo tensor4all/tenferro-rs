@@ -178,6 +178,14 @@ fn test_std_tensor_op_input_output_counts() {
         2
     );
     assert_eq!(
+        StdTensorOp::NaryEinsum {
+            subscripts: "ij,jk,kl->il".into(),
+            n_inputs: 3,
+        }
+        .n_inputs(),
+        3
+    );
+    assert_eq!(
         StdTensorOp::Pad(PadConfig {
             edge_padding_low: vec![1],
             edge_padding_high: vec![1],
@@ -198,6 +206,14 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
     assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
     assert_eq!(StdTensorOp::constant_f64(1.0).n_outputs(), 1);
+    assert_eq!(
+        StdTensorOp::NaryEinsum {
+            subscripts: "ij,jk->ik".into(),
+            n_inputs: 2,
+        }
+        .n_outputs(),
+        1
+    );
     assert_eq!(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -713,6 +729,10 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
             from: DType::F64,
             to: DType::C64,
         },
+        StdTensorOp::NaryEinsum {
+            subscripts: "ij,jk,kl->il".into(),
+            n_inputs: 3,
+        },
         StdTensorOp::Concatenate { axis: 1 },
         StdTensorOp::Reverse { axes: vec![0] },
         StdTensorOp::ReduceProd {
@@ -740,6 +760,62 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
     let mut rhs = DefaultHasher::new();
     StdTensorOp::constant_f64(1.25).hash(&mut rhs);
     assert_eq!(lhs.finish(), rhs.finish());
+}
+
+#[test]
+fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
+    let op = StdTensorOp::NaryEinsum {
+        subscripts: "ij,jk,kl->il".into(),
+        n_inputs: 3,
+    };
+    let (result, fragment) = run_linearize_case(op.clone(), 3, 0, &[true, false, true]);
+
+    assert!(result[0].is_some());
+    assert_eq!(fragment.ops().len(), 3);
+    assert_eq!(fragment.ops()[0].op, op);
+    assert_eq!(
+        fragment.ops()[0].mode,
+        OpMode::Linear {
+            active_mask: vec![true, false, false],
+        }
+    );
+    assert_eq!(fragment.ops()[1].op, op);
+    assert_eq!(
+        fragment.ops()[1].mode,
+        OpMode::Linear {
+            active_mask: vec![false, false, true],
+        }
+    );
+    assert_eq!(fragment.ops()[2].op, StdTensorOp::Add);
+}
+
+#[test]
+fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
+    let op = StdTensorOp::NaryEinsum {
+        subscripts: "ij,jk,kl->il".into(),
+        n_inputs: 3,
+    };
+    let (result, _, fragment) = run_transpose_case(op, 3, &[false, true, false], true);
+
+    assert_eq!(result[0], None);
+    assert!(result[1].is_some());
+    assert_eq!(result[2], None);
+    assert_eq!(fragment.ops().len(), 3);
+    assert_eq!(fragment.ops()[0].op, StdTensorOp::Conj);
+    assert_eq!(fragment.ops()[1].op, StdTensorOp::Conj);
+    assert_eq!(
+        fragment.ops()[2].op,
+        StdTensorOp::NaryEinsum {
+            subscripts: "il,ij,kl->jk".into(),
+            n_inputs: 3,
+        }
+    );
+    assert_eq!(
+        fragment.ops()[2].mode,
+        OpMode::Linear {
+            active_mask: vec![true, false, false],
+        }
+    );
 }
 
 #[test]
