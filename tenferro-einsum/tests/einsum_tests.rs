@@ -3643,6 +3643,100 @@ fn einsum_frule_trace_both_tangents_diag() {
 }
 
 #[test]
+fn einsum_rrule_sum_reduce_no_repeated_labels() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[2.0, 3.0, 5.0], &[3], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ij->j", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 3]);
+
+    for i in 0..2 {
+        for j in 0..3 {
+            let expected = get(&cotangent, &[j]);
+            assert!(
+                (get(&grads[0], &[i, j]) - expected).abs() < 1e-10,
+                "grad[{i},{j}] = {}, expected {expected}",
+                get(&grads[0], &[i, j])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_frule_parenthesized_both_tangents() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let db = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+
+    let nested_tangent = einsum_frule::<S, CpuBackend>(
+        &mut ctx,
+        "(ij,jk),kl->il",
+        &[&a, &b, &c],
+        &[Some(&da), Some(&db), None],
+    )
+    .unwrap();
+
+    let flat_tangent = einsum_frule::<S, CpuBackend>(
+        &mut ctx,
+        "ij,jk,kl->il",
+        &[&a, &b, &c],
+        &[Some(&da), Some(&db), None],
+    )
+    .unwrap();
+
+    assert_tensors_close(&nested_tangent, &flat_tangent, "frule nested both tangents");
+}
+
+#[test]
+fn einsum_frule_no_tangents_produces_zeros() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let result =
+        einsum_frule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[None, None]).unwrap();
+
+    assert_eq!(result.dims(), &[2, 2]);
+    let data = result.buffer().as_slice().unwrap();
+    for (i, &v) in data.iter().enumerate() {
+        assert!(
+            v.abs() < 1e-15,
+            "frule no-tangent element {i} = {v}, expected 0.0"
+        );
+    }
+}
+
+#[test]
+fn einsum_frule_parenthesized_no_tangents_produces_zeros() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    let result = einsum_frule::<S, CpuBackend>(
+        &mut ctx,
+        "(ij,jk),kl->il",
+        &[&a, &b, &c],
+        &[None, None, None],
+    )
+    .unwrap();
+
+    assert_eq!(result.dims(), &[2, 2]);
+    let data = result.buffer().as_slice().unwrap();
+    for (i, &v) in data.iter().enumerate() {
+        assert!(
+            v.abs() < 1e-15,
+            "frule nested no-tangent element {i} = {v}, expected 0.0"
+        );
+    }
+}
+
+#[test]
 fn einsum_rrule_partial_trace_with_free_index_delta() {
     let mut ctx = CpuContext::new(1);
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
