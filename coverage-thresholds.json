@@ -8,7 +8,6 @@
   ],
   "files": {
     "tenferro-einsum/src/lib.rs": 65,
-    "tenferro-tensor/src/cpu/exec_session.rs": 70,
-    "tenferro-tensor/src/cpu/backend.rs": 78
+    "tenferro-tensor/src/cpu/exec_session.rs": 60
   }
 }
