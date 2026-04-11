@@ -1,4 +1,5 @@
 use num_traits::{One, Zero};
+use smallvec::SmallVec;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::DotGeneralConfig;
@@ -30,7 +31,7 @@ struct GemmDims {
     c_rs: isize,
     c_cs: isize,
     c_bs: isize,
-    out_shape: Vec<usize>,
+    out_shape: SmallVec<[usize; 8]>,
 }
 
 fn validate_axis_list(
@@ -39,7 +40,7 @@ fn validate_axis_list(
     axes: &[usize],
     rank: usize,
 ) -> crate::Result<()> {
-    let mut seen = vec![false; rank];
+    let mut seen: SmallVec<[bool; 8]> = smallvec::smallvec![false; rank];
     for &axis in axes {
         if axis >= rank {
             return Err(Error::AxisOutOfBounds { op, axis, rank });
@@ -174,7 +175,7 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
     if shapes.len() == 1 {
         return Some((shapes[0], strides[0]));
     }
-    let mut dims: Vec<(usize, isize)> = shapes
+    let mut dims: SmallVec<[(usize, isize); 8]> = shapes
         .iter()
         .copied()
         .zip(strides.iter().copied())
@@ -191,8 +192,8 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
     Some((shapes.iter().product(), base_stride))
 }
 
-fn stride_sort_order(strides: &[isize]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..strides.len()).collect();
+fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
+    let mut order: SmallVec<[usize; 8]> = (0..strides.len()).collect();
     order.sort_by_key(|&idx| strides[idx].unsigned_abs());
     order
 }
@@ -210,20 +211,20 @@ fn canonical_gemm_layout(
     config: &DotGeneralConfig,
     lhs_rank: usize,
     rhs_rank: usize,
-) -> (Vec<usize>, Vec<usize>, DotGeneralConfig) {
-    let lhs_free: Vec<usize> = (0..lhs_rank)
+) -> (SmallVec<[usize; 8]>, SmallVec<[usize; 8]>, DotGeneralConfig) {
+    let lhs_free: SmallVec<[usize; 8]> = (0..lhs_rank)
         .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
         .collect();
-    let rhs_free: Vec<usize> = (0..rhs_rank)
+    let rhs_free: SmallVec<[usize; 8]> = (0..rhs_rank)
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let mut lhs_perm = Vec::with_capacity(lhs_rank);
+    let mut lhs_perm = SmallVec::<[usize; 8]>::with_capacity(lhs_rank);
     lhs_perm.extend_from_slice(&lhs_free);
     lhs_perm.extend_from_slice(&config.lhs_contracting_dims);
     lhs_perm.extend_from_slice(&config.lhs_batch_dims);
 
-    let mut rhs_perm = Vec::with_capacity(rhs_rank);
+    let mut rhs_perm = SmallVec::<[usize; 8]>::with_capacity(rhs_rank);
     rhs_perm.extend_from_slice(&config.rhs_contracting_dims);
     rhs_perm.extend_from_slice(&rhs_free);
     rhs_perm.extend_from_slice(&config.rhs_batch_dims);
@@ -257,26 +258,26 @@ fn analyse_gemm<T>(
     let lhs_rank = lhs.shape.len();
     let rhs_rank = rhs.shape.len();
 
-    let lhs_free: Vec<usize> = (0..lhs_rank)
+    let lhs_free: SmallVec<[usize; 8]> = (0..lhs_rank)
         .filter(|d| !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d))
         .collect();
-    let rhs_free: Vec<usize> = (0..rhs_rank)
+    let rhs_free: SmallVec<[usize; 8]> = (0..rhs_rank)
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides = col_major_strides(&lhs.shape);
-    let rhs_strides = col_major_strides(&rhs.shape);
+    let lhs_strides: SmallVec<[isize; 8]> = col_major_strides(&lhs.shape).into_iter().collect();
+    let rhs_strides: SmallVec<[isize; 8]> = col_major_strides(&rhs.shape).into_iter().collect();
 
-    let batch_shapes: Vec<usize> = config
+    let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims
         .iter()
         .map(|&d| lhs.shape[d])
         .collect();
     let batch_total: usize = batch_shapes.iter().product();
 
-    let lhs_free_shapes: Vec<usize> = lhs_free.iter().map(|&d| lhs.shape[d]).collect();
-    let rhs_free_shapes: Vec<usize> = rhs_free.iter().map(|&d| rhs.shape[d]).collect();
-    let contract_shapes: Vec<usize> = config
+    let lhs_free_shapes: SmallVec<[usize; 8]> = lhs_free.iter().map(|&d| lhs.shape[d]).collect();
+    let rhs_free_shapes: SmallVec<[usize; 8]> = rhs_free.iter().map(|&d| rhs.shape[d]).collect();
+    let contract_shapes: SmallVec<[usize; 8]> = config
         .lhs_contracting_dims
         .iter()
         .map(|&d| lhs.shape[d])
@@ -286,24 +287,24 @@ fn analyse_gemm<T>(
     let n: usize = rhs_free_shapes.iter().product();
     let k: usize = contract_shapes.iter().product();
 
-    let lhs_free_strides: Vec<isize> = lhs_free.iter().map(|&d| lhs_strides[d]).collect();
-    let rhs_free_strides: Vec<isize> = rhs_free.iter().map(|&d| rhs_strides[d]).collect();
-    let lhs_contract_strides: Vec<isize> = config
+    let lhs_free_strides: SmallVec<[isize; 8]> = lhs_free.iter().map(|&d| lhs_strides[d]).collect();
+    let rhs_free_strides: SmallVec<[isize; 8]> = rhs_free.iter().map(|&d| rhs_strides[d]).collect();
+    let lhs_contract_strides: SmallVec<[isize; 8]> = config
         .lhs_contracting_dims
         .iter()
         .map(|&d| lhs_strides[d])
         .collect();
-    let rhs_contract_strides: Vec<isize> = config
+    let rhs_contract_strides: SmallVec<[isize; 8]> = config
         .rhs_contracting_dims
         .iter()
         .map(|&d| rhs_strides[d])
         .collect();
-    let lhs_batch_strides: Vec<isize> = config
+    let lhs_batch_strides: SmallVec<[isize; 8]> = config
         .lhs_batch_dims
         .iter()
         .map(|&d| lhs_strides[d])
         .collect();
-    let rhs_batch_strides: Vec<isize> = config
+    let rhs_batch_strides: SmallVec<[isize; 8]> = config
         .rhs_batch_dims
         .iter()
         .map(|&d| rhs_strides[d])
@@ -325,12 +326,12 @@ fn analyse_gemm<T>(
     let (_, a_bs) = try_fuse_dims(&batch_shapes, &lhs_batch_strides)?;
     let (_, b_bs) = try_fuse_dims(&batch_shapes, &rhs_batch_strides)?;
 
-    let mut out_shape = Vec::new();
+    let mut out_shape = SmallVec::<[usize; 8]>::new();
     out_shape.extend_from_slice(&lhs_free_shapes);
     out_shape.extend_from_slice(&rhs_free_shapes);
     out_shape.extend_from_slice(&batch_shapes);
 
-    let out_strides = col_major_strides(&out_shape);
+    let out_strides: SmallVec<[isize; 8]> = col_major_strides(&out_shape).into_iter().collect();
     let nm = lhs_free_shapes.len();
     let nn = rhs_free_shapes.len();
     let out_m_shapes = &out_shape[..nm];
@@ -413,7 +414,7 @@ where
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         return Some(TypedTensor {
             buffer: Buffer::Host(vec![T::zero(); out_n]),
-            shape: dims.out_shape,
+            shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
         });
     }
@@ -458,7 +459,7 @@ where
 
     Some(TypedTensor {
         buffer: Buffer::Host(out_data),
-        shape: dims.out_shape,
+        shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
     })
 }
@@ -512,7 +513,7 @@ where
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         return Some(TypedTensor {
             buffer: Buffer::Host(vec![T::zero(); out_n]),
-            shape: dims.out_shape,
+            shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
         });
     }
@@ -563,7 +564,7 @@ where
 
     Some(TypedTensor {
         buffer: Buffer::Host(out),
-        shape: dims.out_shape,
+        shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
     })
 }
