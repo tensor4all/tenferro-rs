@@ -35,14 +35,6 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T> {
-    let total: usize = shape.iter().product();
-    let strides = col_major_strides(shape);
-    StridedArray::from_parts(vec![fill; total], shape, &strides, 0)
-        .expect("column-major output array")
-}
-
 /// Create an output array WITHOUT initializing element values.
 ///
 /// # Safety
