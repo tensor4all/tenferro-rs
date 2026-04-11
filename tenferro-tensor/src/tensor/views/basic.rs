@@ -1,6 +1,13 @@
 use super::*;
 use tenferro_algebra::Conjugate;
 
+#[inline]
+fn checked_dim_offset(base: isize, index: usize, stride: isize) -> Option<isize> {
+    (index as isize)
+        .checked_mul(stride)
+        .and_then(|delta| base.checked_add(delta))
+}
+
 fn matrix_transpose_permutation(ndim: usize) -> Result<Vec<usize>> {
     if ndim < 2 {
         return Err(Error::InvalidArgument(
@@ -279,10 +286,8 @@ impl<T> Tensor<T> {
             )));
         }
 
-        let offset = (index as isize)
-            .checked_mul(self.strides[dim])
-            .and_then(|delta| self.offset.checked_add(delta))
-            .ok_or_else(|| {
+        let offset =
+            checked_dim_offset(self.offset, index, self.strides[dim]).ok_or_else(|| {
                 Error::InvalidArgument(format!(
                     "select offset overflow for index {index} in dimension {dim}"
                 ))
@@ -321,10 +326,8 @@ impl<T> Tensor<T> {
             )));
         }
 
-        let offset = (start as isize)
-            .checked_mul(self.strides[dim])
-            .and_then(|delta| self.offset.checked_add(delta))
-            .ok_or_else(|| {
+        let offset =
+            checked_dim_offset(self.offset, start, self.strides[dim]).ok_or_else(|| {
                 Error::InvalidArgument(format!(
                     "narrow offset overflow for start {start} in dimension {dim}"
                 ))
