@@ -52,6 +52,61 @@ pub fn linearize_dot_general(
     }
 }
 
+pub fn linearize_nary_einsum(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    subscripts: &str,
+) -> Vec<Option<LocalValId>> {
+    let mut terms = Vec::new();
+
+    for (active_idx, tangent) in tangent_in.iter().enumerate() {
+        let Some(dt) = tangent else {
+            continue;
+        };
+
+        let mut inputs = Vec::with_capacity(primal_in.len());
+        for (input_idx, key) in primal_in.iter().enumerate() {
+            if input_idx == active_idx {
+                inputs.push(ValRef::Local(*dt));
+            } else {
+                inputs.push(ValRef::External(key.clone()));
+            }
+        }
+
+        let out = builder.add_op(
+            StdTensorOp::NaryEinsum {
+                subscripts: subscripts.to_string(),
+                n_inputs: primal_in.len(),
+            },
+            inputs,
+            OpMode::Linear {
+                active_mask: (0..primal_in.len()).map(|idx| idx == active_idx).collect(),
+            },
+        );
+        terms.push(out[0]);
+    }
+
+    match terms.as_slice() {
+        [] => vec![None],
+        [only] => vec![Some(*only)],
+        [head, tail @ ..] => {
+            let mut result = *head;
+            for &term in tail {
+                let sum = builder.add_op(
+                    StdTensorOp::Add,
+                    vec![ValRef::Local(result), ValRef::Local(term)],
+                    OpMode::Linear {
+                        active_mask: vec![true, true],
+                    },
+                );
+                result = sum[0];
+            }
+            vec![Some(result)]
+        }
+    }
+}
+
 pub fn linearize_reduce_sum(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
@@ -232,6 +287,83 @@ pub fn transpose_dot_general(
             },
         );
         result[1] = Some(add_transpose_if_needed(builder, out[0], &perm));
+    }
+
+    result
+}
+
+pub fn transpose_nary_einsum(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    subscripts: &str,
+    n_inputs: usize,
+) -> Vec<Option<LocalValId>> {
+    let ct = match cotangent_out[0] {
+        Some(ct) => ct,
+        None => return vec![None; n_inputs],
+    };
+
+    let active_mask = match mode {
+        OpMode::Linear { active_mask } => active_mask,
+        OpMode::Primal => return vec![None; n_inputs],
+    };
+
+    let Some((input_part, output_labels)) = subscripts.split_once("->") else {
+        panic!("NaryEinsum subscripts must contain '->': {subscripts}");
+    };
+    let input_labels: Vec<&str> = input_part.split(',').collect();
+    assert_eq!(
+        input_labels.len(),
+        n_inputs,
+        "NaryEinsum input count mismatch for subscripts {subscripts}"
+    );
+
+    let mut result = Vec::with_capacity(n_inputs);
+    for active_idx in 0..n_inputs {
+        if !active_mask[active_idx] {
+            result.push(None);
+            continue;
+        }
+
+        let mut vjp_input_parts = Vec::with_capacity(n_inputs);
+        let mut vjp_inputs = Vec::with_capacity(n_inputs);
+
+        vjp_input_parts.push(output_labels.to_string());
+        vjp_inputs.push(ValRef::Local(ct));
+
+        for input_idx in 0..n_inputs {
+            if input_idx == active_idx {
+                continue;
+            }
+
+            vjp_input_parts.push(input_labels[input_idx].to_string());
+            let conjugated = builder.add_op(
+                StdTensorOp::Conj,
+                vec![inputs[input_idx].clone()],
+                OpMode::Primal,
+            );
+            vjp_inputs.push(ValRef::Local(conjugated[0]));
+        }
+
+        let out = builder.add_op(
+            StdTensorOp::NaryEinsum {
+                subscripts: format!(
+                    "{}->{}",
+                    vjp_input_parts.join(","),
+                    input_labels[active_idx]
+                ),
+                n_inputs: vjp_inputs.len(),
+            },
+            vjp_inputs,
+            OpMode::Linear {
+                active_mask: std::iter::once(true)
+                    .chain(std::iter::repeat_n(false, n_inputs.saturating_sub(1)))
+                    .collect(),
+            },
+        );
+        result.push(Some(out[0]));
     }
 
     result

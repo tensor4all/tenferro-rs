@@ -65,6 +65,12 @@ fn assert_close(a: f64, b: f64, label: &str) {
     assert!((a - b).abs() < 1e-10, "{label}: got {a}, expected {b}");
 }
 
+fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
+    input
+        .reshape_sym(&[input.sym_size(0), input.sym_size(1)])
+        .unwrap()
+}
+
 // ============================================================================
 // Group 1: Basic unary operations
 // ============================================================================
@@ -246,6 +252,49 @@ fn einsum_matmul() {
             );
         }
     }
+}
+
+#[test]
+fn einsum_symbolic_matmul_matches_static_path() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let a_symbolic = symbolic_identity_2d(&a);
+    let b_symbolic = symbolic_identity_2d(&b);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let mut expected = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
+    let expected = expected.eval(&mut engine).unwrap().clone();
+
+    let mut actual = einsum(&mut engine, &[&a_symbolic, &b_symbolic], "ij,jk->ik").unwrap();
+    let actual = actual.eval(&mut engine).unwrap();
+
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(get_f64_data(actual), get_f64_data(&expected));
+}
+
+#[test]
+fn einsum_symbolic_three_tensor_chain_matches_static_path() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, -0.5, 2.0, 0.75]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![0.5, 1.5, -1.0, 0.25]));
+    let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, -1.5, 0.75, 1.25]));
+    let a_symbolic = symbolic_identity_2d(&a);
+    let b_symbolic = symbolic_identity_2d(&b);
+    let c_symbolic = symbolic_identity_2d(&c);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let mut expected = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    let expected = expected.eval(&mut engine).unwrap().clone();
+
+    let mut actual = einsum(
+        &mut engine,
+        &[&a_symbolic, &b_symbolic, &c_symbolic],
+        "ij,jk,kl->il",
+    )
+    .unwrap();
+    let actual = actual.eval(&mut engine).unwrap();
+
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(get_f64_data(actual), get_f64_data(&expected));
 }
 
 #[test]
@@ -1098,7 +1147,7 @@ fn einsum_scalar_vector_products() {
 // ============================================================================
 
 #[test]
-#[should_panic(expected = "output label not found in inputs")]
+#[should_panic(expected = "unknown size for label")]
 fn einsum_error_output_label_not_in_input() {
     // Output references label 'k' which is not in any input
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);

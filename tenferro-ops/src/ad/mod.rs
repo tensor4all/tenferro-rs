@@ -42,6 +42,9 @@ fn linearize_non_semiring(
         StdTensorOp::DotGeneral(config) => {
             contraction::linearize_dot_general(builder, primal_in, tangent_in, config)
         }
+        StdTensorOp::NaryEinsum { subscripts, .. } => {
+            contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
+        }
         StdTensorOp::ReduceSum { axes, .. } => {
             contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
         }
@@ -169,6 +172,17 @@ fn transpose_non_semiring(
         StdTensorOp::DotGeneral(config) => {
             contraction::transpose_dot_general(builder, cotangent_out, inputs, mode, config)
         }
+        StdTensorOp::NaryEinsum {
+            subscripts,
+            n_inputs,
+        } => contraction::transpose_nary_einsum(
+            builder,
+            cotangent_out,
+            inputs,
+            mode,
+            subscripts,
+            *n_inputs,
+        ),
         StdTensorOp::ReduceSum { .. } => {
             contraction::transpose_reduce_sum(builder, cotangent_out, op, inputs)
         }

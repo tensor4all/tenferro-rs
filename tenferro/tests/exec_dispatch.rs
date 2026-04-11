@@ -17,10 +17,21 @@ fn scalar_tensor(value: f64) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
 }
 
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
+    Tensor::F64(TypedTensor::from_vec(shape, data))
+}
+
 fn scalar_value(tensor: &Tensor) -> f64 {
     match tensor {
         Tensor::F64(inner) => inner.host_data()[0],
         other => panic!("expected scalar f64 tensor, got {other:?}"),
+    }
+}
+
+fn f64_data(tensor: &Tensor) -> &[f64] {
+    match tensor {
+        Tensor::F64(inner) => inner.host_data(),
+        other => panic!("expected f64 tensor, got {other:?}"),
     }
 }
 
@@ -466,6 +477,27 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         assert_eq!(outputs.len(), 1);
         assert_eq!(scalar_value(&outputs[0]), expected_value);
     }
+}
+
+#[test]
+fn eval_exec_ir_executes_nary_einsum_via_nested_program() {
+    let mut backend = CpuBackend::new();
+    let program = single_instruction_program(
+        ExecOp::NaryEinsum {
+            subscripts: "ij,jk->ik".into(),
+        },
+        2,
+    );
+    let inputs = vec![
+        f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ];
+
+    let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(f64_data(&outputs[0]), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]

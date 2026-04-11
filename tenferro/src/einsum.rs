@@ -28,6 +28,7 @@ use computegraph::types::ValRef;
 use omeco::ScoreFunction;
 use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::TensorBackend;
 
 use super::engine::Engine;
@@ -242,8 +243,24 @@ pub fn einsum_with<B: TensorBackend>(
     subscripts: &str,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
+    if inputs.is_empty() {
+        return Err(Error::ContractionError(
+            "einsum requires at least one input tensor".into(),
+        ));
+    }
+
     let subs =
         Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
+    if subs.inputs.len() != inputs.len() {
+        return Err(Error::ContractionError(format!(
+            "einsum subscripts expect {} inputs, got {}",
+            subs.inputs.len(),
+            inputs.len()
+        )));
+    }
+    if inputs.iter().any(|tensor| tensor.shape_hint.is_none()) {
+        return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
+    }
     let shapes: Vec<Vec<usize>> = inputs
         .iter()
         .map(|t| {
@@ -283,6 +300,53 @@ pub fn einsum_with<B: TensorBackend>(
             let tree = resolve_strategy(optimize, &subs, &shape_refs)?;
             Ok(build_traced_from_tree(inputs, &subs, &tree, &shapes))
         }
+    }
+}
+
+fn build_symbolic_nary_einsum(
+    inputs: &[&TracedTensor],
+    subscripts: &str,
+    parsed: &Subscripts,
+) -> TracedTensor {
+    let mut builder = FragmentBuilder::new();
+    let mut input_vals = Vec::with_capacity(inputs.len());
+    let mut merged = HashMap::new();
+    let mut extra_roots = Vec::new();
+
+    for input in inputs {
+        builder.add_parent(input.fragment.clone());
+        input_vals.push(ValRef::External(
+            input.fragment.vals()[input.val].key.clone(),
+        ));
+        merged.extend(
+            input
+                .inputs_map
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        extra_roots.extend(input.extra_roots.iter().cloned());
+    }
+
+    let outputs = builder.add_op(
+        StdTensorOp::NaryEinsum {
+            subscripts: subscripts.to_string(),
+            n_inputs: inputs.len(),
+        },
+        input_vals,
+        computegraph::types::OpMode::Primal,
+    );
+    builder.set_outputs(outputs.clone());
+
+    TracedTensor {
+        id: next_traced_id(),
+        rank: parsed.output.len(),
+        dtype: inputs[0].dtype,
+        fragment: Arc::new(builder.build()),
+        val: outputs[0],
+        data: None,
+        shape_hint: None,
+        inputs_map: Arc::new(merged),
+        extra_roots,
     }
 }
 
@@ -467,20 +531,9 @@ fn build_traced_from_tree(
 
 /// Compute the output shape from einsum subscripts and input shapes.
 fn compute_einsum_output_shape(subscripts: &Subscripts, shapes: &[Vec<usize>]) -> Vec<usize> {
-    let mut label_to_size = HashMap::new();
-    for (labels, shape) in subscripts.inputs.iter().zip(shapes.iter()) {
-        for (&label, &size) in labels.iter().zip(shape.iter()) {
-            label_to_size.insert(label, size);
-        }
-    }
-    let out_shape: Vec<usize> = subscripts
-        .output
-        .iter()
-        .map(|l| {
-            *label_to_size
-                .get(l)
-                .expect("output label not found in inputs")
-        })
-        .collect();
-    out_shape
+    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+    let size_dict = tenferro_einsum::build_size_dict(subscripts, &shape_refs, None)
+        .unwrap_or_else(|err| panic!("einsum shape computation failed: {err}"));
+    tenferro_einsum::compute_output_shape(&subscripts.output, &size_dict)
+        .unwrap_or_else(|err| panic!("einsum output shape computation failed: {err}"))
 }

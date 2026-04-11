@@ -20,6 +20,9 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Neg => StableHloOp::Negate,
                 StdTensorOp::Conj => StableHloOp::Conj,
                 StdTensorOp::DotGeneral(c) => StableHloOp::DotGeneral(c.clone()),
+                StdTensorOp::NaryEinsum { subscripts, .. } => StableHloOp::NaryEinsum {
+                    subscripts: subscripts.clone(),
+                },
                 StdTensorOp::Transpose { perm } => StableHloOp::Transpose { perm: perm.clone() },
                 StdTensorOp::Reshape { to_shape, .. } => StableHloOp::Reshape {
                     shape: to_shape.clone(),
@@ -207,6 +210,9 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Negate => ExecOp::Negate,
                 StableHloOp::Conj => ExecOp::Conj,
                 StableHloOp::DotGeneral(c) => ExecOp::BatchedGemm(c.clone()),
+                StableHloOp::NaryEinsum { subscripts } => ExecOp::NaryEinsum {
+                    subscripts: subscripts.clone(),
+                },
                 StableHloOp::Transpose { perm } => ExecOp::Permute { perm: perm.clone() },
                 StableHloOp::Reshape { shape } => ExecOp::Reshape {
                     shape: shape.clone(),

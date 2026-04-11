@@ -11,6 +11,9 @@ pub enum StableHloOp {
     Negate,
     Conj,
     DotGeneral(DotGeneralConfig),
+    NaryEinsum {
+        subscripts: String,
+    },
     Transpose {
         perm: Vec<usize>,
     },

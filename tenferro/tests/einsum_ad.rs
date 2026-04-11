@@ -112,6 +112,12 @@ fn transpose_f64(data: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     out
 }
 
+fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
+    input
+        .reshape_sym(&[input.sym_size(0), input.sym_size(1)])
+        .unwrap()
+}
+
 fn assert_close_slice(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
     for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -240,6 +246,25 @@ fn jvp_einsum_matmul() {
 }
 
 #[test]
+fn jvp_symbolic_einsum_matmul() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let b_data = vec![0.5, -1.0, 2.0, 1.5, -0.25, 3.0];
+    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+    let da_data = vec![1.0, -0.5, 0.25, 0.0, 2.0, -1.0];
+    let da = TracedTensor::from_tensor(f64_tensor(vec![2, 3], da_data.clone()));
+    let a_symbolic = symbolic_identity_2d(&a);
+    let b_symbolic = symbolic_identity_2d(&b);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let y = einsum(&mut engine, &[&a_symbolic, &b_symbolic], "ij,jk->ik").unwrap();
+    let dy = y.jvp(&a, &da);
+
+    let result = eval_tensor(dy);
+    let expected = matmul_f64(&da_data, &b_data, 2, 3, 2);
+    assert_close_slice(get_f64_data(&result), &expected);
+}
+
+#[test]
 fn vjp_einsum_matmul() {
     let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
     let b_data = vec![0.5, -1.0, 2.0, 1.5, -0.25, 3.0];
@@ -278,6 +303,49 @@ fn grad_einsum_three_way() {
         let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
+        eval_scalar(y.reduce_sum(&[0, 1]))
+    };
+    assert_grad_matches_finite_diff(grad_a_data, &a_data, f);
+}
+
+#[test]
+fn grad_symbolic_einsum_three_way() {
+    let a_data = vec![1.0, -0.5, 2.0, 0.75];
+    let b_data = vec![0.5, 1.5, -1.0, 0.25];
+    let c_data = vec![2.0, -1.5, 0.75, 1.25];
+
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], a_data.clone()));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
+    let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+    let a_symbolic = symbolic_identity_2d(&a);
+    let b_symbolic = symbolic_identity_2d(&b);
+    let c_symbolic = symbolic_identity_2d(&c);
+    let mut engine = Engine::new(CpuBackend::new());
+    let y = einsum(
+        &mut engine,
+        &[&a_symbolic, &b_symbolic, &c_symbolic],
+        "ij,jk,kl->il",
+    )
+    .unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
+
+    let grad_a_tensor = eval_tensor(grad_a);
+    let grad_a_data = get_f64_data(&grad_a_tensor);
+
+    let f = |xs: &[f64]| {
+        let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], xs.to_vec()));
+        let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
+        let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+        let a_symbolic = symbolic_identity_2d(&a);
+        let b_symbolic = symbolic_identity_2d(&b);
+        let c_symbolic = symbolic_identity_2d(&c);
+        let mut engine = Engine::new(CpuBackend::new());
+        let y = einsum(
+            &mut engine,
+            &[&a_symbolic, &b_symbolic, &c_symbolic],
+            "ij,jk,kl->il",
+        )
+        .unwrap();
         eval_scalar(y.reduce_sum(&[0, 1]))
     };
     assert_grad_matches_finite_diff(grad_a_data, &a_data, f);

@@ -5,7 +5,21 @@ use tenferro_device::{Error, Result};
 use crate::syntax::subscripts::Subscripts;
 
 /// Build a label -> size mapping from subscripts and input shapes.
-pub(crate) fn build_size_dict(
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::{build_size_dict, Subscripts};
+///
+/// let subs = Subscripts::parse("ij,jk->ik").unwrap();
+/// let shapes = [&[2, 3][..], &[3, 4][..]];
+/// let sizes = build_size_dict(&subs, &shapes, None).unwrap();
+///
+/// assert_eq!(sizes.get(&(b'i' as u32)), Some(&2));
+/// assert_eq!(sizes.get(&(b'j' as u32)), Some(&3));
+/// assert_eq!(sizes.get(&(b'k' as u32)), Some(&4));
+/// ```
+pub fn build_size_dict(
     subscripts: &Subscripts,
     shapes: &[&[usize]],
     extra: Option<&HashMap<u32, usize>>,
@@ -50,7 +64,20 @@ pub(crate) fn build_size_dict(
 }
 
 /// Compute output shape from output subscripts and size dictionary.
-pub(crate) fn compute_output_shape(
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::{build_size_dict, compute_output_shape, Subscripts};
+///
+/// let subs = Subscripts::parse("ij,jk->ik").unwrap();
+/// let shapes = [&[2, 3][..], &[3, 4][..]];
+/// let sizes = build_size_dict(&subs, &shapes, None).unwrap();
+/// let output_shape = compute_output_shape(&subs.output, &sizes).unwrap();
+///
+/// assert_eq!(output_shape, vec![2, 4]);
+/// ```
+pub fn compute_output_shape(
     output_subs: &[u32],
     size_dict: &HashMap<u32, usize>,
 ) -> Result<Vec<usize>> {

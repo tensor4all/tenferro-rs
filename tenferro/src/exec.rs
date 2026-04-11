@@ -1,7 +1,17 @@
-use crate::error::Result;
+use std::sync::Arc;
+
+use crate::compiler::{compile_to_exec, lower_to_stablehlo};
+use crate::error::{Error, Result};
+use computegraph::compile::compile;
+use computegraph::fragment::FragmentBuilder;
+use computegraph::materialize::materialize_merge;
+use computegraph::resolve::resolve;
+use computegraph::types::{GlobalValKey, ValRef};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Semiring;
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::cpu::structural::{
     typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
     typed_transpose,
@@ -32,6 +42,9 @@ pub enum ExecOp {
         bytes: Vec<u8>,
     },
     BatchedGemm(DotGeneralConfig),
+    NaryEinsum {
+        subscripts: String,
+    },
     ReduceSum {
         axes: Vec<usize>,
     },
@@ -200,6 +213,17 @@ fn eval_exec_ir_inner(
                 get(&slots, &inst.input_slots, 1)?,
                 config,
             )?,
+            ExecOp::NaryEinsum { subscripts } => {
+                let mut inputs = Vec::with_capacity(inst.input_slots.len());
+                for &slot in &inst.input_slots {
+                    inputs.push(
+                        slots[slot]
+                            .as_ref()
+                            .ok_or(TensorError::MissingValue { slot })?,
+                    );
+                }
+                execute_nary_einsum(exec, &inputs, subscripts)?
+            }
             ExecOp::ReduceSum { axes } => {
                 exec.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)?
             }
@@ -345,6 +369,93 @@ fn eval_exec_ir_inner(
                 .ok_or(TensorError::MissingValue { slot }.into())
         })
         .collect()
+}
+
+fn execute_nary_einsum(
+    exec: &mut dyn TensorExec,
+    inputs: &[&Tensor],
+    subscripts: &str,
+) -> Result<Tensor> {
+    use tenferro_einsum::{
+        build_einsum_fragment, ContractionOptimizerOptions, ContractionTree, Subscripts,
+    };
+
+    if inputs.is_empty() {
+        return Err(Error::ContractionError(
+            "nary einsum requires at least one input tensor".into(),
+        ));
+    }
+
+    let subs =
+        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
+    let shapes: Vec<Vec<usize>> = inputs
+        .iter()
+        .map(|tensor| tensor.shape().to_vec())
+        .collect();
+    let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+    let tree = ContractionTree::optimize_with_options(
+        &subs,
+        &shape_refs,
+        &ContractionOptimizerOptions::default(),
+    )
+    .map_err(|e| Error::ContractionError(format!("{e}")))?;
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut input_vals = Vec::with_capacity(inputs.len());
+    for input_idx in 0..inputs.len() {
+        let local = builder.add_input(TensorInputKey::User {
+            id: input_idx as u64,
+        });
+        input_vals.push(ValRef::Local(local));
+    }
+
+    let result_ref = build_einsum_fragment(&mut builder, &tree, &input_vals, &shapes);
+    let result_local = match result_ref {
+        ValRef::Local(local) => local,
+        ValRef::External(_) => {
+            return Err(Error::Internal(
+                "runtime nary einsum builder returned an external value".into(),
+            ))
+        }
+    };
+    builder.set_outputs(vec![result_local]);
+    let fragment = Arc::new(builder.build());
+    let output_key = fragment.vals()[result_local].key.clone();
+
+    let view = resolve(vec![fragment]);
+    let graph = materialize_merge(&view, &[output_key]);
+    let compiled = compile(&graph);
+    let stablehlo = lower_to_stablehlo(&compiled);
+    let program = compile_to_exec(&stablehlo);
+
+    let mut program_inputs = Vec::with_capacity(graph.inputs.len());
+    for key in &graph.inputs {
+        match key {
+            GlobalValKey::Input(TensorInputKey::User { id }) => {
+                let input_idx = *id as usize;
+                let tensor = inputs.get(input_idx).ok_or_else(|| {
+                    Error::Internal(format!(
+                        "runtime nary einsum input {input_idx} missing for subscripts {subscripts}"
+                    ))
+                })?;
+                program_inputs.push((*tensor).clone());
+            }
+            other => {
+                return Err(Error::Internal(format!(
+                    "unexpected runtime nary einsum input key: {other:?}"
+                )))
+            }
+        }
+    }
+
+    let mut outputs = eval_exec_ir_inner(exec, &program, program_inputs)?;
+    if outputs.len() != 1 {
+        return Err(Error::Internal(format!(
+            "runtime nary einsum expected 1 output, got {}",
+            outputs.len()
+        )));
+    }
+    Ok(outputs.remove(0))
 }
 
 fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
