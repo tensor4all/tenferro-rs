@@ -3446,3 +3446,223 @@ fn einsum_rrule_trace_multi_operand() {
     assert!((ga[2] - 0.0).abs() < 1e-12, "grad_A[0,1]={}", ga[2]);
     assert!((ga[3] - 11.0).abs() < 1e-12, "grad_A[1,1]={}", ga[3]);
 }
+
+#[test]
+fn einsum_rrule_multi_pair_trace_iijj_delta_injection() {
+    let mut ctx = CpuContext::new(1);
+    let n = 3;
+    let total = n * n * n * n;
+    let data: Vec<f64> = (0..total).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[n, n, n, n], COL).unwrap();
+
+    let cotangent = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "iijj->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[n, n, n, n]);
+
+    for i1 in 0..n {
+        for i2 in 0..n {
+            for j1 in 0..n {
+                for j2 in 0..n {
+                    let expected = if i1 == i2 && j1 == j2 { 2.0 } else { 0.0 };
+                    assert!(
+                        (get(&grads[0], &[i1, i2, j1, j2]) - expected).abs() < 1e-10,
+                        "grad[{i1},{i2},{j1},{j2}] = {}, expected {expected}",
+                        get(&grads[0], &[i1, i2, j1, j2])
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn einsum_rrule_binary_diag_ii_j_to_j_finite_difference() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3], COL)
+        .unwrap();
+    let v = Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+    let eps = 1e-7;
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii,j->j", &[&a, &v], &cotangent).unwrap();
+    assert_eq!(grads.len(), 2);
+    assert_eq!(grads[0].dims(), &[3, 3]);
+    assert_eq!(grads[1].dims(), &[2]);
+
+    let a_data = a.buffer().as_slice().unwrap();
+    for idx in 0..9 {
+        let row = idx % 3;
+        let col = idx / 3;
+        let mut a_plus = a_data.to_vec();
+        a_plus[idx] += eps;
+        let a_p = Tensor::<f64>::from_slice(&a_plus, &[3, 3], COL).unwrap();
+        let f_plus = einsum::<S, CpuBackend>(&mut ctx, "ii,j->j", &[&a_p, &v], None).unwrap();
+        let mut a_minus = a_data.to_vec();
+        a_minus[idx] -= eps;
+        let a_m = Tensor::<f64>::from_slice(&a_minus, &[3, 3], COL).unwrap();
+        let f_minus = einsum::<S, CpuBackend>(&mut ctx, "ii,j->j", &[&a_m, &v], None).unwrap();
+        let mut fd = 0.0;
+        for j in 0..2 {
+            fd += (get(&f_plus, &[j]) - get(&f_minus, &[j])) / (2.0 * eps) * get(&cotangent, &[j]);
+        }
+        let analytic = get(&grads[0], &[row, col]);
+        assert!(
+            (fd - analytic).abs() < 1e-5,
+            "grad_A fd mismatch at [{row},{col}]: fd={fd}, analytic={analytic}"
+        );
+    }
+}
+
+#[test]
+fn einsum_rrule_trace_finite_difference_verification() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3], COL)
+        .unwrap();
+    let eps = 1e-7;
+    let cotangent = Tensor::<f64>::from_slice(&[2.5], &[], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+
+    let a_data = a.buffer().as_slice().unwrap();
+    for idx in 0..9 {
+        let row = idx % 3;
+        let col = idx / 3;
+        let mut a_plus = a_data.to_vec();
+        a_plus[idx] += eps;
+        let a_p = Tensor::<f64>::from_slice(&a_plus, &[3, 3], COL).unwrap();
+        let val_plus =
+            scalar_val(&einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&a_p], None).unwrap());
+        let mut a_minus = a_data.to_vec();
+        a_minus[idx] -= eps;
+        let a_m = Tensor::<f64>::from_slice(&a_minus, &[3, 3], COL).unwrap();
+        let val_minus =
+            scalar_val(&einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&a_m], None).unwrap());
+        let fd_grad = (val_plus - val_minus) / (2.0 * eps) * 2.5;
+        let analytic = get(&grads[0], &[row, col]);
+        assert!(
+            (fd_grad - analytic).abs() < 1e-5,
+            "fd mismatch at [{row},{col}]: fd={fd_grad}, analytic={analytic}"
+        );
+    }
+}
+
+#[test]
+fn einsum_rrule_diagonal_extraction_finite_difference_verification() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3], COL)
+        .unwrap();
+    let eps = 1e-7;
+    let cotangent = Tensor::<f64>::from_slice(&[0.5, 1.0, 1.5], &[3], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->i", &[&a], &cotangent).unwrap();
+
+    let a_data = a.buffer().as_slice().unwrap();
+    for idx in 0..9 {
+        let row = idx % 3;
+        let col = idx / 3;
+        let mut a_plus = a_data.to_vec();
+        a_plus[idx] += eps;
+        let a_p = Tensor::<f64>::from_slice(&a_plus, &[3, 3], COL).unwrap();
+        let d_plus = einsum::<S, CpuBackend>(&mut ctx, "ii->i", &[&a_p], None).unwrap();
+        let mut a_minus = a_data.to_vec();
+        a_minus[idx] -= eps;
+        let a_m = Tensor::<f64>::from_slice(&a_minus, &[3, 3], COL).unwrap();
+        let d_minus = einsum::<S, CpuBackend>(&mut ctx, "ii->i", &[&a_m], None).unwrap();
+        let mut fd_dot = 0.0;
+        for k in 0..3 {
+            fd_dot +=
+                (get(&d_plus, &[k]) - get(&d_minus, &[k])) / (2.0 * eps) * get(&cotangent, &[k]);
+        }
+        let analytic = get(&grads[0], &[row, col]);
+        assert!(
+            (fd_dot - analytic).abs() < 1e-5,
+            "fd mismatch at [{row},{col}]: fd={fd_dot}, analytic={analytic}"
+        );
+    }
+}
+
+#[test]
+fn einsum_hvp_diag_both_operands_ii_jj_to_ij() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[3.0, 0.0, 0.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii,jj->ij",
+        &[&a, &b],
+        &[Some(&da), None],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 2);
+
+    let (ref grad_a, ref hvp_a) = hvps[0];
+    assert_eq!(grad_a.dims(), &[2, 2]);
+    assert_eq!(hvp_a.dims(), &[2, 2]);
+
+    let (ref grad_b, ref hvp_b) = hvps[1];
+    assert_eq!(grad_b.dims(), &[2, 2]);
+    assert_eq!(hvp_b.dims(), &[2, 2]);
+
+    let grad_a_rrule =
+        einsum_rrule::<S, CpuBackend>(&mut ctx, "ii,jj->ij", &[&a, &b], &cotangent).unwrap();
+    assert_tensors_close(grad_a, &grad_a_rrule[0], "hvp_grad_a_matches_rrule");
+    assert_tensors_close(grad_b, &grad_a_rrule[1], "hvp_grad_b_matches_rrule");
+}
+
+#[test]
+fn einsum_frule_trace_both_tangents_diag() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let db = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    let dc = einsum_frule::<S, CpuBackend>(&mut ctx, "ii,jj->", &[&a, &b], &[Some(&da), Some(&db)])
+        .unwrap();
+    assert!(dc.dims().is_empty());
+    let trace_a = get(&a, &[0, 0]) + get(&a, &[1, 1]);
+    let trace_b = get(&b, &[0, 0]) + get(&b, &[1, 1]);
+    let trace_da = get(&da, &[0, 0]) + get(&da, &[1, 1]);
+    let trace_db = get(&db, &[0, 0]) + get(&db, &[1, 1]);
+    let expected = trace_da * trace_b + trace_a * trace_db;
+    assert!(
+        (scalar_val(&dc) - expected).abs() < 1e-10,
+        "frule_trace_both: got {}, expected {expected}",
+        scalar_val(&dc)
+    );
+}
+
+#[test]
+fn einsum_rrule_partial_trace_with_free_index_delta() {
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2, 3], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "iij->j", &[&t], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2, 3]);
+
+    for i1 in 0..2 {
+        for i2 in 0..2 {
+            for j in 0..3 {
+                let expected = if i1 == i2 { get(&cotangent, &[j]) } else { 0.0 };
+                assert!(
+                    (get(&grads[0], &[i1, i2, j]) - expected).abs() < 1e-10,
+                    "grad[{i1},{i2},{j}] = {}, expected {expected}",
+                    get(&grads[0], &[i1, i2, j])
+                );
+            }
+        }
+    }
+}
