@@ -1,7 +1,6 @@
 use std::any::Any;
-use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use tenferro_algebra::Semiring;
 
@@ -13,7 +12,7 @@ use crate::config::{
 use crate::types::flat_to_multi;
 use crate::{Buffer, Tensor, TypedTensor};
 
-use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural};
+use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
 
 /// CPU execution backend.
 ///
@@ -25,35 +24,12 @@ use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural
 /// let backend = CpuBackend::new();
 /// ```
 pub struct CpuBackend {
-    pub(crate) pool: Arc<rayon::ThreadPool>,
+    pub(crate) ctx: Arc<CpuContext>,
     pub(crate) buffers: BufferPool,
 }
 
-fn shared_pools() -> &'static Mutex<HashMap<usize, Arc<rayon::ThreadPool>>> {
-    static POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> = OnceLock::new();
-    POOLS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn get_or_create_pool(num_threads: usize) -> Arc<rayon::ThreadPool> {
-    let mut pools = shared_pools()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(pool) = pools.get(&num_threads) {
-        return Arc::clone(pool);
-    }
-
-    let pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap_or_else(|e| panic!("failed to create rayon thread pool: {e}")),
-    );
-    pools.insert(num_threads, Arc::clone(&pool));
-    pool
-}
-
 impl CpuBackend {
-    /// Create a CPU backend using the default thread count.
+    /// Create a CPU backend using the environment-driven CPU context.
     ///
     /// # Examples
     ///
@@ -63,11 +39,38 @@ impl CpuBackend {
     /// let backend = CpuBackend::new();
     /// ```
     pub fn new() -> Self {
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
+        Self::from_context(Arc::new(CpuContext::from_env()))
+    }
+
+    /// Try to create a CPU backend using `RAYON_NUM_THREADS`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::try_new().unwrap();
+    /// let _ = backend.num_threads();
+    /// ```
+    pub fn try_new() -> crate::Result<Self> {
+        CpuContext::try_from_env().map(|ctx| Self::from_context(Arc::new(ctx)))
+    }
+
+    /// Create a CPU backend from an existing context.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuContext};
+    ///
+    /// let ctx = Arc::new(CpuContext::with_threads(2));
+    /// let backend = CpuBackend::from_context(ctx);
+    /// assert_eq!(backend.num_threads(), 2);
+    /// ```
+    pub fn from_context(ctx: Arc<CpuContext>) -> Self {
         Self {
-            pool: get_or_create_pool(num_threads),
+            ctx,
             buffers: BufferPool::new(),
         }
     }
@@ -84,13 +87,10 @@ impl CpuBackend {
     /// ```
     pub fn with_threads(num_threads: usize) -> Self {
         assert!(num_threads >= 1, "thread count must be >= 1");
-        Self {
-            pool: get_or_create_pool(num_threads),
-            buffers: BufferPool::new(),
-        }
+        Self::from_context(Arc::new(CpuContext::with_threads(num_threads)))
     }
 
-    /// Return the number of threads in the shared rayon thread pool.
+    /// Return the number of threads in this backend's CPU context.
     ///
     /// # Examples
     ///
@@ -101,7 +101,7 @@ impl CpuBackend {
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
     pub fn num_threads(&self) -> usize {
-        self.pool.current_num_threads()
+        self.ctx.num_threads()
     }
 
     /// Number of retained typed host buffers currently held by this backend.
@@ -133,7 +133,7 @@ impl CpuBackend {
     where
         R: Send,
     {
-        self.pool.install(op)
+        self.ctx.install(op)
     }
 
     fn install_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R
@@ -141,7 +141,7 @@ impl CpuBackend {
         R: Send,
     {
         let mut buffers = std::mem::take(&mut self.buffers);
-        let (result, buffers) = self.pool.install(|| {
+        let (result, buffers) = self.ctx.install(|| {
             let result = op(&mut buffers);
             (result, buffers)
         });
@@ -313,16 +313,37 @@ impl TensorBackend for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match (lhs, rhs) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => {
+                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::C32)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => {
+                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::C64)
+            }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F32(a), Tensor::F32(b)) => {
                 gemm::dot_general(buffers, a, b, config).map(Tensor::F32)
             }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => {
                 gemm::dot_general(buffers, a, b, config).map(Tensor::F64)
             }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::C32(a), Tensor::C32(b)) => {
                 gemm::dot_general(buffers, a, b, config).map(Tensor::C32)
             }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => {
                 gemm::dot_general(buffers, a, b, config).map(Tensor::C64)
             }
@@ -391,9 +412,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => catch_backend_panic("cholesky", || linalg::cholesky(t))
+            Tensor::F64(t) => catch_backend_panic("cholesky", || linalg::cholesky(ctx.as_ref(), t))
                 .and_then(|result| result)
                 .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
@@ -401,7 +423,7 @@ impl TensorBackend for CpuBackend {
                 catch_backend_panic("cholesky", || linalg::cholesky(t)).map(Tensor::F64)
             }
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => catch_backend_panic("cholesky", || linalg::cholesky(t))
+            Tensor::C64(t) => catch_backend_panic("cholesky", || linalg::cholesky(ctx.as_ref(), t))
                 .and_then(|result| result)
                 .map(Tensor::C64),
             _ => Err(unsupported_dtype("cholesky", input.dtype())),
@@ -417,7 +439,21 @@ impl TensorBackend for CpuBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> crate::Result<Tensor> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match (a, b) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
+                Tensor::F64(linalg::triangular_solve(
+                    ctx.as_ref(),
+                    a,
+                    b,
+                    left_side,
+                    lower,
+                    transpose_a,
+                    unit_diagonal,
+                ))
+            }),
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
                 Tensor::F64(linalg::triangular_solve(
                     a,
@@ -431,6 +467,7 @@ impl TensorBackend for CpuBackend {
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
                 Tensor::C64(linalg::triangular_solve(
+                    ctx.as_ref(),
                     a,
                     b,
                     left_side,
@@ -454,59 +491,119 @@ impl TensorBackend for CpuBackend {
     }
 
     fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("lu", || {
+                linalg::lu(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => catch_backend_panic("lu", || {
                 linalg::lu(t).into_iter().map(Tensor::F64).collect()
             }),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => catch_backend_panic("lu", || {
-                linalg::lu(t).into_iter().map(Tensor::C64).collect()
+                linalg::lu(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
             }),
             _ => Err(unsupported_dtype("lu", input.dtype())),
         })
     }
 
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("svd", || {
+                linalg::svd(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => catch_backend_panic("svd", || {
                 linalg::svd(t).into_iter().map(Tensor::F64).collect()
             }),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => catch_backend_panic("svd", || {
-                linalg::svd(t).into_iter().map(Tensor::C64).collect()
+                linalg::svd(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
             }),
             _ => Err(unsupported_dtype("svd", input.dtype())),
         })
     }
 
     fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("qr", || {
+                linalg::qr(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => catch_backend_panic("qr", || {
                 linalg::qr(t).into_iter().map(Tensor::F64).collect()
             }),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => catch_backend_panic("qr", || {
-                linalg::qr(t).into_iter().map(Tensor::C64).collect()
+                linalg::qr(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
             }),
             _ => Err(unsupported_dtype("qr", input.dtype())),
         })
     }
 
     fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let ctx = Arc::clone(&self.ctx);
         self.install(|| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("eigh", || {
+                linalg::eigh(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => catch_backend_panic("eigh", || {
                 linalg::eigh(t).into_iter().map(Tensor::F64).collect()
             }),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => catch_backend_panic("eigh", || {
-                linalg::eigh(t).into_iter().map(Tensor::C64).collect()
+                linalg::eigh(ctx.as_ref(), t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
             }),
             _ => Err(unsupported_dtype("eigh", input.dtype())),
         })
     }
 
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        self.install(|| catch_backend_panic("eig", || linalg::eig(input)))
+        let ctx = Arc::clone(&self.ctx);
+        self.install(|| {
+            catch_backend_panic("eig", || {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    linalg::eig(ctx.as_ref(), input)
+                }
+                #[cfg(feature = "cpu-blas")]
+                {
+                    linalg::eig(input)
+                }
+            })
+        })
     }
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {

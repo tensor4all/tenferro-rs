@@ -1,8 +1,11 @@
 use num_complex::{Complex32, Complex64};
 
+use crate::cpu::CpuContext;
+
 pub(crate) trait FaerGemm: Sized {
     #[allow(clippy::too_many_arguments)]
     unsafe fn strided_gemm(
+        ctx: &CpuContext,
         alpha: Self,
         a_ptr: *const Self,
         m: usize,
@@ -24,6 +27,7 @@ macro_rules! impl_faer_gemm {
     ($ty:ty) => {
         impl FaerGemm for $ty {
             unsafe fn strided_gemm(
+                ctx: &CpuContext,
                 alpha: $ty,
                 a_ptr: *const $ty,
                 m: usize,
@@ -39,7 +43,7 @@ macro_rules! impl_faer_gemm {
                 c_rs: isize,
                 c_cs: isize,
             ) {
-                use faer::{Accum, MatMut, MatRef, Par};
+                use faer::{Accum, MatMut, MatRef};
                 let a_mat = MatRef::<$ty>::from_raw_parts(a_ptr, m, k, a_rs, a_cs);
                 let b_mat = MatRef::<$ty>::from_raw_parts(b_ptr, k, n, b_rs, b_cs);
                 let zero = <$ty as num_traits::Zero>::zero();
@@ -67,7 +71,7 @@ macro_rules! impl_faer_gemm {
                     &a_mat,
                     &b_mat,
                     alpha,
-                    Par::rayon(0),
+                    ctx.faer_par(),
                 );
             }
         }

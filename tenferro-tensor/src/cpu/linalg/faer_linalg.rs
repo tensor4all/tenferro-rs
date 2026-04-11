@@ -1,13 +1,20 @@
-use faer::{diag::DiagRef, MatMut, MatRef, Par, Side};
+use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::{
+    diag::{Diag, DiagRef},
+    Conj, Mat, MatMut, MatRef,
+};
 use num_complex::Complex64;
 
+use crate::cpu::CpuContext;
 use crate::{Buffer, Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone {
     fn parity_one() -> Self;
-    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>>;
-    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn cholesky_2d(ctx: &CpuContext, input: &TypedTensor<Self>)
+        -> crate::Result<TypedTensor<Self>>;
+    fn lu_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
     fn triangular_solve_2d(
+        ctx: &CpuContext,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
         left_side: bool,
@@ -15,9 +22,9 @@ pub(crate) trait FaerLinalg: Copy + Clone {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> TypedTensor<Self>;
-    fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
-    fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
-    fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn svd_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn qr_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn eigh_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
 }
 
 fn matrix_dims<T>(input: &TypedTensor<T>, op: &str) -> (usize, usize) {
@@ -52,14 +59,6 @@ fn col_major_vec_from_mat<T: Copy>(mat: MatRef<'_, T>) -> Vec<T> {
         }
     }
     data
-}
-
-fn tensor_from_mat<T: Copy + Clone, U>(
-    mat: MatRef<'_, T>,
-    shape: Vec<usize>,
-    template: &TypedTensor<U>,
-) -> TypedTensor<T> {
-    tensor_from_vec_with_template(shape, col_major_vec_from_mat(mat), template)
 }
 
 fn vec_from_diag<T: Copy>(diag: DiagRef<'_, T>) -> Vec<T> {
@@ -125,6 +124,80 @@ fn complex_vec_from_mat(mat: MatRef<'_, faer::c64>) -> Vec<Complex64> {
         }
     }
     data
+}
+
+fn matrix_from_predicate<T: Copy + Default>(
+    mat: MatRef<'_, T>,
+    rows: usize,
+    cols: usize,
+    predicate: impl Fn(usize, usize) -> bool,
+) -> Vec<T> {
+    let mut data = vec![T::default(); rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            if predicate(i, j) {
+                data[i + j * rows] = mat[(i, j)];
+            }
+        }
+    }
+    data
+}
+
+fn lower_triangle_vec_from_mat<T: Copy + Default>(mat: MatRef<'_, T>) -> Vec<T> {
+    let (rows, cols) = mat.shape();
+    matrix_from_predicate(mat, rows, cols, |row, col| row >= col)
+}
+
+fn upper_triangle_vec_from_mat<T: Copy + Default>(mat: MatRef<'_, T>) -> Vec<T> {
+    let (rows, cols) = mat.shape();
+    matrix_from_predicate(mat, rows, cols, |row, col| row <= col)
+}
+
+fn complex_matrix_from_predicate(
+    mat: MatRef<'_, faer::c64>,
+    rows: usize,
+    cols: usize,
+    predicate: impl Fn(usize, usize) -> bool,
+) -> Vec<Complex64> {
+    let mut data = vec![Complex64::new(0.0, 0.0); rows * cols];
+    for j in 0..cols {
+        for i in 0..rows {
+            if predicate(i, j) {
+                let value = mat[(i, j)];
+                data[i + j * rows] = Complex64::new(value.re, value.im);
+            }
+        }
+    }
+    data
+}
+
+fn real_eig_to_complex_outputs(
+    u_real: MatRef<'_, f64>,
+    s_re: DiagRef<'_, f64>,
+    s_im: DiagRef<'_, f64>,
+) -> (Vec<Complex64>, Vec<Complex64>) {
+    let n = u_real.nrows();
+    let mut u = vec![Complex64::new(0.0, 0.0); n * n];
+    let mut s = vec![Complex64::new(0.0, 0.0); n];
+    let mut j = 0;
+    while j < n {
+        if s_im[j] == 0.0 {
+            s[j] = Complex64::new(s_re[j], 0.0);
+            for i in 0..n {
+                u[i + j * n] = Complex64::new(u_real[(i, j)], 0.0);
+            }
+            j += 1;
+        } else {
+            s[j] = Complex64::new(s_re[j], s_im[j]);
+            s[j + 1] = Complex64::new(s_re[j], -s_im[j]);
+            for i in 0..n {
+                u[i + j * n] = Complex64::new(u_real[(i, j)], u_real[(i, j + 1)]);
+                u[i + (j + 1) * n] = Complex64::new(u_real[(i, j)], -u_real[(i, j + 1)]);
+            }
+            j += 2;
+        }
+    }
+    (u, s)
 }
 
 fn split_core_and_batch<'a, T>(
@@ -416,60 +489,91 @@ impl FaerLinalg for f64 {
         1.0
     }
 
-    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>> {
+    fn cholesky_2d(
+        ctx: &CpuContext,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky");
-        let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
-        let chol = match mat.llt(Side::Lower) {
-            Ok(chol) => chol,
-            Err(_) => {
-                return Err(crate::Error::BackendFailure {
-                    op: "cholesky",
-                    message: "matrix is not positive definite".into(),
-                });
-            }
-        };
-        Ok(tensor_from_mat(chol.L(), vec![n, n], input))
+        let mut l = Mat::zeros(n, n);
+        l.copy_from(MatRef::from_column_major_slice(input.host_data(), n, n));
+        let mut mem = MemBuffer::new(
+            faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<Self>(
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::cholesky::llt::factor::cholesky_in_place(
+            l.as_mut(),
+            Default::default(),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| crate::Error::BackendFailure {
+            op: "cholesky",
+            message: "matrix is not positive definite".into(),
+        })?;
+        Ok(tensor_from_vec_with_template(
+            vec![n, n],
+            lower_triangle_vec_from_mat(l.as_ref()),
+            input,
+        ))
     }
 
-    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn lu_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "lu");
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
-        let lu = mat.partial_piv_lu();
-        let perm: Vec<usize> = lu.P().arrays().0.iter().copied().collect();
+        let mut lu = Mat::zeros(m, n);
+        lu.copy_from(MatRef::from_column_major_slice(input.host_data(), m, n));
+        let mut perm = vec![0usize; m];
+        let mut perm_inv = vec![0usize; m];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
+                m,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut perm,
+            &mut perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .0;
 
         let mut p_data = vec![0.0; m * m];
         for (row, &col) in perm.iter().enumerate() {
             p_data[row + col * m] = 1.0;
         }
+        let parity = if info.transposition_count % 2 == 0 {
+            1.0
+        } else {
+            -1.0
+        };
 
-        let mut parity = 1.0;
-        let mut visited = vec![false; m];
-        for start in 0..m {
-            if visited[start] {
-                continue;
-            }
-            let mut current = start;
-            let mut cycle_len = 0usize;
-            while !visited[current] {
-                visited[current] = true;
-                current = perm[current];
-                cycle_len += 1;
-            }
-            if cycle_len > 0 && (cycle_len - 1) % 2 == 1 {
-                parity = -parity;
-            }
+        let mut l_data = matrix_from_predicate(lu.as_ref(), m, k, |row, col| row >= col);
+        for i in 0..k {
+            l_data[i + i * m] = 1.0;
         }
+        let u_data = upper_triangle_vec_from_mat(lu.as_ref().get(..k, ..));
 
         vec![
             tensor_from_vec_with_template(vec![m, m], p_data, input),
-            tensor_from_mat(lu.L(), vec![m, k], input),
-            tensor_from_mat(lu.U(), vec![k, n], input),
+            tensor_from_vec_with_template(vec![m, k], l_data, input),
+            tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
         ]
     }
 
     fn triangular_solve_2d(
+        ctx: &CpuContext,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
         left_side: bool,
@@ -490,56 +594,56 @@ impl FaerLinalg for f64 {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
             }
@@ -554,56 +658,56 @@ impl FaerLinalg for f64 {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
             }
@@ -612,19 +716,36 @@ impl FaerLinalg for f64 {
         }
     }
 
-    fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn svd_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
-        let svd = match mat.thin_svd() {
-            Ok(svd) => svd,
-            Err(_) => panic!("svd: decomposition failed"),
-        };
+        let mut u = Mat::zeros(m, k);
+        let mut v = Mat::zeros(n, k);
+        let mut s = Diag::zeros(k);
+        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
+            m,
+            n,
+            faer::linalg::svd::ComputeSvdVectors::Thin,
+            faer::linalg::svd::ComputeSvdVectors::Thin,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::svd::svd(
+            mat,
+            s.as_mut(),
+            Some(u.as_mut()),
+            Some(v.as_mut()),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .unwrap_or_else(|_| panic!("svd: decomposition failed"));
 
-        let u = tensor_from_mat(svd.U(), vec![m, k], input);
-        let s = tensor_from_vec_with_template(vec![k], vec_from_diag(svd.S()), input);
-
-        let v = svd.V();
+        let u =
+            tensor_from_vec_with_template(vec![m, k], col_major_vec_from_mat(u.as_ref()), input);
+        let s = tensor_from_vec_with_template(vec![k], vec_from_diag(s.as_ref()), input);
         let mut vt_data = Vec::with_capacity(k * n);
         for j in 0..n {
             for i in 0..k {
@@ -636,29 +757,88 @@ impl FaerLinalg for f64 {
         vec![u, s, vt]
     }
 
-    fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn qr_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "qr");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
-        let qr = mat.qr();
-
-        let q_mat = qr.compute_thin_Q();
-        let q = tensor_from_mat(q_mat.as_ref(), vec![m, k], input);
-        let r = tensor_from_mat(qr.thin_R(), vec![k, n], input);
+        let block_size =
+            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<Self>(m, n);
+        let mut qr = Mat::zeros(m, n);
+        qr.copy_from(mat);
+        let mut coeff = Mat::zeros(block_size, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::qr::no_pivoting::factor::qr_in_place_scratch::<Self>(
+                m,
+                n,
+                block_size,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::qr::no_pivoting::factor::qr_in_place(
+            qr.as_mut(),
+            coeff.as_mut(),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        );
+        let mut q = Mat::identity(m, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<Self>(
+                m,
+                block_size,
+                k,
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+            qr.as_ref().subcols(0, k),
+            coeff.as_ref(),
+            Conj::No,
+            q.as_mut(),
+            ctx.faer_par(),
+            stack,
+        );
+        let q =
+            tensor_from_vec_with_template(vec![m, k], col_major_vec_from_mat(q.as_ref()), input);
+        let r = tensor_from_vec_with_template(
+            vec![k, n],
+            upper_triangle_vec_from_mat(qr.as_ref().get(..k, ..)),
+            input,
+        );
 
         vec![q, r]
     }
 
-    fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn eigh_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "eigh");
         let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
-        let eig = match mat.self_adjoint_eigen(Side::Lower) {
-            Ok(eig) => eig,
-            Err(_) => panic!("eigh: decomposition failed"),
-        };
+        let mut values = Diag::zeros(n);
+        let mut vectors = Mat::zeros(n, n);
+        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
+            n,
+            faer::linalg::evd::ComputeEigenvectors::Yes,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::evd::self_adjoint_evd(
+            mat,
+            values.as_mut(),
+            Some(vectors.as_mut()),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .unwrap_or_else(|_| panic!("eigh: decomposition failed"));
 
-        let values = tensor_from_vec_with_template(vec![n], vec_from_diag(eig.S()), input);
-        let vectors = tensor_from_mat(eig.U(), vec![n, n], input);
+        let values = tensor_from_vec_with_template(vec![n], vec_from_diag(values.as_ref()), input);
+        let vectors = tensor_from_vec_with_template(
+            vec![n, n],
+            col_major_vec_from_mat(vectors.as_ref()),
+            input,
+        );
 
         vec![values, vectors]
     }
@@ -669,60 +849,98 @@ impl FaerLinalg for Complex64 {
         Complex64::new(1.0, 0.0)
     }
 
-    fn cholesky_2d(input: &TypedTensor<Self>) -> crate::Result<TypedTensor<Self>> {
+    fn cholesky_2d(
+        ctx: &CpuContext,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky");
-        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
-        let chol = match mat.llt(Side::Lower) {
-            Ok(chol) => chol,
-            Err(_) => {
-                return Err(crate::Error::BackendFailure {
-                    op: "cholesky",
-                    message: "matrix is not positive definite".into(),
-                });
-            }
-        };
-        Ok(tensor_from_mat(chol.L(), vec![n, n], input))
+        let mut l = Mat::zeros(n, n);
+        l.copy_from(MatRef::from_column_major_slice(
+            complex64_to_faer_slice(input.host_data()),
+            n,
+            n,
+        ));
+        let mut mem = MemBuffer::new(
+            faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<faer::c64>(
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::cholesky::llt::factor::cholesky_in_place(
+            l.as_mut(),
+            Default::default(),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .map_err(|_| crate::Error::BackendFailure {
+            op: "cholesky",
+            message: "matrix is not positive definite".into(),
+        })?;
+        Ok(tensor_from_vec_with_template(
+            vec![n, n],
+            complex_matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col),
+            input,
+        ))
     }
 
-    fn lu_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn lu_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "lu");
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
-        let lu = mat.partial_piv_lu();
-        let perm: Vec<usize> = lu.P().arrays().0.iter().copied().collect();
+        let mut lu = Mat::zeros(m, n);
+        lu.copy_from(MatRef::from_column_major_slice(
+            complex64_to_faer_slice(input.host_data()),
+            m,
+            n,
+        ));
+        let mut perm = vec![0usize; m];
+        let mut perm_inv = vec![0usize; m];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, faer::c64>(
+                m,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let info = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut perm,
+            &mut perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .0;
 
         let mut p_data = vec![Complex64::new(0.0, 0.0); m * m];
         for (row, &col) in perm.iter().enumerate() {
             p_data[row + col * m] = Complex64::new(1.0, 0.0);
         }
-
-        let mut parity = Complex64::new(1.0, 0.0);
-        let mut visited = vec![false; m];
-        for start in 0..m {
-            if visited[start] {
-                continue;
-            }
-            let mut current = start;
-            let mut cycle_len = 0usize;
-            while !visited[current] {
-                visited[current] = true;
-                current = perm[current];
-                cycle_len += 1;
-            }
-            if cycle_len > 0 && (cycle_len - 1) % 2 == 1 {
-                parity = -parity;
-            }
+        let parity = if info.transposition_count % 2 == 0 {
+            Complex64::new(1.0, 0.0)
+        } else {
+            Complex64::new(-1.0, 0.0)
+        };
+        let mut l_data = complex_matrix_from_predicate(lu.as_ref(), m, k, |row, col| row >= col);
+        for i in 0..k {
+            l_data[i + i * m] = Complex64::new(1.0, 0.0);
         }
+        let u_data = complex_matrix_from_predicate(lu.as_ref(), k, n, |row, col| row <= col);
 
         vec![
             tensor_from_vec_with_template(vec![m, m], p_data, input),
-            tensor_from_mat(lu.L(), vec![m, k], input),
-            tensor_from_mat(lu.U(), vec![k, n], input),
+            tensor_from_vec_with_template(vec![m, k], l_data, input),
+            tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
         ]
     }
 
     fn triangular_solve_2d(
+        ctx: &CpuContext,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
         left_side: bool,
@@ -747,56 +965,56 @@ impl FaerLinalg for Complex64 {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
             }
@@ -815,56 +1033,56 @@ impl FaerLinalg for Complex64 {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        Par::Seq,
+                        ctx.faer_par(),
                     );
                 }
             }
@@ -873,19 +1091,36 @@ impl FaerLinalg for Complex64 {
         }
     }
 
-    fn svd_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn svd_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
-        let svd = match mat.thin_svd() {
-            Ok(svd) => svd,
-            Err(_) => panic!("svd: decomposition failed"),
-        };
+        let mut u = Mat::zeros(m, k);
+        let mut v = Mat::zeros(n, k);
+        let mut s = Diag::zeros(k);
+        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<faer::c64>(
+            m,
+            n,
+            faer::linalg::svd::ComputeSvdVectors::Thin,
+            faer::linalg::svd::ComputeSvdVectors::Thin,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::svd::svd(
+            mat,
+            s.as_mut(),
+            Some(u.as_mut()),
+            Some(v.as_mut()),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .unwrap_or_else(|_| panic!("svd: decomposition failed"));
 
-        let u = tensor_from_mat(svd.U(), vec![m, k], input);
-        let s = tensor_from_vec_with_template(vec![k], complex_vec_from_real_diag(svd.S()), input);
-
-        let v = svd.V();
+        let u = tensor_from_vec_with_template(vec![m, k], complex_vec_from_mat(u.as_ref()), input);
+        let s =
+            tensor_from_vec_with_template(vec![k], complex_vec_from_real_diag(s.as_ref()), input);
         let mut vt_data = Vec::with_capacity(k * n);
         for j in 0..n {
             for i in 0..k {
@@ -897,36 +1132,100 @@ impl FaerLinalg for Complex64 {
         vec![u, s, vt]
     }
 
-    fn qr_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn qr_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let (m, n) = matrix_dims(input, "qr");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
-        let qr = mat.qr();
-
-        let q_mat = qr.compute_thin_Q();
-        let q = tensor_from_mat(q_mat.as_ref(), vec![m, k], input);
-        let r = tensor_from_mat(qr.thin_R(), vec![k, n], input);
+        let block_size =
+            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<faer::c64>(m, n);
+        let mut qr = Mat::zeros(m, n);
+        qr.copy_from(mat);
+        let mut coeff = Mat::zeros(block_size, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::qr::no_pivoting::factor::qr_in_place_scratch::<faer::c64>(
+                m,
+                n,
+                block_size,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::qr::no_pivoting::factor::qr_in_place(
+            qr.as_mut(),
+            coeff.as_mut(),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        );
+        let mut q = Mat::identity(m, k);
+        let mut mem = MemBuffer::new(
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<faer::c64>(
+                m,
+                block_size,
+                k,
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+            qr.as_ref().subcols(0, k),
+            coeff.as_ref(),
+            Conj::No,
+            q.as_mut(),
+            ctx.faer_par(),
+            stack,
+        );
+        let q = tensor_from_vec_with_template(vec![m, k], complex_vec_from_mat(q.as_ref()), input);
+        let r = tensor_from_vec_with_template(
+            vec![k, n],
+            complex_matrix_from_predicate(qr.as_ref(), k, n, |row, col| row <= col),
+            input,
+        );
 
         vec![q, r]
     }
 
-    fn eigh_2d(input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
+    fn eigh_2d(ctx: &CpuContext, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "eigh");
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
-        let eig = match mat.self_adjoint_eigen(Side::Lower) {
-            Ok(eig) => eig,
-            Err(_) => panic!("eigh: decomposition failed"),
-        };
+        let mut values = Diag::zeros(n);
+        let mut vectors = Mat::zeros(n, n);
+        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<faer::c64>(
+            n,
+            faer::linalg::evd::ComputeEigenvectors::Yes,
+            ctx.faer_par(),
+            Default::default(),
+        ));
+        let stack = MemStack::new(&mut mem);
+        faer::linalg::evd::self_adjoint_evd(
+            mat,
+            values.as_mut(),
+            Some(vectors.as_mut()),
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        )
+        .unwrap_or_else(|_| panic!("eigh: decomposition failed"));
 
-        let values =
-            tensor_from_vec_with_template(vec![n], complex_vec_from_real_diag(eig.S()), input);
-        let vectors = tensor_from_mat(eig.U(), vec![n, n], input);
+        let values = tensor_from_vec_with_template(
+            vec![n],
+            complex_vec_from_real_diag(values.as_ref()),
+            input,
+        );
+        let vectors = tensor_from_vec_with_template(
+            vec![n, n],
+            complex_vec_from_mat(vectors.as_ref()),
+            input,
+        );
 
         vec![values, vectors]
     }
 }
 
-pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>> {
+pub(crate) fn cholesky<T: FaerLinalg>(
+    ctx: &CpuContext,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
         return Ok(tensor_from_vec_with_template(
             input.shape.clone(),
@@ -934,10 +1233,10 @@ pub(crate) fn cholesky<T: FaerLinalg>(input: &TypedTensor<T>) -> crate::Result<T
             input,
         ));
     }
-    batched_single(input, 2, T::cholesky_2d)
+    batched_single(input, 2, |batch| T::cholesky_2d(ctx, batch))
 }
 
-pub(crate) fn lu<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+pub(crate) fn lu<T: FaerLinalg>(ctx: &CpuContext, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
         let m = input.shape[0];
         let n = input.shape[1];
@@ -967,10 +1266,11 @@ pub(crate) fn lu<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
             ),
         ];
     }
-    batched_multi(input, 2, T::lu_2d)
+    batched_multi(input, 2, |batch| T::lu_2d(ctx, batch))
 }
 
 pub(crate) fn triangular_solve<T: FaerLinalg>(
+    ctx: &CpuContext,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -982,11 +1282,11 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
         return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
     }
     batched_binary(a, b, 2, 2, |a, b| {
-        T::triangular_solve_2d(a, b, left_side, lower, transpose_a, unit_diagonal)
+        T::triangular_solve_2d(ctx, a, b, left_side, lower, transpose_a, unit_diagonal)
     })
 }
 
-pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+pub(crate) fn svd<T: FaerLinalg>(ctx: &CpuContext, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
         let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
         let m = matrix_shape[0];
@@ -1010,10 +1310,10 @@ pub(crate) fn svd<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> 
             ),
         ];
     }
-    batched_multi(input, 2, T::svd_2d)
+    batched_multi(input, 2, |batch| T::svd_2d(ctx, batch))
 }
 
-pub(crate) fn qr<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+pub(crate) fn qr<T: FaerLinalg>(ctx: &CpuContext, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
         let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr");
         let m = matrix_shape[0];
@@ -1032,10 +1332,10 @@ pub(crate) fn qr<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
             ),
         ];
     }
-    batched_multi(input, 2, T::qr_2d)
+    batched_multi(input, 2, |batch| T::qr_2d(ctx, batch))
 }
 
-pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+pub(crate) fn eigh<T: FaerLinalg>(ctx: &CpuContext, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
         let n = input.shape[0];
         let batch_shape = &input.shape[2..];
@@ -1052,38 +1352,73 @@ pub(crate) fn eigh<T: FaerLinalg>(input: &TypedTensor<T>) -> Vec<TypedTensor<T>>
             ),
         ];
     }
-    batched_multi(input, 2, T::eigh_2d)
+    batched_multi(input, 2, |batch| T::eigh_2d(ctx, batch))
 }
 
-fn eig_real_2d(input: &TypedTensor<f64>) -> Vec<TypedTensor<Complex64>> {
+fn eig_real_2d(ctx: &CpuContext, input: &TypedTensor<f64>) -> Vec<TypedTensor<Complex64>> {
     let n = square_matrix_dim(input, "eig");
     let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
-    let eig = match mat.eigen() {
-        Ok(eig) => eig,
-        Err(_) => panic!("eig: decomposition failed"),
-    };
+    let mut u_real = Mat::zeros(n, n);
+    let mut s_re = Diag::zeros(n);
+    let mut s_im = Diag::zeros(n);
+    let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<f64>(
+        n,
+        faer::linalg::evd::ComputeEigenvectors::No,
+        faer::linalg::evd::ComputeEigenvectors::Yes,
+        ctx.faer_par(),
+        Default::default(),
+    ));
+    let stack = MemStack::new(&mut mem);
+    faer::linalg::evd::evd_real(
+        mat,
+        s_re.as_mut(),
+        s_im.as_mut(),
+        None,
+        Some(u_real.as_mut()),
+        ctx.faer_par(),
+        stack,
+        Default::default(),
+    )
+    .unwrap_or_else(|_| panic!("eig: decomposition failed"));
+    let (u, s) = real_eig_to_complex_outputs(u_real.as_ref(), s_re.as_ref(), s_im.as_ref());
 
     vec![
-        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(eig.S()), input),
-        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(eig.U()), input),
+        tensor_from_vec_with_template(vec![n], s, input),
+        tensor_from_vec_with_template(vec![n, n], u, input),
     ]
 }
 
-fn eig_complex_2d(input: &TypedTensor<Complex64>) -> Vec<TypedTensor<Complex64>> {
+fn eig_complex_2d(ctx: &CpuContext, input: &TypedTensor<Complex64>) -> Vec<TypedTensor<Complex64>> {
     let n = square_matrix_dim(input, "eig");
     let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
-    let eig = match mat.eigen() {
-        Ok(eig) => eig,
-        Err(_) => panic!("eig: decomposition failed"),
-    };
+    let mut u = Mat::zeros(n, n);
+    let mut s = Diag::zeros(n);
+    let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<faer::c64>(
+        n,
+        faer::linalg::evd::ComputeEigenvectors::No,
+        faer::linalg::evd::ComputeEigenvectors::Yes,
+        ctx.faer_par(),
+        Default::default(),
+    ));
+    let stack = MemStack::new(&mut mem);
+    faer::linalg::evd::evd_cplx(
+        mat,
+        s.as_mut(),
+        None,
+        Some(u.as_mut()),
+        ctx.faer_par(),
+        stack,
+        Default::default(),
+    )
+    .unwrap_or_else(|_| panic!("eig: decomposition failed"));
 
     vec![
-        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(eig.S()), input),
-        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(eig.U()), input),
+        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(s.as_ref()), input),
+        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(u.as_ref()), input),
     ]
 }
 
-pub(crate) fn eig(input: &Tensor) -> Vec<Tensor> {
+pub(crate) fn eig(ctx: &CpuContext, input: &Tensor) -> Vec<Tensor> {
     if has_zero_dim(input.shape()) {
         let n = input.shape()[0];
         let batch_shape = &input.shape()[2..];
@@ -1100,11 +1435,11 @@ pub(crate) fn eig(input: &Tensor) -> Vec<Tensor> {
     }
 
     match input {
-        Tensor::F64(t) => batched_multi_convert(t, 2, eig_real_2d)
+        Tensor::F64(t) => batched_multi_convert(t, 2, |batch| eig_real_2d(ctx, batch))
             .into_iter()
             .map(Tensor::C64)
             .collect(),
-        Tensor::C64(t) => batched_multi_convert(t, 2, eig_complex_2d)
+        Tensor::C64(t) => batched_multi_convert(t, 2, |batch| eig_complex_2d(ctx, batch))
             .into_iter()
             .map(Tensor::C64)
             .collect(),

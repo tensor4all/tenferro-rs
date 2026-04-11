@@ -33,6 +33,13 @@
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
 
+## CPU Threading Contract
+
+- For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
+- Do not derive faer parallelism independently inside individual ops or helper functions.
+- Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
+- Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
+
 ## Public API Convention
 
 - **Unary single-output ops**: methods on `TracedTensor` (e.g., `x.exp()`, `x.reshape(shape)`)

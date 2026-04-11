@@ -8,6 +8,8 @@ use super::faer_gemm::FaerGemm;
 use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-blas")]
 use crate::config::DotGeneralConfig;
+#[cfg(feature = "cpu-faer")]
+use crate::cpu::CpuContext;
 #[cfg(feature = "cpu-blas")]
 use crate::types::TypedTensor;
 
@@ -62,9 +64,11 @@ fn faer_strided_gemm_accumulates_with_nontrivial_beta() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
+    let ctx = CpuContext::with_threads(1);
 
     unsafe {
         <f64 as FaerGemm>::strided_gemm(
+            &ctx,
             1.0,
             a.as_ptr(),
             2,
@@ -91,9 +95,11 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
+    let ctx = CpuContext::with_threads(1);
 
     unsafe {
         <f64 as FaerGemm>::strided_gemm(
+            &ctx,
             1.0,
             a.as_ptr(),
             2,
