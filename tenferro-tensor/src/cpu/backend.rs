@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tenferro_algebra::Semiring;
 
-use crate::backend::{SemiringBackend, TensorBackend};
+use crate::backend::{SemiringBackend, TensorBackend, TensorExec};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -12,6 +12,7 @@ use crate::config::{
 use crate::types::flat_to_multi;
 use crate::{Buffer, Tensor, TypedTensor};
 
+use super::exec_session::CpuExecSession;
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
 
 /// CPU execution backend.
@@ -655,6 +656,20 @@ impl TensorBackend for CpuBackend {
         }
     }
 
+    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
+        let mut buffers = std::mem::take(&mut self.buffers);
+        let ctx = Arc::clone(&self.ctx);
+        let result = ctx.install(|| {
+            let mut session = CpuExecSession {
+                ctx: ctx.as_ref(),
+                buffers: &mut buffers,
+            };
+            f(&mut session)
+        });
+        self.buffers = buffers;
+        result
+    }
+
     fn reclaim_buffer(&mut self, tensor: Tensor) {
         match tensor {
             Tensor::F32(t) => reclaim_typed(&mut self.buffers, t),
@@ -708,7 +723,7 @@ fn matmul_preserve_trailing_batch(
     )
 }
 
-fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
+pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
     if let Buffer::Host(data) = typed.buffer {
         T::pool_release(pool, data);
     }
@@ -733,14 +748,14 @@ fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
     }
 }
 
-fn catch_backend_panic<R>(op: &'static str, f: impl FnOnce() -> R) -> crate::Result<R> {
+pub(crate) fn catch_backend_panic<R>(op: &'static str, f: impl FnOnce() -> R) -> crate::Result<R> {
     catch_unwind(AssertUnwindSafe(f)).map_err(|payload| crate::Error::BackendFailure {
         op,
         message: panic_payload_message(payload),
     })
 }
 
-fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
+pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
     crate::Error::BackendFailure {
         op,
         message: format!("unsupported dtype {dtype:?}"),
