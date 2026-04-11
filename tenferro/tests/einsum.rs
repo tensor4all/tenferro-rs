@@ -1239,6 +1239,36 @@ fn einsum_transposed_rhs_contraction() {
 }
 
 #[test]
+fn einsum_cyclic_trace() {
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![3, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+    let c = f64_tensor(vec![4, 2], vec![2.0, 1.0, 0.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let ta = TracedTensor::from_tensor(a.clone());
+    let tb = TracedTensor::from_tensor(b.clone());
+    let tc = TracedTensor::from_tensor(c.clone());
+    let mut out = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,ki->").unwrap();
+    let result = out.eval(&mut engine).unwrap();
+
+    assert!(result.shape().is_empty());
+    let mut expected = 0.0;
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..4 {
+                expected += get_v2(&a, &[i, j]) * get_v2(&b, &[j, k]) * get_v2(&c, &[k, i]);
+            }
+        }
+    }
+    assert_close(get_f64_data(result)[0], expected, "cyclic_trace");
+}
+
+#[test]
 fn einsum_three_way_repeated_label_trace() {
     // "iii->" — triple-repeated index trace
     let data: Vec<f64> = (1..=27).map(|x| x as f64).collect();

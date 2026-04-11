@@ -17,7 +17,6 @@
 
 use tenferro_tensor::DotGeneralConfig;
 
-pub mod buffer_pool;
 pub mod compiler;
 pub mod einsum;
 pub mod engine;

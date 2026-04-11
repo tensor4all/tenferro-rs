@@ -2,7 +2,6 @@
 //!
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
-use tenferro::buffer_pool::BufferPool;
 use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
@@ -258,77 +257,31 @@ fn test_vector_dot_product() {
 }
 
 // ============================================================================
-// Buffer pool tests
-// ============================================================================
-
 #[test]
-fn test_buffer_pool_allocate_fresh() {
-    let mut pool = BufferPool::new();
-    let buf = pool.allocate(64);
-    assert_eq!(buf.len(), 64);
-    assert!(pool.is_empty());
-}
-
-#[test]
-fn test_buffer_pool_reuse() {
-    let mut pool = BufferPool::new();
-    let buf = pool.allocate(128);
-    assert_eq!(buf.len(), 128);
-
-    pool.return_buffer(buf);
-    assert_eq!(pool.len(), 1);
-
-    // Allocate smaller: should reuse the 128-byte buffer
-    let buf2 = pool.allocate(64);
-    assert_eq!(buf2.len(), 64);
-    assert!(pool.is_empty());
-}
-
-#[test]
-fn test_buffer_pool_no_fit() {
-    let mut pool = BufferPool::new();
-    let buf = pool.allocate(32);
-    pool.return_buffer(buf);
-
-    // Request larger than any pooled buffer: fresh allocation
-    let buf2 = pool.allocate(256);
-    assert_eq!(buf2.len(), 256);
-    // The 32-byte buffer is still in the pool
-    assert_eq!(pool.len(), 1);
-}
-
-#[test]
-fn test_buffer_pool_best_fit() {
-    let mut pool = BufferPool::new();
-
-    let b1 = pool.allocate(100);
-    let b2 = pool.allocate(200);
-    let b3 = pool.allocate(300);
-    pool.return_buffer(b1);
-    pool.return_buffer(b2);
-    pool.return_buffer(b3);
-    assert_eq!(pool.len(), 3);
-
-    // Request 150 bytes: should pick the 200-byte buffer (smallest that fits)
-    let reused = pool.allocate(150);
-    assert_eq!(reused.len(), 150); // resized to requested size
-    assert_eq!(pool.len(), 2); // two buffers left
-}
-
-#[test]
-fn buffer_pool_reclaims_intermediate_buffers() {
+fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
-    let tc = TracedTensor::from_tensor(c);
-    let mut out = einsum(&mut engine, &[&ta, &tb, &tc], "ij,jk,kl->il").unwrap();
+    let ta1 = TracedTensor::from_tensor(a.clone());
+    let tb1 = TracedTensor::from_tensor(b.clone());
+    let tc1 = TracedTensor::from_tensor(c.clone());
+    let mut out1 = einsum(&mut engine, &[&ta1, &tb1, &tc1], "ij,jk,kl->il").unwrap();
 
-    let result = out.eval(&mut engine).unwrap();
+    let result1 = out1.eval(&mut engine).unwrap();
+    assert_eq!(get_f64_data(result1), &[517.0, 766.0, 625.0, 926.0]);
 
-    assert_eq!(get_f64_data(result), &[517.0, 766.0, 625.0, 926.0]);
-    assert!(engine.buffer_pool_len() > 0);
+    let pooled_after_first = engine.buffer_pool_len();
+    assert!(pooled_after_first > 0);
+
+    let ta2 = TracedTensor::from_tensor(a);
+    let tb2 = TracedTensor::from_tensor(b);
+    let tc2 = TracedTensor::from_tensor(c);
+    let mut out2 = einsum(&mut engine, &[&ta2, &tb2, &tc2], "ij,jk,kl->il").unwrap();
+
+    let result2 = out2.eval(&mut engine).unwrap();
+    assert_eq!(get_f64_data(result2), &[517.0, 766.0, 625.0, 926.0]);
+    let pooled_after_second = engine.buffer_pool_len();
+    assert!(pooled_after_second < pooled_after_first * 2);
 }

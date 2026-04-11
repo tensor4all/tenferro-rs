@@ -13,6 +13,7 @@
 //! ```
 
 pub mod backend;
+pub mod buffer_pool;
 pub mod config;
 pub mod cpu;
 pub mod error;

@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tenferro_algebra::Semiring;
 
 use crate::backend::{SemiringBackend, TensorBackend};
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::flat_to_multi;
-use crate::{Tensor, TypedTensor};
+use crate::{Buffer, Tensor, TypedTensor};
 
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural};
 
@@ -25,6 +26,7 @@ use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural
 /// ```
 pub struct CpuBackend {
     pub(crate) pool: Arc<rayon::ThreadPool>,
+    pub(crate) buffers: BufferPool,
 }
 
 fn shared_pools() -> &'static Mutex<HashMap<usize, Arc<rayon::ThreadPool>>> {
@@ -66,6 +68,7 @@ impl CpuBackend {
             .unwrap_or(1);
         Self {
             pool: get_or_create_pool(num_threads),
+            buffers: BufferPool::new(),
         }
     }
 
@@ -83,6 +86,7 @@ impl CpuBackend {
         assert!(num_threads >= 1, "thread count must be >= 1");
         Self {
             pool: get_or_create_pool(num_threads),
+            buffers: BufferPool::new(),
         }
     }
 
@@ -98,6 +102,20 @@ impl CpuBackend {
     /// ```
     pub fn num_threads(&self) -> usize {
         self.pool.current_num_threads()
+    }
+
+    /// Number of retained typed host buffers currently held by this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// ```
+    pub fn buffer_pool_len(&self) -> usize {
+        self.buffers.len()
     }
 
     /// Run a closure inside this backend's shared rayon thread pool.
@@ -116,6 +134,19 @@ impl CpuBackend {
         R: Send,
     {
         self.pool.install(op)
+    }
+
+    fn install_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R
+    where
+        R: Send,
+    {
+        let mut buffers = std::mem::take(&mut self.buffers);
+        let (result, buffers) = self.pool.install(|| {
+            let result = op(&mut buffers);
+            (result, buffers)
+        });
+        self.buffers = buffers;
+        result
     }
 }
 
@@ -282,11 +313,19 @@ impl TensorBackend for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.install(|| match (lhs, rhs) {
-            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general(a, b, config).map(Tensor::F32),
-            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general(a, b, config).map(Tensor::F64),
-            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general(a, b, config).map(Tensor::C32),
-            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general(a, b, config).map(Tensor::C64),
+        self.install_with_pool(|buffers| match (lhs, rhs) {
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                gemm::dot_general(buffers, a, b, config).map(Tensor::F32)
+            }
+            (Tensor::F64(a), Tensor::F64(b)) => {
+                gemm::dot_general(buffers, a, b, config).map(Tensor::F64)
+            }
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                gemm::dot_general(buffers, a, b, config).map(Tensor::C32)
+            }
+            (Tensor::C64(a), Tensor::C64(b)) => {
+                gemm::dot_general(buffers, a, b, config).map(Tensor::C64)
+            }
             _ => Err(crate::Error::DTypeMismatch {
                 op: "dot_general",
                 lhs: lhs.dtype(),
@@ -499,6 +538,15 @@ impl TensorBackend for CpuBackend {
             Ok(x)
         }
     }
+
+    fn reclaim_buffer(&mut self, tensor: Tensor) {
+        match tensor {
+            Tensor::F32(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::F64(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::C32(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::C64(t) => reclaim_typed(&mut self.buffers, t),
+        }
+    }
 }
 
 fn has_zero_dim(shape: &[usize]) -> bool {
@@ -542,6 +590,12 @@ fn matmul_preserve_trailing_batch(
             rhs_rank: rank,
         },
     )
+}
+
+fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
+    if let Buffer::Host(data) = typed.buffer {
+        T::pool_release(pool, data);
+    }
 }
 
 fn zeros_like_tensor(input: &Tensor) -> Tensor {
