@@ -2,6 +2,7 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
+use super::context::{resolve_and_guard, ShapeGuardContext};
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -10,14 +11,14 @@ pub fn linearize_lu(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None, None];
     };
 
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
-    let m_size = const_dim(m, "linearize_lu");
-    let n_size = const_dim(n, "linearize_lu");
+    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let k = DimExpr::min(m.clone(), n.clone());
     let k_size = m_size.min(n_size);
     let rank = input_shape.len();
@@ -277,14 +278,14 @@ pub fn linearize_svd(
     tangent_in: &[Option<LocalValId>],
     eps: f64,
     input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None];
     };
 
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
-    let m_size = const_dim(m, "linearize_svd");
-    let n_size = const_dim(n, "linearize_svd");
+    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let matrix_rank = input_shape.len();
     let k = DimExpr::min(m.clone(), n.clone());
     let u = ValRef::External(primal_out[0].clone());
@@ -576,14 +577,14 @@ pub fn linearize_qr(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
-    let m_size = const_dim(m, "linearize_qr");
-    let n_size = const_dim(n, "linearize_qr");
+    let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let k = DimExpr::min(m.clone(), n.clone());
     let matrix_rank = input_shape.len();
     let r_shape = matrix_shape(k, n, batch_shape);
@@ -1299,27 +1300,6 @@ fn shared_matrix_rank(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr], op: &str) ->
         "{op}: batch shape mismatch between lhs and rhs"
     );
     lhs_shape.len()
-}
-
-/// Extract a concrete dimension from a [`DimExpr`].
-///
-/// Linalg AD rules (LU, SVD, QR, etc.) compute branch-dependent
-/// sub-expressions whose structure depends on the relationship between
-/// matrix dimensions (e.g. `m >= n`). This requires the dimensions to
-/// be known at graph-construction time, so only `DimExpr::Const`
-/// values are accepted.
-///
-/// **Known limitation:** symbolic (`InputDim`) dimensions will cause
-/// a panic here. Supporting fully symbolic linalg AD would require
-/// a conditional/select node in the AD graph, which is not yet
-/// implemented.
-fn const_dim(dim: &DimExpr, op: &str) -> usize {
-    match dim {
-        DimExpr::Const(value) => *value,
-        other => panic!(
-            "{op}: branch-dependent linalg rule requires a concrete dimension, got {other:?}"
-        ),
-    }
 }
 
 fn matrix_shape(

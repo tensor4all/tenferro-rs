@@ -118,6 +118,7 @@ fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Opti
 macro_rules! impl_pool_scalar {
     ($ty:ty, $field:ident) => {
         impl PoolScalar for $ty {
+            #[allow(clippy::uninit_vec)]
             unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self> {
                 match take_best_fit(&mut pool.$field, len) {
                     Some(mut buf) => {

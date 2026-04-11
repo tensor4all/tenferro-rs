@@ -12,6 +12,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
 use tidu::{differentiate, transpose};
 
@@ -349,11 +350,13 @@ impl TracedTensor {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let view = resolve(self.resolve_roots());
+        let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
+            &mut ad_ctx,
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
@@ -392,18 +395,20 @@ impl TracedTensor {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let view = resolve(self.resolve_roots());
+        let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
+            &mut ad_ctx,
         );
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs
             .iter()
             .map(|(_, local_id)| *local_id)
             .collect();
-        let transposed = transpose(&linear);
+        let transposed = transpose(&linear, &mut ad_ctx);
         let linear_fragment = Arc::new(linear.fragment);
         let cotangent_output = transposed.tangent_outputs[0]?;
         let cotangent_input_key =

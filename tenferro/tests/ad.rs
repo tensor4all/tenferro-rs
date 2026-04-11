@@ -16,6 +16,7 @@ use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 use tidu::{differentiate, transpose, LinearFragment};
@@ -889,13 +890,15 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     cotangent: Tensor,
 ) -> Tensor {
     let view = resolve(vec![fragment.clone()]);
+    let mut ad_ctx = ShapeGuardContext::default();
     let linear = differentiate(
         &view,
         std::slice::from_ref(&loss_key),
         std::slice::from_ref(&input_key),
         0,
+        &mut ad_ctx,
     );
-    let transposed = transpose(&linear);
+    let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
     let grad_key = transposed.tangent_outputs[0]
         .map(|id| transposed.fragment.vals()[id].key.clone())
@@ -953,11 +956,13 @@ fn jvp_from_fragment_with_inputs(
     tangent: Tensor,
 ) -> Tensor {
     let view = resolve(vec![fragment.clone()]);
+    let mut ad_ctx = ShapeGuardContext::default();
     let linear = differentiate(
         &view,
         std::slice::from_ref(&output_key),
         std::slice::from_ref(&input_key),
         0,
+        &mut ad_ctx,
     );
     let tangent_key = linear.tangent_outputs[0]
         .map(|id| linear.fragment.vals()[id].key.clone())
@@ -1029,7 +1034,8 @@ fn transpose_primal_unary_op_with_inputs(
         tangent_inputs: vec![(input_key, tangent_input)],
         tangent_outputs: vec![Some(output)],
     };
-    let transposed = transpose(&linear);
+    let mut ad_ctx = ShapeGuardContext::default();
+    let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
     let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key
     {

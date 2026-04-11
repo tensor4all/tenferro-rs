@@ -108,6 +108,7 @@ pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
     dispatch_tensor!(input, tensor => typed_reverse(tensor, axes))
 }
 
+#[allow(clippy::uninit_vec)]
 fn typed_tensor_uninit<T: Clone>(shape: Vec<usize>) -> TypedTensor<T> {
     let n: usize = shape.iter().product();
     let mut data = Vec::with_capacity(n);
