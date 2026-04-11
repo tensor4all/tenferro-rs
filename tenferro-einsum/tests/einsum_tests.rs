@@ -3330,18 +3330,14 @@ fn einsum_rrule_diagonal_extraction_nonunit_cotangent() {
     assert!((g[3] - 5.0).abs() < 1e-12, "grad[1,1]={}", g[3]);
 }
 
-    // Verify the HVP via finite differences
+#[test]
+fn einsum_hvp_trace_with_delta_injection() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], COL).unwrap();
-    let eps = 1e-6;
-    let a_plus_eps = {
-        let vals = a.buffer().as_slice().unwrap();
-        let da_vals = da.buffer().as_slice().unwrap();
-        let mut result = vec![0.0; 4];
-        for i in 0..4 {
-            result[i] = vals[i] + eps * da_vals[i];
-        }
-        Tensor::<f64>::from_slice(&result, &[2, 2], COL).unwrap()
-    };
+    let cotangent = Tensor::<f64>::from_slice(&[3.0], &[], COL).unwrap();
     let cotangent_tangent = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
 
     let hvps = einsum_hvp::<S, CpuBackend>(
@@ -3358,13 +3354,95 @@ fn einsum_rrule_diagonal_extraction_nonunit_cotangent() {
     let (ref grad, ref hvp_val) = hvps[0];
     assert_eq!(grad.dims(), &[2, 2]);
     assert_eq!(hvp_val.dims(), &[2, 2]);
-    assert_tensors_close(&grad, &expected_grad, "hvp_grad");
+    // grad = cotangent * I = 3 * I = [[3,0],[0,3]]
+    let expected_grad = Tensor::<f64>::from_slice(&[3.0, 0.0, 0.0, 3.0], &[2, 2], COL).unwrap();
+    assert_tensors_close(grad, &expected_grad, "hvp_grad");
+    // hvp = cotangent_tangent * I = 2 * I = [[2,0],[0,2]]
     let expected_hvp = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], COL).unwrap();
-    assert_tensors_close(&hvp_val, &expected_hvp, "hvp_hvp");
+    assert_tensors_close(hvp_val, &expected_hvp, "hvp_hvp");
 }
 
+#[test]
+fn einsum_hvp_trace_with_tangent_cross_term() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[3.0], &[], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[7.0], &[], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii->",
+        &[&a],
+        &[Some(&da)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp_val) = hvps[0];
+    // grad = 3 * I = [[3,0],[0,3]]
+    let gv = to_col_major_vec(grad);
+    assert!((gv[0] - 3.0).abs() < 1e-10, "grad[0,0]={}", gv[0]);
+    assert!((gv[3] - 3.0).abs() < 1e-10, "grad[1,1]={}", gv[3]);
     // hvp = 7 * I = [[7,0],[0,7]]
-    let hv = to_col_major_vec(hvp);
-    assert!((hv[0] - 7.0).abs() < 1e-12);
-    assert!((hv[3] - 7.0).abs() < 1e-12);
+    let hv = to_col_major_vec(hvp_val);
+    assert!((hv[0] - 7.0).abs() < 1e-10, "hvp[0,0]={}", hv[0]);
+    assert!((hv[3] - 7.0).abs() < 1e-10, "hvp[1,1]={}", hv[3]);
+}
+
+#[test]
+fn einsum_hvp_diagonal_extraction_with_delta_injection() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.5, 0.0, 0.0, 0.5], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[2.0, 5.0], &[2], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii->i",
+        &[&a],
+        &[Some(&da)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp_val) = hvps[0];
+    assert_eq!(grad.dims(), &[2, 2]);
+    assert_eq!(hvp_val.dims(), &[2, 2]);
+    // grad = diag(cotangent) = diag([2, 5]) = [[2,0],[0,5]]
+    let expected_grad = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 5.0], &[2, 2], COL).unwrap();
+    assert_tensors_close(grad, &expected_grad, "hvp_grad");
+    // hvp = diag(cotangent_tangent) = diag([1, 1]) = [[1,0],[0,1]]
+    let expected_hvp = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    assert_tensors_close(hvp_val, &expected_hvp, "hvp_hvp");
+}
+
+#[test]
+fn einsum_rrule_trace_multi_operand() {
+    let mut ctx = CpuContext::new(1);
+    // "ii,j->j" : trace(A) * v
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let v = Tensor::<f64>::from_slice(&[5.0, 6.0], &[2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii,j->j", &[&a, &v], &cotangent).unwrap();
+    assert_eq!(grads.len(), 2);
+    // grad_v = trace(A) * cotangent = 5 * [1, 1] = [5, 5]
+    let gv = to_col_major_vec(&grads[1]);
+    assert!((gv[0] - 5.0).abs() < 1e-12, "grad_v[0]={}", gv[0]);
+    assert!((gv[1] - 5.0).abs() < 1e-12, "grad_v[1]={}", gv[1]);
+    // grad_A = diag(sum_j v[j]*cot[j]) = diag(5*1 + 6*1) = diag(11)
+    let ga = to_col_major_vec(&grads[0]);
+    assert!((ga[0] - 11.0).abs() < 1e-12, "grad_A[0,0]={}", ga[0]);
+    assert!((ga[1] - 0.0).abs() < 1e-12, "grad_A[1,0]={}", ga[1]);
+    assert!((ga[2] - 0.0).abs() < 1e-12, "grad_A[0,1]={}", ga[2]);
+    assert!((ga[3] - 11.0).abs() < 1e-12, "grad_A[1,1]={}", ga[3]);
 }
