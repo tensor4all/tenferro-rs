@@ -22,15 +22,12 @@ struct GemmDims {
     k: usize,
     batch_total: usize,
     a_rs: isize,
-    #[cfg(feature = "cpu-faer")]
     a_cs: isize,
     a_bs: isize,
     b_rs: isize,
-    #[cfg(feature = "cpu-faer")]
     b_cs: isize,
     b_bs: isize,
     c_rs: isize,
-    #[cfg(feature = "cpu-faer")]
     c_cs: isize,
     c_bs: isize,
     out_shape: Vec<usize>,
@@ -177,15 +174,31 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
     if shapes.len() == 1 {
         return Some((shapes[0], strides[0]));
     }
-    let base_stride = strides[0];
+    let mut dims: Vec<(usize, isize)> = shapes
+        .iter()
+        .copied()
+        .zip(strides.iter().copied())
+        .collect();
+    dims.sort_by_key(|&(_, stride)| stride.unsigned_abs());
+    let base_stride = dims[0].1;
     let mut expected = base_stride;
-    for i in 0..shapes.len() {
-        if strides[i] != expected {
+    for (shape, stride) in dims {
+        if stride != expected {
             return None;
         }
-        expected = strides[i].checked_mul(shapes[i] as isize)?;
+        expected = stride.checked_mul(shape as isize)?;
     }
     Some((shapes.iter().product(), base_stride))
+}
+
+fn stride_sort_order(strides: &[isize]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..strides.len()).collect();
+    order.sort_by_key(|&idx| strides[idx].unsigned_abs());
+    order
+}
+
+fn is_identity_order(order: &[usize]) -> bool {
+    order.iter().enumerate().all(|(idx, &value)| idx == value)
 }
 
 /// Compute permutations that reorder lhs/rhs into canonical GEMM layout.
@@ -274,9 +287,7 @@ fn analyse_gemm<T>(
     let k: usize = contract_shapes.iter().product();
 
     let lhs_free_strides: Vec<isize> = lhs_free.iter().map(|&d| lhs_strides[d]).collect();
-    #[cfg(feature = "cpu-faer")]
     let rhs_free_strides: Vec<isize> = rhs_free.iter().map(|&d| rhs_strides[d]).collect();
-    #[cfg(feature = "cpu-faer")]
     let lhs_contract_strides: Vec<isize> = config
         .lhs_contracting_dims
         .iter()
@@ -298,11 +309,18 @@ fn analyse_gemm<T>(
         .map(|&d| rhs_strides[d])
         .collect();
 
+    if !is_identity_order(&stride_sort_order(&lhs_free_strides))
+        || !is_identity_order(&stride_sort_order(&rhs_free_strides))
+        || !is_identity_order(&stride_sort_order(&lhs_batch_strides))
+        || !is_identity_order(&stride_sort_order(&rhs_batch_strides))
+        || stride_sort_order(&lhs_contract_strides) != stride_sort_order(&rhs_contract_strides)
+    {
+        return None;
+    }
+
     let (_, a_rs) = try_fuse_dims(&lhs_free_shapes, &lhs_free_strides)?;
-    #[cfg(feature = "cpu-faer")]
     let (_, a_cs) = try_fuse_dims(&contract_shapes, &lhs_contract_strides)?;
     let (_, b_rs) = try_fuse_dims(&contract_shapes, &rhs_contract_strides)?;
-    #[cfg(feature = "cpu-faer")]
     let (_, b_cs) = try_fuse_dims(&rhs_free_shapes, &rhs_free_strides)?;
     let (_, a_bs) = try_fuse_dims(&batch_shapes, &lhs_batch_strides)?;
     let (_, b_bs) = try_fuse_dims(&batch_shapes, &rhs_batch_strides)?;
@@ -317,15 +335,12 @@ fn analyse_gemm<T>(
     let nn = rhs_free_shapes.len();
     let out_m_shapes = &out_shape[..nm];
     let out_m_strides = &out_strides[..nm];
-    #[cfg(feature = "cpu-faer")]
     let out_n_shapes = &out_shape[nm..nm + nn];
-    #[cfg(feature = "cpu-faer")]
     let out_n_strides = &out_strides[nm..nm + nn];
     let out_b_shapes = &out_shape[nm + nn..];
     let out_b_strides = &out_strides[nm + nn..];
 
     let (_, c_rs) = try_fuse_dims(out_m_shapes, out_m_strides)?;
-    #[cfg(feature = "cpu-faer")]
     let (_, c_cs) = try_fuse_dims(out_n_shapes, out_n_strides)?;
     let (_, c_bs) = try_fuse_dims(out_b_shapes, out_b_strides)?;
 
@@ -335,15 +350,12 @@ fn analyse_gemm<T>(
         k,
         batch_total,
         a_rs,
-        #[cfg(feature = "cpu-faer")]
         a_cs,
         a_bs,
         b_rs,
-        #[cfg(feature = "cpu-faer")]
         b_cs,
         b_bs,
         c_rs,
-        #[cfg(feature = "cpu-faer")]
         c_cs,
         c_bs,
         out_shape,
@@ -502,39 +514,48 @@ where
         });
     }
 
-    if dims.a_rs != 1 || dims.b_rs != 1 || dims.c_rs != 1 {
+    let a_ok = dims.a_rs == 1 || dims.a_cs == 1;
+    let b_ok = dims.b_rs == 1 || dims.b_cs == 1;
+    let c_ok = dims.c_rs == 1;
+    if !a_ok || !b_ok || !c_ok {
         return None;
     }
 
     let a_data = match &lhs.buffer {
-        Buffer::Host(v) => v,
+        Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
     };
     let b_data = match &rhs.buffer {
-        Buffer::Host(v) => v,
+        Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
     };
 
-    // SAFETY: each batch GEMM writes its full `c_block` slice with beta = 0.
+    // SAFETY: each batch GEMM writes its full output block with beta = 0.
     let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
-    let a_block = dims.m * dims.k;
-    let b_block = dims.k * dims.n;
-    let c_block = dims.m * dims.n;
+    let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_start = (batch as isize * dims.a_bs) as usize;
-        let b_start = (batch as isize * dims.b_bs) as usize;
-        let c_start = (batch as isize * dims.c_bs) as usize;
-        T::contiguous_gemm(
-            T::one(),
-            &a_data[a_start..a_start + a_block],
-            &b_data[b_start..b_start + b_block],
-            T::zero(),
-            &mut out[c_start..c_start + c_block],
-            dims.m,
-            dims.n,
-            dims.k,
-        );
+        let a_off = batch as isize * dims.a_bs;
+        let b_off = batch as isize * dims.b_bs;
+        let c_off = batch as isize * dims.c_bs;
+        unsafe {
+            T::strided_gemm(
+                T::one(),
+                a_data.offset(a_off),
+                dims.m,
+                dims.k,
+                dims.a_rs,
+                dims.a_cs,
+                b_data.offset(b_off),
+                dims.n,
+                dims.b_rs,
+                dims.b_cs,
+                T::zero(),
+                c_ptr.offset(c_off),
+                dims.c_rs,
+                dims.c_cs,
+            );
+        }
     }
 
     Some(TypedTensor {
