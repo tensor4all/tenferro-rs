@@ -1,3 +1,5 @@
+pub mod context;
+
 mod analytic;
 mod contraction;
 mod diagonal;
@@ -17,6 +19,7 @@ fn linearize_non_semiring(
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
     Some(match op {
         StdTensorOp::Div => {
@@ -81,7 +84,7 @@ fn linearize_non_semiring(
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
         StdTensorOp::Lu { input_shape } => {
-            linalg::linearize_lu(builder, primal_out, tangent_in, input_shape)
+            linalg::linearize_lu(builder, primal_out, tangent_in, input_shape, ctx)
         }
         StdTensorOp::TriangularSolve {
             left_side,
@@ -106,10 +109,10 @@ fn linearize_non_semiring(
             linalg::linearize_cholesky(builder, primal_out, tangent_in, input_shape)
         }
         StdTensorOp::Svd { eps, input_shape } => {
-            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, input_shape)
+            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, input_shape, ctx)
         }
         StdTensorOp::Qr { input_shape } => {
-            linalg::linearize_qr(builder, primal_out, tangent_in, input_shape)
+            linalg::linearize_qr(builder, primal_out, tangent_in, input_shape, ctx)
         }
         StdTensorOp::Eigh { eps, input_shape } => {
             linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
@@ -127,6 +130,7 @@ fn linearize_semiring(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    _ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
     Some(match op {
         StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
@@ -143,7 +147,9 @@ fn transpose_non_semiring(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
+    ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
+    let _ = ctx;
     Some(match op {
         StdTensorOp::Div => elementwise_tier2::transpose_div(builder, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(builder, cotangent_out, inputs, mode),
@@ -221,6 +227,7 @@ fn transpose_semiring(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
+    _ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
     Some(match op {
         StdTensorOp::Add => semiring::transpose_add(cotangent_out),
@@ -245,11 +252,14 @@ pub fn linearize(
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    ctx: &mut context::ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    if let Some(result) = linearize_non_semiring(op, builder, primal_in, primal_out, tangent_in) {
+    if let Some(result) =
+        linearize_non_semiring(op, builder, primal_in, primal_out, tangent_in, ctx)
+    {
         return result;
     }
-    if let Some(result) = linearize_semiring(op, builder, primal_in, tangent_in) {
+    if let Some(result) = linearize_semiring(op, builder, primal_in, tangent_in, ctx) {
         return result;
     }
     todo_linearize(op)
@@ -261,11 +271,12 @@ pub fn transpose_rule(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
+    ctx: &mut context::ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    if let Some(result) = transpose_non_semiring(op, builder, cotangent_out, inputs, mode) {
+    if let Some(result) = transpose_non_semiring(op, builder, cotangent_out, inputs, mode, ctx) {
         return result;
     }
-    if let Some(result) = transpose_semiring(op, builder, cotangent_out, inputs, mode) {
+    if let Some(result) = transpose_semiring(op, builder, cotangent_out, inputs, mode, ctx) {
         return result;
     }
     todo_transpose_rule(op)

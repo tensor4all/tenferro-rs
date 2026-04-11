@@ -6,6 +6,7 @@ pub mod semiring_op_kind;
 pub mod semiring_ops;
 pub mod std_tensor_op;
 
+pub use ad::context::{ShapeGuard, ShapeGuardContext};
 pub use tenferro_tensor::config;
 
 #[cfg(test)]

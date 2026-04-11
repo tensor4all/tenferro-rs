@@ -466,6 +466,8 @@ impl GraphOp for StdTensorOp {
 }
 
 impl PrimitiveOp for StdTensorOp {
+    type ADContext = crate::ad::context::ShapeGuardContext;
+
     fn add() -> Self {
         StdTensorOp::Add
     }
@@ -476,8 +478,9 @@ impl PrimitiveOp for StdTensorOp {
         primal_in: &[GlobalValKey<Self>],
         primal_out: &[GlobalValKey<Self>],
         tangent_in: &[Option<LocalValId>],
+        ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
-        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in)
+        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
     fn transpose_rule(
@@ -486,8 +489,9 @@ impl PrimitiveOp for StdTensorOp {
         cotangent_out: &[Option<LocalValId>],
         inputs: &[ValRef<Self>],
         mode: &OpMode,
+        ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
-        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode)
+        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
     }
 }
 

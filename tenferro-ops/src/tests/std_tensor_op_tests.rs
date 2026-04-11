@@ -1,3 +1,4 @@
+use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::semiring_op::{SemiringInputKey, SemiringOp};
 use crate::semiring_op_kind::SemiringOpKind;
@@ -61,6 +62,7 @@ fn run_linearize_case(
     tangent_mask: &[bool],
 ) -> (Vec<Option<LocalValId>>, Fragment<StdTensorOp>) {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let primal_in = add_input_keys(&mut builder, 100, n_primal_in);
     let primal_out = add_input_keys(&mut builder, 200, n_primal_out);
     let tangent_in: Vec<Option<LocalValId>> = tangent_mask
@@ -70,7 +72,13 @@ fn run_linearize_case(
             active.then(|| builder.add_input(tensor_input_key(300 + offset as u64)))
         })
         .collect();
-    let result = op.linearize(&mut builder, &primal_in, &primal_out, &tangent_in);
+    let result = op.linearize(
+        &mut builder,
+        &primal_in,
+        &primal_out,
+        &tangent_in,
+        &mut ad_ctx,
+    );
     (result, builder.build())
 }
 
@@ -85,6 +93,7 @@ fn run_transpose_case(
     Fragment<StdTensorOp>,
 ) {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = cotangent_present.then(|| builder.add_input(tensor_input_key(400)));
     let inputs = external_inputs(500, n_inputs);
     let result = op.transpose_rule(
@@ -92,6 +101,7 @@ fn run_transpose_case(
         &[cotangent],
         &inputs,
         &linear_mode(active_mask),
+        &mut ad_ctx,
     );
     (result, cotangent, builder.build())
 }
@@ -621,10 +631,12 @@ fn test_std_tensor_op_semiring_ops_impl_constructors_cover_remaining_variants() 
 #[test]
 fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let dx = builder.add_input(TensorInputKey::User { id: 1 });
     let dy = builder.add_input(TensorInputKey::User { id: 2 });
 
-    let result = StdTensorOp::add().linearize(&mut builder, &[], &[], &[Some(dx), Some(dy)]);
+    let result =
+        StdTensorOp::add().linearize(&mut builder, &[], &[], &[Some(dx), Some(dy)], &mut ad_ctx);
 
     assert_eq!(result.len(), 1);
     assert!(result[0].is_some());
@@ -642,14 +654,20 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
 #[test]
 fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let ct = builder.add_input(TensorInputKey::User { id: 3 });
     let inputs = vec![
         ValRef::External(GlobalValKey::Input(TensorInputKey::User { id: 10 })),
         ValRef::External(GlobalValKey::Input(TensorInputKey::User { id: 11 })),
     ];
 
-    let result =
-        StdTensorOp::add().transpose_rule(&mut builder, &[Some(ct)], &inputs, &OpMode::Primal);
+    let result = StdTensorOp::add().transpose_rule(
+        &mut builder,
+        &[Some(ct)],
+        &inputs,
+        &OpMode::Primal,
+        &mut ad_ctx,
+    );
 
     assert_eq!(result, vec![Some(ct), Some(ct)]);
     let fragment = builder.build();
@@ -885,12 +903,14 @@ fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
     assert!(transpose_div_none_fragment.ops().is_empty());
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(920));
     let div_primal_mode = StdTensorOp::Div.transpose_rule(
         &mut builder,
         &[Some(cotangent)],
         &external_inputs(921, 2),
         &OpMode::Primal,
+        &mut ad_ctx,
     );
     assert_eq!(div_primal_mode, vec![None, None]);
     assert!(builder.build().ops().is_empty());
@@ -983,12 +1003,14 @@ fn test_std_tensor_op_transpose_none_or_inactive_paths_return_none() {
         assert!(none_fragment.ops().is_empty(), "expected no ops for {op:?}");
 
         let mut builder = FragmentBuilder::<StdTensorOp>::new();
+        let mut ad_ctx = ShapeGuardContext::default();
         let cotangent = builder.add_input(tensor_input_key(900));
         let result = op.transpose_rule(
             &mut builder,
             &[Some(cotangent)],
             &external_inputs(901, 1),
             &OpMode::Primal,
+            &mut ad_ctx,
         );
         assert_eq!(result, vec![None], "unexpected inactive path for {op:?}");
         assert!(
@@ -1071,6 +1093,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     );
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(910));
     let result = StdTensorOp::BroadcastInDim {
         shape: shape![2, 3],
@@ -1081,6 +1104,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         &[Some(cotangent)],
         &external_inputs(911, 1),
         &linear_mode(&[true]),
+        &mut ad_ctx,
     );
     assert_eq!(result, vec![Some(cotangent)]);
     assert!(builder.build().ops().is_empty());
@@ -1124,6 +1148,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert!(transpose_transpose_none_fragment.ops().is_empty());
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let none_broadcast = StdTensorOp::BroadcastInDim {
         shape: shape![2, 2, 3],
         dims: vec![0, 2],
@@ -1133,6 +1158,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         &[None],
         &external_inputs(930, 1),
         &linear_mode(&[true]),
+        &mut ad_ctx,
     );
     assert_eq!(none_broadcast, vec![None]);
     assert!(builder.build().ops().is_empty());
@@ -1194,12 +1220,14 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert!(transpose_none_fragment.ops().is_empty());
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(980));
     let primal_mode_result = matmul.transpose_rule(
         &mut builder,
         &[Some(cotangent)],
         &external_inputs(981, 2),
         &OpMode::Primal,
+        &mut ad_ctx,
     );
     assert_eq!(primal_mode_result, vec![None, None]);
     assert!(builder.build().ops().is_empty());
@@ -1260,17 +1288,20 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
 #[should_panic(expected = "linearize not implemented for Maximum")]
 fn test_std_tensor_op_linearize_panics_for_unimplemented_variant() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let _ = StdTensorOp::Maximum.linearize(&mut builder, &[], &[], &[None, None]);
+    let mut ad_ctx = ShapeGuardContext::default();
+    let _ = StdTensorOp::Maximum.linearize(&mut builder, &[], &[], &[None, None], &mut ad_ctx);
 }
 
 #[test]
 #[should_panic(expected = "transpose_rule not implemented for Maximum")]
 fn test_std_tensor_op_transpose_rule_panics_for_unimplemented_variant() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
     let _ = StdTensorOp::Maximum.transpose_rule(
         &mut builder,
         &[None],
         &external_inputs(950, 2),
         &OpMode::Primal,
+        &mut ad_ctx,
     );
 }

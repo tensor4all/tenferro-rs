@@ -41,6 +41,7 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
 /// # Safety
 /// Caller must write every element before reading. The returned array
 /// contains uninitialized data.
+#[allow(clippy::uninit_vec)]
 pub(crate) unsafe fn typed_array_uninit<T>(shape: &[usize]) -> StridedArray<T> {
     let total: usize = shape.iter().product();
     let strides = col_major_strides(shape);
