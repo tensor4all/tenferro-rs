@@ -1267,3 +1267,64 @@ fn strided_copy_preserves_data() {
     let result = c.buffer().as_slice().unwrap();
     assert_eq!(result.len(), 24);
 }
+
+#[test]
+fn tril_batched_2x2x2_values_correct() {
+    let data: Vec<f64> = (1..=8).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2, 2], COL).unwrap();
+    let lower = t.tril(0).unwrap();
+    assert_eq!(lower.dims(), &[2, 2, 2]);
+    let v = lower.buffer().as_slice().unwrap();
+    // col-major: A[0,0,0]=1 A[1,0,0]=2 A[0,1,0]=3 A[1,1,0]=4 ...
+    // batch 0: [[1,0],[2,4]] col-major -> [1,2,0,4]
+    assert_eq!(v[0], 1.0);
+    assert_eq!(v[1], 2.0);
+    assert_eq!(v[2], 0.0);
+    assert_eq!(v[3], 4.0);
+    // batch 1: [[5,0],[6,8]] col-major -> [5,6,0,8]
+    assert_eq!(v[4], 5.0);
+    assert_eq!(v[5], 6.0);
+    assert_eq!(v[6], 0.0);
+    assert_eq!(v[7], 8.0);
+}
+
+#[test]
+fn triu_batched_2x2x2_values_correct() {
+    let data: Vec<f64> = (1..=8).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2, 2], COL).unwrap();
+    let upper = t.triu(0).unwrap();
+    assert_eq!(upper.dims(), &[2, 2, 2]);
+    let v = upper.buffer().as_slice().unwrap();
+    // batch 0: [[1,3],[0,4]] col-major -> [1,0,3,4]
+    assert_eq!(v[0], 1.0);
+    assert_eq!(v[1], 0.0);
+    assert_eq!(v[2], 3.0);
+    assert_eq!(v[3], 4.0);
+    // batch 1: [[5,7],[0,8]] col-major -> [5,0,7,8]
+    assert_eq!(v[4], 5.0);
+    assert_eq!(v[5], 0.0);
+    assert_eq!(v[6], 7.0);
+    assert_eq!(v[7], 8.0);
+}
+
+#[test]
+fn tril_batched_with_diagonal_offset_values() {
+    let data: Vec<f64> = (1..=18).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[3, 3, 2], COL).unwrap();
+    let lower = t.tril(1).unwrap();
+    assert_eq!(lower.dims(), &[3, 3, 2]);
+    let v = lower.buffer().as_slice().unwrap();
+    // col-major [3,3,2]: A[i,j,b] at index i + 3*j + 9*b
+    // batch 0: A[:,:,0] = [[1,4,7],[2,5,8],[3,6,9]]
+    // tril(1) keeps where j-i <= 1: [[1,4,0],[2,5,8],[3,6,9]]
+    // col-major: [1,2,3,4,5,6,0,8,9]
+    assert_eq!(v[0], 1.0);
+    assert_eq!(v[1], 2.0);
+    assert_eq!(v[2], 3.0);
+    assert_eq!(v[3], 4.0);
+    assert_eq!(v[4], 5.0);
+    assert_eq!(v[5], 6.0);
+    assert_eq!(v[6], 0.0);
+    assert_eq!(v[7], 8.0);
+    assert_eq!(v[8], 9.0);
+}
