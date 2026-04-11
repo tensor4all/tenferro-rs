@@ -365,6 +365,7 @@ fn analyse_gemm<T>(
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn dot_general<T>(
     buffers: &mut BufferPool,
+    ctx: &crate::cpu::CpuContext,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -373,7 +374,7 @@ where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_faer_gemm(buffers, lhs, rhs, config) {
+    if let Some(result) = typed_faer_gemm(buffers, ctx, lhs, rhs, config) {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -388,7 +389,7 @@ where
     } else {
         std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
-    typed_faer_gemm(buffers, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
+    typed_faer_gemm(buffers, ctx, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
         Error::BackendFailure {
             op: "dot_general",
             message: "CPU GEMM requires host-backed canonical inputs".into(),
@@ -399,6 +400,7 @@ where
 #[cfg(feature = "cpu-faer")]
 fn typed_faer_gemm<T>(
     buffers: &mut BufferPool,
+    ctx: &crate::cpu::CpuContext,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -435,6 +437,7 @@ where
         let c_off = batch as isize * dims.c_bs;
         unsafe {
             T::strided_gemm(
+                ctx,
                 T::one(),
                 a_data.offset(a_off),
                 dims.m,

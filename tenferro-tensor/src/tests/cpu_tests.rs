@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
+use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
@@ -9,7 +11,7 @@ use crate::config::{
 use crate::cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, embed_diagonal,
     extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
-    reduce_sum, reshape, scatter, select, sign, transpose, tril, triu, CpuBackend,
+    reduce_sum, reshape, scatter, select, sign, transpose, tril, triu, CpuBackend, CpuContext,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -241,12 +243,49 @@ fn diagonal_scatter_config() -> ScatterConfig {
 }
 
 #[test]
-fn cpu_backend_default_uses_available_parallelism() {
-    let backend = CpuBackend::new();
-    let expected = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-    assert_eq!(backend.num_threads(), expected);
+fn cpu_context_from_env_respects_rayon_num_threads() {
+    with_rayon_num_threads(Some("3"), || {
+        let ctx = CpuContext::from_env();
+        assert_eq!(ctx.num_threads(), 3);
+    });
+}
+
+#[test]
+fn cpu_context_from_env_falls_back_to_affinity_when_rayon_num_threads_is_absent() {
+    with_rayon_num_threads(None, || {
+        let ctx = CpuContext::from_env();
+        assert_eq!(ctx.num_threads(), crate::cpu::available_parallelism());
+    });
+}
+
+#[test]
+fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
+    with_rayon_num_threads(Some("not-a-number"), || {
+        assert!(CpuContext::try_from_env().is_err());
+    });
+}
+
+#[test]
+fn cpu_backend_new_matches_context_from_env() {
+    with_rayon_num_threads(Some("2"), || {
+        let backend = CpuBackend::new();
+        assert_eq!(backend.num_threads(), 2);
+    });
+}
+
+#[test]
+fn cpu_backend_new_falls_back_to_affinity_when_rayon_num_threads_is_absent() {
+    with_rayon_num_threads(None, || {
+        let backend = CpuBackend::new();
+        assert_eq!(backend.num_threads(), crate::cpu::available_parallelism());
+    });
+}
+
+#[test]
+fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
+    with_rayon_num_threads(Some("not-a-number"), || {
+        assert!(CpuBackend::try_new().is_err());
+    });
 }
 
 #[test]
@@ -256,10 +295,86 @@ fn cpu_backend_with_threads_creates_custom_pool() {
 }
 
 #[test]
-fn cpu_backend_shared_pool() {
-    let b1 = CpuBackend::with_threads(3);
-    let b2 = CpuBackend::with_threads(3);
-    assert!(Arc::ptr_eq(&b1.pool, &b2.pool));
+fn cpu_backend_shared_context() {
+    let ctx = Arc::new(CpuContext::with_threads(3));
+    let b1 = CpuBackend::from_context(ctx.clone());
+    let b2 = CpuBackend::from_context(ctx);
+    assert!(Arc::ptr_eq(&b1.ctx, &b2.ctx));
+}
+
+#[test]
+fn cpu_affinity_available_parallelism_reports_positive_count() {
+    assert!(crate::cpu::available_parallelism() >= 1);
+}
+
+#[test]
+fn cpu_backend_from_context_shares_runtime_owner() {
+    let ctx = Arc::new(CpuContext::with_threads(3));
+    let b1 = CpuBackend::from_context(ctx.clone());
+    let b2 = CpuBackend::from_context(ctx);
+    assert_eq!(b1.num_threads(), 3);
+    assert_eq!(b2.num_threads(), 3);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn cpu_context_faer_policy_is_seq_for_one_thread() {
+    let ctx = CpuContext::with_threads(1);
+    assert!(matches!(ctx.faer_par(), faer::Par::Seq));
+}
+
+#[test]
+fn cpu_context_with_threads_reports_requested_size() {
+    let ctx = CpuContext::with_threads(2);
+    assert_eq!(ctx.num_threads(), 2);
+}
+
+#[test]
+fn cpu_context_install_uses_owned_pool() {
+    let ctx = CpuContext::with_threads(1);
+    let seen = ctx.install(|| rayon::current_num_threads());
+    assert_eq!(seen, 1);
+}
+
+fn env_lock() -> MutexGuard<'static, ()> {
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct RayonNumThreadsEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    prev: Option<OsString>,
+}
+
+impl RayonNumThreadsEnvGuard {
+    fn new(value: Option<&str>) -> Self {
+        let lock = env_lock();
+        let prev = std::env::var_os("RAYON_NUM_THREADS");
+
+        match value {
+            Some(value) => std::env::set_var("RAYON_NUM_THREADS", value),
+            None => std::env::remove_var("RAYON_NUM_THREADS"),
+        }
+
+        Self { _lock: lock, prev }
+    }
+}
+
+impl Drop for RayonNumThreadsEnvGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(value) => std::env::set_var("RAYON_NUM_THREADS", value),
+            None => std::env::remove_var("RAYON_NUM_THREADS"),
+        }
+    }
+}
+
+fn with_rayon_num_threads<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+    let _guard = RayonNumThreadsEnvGuard::new(value);
+    f()
 }
 
 #[test]

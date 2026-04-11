@@ -1,5 +1,7 @@
+pub mod affinity;
 pub mod analytic;
 pub mod backend;
+pub mod context;
 pub mod elementwise;
 pub mod gemm;
 pub mod indexing;
@@ -11,7 +13,9 @@ use strided_kernel::{col_major_strides, StridedArray, StridedView};
 
 use crate::{Buffer, TypedTensor};
 
+pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::CpuBackend;
+pub use context::CpuContext;
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
 };
