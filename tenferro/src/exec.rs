@@ -97,6 +97,15 @@ pub enum ExecOp {
     Reverse {
         axes: Vec<usize>,
     },
+    ShapeOf {
+        axis: usize,
+    },
+    DynamicTruncate {
+        axis: usize,
+    },
+    PadToMatch {
+        axis: usize,
+    },
     ReduceProd {
         axes: Vec<usize>,
     },
@@ -317,6 +326,59 @@ fn eval_exec_ir_inner(
                 exec.concatenate(&inputs, *axis)?
             }
             ExecOp::Reverse { axes } => exec.reverse(get(&slots, &inst.input_slots, 0)?, axes)?,
+            ExecOp::ShapeOf { axis } => {
+                let input = get(&slots, &inst.input_slots, 0)?;
+                let size = input.shape()[*axis] as f64;
+                Tensor::F64(TypedTensor::from_vec(vec![], vec![size]))
+            }
+            ExecOp::DynamicTruncate { axis } => {
+                let input = get(&slots, &inst.input_slots, 0)?;
+                let size_tensor = get(&slots, &inst.input_slots, 1)?;
+                let axis_extent = input.shape()[*axis];
+                let size_f64 = match size_tensor {
+                    Tensor::F64(inner) => inner.host_data()[0],
+                    Tensor::F32(inner) => inner.host_data()[0] as f64,
+                    _ => {
+                        return Err(Error::Internal(
+                            "DynamicTruncate size must be an f32 or f64 scalar".into(),
+                        ))
+                    }
+                };
+                let rounded_size = if size_f64.is_finite() {
+                    size_f64.round()
+                } else {
+                    0.0
+                };
+                let size = rounded_size.max(0.0).min(axis_extent as f64) as usize;
+                let rank = input.shape().len();
+                let mut limits = input.shape().to_vec();
+                limits[*axis] = size;
+                let config = SliceConfig {
+                    starts: vec![0; rank],
+                    limits,
+                    strides: vec![1; rank],
+                };
+                exec.slice(input, &config)?
+            }
+            ExecOp::PadToMatch { axis } => {
+                let input = get(&slots, &inst.input_slots, 0)?;
+                let reference = get(&slots, &inst.input_slots, 1)?;
+                let target_size = reference.shape()[*axis];
+                let current_size = input.shape()[*axis];
+                if current_size >= target_size {
+                    input.clone()
+                } else {
+                    let rank = input.shape().len();
+                    let mut high = vec![0i64; rank];
+                    high[*axis] = (target_size - current_size) as i64;
+                    let config = PadConfig {
+                        edge_padding_low: vec![0i64; rank],
+                        edge_padding_high: high,
+                        interior_padding: vec![0i64; rank],
+                    };
+                    exec.pad(input, &config)?
+                }
+            }
             ExecOp::ReduceProd { axes } => {
                 exec.reduce_prod(get(&slots, &inst.input_slots, 0)?, axes)?
             }

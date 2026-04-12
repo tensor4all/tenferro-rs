@@ -21,6 +21,7 @@ use super::engine::Engine;
 use super::error::{Error, Result};
 use super::exec::eval_exec_ir;
 use super::sym_dim::SymDim;
+use crate::checkpoint::CheckpointNode;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +54,7 @@ pub struct TracedTensor {
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Tensor>>,
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
+    pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
 }
 
 /// Compute a broadcast output shape following NumPy rules.
@@ -258,6 +260,7 @@ impl TracedTensor {
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
+            checkpoint_chain: None,
         }
     }
 
@@ -352,6 +355,64 @@ impl TracedTensor {
         Ok(self.try_vjp(wrt, &seed))
     }
 
+    /// Evaluate this tensor and replace its graph with a concrete leaf.
+    ///
+    /// This keeps downstream forward evaluation rooted at the concrete value
+    /// while retaining the original fragment chain for later reverse-mode AD.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![], vec![3.0_f64]);
+    /// let mut y = &x * &x;
+    /// y.checkpoint(&mut engine).unwrap();
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// ```
+    pub fn checkpoint<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<()> {
+        self.eval(engine)?;
+        let data = self
+            .data
+            .clone()
+            .ok_or_else(|| Error::Internal("checkpoint eval did not populate data".to_string()))?;
+        let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
+
+        let old_fragment = self.fragment.clone();
+        let old_output_key = old_fragment.vals()[self.val].key.clone();
+        let old_inputs = (*self.inputs_map).clone();
+
+        let new_key = next_input_key();
+        let mut builder = FragmentBuilder::new();
+        let leaf_val = builder.add_input(new_key.clone());
+        builder.set_outputs(vec![leaf_val]);
+        let new_fragment = Arc::new(builder.build());
+
+        let node = CheckpointNode {
+            fragment: old_fragment,
+            alias_key: new_key.clone(),
+            alias_target: old_output_key,
+            old_inputs,
+            prev: self.checkpoint_chain.take(),
+        };
+
+        self.fragment = new_fragment;
+        self.val = leaf_val;
+        self.extra_roots.clear();
+        self.shape_hint = concrete_shape_hint;
+        self.checkpoint_chain = Some(Arc::new(node));
+
+        let mut merged = HashMap::new();
+        if let Some(chain) = &self.checkpoint_chain {
+            merged.extend(chain.collect_inputs());
+        }
+        merged.insert(new_key, data);
+        self.inputs_map = Arc::new(merged);
+
+        Ok(())
+    }
+
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
         self.try_jvp(wrt, tangent)
             .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
@@ -362,7 +423,19 @@ impl TracedTensor {
     pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
+        let aliases = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_aliases())
+            .unwrap_or_default();
+        let checkpoint_fragments = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_fragments())
+            .unwrap_or_default();
+        let mut roots = self.resolve_roots();
+        roots.extend(checkpoint_fragments.iter().cloned());
+        let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
@@ -370,11 +443,15 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
+            &aliases,
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
+        if let Some(chain) = &self.checkpoint_chain {
+            inputs_map.extend(chain.collect_inputs());
+        }
         inputs_map.insert(
             tangent_input_key,
             tangent
@@ -384,6 +461,7 @@ impl TracedTensor {
         );
 
         let mut extra_roots = vec![self.fragment.clone()];
+        extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
         Some(TracedTensor {
@@ -396,6 +474,7 @@ impl TracedTensor {
             shape_hint: self.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
+            checkpoint_chain: self.checkpoint_chain.clone(),
         })
     }
 
@@ -407,7 +486,19 @@ impl TracedTensor {
     fn try_vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
+        let aliases = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_aliases())
+            .unwrap_or_default();
+        let checkpoint_fragments = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_fragments())
+            .unwrap_or_default();
+        let mut roots = self.resolve_roots();
+        roots.extend(checkpoint_fragments.iter().cloned());
+        let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
@@ -415,6 +506,7 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
+            &aliases,
         );
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs
@@ -428,6 +520,9 @@ impl TracedTensor {
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
+        if let Some(chain) = &self.checkpoint_chain {
+            inputs_map.extend(chain.collect_inputs());
+        }
         inputs_map.insert(
             cotangent_input_key.clone(),
             cotangent
@@ -451,6 +546,7 @@ impl TracedTensor {
         }
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
+        extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
         Some(TracedTensor {
@@ -463,6 +559,7 @@ impl TracedTensor {
             shape_hint: wrt.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
+            checkpoint_chain: self.checkpoint_chain.clone(),
         })
     }
 
@@ -1020,6 +1117,107 @@ impl TracedTensor {
     pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
         self.broadcast_in_dim(shape, dims)
     }
+
+    /// Return the runtime size of one axis as a scalar `f64` tensor.
+    ///
+    /// The result is metadata-derived and therefore has no gradient.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let mut cols = x.shape_of(1);
+    /// assert_eq!(cols.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// ```
+    pub fn shape_of(&self, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        apply_unary_with_dtype(
+            StdTensorOp::ShapeOf { axis },
+            self,
+            0,
+            Some(vec![]),
+            DType::F64,
+        )
+    }
+
+    /// Truncate this tensor along `axis` to the first `size` elements.
+    ///
+    /// `size` is read at runtime from a scalar traced tensor. Values are
+    /// rounded to the nearest integer, clamped to `[0, self.shape[axis]]`,
+    /// and the output keeps the same element dtype as the input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let size = TracedTensor::new(vec![], vec![2.0_f64]);
+    /// let mut y = x.dynamic_truncate(&size, 0);
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[2]);
+    /// ```
+    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        assert!(
+            size.rank == 0,
+            "dynamic_truncate size must be a scalar tensor, got rank {}",
+            size.rank
+        );
+        apply_binary(
+            StdTensorOp::DynamicTruncate { axis },
+            self,
+            size,
+            self.rank,
+            None,
+        )
+    }
+
+    /// Pad this tensor with zeros along `axis` to match `reference.shape[axis]`.
+    ///
+    /// If `reference` is smaller along that axis, this is a no-op.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);
+    /// let reference = TracedTensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    /// let mut y = x.pad_to_match(&reference, 0);
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[4]);
+    /// ```
+    pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        assert!(
+            axis < reference.rank,
+            "reference axis {axis} out of bounds for rank {}",
+            reference.rank
+        );
+        apply_binary(
+            StdTensorOp::PadToMatch { axis },
+            self,
+            reference,
+            self.rank,
+            reference.shape_hint.clone(),
+        )
+    }
 }
 
 pub(crate) fn apply_unary(
@@ -1055,6 +1253,7 @@ pub(crate) fn apply_unary_with_dtype(
         shape_hint: out_shape_hint,
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
+        checkpoint_chain: input.checkpoint_chain.clone(),
     }
 }
 
@@ -1079,6 +1278,7 @@ pub(crate) fn apply_nullary(
         shape_hint,
         inputs_map: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
+        checkpoint_chain: None,
     }
 }
 
@@ -1113,6 +1313,10 @@ pub(crate) fn apply_binary(
         shape_hint: out_shape_hint,
         inputs_map: Arc::new(merged),
         extra_roots,
+        checkpoint_chain: lhs
+            .checkpoint_chain
+            .clone()
+            .or(rhs.checkpoint_chain.clone()),
     }
 }
 
@@ -1146,6 +1350,7 @@ pub(crate) fn apply_multi_output(
             shape_hint: Some(shape),
             inputs_map: input.inputs_map.clone(),
             extra_roots: input.extra_roots.clone(),
+            checkpoint_chain: input.checkpoint_chain.clone(),
         })
         .collect()
 }

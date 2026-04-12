@@ -103,6 +103,15 @@ pub enum StdTensorOp {
     Reverse {
         axes: Vec<usize>,
     },
+    ShapeOf {
+        axis: usize,
+    },
+    DynamicTruncate {
+        axis: usize,
+    },
+    PadToMatch {
+        axis: usize,
+    },
 
     // Tier 2: reductions
     ReduceProd {
@@ -319,6 +328,9 @@ impl Hash for StdTensorOp {
             }
             Self::Concatenate { axis } => axis.hash(state),
             Self::Reverse { axes } => axes.hash(state),
+            Self::ShapeOf { axis } | Self::DynamicTruncate { axis } | Self::PadToMatch { axis } => {
+                axis.hash(state)
+            }
             Self::ReduceProd { axes, input_shape }
             | Self::ReduceMax { axes, input_shape }
             | Self::ReduceMin { axes, input_shape } => {
@@ -380,7 +392,9 @@ impl GraphOp for StdTensorOp {
             | Self::Triu { .. }
             | Self::Slice(_)
             | Self::Pad(_)
-            | Self::Reverse { .. } => 1,
+            | Self::Reverse { .. }
+            | Self::ShapeOf { .. } => 1,
+            Self::DynamicTruncate { .. } | Self::PadToMatch { .. } => 2,
             Self::Reshape {
                 from_shape,
                 to_shape,
@@ -470,6 +484,9 @@ impl GraphOp for StdTensorOp {
             | Self::Pad(_)
             | Self::NaryEinsum { .. }
             | Self::Reverse { .. }
+            | Self::ShapeOf { .. }
+            | Self::DynamicTruncate { .. }
+            | Self::PadToMatch { .. }
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,

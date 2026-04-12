@@ -415,6 +415,12 @@ fn test_std_tensor_op_remaining_input_output_counts() {
     assert_eq!(StdTensorOp::Slice(slice).n_outputs(), 1);
     assert_eq!(StdTensorOp::Reverse { axes: vec![0, 2] }.n_inputs(), 1);
     assert_eq!(StdTensorOp::Reverse { axes: vec![0, 2] }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::ShapeOf { axis: 1 }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::ShapeOf { axis: 1 }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::DynamicTruncate { axis: 0 }.n_inputs(), 2);
+    assert_eq!(StdTensorOp::DynamicTruncate { axis: 0 }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::PadToMatch { axis: 0 }.n_inputs(), 2);
+    assert_eq!(StdTensorOp::PadToMatch { axis: 0 }.n_outputs(), 1);
 }
 
 #[test]
@@ -735,6 +741,9 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         },
         StdTensorOp::Concatenate { axis: 1 },
         StdTensorOp::Reverse { axes: vec![0] },
+        StdTensorOp::ShapeOf { axis: 0 },
+        StdTensorOp::DynamicTruncate { axis: 0 },
+        StdTensorOp::PadToMatch { axis: 0 },
         StdTensorOp::ReduceProd {
             axes: vec![0],
             input_shape: shape![2, 2],

@@ -82,6 +82,15 @@ pub enum StableHloOp {
     Reverse {
         axes: Vec<usize>,
     },
+    ShapeOf {
+        axis: usize,
+    },
+    DynamicTruncate {
+        axis: usize,
+    },
+    PadToMatch {
+        axis: usize,
+    },
     // Additional reductions
     ReduceProd {
         axes: Vec<usize>,
