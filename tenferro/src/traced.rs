@@ -421,7 +421,19 @@ impl TracedTensor {
     pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
+        let aliases = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_aliases())
+            .unwrap_or_default();
+        let checkpoint_fragments = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_fragments())
+            .unwrap_or_default();
+        let mut roots = self.resolve_roots();
+        roots.extend(checkpoint_fragments.iter().cloned());
+        let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
@@ -429,12 +441,15 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
-            &HashMap::new(),
+            &aliases,
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
+        if let Some(chain) = &self.checkpoint_chain {
+            inputs_map.extend(chain.collect_inputs());
+        }
         inputs_map.insert(
             tangent_input_key,
             tangent
@@ -444,6 +459,7 @@ impl TracedTensor {
         );
 
         let mut extra_roots = vec![self.fragment.clone()];
+        extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
         Some(TracedTensor {
@@ -456,7 +472,7 @@ impl TracedTensor {
             shape_hint: self.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
-            checkpoint_chain: None,
+            checkpoint_chain: self.checkpoint_chain.clone(),
         })
     }
 
@@ -541,7 +557,7 @@ impl TracedTensor {
             shape_hint: wrt.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
-            checkpoint_chain: None,
+            checkpoint_chain: self.checkpoint_chain.clone(),
         })
     }
 
