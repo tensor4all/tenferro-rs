@@ -468,7 +468,19 @@ impl TracedTensor {
     fn try_vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
+        let aliases = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_aliases())
+            .unwrap_or_default();
+        let checkpoint_fragments = self
+            .checkpoint_chain
+            .as_ref()
+            .map(|chain| chain.collect_fragments())
+            .unwrap_or_default();
+        let mut roots = self.resolve_roots();
+        roots.extend(checkpoint_fragments.iter().cloned());
+        let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::default();
         let linear = differentiate(
             &view,
@@ -476,7 +488,7 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
-            &HashMap::new(),
+            &aliases,
         );
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs
@@ -490,6 +502,9 @@ impl TracedTensor {
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
 
         let mut inputs_map = (*self.inputs_map).clone();
+        if let Some(chain) = &self.checkpoint_chain {
+            inputs_map.extend(chain.collect_inputs());
+        }
         inputs_map.insert(
             cotangent_input_key.clone(),
             cotangent
@@ -513,6 +528,7 @@ impl TracedTensor {
         }
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
+        extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
         Some(TracedTensor {
