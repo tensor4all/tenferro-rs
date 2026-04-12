@@ -96,12 +96,32 @@ pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     }
 }
 
-pub fn concatenate(inputs: &[&Tensor], axis: usize) -> Tensor {
+pub fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
+    try_concatenate(inputs, axis)
+}
+
+pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
     let first = inputs
         .first()
         .copied()
-        .expect("concatenate requires at least one input");
-    dispatch_tensor!(first, tensor => typed_concatenate_from_dyn_inputs(tensor, inputs, axis))
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op: "concatenate",
+            message: "concatenate requires at least one input".into(),
+        })?;
+    match first {
+        Tensor::F32(t) => Ok(Tensor::F32(typed_concatenate_from_dyn_inputs(
+            t, inputs, axis,
+        )?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_concatenate_from_dyn_inputs(
+            t, inputs, axis,
+        )?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_concatenate_from_dyn_inputs(
+            t, inputs, axis,
+        )?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_concatenate_from_dyn_inputs(
+            t, inputs, axis,
+        )?)),
+    }
 }
 
 pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
@@ -197,45 +217,68 @@ fn typed_concatenate_from_dyn_inputs<T>(
     _first: &TypedTensor<T>,
     inputs: &[&Tensor],
     axis: usize,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone,
     Tensor: TensorAsTyped<T>,
 {
-    let typed_inputs = collect_typed_inputs(inputs);
+    let first_dtype = inputs[0].dtype();
+    let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
     typed_concatenate(&typed_inputs, axis)
 }
 
-fn collect_typed_inputs<'a, T>(inputs: &[&'a Tensor]) -> Vec<&'a TypedTensor<T>>
+fn collect_typed_inputs<'a, T>(
+    first_dtype: crate::DType,
+    inputs: &[&'a Tensor],
+) -> crate::Result<Vec<&'a TypedTensor<T>>>
 where
     Tensor: TensorAsTyped<T>,
 {
     inputs
         .iter()
         .map(|tensor| {
-            TensorAsTyped::<T>::as_typed(*tensor)
-                .expect("concatenate: dtype mismatch across inputs")
+            TensorAsTyped::<T>::as_typed(*tensor).ok_or_else(|| crate::Error::DTypeMismatch {
+                op: "concatenate",
+                lhs: first_dtype,
+                rhs: tensor.dtype(),
+            })
         })
         .collect()
 }
 
-fn typed_concatenate<T: Copy + Clone>(inputs: &[&TypedTensor<T>], axis: usize) -> TypedTensor<T> {
+fn typed_concatenate<T: Copy + Clone>(
+    inputs: &[&TypedTensor<T>],
+    axis: usize,
+) -> crate::Result<TypedTensor<T>> {
     let first = inputs[0];
     let rank = first.shape.len();
-    assert!(axis < rank, "concatenate: axis out of bounds");
+    if axis >= rank {
+        return Err(crate::Error::AxisOutOfBounds {
+            op: "concatenate",
+            axis,
+            rank,
+        });
+    }
 
     let mut out_shape = first.shape.clone();
     let mut axis_extent = 0usize;
     for input in inputs {
-        assert_eq!(input.shape.len(), rank, "concatenate: rank mismatch");
+        if input.shape.len() != rank {
+            return Err(crate::Error::RankMismatch {
+                op: "concatenate",
+                expected: rank,
+                actual: input.shape.len(),
+            });
+        }
         for dim in 0..rank {
             if dim == axis {
                 axis_extent += input.shape[dim];
-            } else {
-                assert_eq!(
-                    input.shape[dim], first.shape[dim],
-                    "concatenate: non-concat dimensions must match"
-                );
+            } else if input.shape[dim] != first.shape[dim] {
+                return Err(crate::Error::ShapeMismatch {
+                    op: "concatenate",
+                    lhs: first.shape.clone(),
+                    rhs: input.shape.clone(),
+                });
             }
         }
     }
@@ -272,7 +315,7 @@ fn typed_concatenate<T: Copy + Clone>(inputs: &[&TypedTensor<T>], axis: usize) -
         out_data.push(*inputs[input_pos].get(&in_idx));
     }
 
-    TypedTensor::from_vec(out_shape, out_data)
+    Ok(TypedTensor::from_vec(out_shape, out_data))
 }
 
 fn typed_reverse<T: Copy + Clone>(input: &TypedTensor<T>, axes: &[usize]) -> TypedTensor<T> {

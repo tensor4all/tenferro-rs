@@ -10,6 +10,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
+fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
+    Tensor::F32(TypedTensor::from_vec(shape, data))
+}
+
 #[test]
 fn dot_general_rejects_out_of_bounds_contracting_dim() {
     let lhs = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
@@ -254,4 +258,126 @@ fn pad_returns_error_instead_of_panicking() {
             | Error::InvalidConfig { op: "pad", .. }
             | Error::RankMismatch { op: "pad", .. }
     ));
+}
+
+#[test]
+fn concatenate_returns_error_on_empty_inputs() {
+    let mut backend = CpuBackend::new();
+    let inputs: Vec<&Tensor> = vec![];
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&inputs, 0)));
+
+    assert!(result.is_ok(), "concatenate should return Err, not panic");
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "concatenate",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concatenate_returns_error_on_dtype_mismatch() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f32_tensor(vec![2, 2], vec![5.0f32, 6.0, 7.0, 8.0]);
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+
+    assert!(
+        result.is_ok(),
+        "concatenate should return Err on dtype mismatch, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DTypeMismatch {
+            op: "concatenate",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concatenate_returns_error_on_rank_mismatch() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2], vec![5.0, 6.0]);
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+
+    assert!(
+        result.is_ok(),
+        "concatenate should return Err on rank mismatch, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            op: "concatenate",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concatenate_returns_error_on_axis_out_of_bounds() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 5)));
+
+    assert!(
+        result.is_ok(),
+        "concatenate should return Err on axis out of bounds, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::AxisOutOfBounds {
+            op: "concatenate",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concatenate_returns_error_on_shape_mismatch() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = f64_tensor(
+        vec![2, 4],
+        vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+    );
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+
+    assert!(
+        result.is_ok(),
+        "concatenate should return Err on shape mismatch, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ShapeMismatch {
+            op: "concatenate",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn concatenate_accepts_valid_inputs() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+
+    let result = backend.concatenate(&[&a, &b], 0);
+
+    assert!(result.is_ok());
+    let out = result.unwrap();
+    assert_eq!(out.shape(), &[4, 2]);
 }

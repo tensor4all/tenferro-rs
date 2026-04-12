@@ -405,7 +405,7 @@ impl TensorBackend for CpuBackend {
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.install(|| catch_backend_panic("concatenate", || indexing::concatenate(inputs, axis)))
+        self.install(|| indexing::try_concatenate(inputs, axis))
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
