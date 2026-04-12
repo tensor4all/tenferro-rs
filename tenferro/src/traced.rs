@@ -355,6 +355,62 @@ impl TracedTensor {
         Ok(self.try_vjp(wrt, &seed))
     }
 
+    /// Evaluate this tensor and replace its graph with a concrete leaf.
+    ///
+    /// This keeps downstream forward evaluation rooted at the concrete value
+    /// while retaining the original fragment chain for later reverse-mode AD.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![], vec![3.0_f64]);
+    /// let mut y = &x * &x;
+    /// y.checkpoint(&mut engine).unwrap();
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// ```
+    pub fn checkpoint<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<()> {
+        self.eval(engine)?;
+        let data = self
+            .data
+            .clone()
+            .ok_or_else(|| Error::Internal("checkpoint eval did not populate data".to_string()))?;
+
+        let old_fragment = self.fragment.clone();
+        let old_output_key = old_fragment.vals()[self.val].key.clone();
+        let old_inputs = (*self.inputs_map).clone();
+
+        let new_key = next_input_key();
+        let mut builder = FragmentBuilder::new();
+        let leaf_val = builder.add_input(new_key.clone());
+        builder.set_outputs(vec![leaf_val]);
+        let new_fragment = Arc::new(builder.build());
+
+        let node = CheckpointNode {
+            fragment: old_fragment,
+            alias_key: new_key.clone(),
+            alias_target: old_output_key,
+            old_inputs,
+            prev: self.checkpoint_chain.take(),
+        };
+
+        self.fragment = new_fragment;
+        self.val = leaf_val;
+        self.extra_roots.clear();
+        self.checkpoint_chain = Some(Arc::new(node));
+
+        let mut merged = HashMap::new();
+        if let Some(chain) = &self.checkpoint_chain {
+            merged.extend(chain.collect_inputs());
+        }
+        merged.insert(new_key, data);
+        self.inputs_map = Arc::new(merged);
+
+        Ok(())
+    }
+
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
         self.try_jvp(wrt, tangent)
             .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
