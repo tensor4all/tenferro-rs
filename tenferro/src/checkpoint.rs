@@ -12,7 +12,7 @@ pub(crate) struct CheckpointNode {
     pub fragment: Arc<Fragment<StdTensorOp>>,
     pub alias_key: TensorInputKey,
     pub alias_target: GlobalValKey<StdTensorOp>,
-    pub old_inputs: HashMap<TensorInputKey, Tensor>,
+    pub old_inputs: HashMap<TensorInputKey, Arc<Tensor>>,
     pub prev: Option<Arc<CheckpointNode>>,
 }
 
@@ -37,7 +37,7 @@ impl CheckpointNode {
         fragments
     }
 
-    pub(crate) fn collect_inputs(&self) -> HashMap<TensorInputKey, Tensor> {
+    pub(crate) fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
         let mut inputs = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {
