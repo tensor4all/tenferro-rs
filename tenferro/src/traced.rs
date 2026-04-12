@@ -1115,6 +1115,30 @@ impl TracedTensor {
     pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
         self.broadcast_in_dim(shape, dims)
     }
+
+    /// Return the runtime size of one axis as a scalar `f64` tensor.
+    ///
+    /// The result is metadata-derived and therefore has no gradient.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let mut cols = x.shape_of(1);
+    /// assert_eq!(cols.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// ```
+    pub fn shape_of(&self, axis: usize) -> TracedTensor {
+        apply_unary_with_dtype(
+            StdTensorOp::ShapeOf { axis },
+            self,
+            0,
+            Some(vec![]),
+            DType::F64,
+        )
+    }
 }
 
 pub(crate) fn apply_unary(

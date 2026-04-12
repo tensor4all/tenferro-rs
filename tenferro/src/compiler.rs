@@ -85,6 +85,7 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 },
                 StdTensorOp::Pad(config) => StableHloOp::Pad(config.clone()),
                 StdTensorOp::Reverse { axes } => StableHloOp::Reverse { axes: axes.clone() },
+                StdTensorOp::ShapeOf { axis } => StableHloOp::ShapeOf { axis: *axis },
                 StdTensorOp::Cholesky { .. } => StableHloOp::Cholesky,
                 StdTensorOp::Lu { .. } => StableHloOp::CustomCall {
                     target: "lu".to_string(),
@@ -267,6 +268,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 },
                 StableHloOp::Pad(config) => ExecOp::Pad(config.clone()),
                 StableHloOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },
+                StableHloOp::ShapeOf { axis } => ExecOp::ShapeOf { axis: *axis },
                 StableHloOp::Cholesky => ExecOp::Cholesky,
                 StableHloOp::TriangularSolve {
                     left_side,

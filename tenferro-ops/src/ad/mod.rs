@@ -86,6 +86,7 @@ fn linearize_non_semiring(
         StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+        StdTensorOp::ShapeOf { .. } => vec![None],
         StdTensorOp::Lu { input_shape } => {
             linalg::linearize_lu(builder, primal_out, tangent_in, input_shape, ctx)
         }
@@ -212,6 +213,7 @@ fn transpose_non_semiring(
         }
         StdTensorOp::Tril { k } => structural::transpose_tril(builder, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(builder, cotangent_out, *k),
+        StdTensorOp::ShapeOf { .. } => vec![None],
         StdTensorOp::TriangularSolve {
             left_side,
             lower,

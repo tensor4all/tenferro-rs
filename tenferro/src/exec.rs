@@ -97,6 +97,9 @@ pub enum ExecOp {
     Reverse {
         axes: Vec<usize>,
     },
+    ShapeOf {
+        axis: usize,
+    },
     ReduceProd {
         axes: Vec<usize>,
     },
@@ -317,6 +320,11 @@ fn eval_exec_ir_inner(
                 exec.concatenate(&inputs, *axis)?
             }
             ExecOp::Reverse { axes } => exec.reverse(get(&slots, &inst.input_slots, 0)?, axes)?,
+            ExecOp::ShapeOf { axis } => {
+                let input = get(&slots, &inst.input_slots, 0)?;
+                let size = input.shape()[*axis] as f64;
+                Tensor::F64(TypedTensor::from_vec(vec![], vec![size]))
+            }
             ExecOp::ReduceProd { axes } => {
                 exec.reduce_prod(get(&slots, &inst.input_slots, 0)?, axes)?
             }
