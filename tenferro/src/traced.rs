@@ -21,6 +21,7 @@ use super::engine::Engine;
 use super::error::{Error, Result};
 use super::exec::eval_exec_ir;
 use super::sym_dim::SymDim;
+use crate::checkpoint::CheckpointNode;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +54,7 @@ pub struct TracedTensor {
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Tensor>>,
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
+    pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
 }
 
 /// Compute a broadcast output shape following NumPy rules.
@@ -258,6 +260,7 @@ impl TracedTensor {
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
+            checkpoint_chain: None,
         }
     }
 
@@ -397,6 +400,7 @@ impl TracedTensor {
             shape_hint: self.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
+            checkpoint_chain: None,
         })
     }
 
@@ -465,6 +469,7 @@ impl TracedTensor {
             shape_hint: wrt.shape_hint.clone(),
             inputs_map: Arc::new(inputs_map),
             extra_roots,
+            checkpoint_chain: None,
         })
     }
 
@@ -1057,6 +1062,7 @@ pub(crate) fn apply_unary_with_dtype(
         shape_hint: out_shape_hint,
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
+        checkpoint_chain: input.checkpoint_chain.clone(),
     }
 }
 
@@ -1081,6 +1087,7 @@ pub(crate) fn apply_nullary(
         shape_hint,
         inputs_map: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
+        checkpoint_chain: None,
     }
 }
 
@@ -1115,6 +1122,10 @@ pub(crate) fn apply_binary(
         shape_hint: out_shape_hint,
         inputs_map: Arc::new(merged),
         extra_roots,
+        checkpoint_chain: lhs
+            .checkpoint_chain
+            .clone()
+            .or(rhs.checkpoint_chain.clone()),
     }
 }
 
@@ -1148,6 +1159,7 @@ pub(crate) fn apply_multi_output(
             shape_hint: Some(shape),
             inputs_map: input.inputs_map.clone(),
             extra_roots: input.extra_roots.clone(),
+            checkpoint_chain: input.checkpoint_chain.clone(),
         })
         .collect()
 }

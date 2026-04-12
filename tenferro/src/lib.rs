@@ -17,6 +17,7 @@
 
 use tenferro_tensor::DotGeneralConfig;
 
+mod checkpoint;
 pub mod compiler;
 pub mod einsum;
 pub mod engine;

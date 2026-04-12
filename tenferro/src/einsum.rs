@@ -341,6 +341,7 @@ fn build_symbolic_nary_einsum(
         shape_hint: None,
         inputs_map: Arc::new(merged),
         extra_roots,
+        checkpoint_chain: None,
     }
 }
 
@@ -498,6 +499,7 @@ fn build_traced_from_tree(
                 shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
                 inputs_map: Arc::new(merged),
                 extra_roots,
+                checkpoint_chain: None,
             }
         }
         ValRef::External(_) => {
@@ -515,6 +517,7 @@ fn build_traced_from_tree(
                         shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
                         inputs_map: inputs[i].inputs_map.clone(),
                         extra_roots: inputs[i].extra_roots.clone(),
+                        checkpoint_chain: inputs[i].checkpoint_chain.clone(),
                     };
                 }
             }
