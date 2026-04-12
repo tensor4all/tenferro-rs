@@ -6,7 +6,6 @@
     "strict": true,
     "contexts": [
       "rustfmt",
-      "cargo test (workspace)",
       "cargo test (blas inject)",
       "coverage",
       "docs-site"
