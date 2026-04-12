@@ -690,7 +690,7 @@ fn reduce_prod(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
     apply_unary(
         StdTensorOp::ReduceProd {
             axes: axes.to_vec(),
-            input_shape: input_shape_expr(input),
+            input_shape: DimExpr::input_shape(0, input.rank),
         },
         input,
         input.rank - axes.len(),
@@ -704,7 +704,7 @@ fn reduce_max(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
     apply_unary(
         StdTensorOp::ReduceMax {
             axes: axes.to_vec(),
-            input_shape: input_shape_expr(input),
+            input_shape: DimExpr::input_shape(0, input.rank),
         },
         input,
         input.rank - axes.len(),
@@ -718,7 +718,7 @@ fn reduce_min(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
     apply_unary(
         StdTensorOp::ReduceMin {
             axes: axes.to_vec(),
-            input_shape: input_shape_expr(input),
+            input_shape: DimExpr::input_shape(0, input.rank),
         },
         input,
         input.rank - axes.len(),

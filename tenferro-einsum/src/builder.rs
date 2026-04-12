@@ -93,7 +93,7 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         .map(|(_, &s)| s)
         .collect();
     let outputs = builder.add_op(
-        Op::reduce_sum(reduce_axes, DimExpr::from_concrete(&lv.shape)),
+        Op::reduce_sum(reduce_axes, DimExpr::input_shape(0, lv.shape.len())),
         vec![lv.val.clone()],
         OpMode::Primal,
     );
