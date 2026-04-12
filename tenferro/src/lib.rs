@@ -21,7 +21,7 @@ mod checkpoint;
 pub mod compiler;
 mod eager;
 mod eager_emitter;
-pub mod eager_exec;
+mod eager_exec;
 pub mod einsum;
 pub mod engine;
 pub mod error;
