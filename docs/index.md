@@ -1,16 +1,21 @@
 # tenferro
 
-tenferro is a Rust tensor library for lazy numerical computation. It is aimed at users who already think in PyTorch or JAX terms but want a facade crate that fits naturally into Rust code. Use it when you want traced tensor operations, einsum-heavy workloads, and first-order autodiff without reaching into internal crates.
+tenferro-rs is a dense tensor computation workspace in Rust, inspired by
+PyTorch and JAX. It provides eager tensor operations, lazy traced execution
+with graph optimization, einsum with automatic contraction-tree planning,
+linear algebra, and first-order automatic differentiation (VJP/JVP). CPU
+execution is fully supported; GPU support is planned.
 
 ## PyTorch, JAX, and tenferro
 
 | Topic | PyTorch | JAX | tenferro |
 |---|---|---|---|
-| Tensor creation | `torch.tensor(data)` | `jnp.array(data)` | `TracedTensor::new(shape, data)` |
-| Execution model | Eager by default | Array ops are eager; `jit` stages work when you ask for it | Lazy until `.eval(&mut engine)` |
-| Gradients | `loss.backward()` / `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp` | `loss.grad(&x)`, `y.vjp(&x, &cotangent)`, `y.jvp(&x, &tangent)` |
-| Einsum | `torch.einsum(...)` | `jnp.einsum(...)` | `einsum(&mut engine, inputs, subscripts)` |
-| Device model | Device on tensors and modules | Device on arrays, often with `jax.device_put(...)` | Backend owned by `Engine` |
+| Eager tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::new(shape, data)` |
+| Traced tensor | — | staged via `jit` | `TracedTensor::new(shape, data)` |
+| Execution model | Eager by default | Eager; `jit` stages when asked | Eager (`Tensor`) or lazy (`TracedTensor` + `.eval()`) |
+| Gradients | `loss.backward()` / `torch.autograd.grad` | `jax.grad`, `jax.vjp`, `jax.jvp` | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
+| Einsum | `torch.einsum(...)` | `jnp.einsum(...)` | `einsum(...)` (lazy) / `eager_einsum(...)` (eager) |
+| Device model | Device on tensors | `jax.device_put(...)` | Backend owned by `Engine` or `CpuBackend` |
 
 ## Navigate
 
