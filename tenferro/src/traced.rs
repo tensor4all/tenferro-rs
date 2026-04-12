@@ -50,9 +50,9 @@ pub struct TracedTensor {
     pub dtype: DType,
     pub fragment: Arc<Fragment<StdTensorOp>>,
     pub val: LocalValId,
-    pub data: Option<Tensor>,
+    pub data: Option<Arc<Tensor>>,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
-    pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Tensor>>,
+    pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
 }
@@ -241,6 +241,7 @@ impl TracedTensor {
         let rank = shape.len();
         let dtype = tensor.dtype();
         let key = next_input_key();
+        let data = Arc::new(tensor);
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
@@ -248,7 +249,7 @@ impl TracedTensor {
         let fragment = Arc::new(builder.build());
 
         let mut map = HashMap::new();
-        map.insert(key, tensor.clone());
+        map.insert(key, Arc::clone(&data));
 
         Self {
             id: next_traced_id(),
@@ -256,7 +257,7 @@ impl TracedTensor {
             dtype,
             fragment,
             val,
-            data: Some(tensor),
+            data: Some(data),
             shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
@@ -280,7 +281,7 @@ impl TracedTensor {
 
     pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
         if self.data.is_some() {
-            return Ok(self.data.as_ref().unwrap());
+            return Ok(self.data.as_ref().unwrap().as_ref());
         }
 
         let output_key = self.fragment.vals()[self.val].key.clone();
@@ -299,7 +300,7 @@ impl TracedTensor {
                     let tensor = self.inputs_map.get(k).ok_or_else(|| {
                         Error::MissingInput(format!("missing input data for key {:?}", k))
                     })?;
-                    input_tensors.push(tensor.clone());
+                    input_tensors.push(tensor.as_ref().clone());
                 }
                 _ => {
                     return Err(Error::Internal(
@@ -319,8 +320,8 @@ impl TracedTensor {
             )));
         }
 
-        self.data = Some(results.remove(0));
-        Ok(self.data.as_ref().unwrap())
+        self.data = Some(Arc::new(results.remove(0)));
+        Ok(self.data.as_ref().unwrap().as_ref())
     }
 
     pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
@@ -530,19 +531,19 @@ impl TracedTensor {
                 .clone()
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
-        let zero_tangent = zeros_tensor(
+        let zero_tangent = Arc::new(zeros_tensor(
             wrt.dtype,
             try_concrete_shape(wrt).unwrap_or_else(|| vec![0; wrt.rank]),
-        );
+        ));
         for (_, local_id) in &transposed.tangent_inputs {
             let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
             if tangent_input_key != cotangent_input_key {
-                inputs_map.insert(tangent_input_key, zero_tangent.clone());
+                inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
             }
         }
         for local_id in linear_tangent_input_ids {
             let tangent_input_key = linear_input_key(&linear_fragment, local_id);
-            inputs_map.insert(tangent_input_key, zero_tangent.clone());
+            inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
         }
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
@@ -1402,7 +1403,7 @@ pub fn eval_all<B: TensorBackend>(
 ) -> Result<Vec<Tensor>> {
     let mut all_fragments = Vec::new();
     let mut output_keys = Vec::new();
-    let mut all_inputs: HashMap<TensorInputKey, Tensor> = HashMap::new();
+    let mut all_inputs: HashMap<TensorInputKey, Arc<Tensor>> = HashMap::new();
 
     for tt in outputs.iter() {
         all_fragments.extend(tt.resolve_roots());
@@ -1423,7 +1424,7 @@ pub fn eval_all<B: TensorBackend>(
                 let tensor = all_inputs.get(k).ok_or_else(|| {
                     Error::MissingInput(format!("missing input data for key {:?}", k))
                 })?;
-                input_tensors.push(tensor.clone());
+                input_tensors.push(tensor.as_ref().clone());
             }
             _ => {
                 return Err(Error::Internal(
@@ -1437,7 +1438,7 @@ pub fn eval_all<B: TensorBackend>(
     let results: Vec<Tensor> = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
-        tt.data = Some(result.clone());
+        tt.data = Some(Arc::new(result.clone()));
     }
 
     Ok(results)
