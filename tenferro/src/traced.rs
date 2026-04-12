@@ -377,6 +377,7 @@ impl TracedTensor {
             .data
             .clone()
             .ok_or_else(|| Error::Internal("checkpoint eval did not populate data".to_string()))?;
+        let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
 
         let old_fragment = self.fragment.clone();
         let old_output_key = old_fragment.vals()[self.val].key.clone();
@@ -399,6 +400,7 @@ impl TracedTensor {
         self.fragment = new_fragment;
         self.val = leaf_val;
         self.extra_roots.clear();
+        self.shape_hint = concrete_shape_hint;
         self.checkpoint_chain = Some(Arc::new(node));
 
         let mut merged = HashMap::new();
@@ -1131,12 +1133,89 @@ impl TracedTensor {
     /// assert_eq!(cols.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
     /// ```
     pub fn shape_of(&self, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
         apply_unary_with_dtype(
             StdTensorOp::ShapeOf { axis },
             self,
             0,
             Some(vec![]),
             DType::F64,
+        )
+    }
+
+    /// Truncate this tensor along `axis` to the first `size` elements.
+    ///
+    /// `size` is read at runtime from a scalar traced tensor. Values are
+    /// rounded to the nearest integer, clamped to `[0, self.shape[axis]]`,
+    /// and the output keeps the same element dtype as the input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let size = TracedTensor::new(vec![], vec![2.0_f64]);
+    /// let mut y = x.dynamic_truncate(&size, 0);
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[2]);
+    /// ```
+    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        assert!(
+            size.rank == 0,
+            "dynamic_truncate size must be a scalar tensor, got rank {}",
+            size.rank
+        );
+        apply_binary(
+            StdTensorOp::DynamicTruncate { axis },
+            self,
+            size,
+            self.rank,
+            None,
+        )
+    }
+
+    /// Pad this tensor with zeros along `axis` to match `reference.shape[axis]`.
+    ///
+    /// If `reference` is smaller along that axis, this is a no-op.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);
+    /// let reference = TracedTensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    /// let mut y = x.pad_to_match(&reference, 0);
+    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[4]);
+    /// ```
+    pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> TracedTensor {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        assert!(
+            axis < reference.rank,
+            "reference axis {axis} out of bounds for rank {}",
+            reference.rank
+        );
+        apply_binary(
+            StdTensorOp::PadToMatch { axis },
+            self,
+            reference,
+            self.rank,
+            reference.shape_hint.clone(),
         )
     }
 }
