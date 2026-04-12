@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use tenferro_algebra::Semiring;
 
-use num_complex::{Complex32, Complex64};
-
 use crate::backend::{SemiringBackend, TensorBackend, TensorExec};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::flat_to_multi;
+use crate::validate::validate_nonsingular_u;
 use crate::{Buffer, Tensor, TypedTensor};
 
 use super::exec_session::CpuExecSession;
@@ -764,63 +763,6 @@ pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate:
     }
 }
 
-trait DiagSingularity {
-    fn is_singular_or_nonfinite(&self) -> bool;
-}
-
-impl DiagSingularity for f64 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.is_finite() || *self == 0.0
-    }
-}
-
-impl DiagSingularity for f32 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.is_finite() || *self == 0.0
-    }
-}
-
-impl DiagSingularity for Complex64 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
-    }
-}
-
-impl DiagSingularity for Complex32 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
-    }
-}
-
-fn check_singular_diagonal<T: DiagSingularity + Copy>(t: &TypedTensor<T>) -> crate::Result<()> {
-    let n = t.shape[0].min(t.shape[1]);
-    let batch_total: usize = t.shape[2..].iter().product();
-    let batch_total = batch_total.max(1);
-    let slice_size = t.shape[0] * t.shape[1];
-    for batch_idx in 0..batch_total {
-        let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
-        for i in 0..n {
-            let diag = batch[i + i * t.shape[0]];
-            if diag.is_singular_or_nonfinite() {
-                return Err(crate::Error::BackendFailure {
-                    op: "solve",
-                    message: "singular matrix".into(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_nonsingular_u(u: &Tensor) -> crate::Result<()> {
-    match u {
-        Tensor::F64(t) => check_singular_diagonal(t),
-        Tensor::F32(t) => check_singular_diagonal(t),
-        Tensor::C64(t) => check_singular_diagonal(t),
-        Tensor::C32(t) => check_singular_diagonal(t),
-    }
-}
-
 fn validate_axis_role_conflicts(
     op: &'static str,
     first_role: &'static str,
@@ -1033,160 +975,5 @@ impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
 impl Default for CpuBackend {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Error;
-
-    #[test]
-    fn test_check_singular_diagonal_f32_nonsingular() {
-        let t = TypedTensor::from_vec(vec![2, 2], vec![2.0f32, 1.0, 0.0, 3.0]);
-        assert!(check_singular_diagonal(&t).is_ok());
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_f32_zero_diagonal() {
-        let t = TypedTensor::from_vec(vec![2, 2], vec![0.0f32, 1.0, 1.0, 0.0]);
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_f32_nan_diagonal() {
-        let t = TypedTensor::from_vec(vec![2, 2], vec![f32::NAN, 1.0, 0.0, 1.0]);
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_f32_inf_diagonal() {
-        let t = TypedTensor::from_vec(vec![2, 2], vec![f32::INFINITY, 1.0, 0.0, 1.0]);
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_f32_batched_singular() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2, 2],
-            vec![1.0f32, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 4.0],
-        );
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_f32_batched_nonsingular() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2, 2],
-            vec![1.0f32, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 4.0],
-        );
-        assert!(check_singular_diagonal(&t).is_ok());
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_c32_nonsingular() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2],
-            vec![
-                Complex32::new(2.0, 1.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(1.0, 0.0),
-                Complex32::new(3.0, -1.0),
-            ],
-        );
-        assert!(check_singular_diagonal(&t).is_ok());
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_c32_zero_diagonal() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2],
-            vec![
-                Complex32::new(0.0, 0.0),
-                Complex32::new(1.0, 0.0),
-                Complex32::new(1.0, 0.0),
-                Complex32::new(0.0, 0.0),
-            ],
-        );
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_c32_nan_diagonal() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2],
-            vec![
-                Complex32::new(f32::NAN, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(1.0, 0.0),
-            ],
-        );
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_c32_inf_diagonal() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2],
-            vec![
-                Complex32::new(1.0, f32::INFINITY),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(1.0, 0.0),
-            ],
-        );
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_check_singular_diagonal_c32_batched_singular() {
-        let t = TypedTensor::from_vec(
-            vec![2, 2, 2],
-            vec![
-                Complex32::new(1.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(2.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(0.0, 0.0),
-                Complex32::new(4.0, 0.0),
-            ],
-        );
-        let err = check_singular_diagonal(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_validate_nonsingular_u_f32() {
-        let t = Tensor::F32(TypedTensor::from_vec(
-            vec![2, 2],
-            vec![0.0f32, 1.0, 1.0, 0.0],
-        ));
-        let err = validate_nonsingular_u(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-    }
-
-    #[test]
-    fn test_validate_nonsingular_u_c32() {
-        let t = Tensor::C32(TypedTensor::from_vec(
-            vec![2, 2],
-            vec![
-                Complex32::new(0.0, 0.0),
-                Complex32::new(1.0, 0.0),
-                Complex32::new(1.0, 0.0),
-                Complex32::new(0.0, 0.0),
-            ],
-        ));
-        let err = validate_nonsingular_u(&t).unwrap_err();
-        assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
     }
 }

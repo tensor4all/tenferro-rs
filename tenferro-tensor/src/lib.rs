@@ -20,6 +20,7 @@ pub mod error;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 pub mod types;
+pub mod validate;
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
