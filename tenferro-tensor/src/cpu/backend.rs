@@ -2,6 +2,7 @@ use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Semiring;
 
 use crate::backend::{SemiringBackend, TensorBackend, TensorExec};
@@ -762,50 +763,60 @@ pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate:
     }
 }
 
+trait DiagSingularity {
+    fn is_singular_or_nonfinite(&self) -> bool;
+}
+
+impl DiagSingularity for f64 {
+    fn is_singular_or_nonfinite(&self) -> bool {
+        !self.is_finite() || *self == 0.0
+    }
+}
+
+impl DiagSingularity for f32 {
+    fn is_singular_or_nonfinite(&self) -> bool {
+        !self.is_finite() || *self == 0.0
+    }
+}
+
+impl DiagSingularity for Complex64 {
+    fn is_singular_or_nonfinite(&self) -> bool {
+        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
+    }
+}
+
+impl DiagSingularity for Complex32 {
+    fn is_singular_or_nonfinite(&self) -> bool {
+        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
+    }
+}
+
+fn check_singular_diagonal<T: DiagSingularity + Copy>(t: &TypedTensor<T>) -> crate::Result<()> {
+    let n = t.shape[0].min(t.shape[1]);
+    let batch_total: usize = t.shape[2..].iter().product();
+    let batch_total = batch_total.max(1);
+    let slice_size = t.shape[0] * t.shape[1];
+    for batch_idx in 0..batch_total {
+        let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+        for i in 0..n {
+            let diag = batch[i + i * t.shape[0]];
+            if diag.is_singular_or_nonfinite() {
+                return Err(crate::Error::BackendFailure {
+                    op: "solve",
+                    message: "singular matrix".into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_nonsingular_u(u: &Tensor) -> crate::Result<()> {
     match u {
-        Tensor::F64(t) => {
-            let n = t.shape[0].min(t.shape[1]);
-            let batch_total: usize = t.shape[2..].iter().product();
-            let batch_total = batch_total.max(1);
-            let slice_size = t.shape[0] * t.shape[1];
-            for batch_idx in 0..batch_total {
-                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
-                for i in 0..n {
-                    let diag = batch[i + i * t.shape[0]];
-                    if !diag.is_finite() || diag == 0.0 {
-                        return Err(crate::Error::BackendFailure {
-                            op: "solve",
-                            message: "singular matrix".into(),
-                        });
-                    }
-                }
-            }
-            Ok(())
-        }
-        Tensor::C64(t) => {
-            let n = t.shape[0].min(t.shape[1]);
-            let batch_total: usize = t.shape[2..].iter().product();
-            let batch_total = batch_total.max(1);
-            let slice_size = t.shape[0] * t.shape[1];
-            for batch_idx in 0..batch_total {
-                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
-                for i in 0..n {
-                    let diag = batch[i + i * t.shape[0]];
-                    if !diag.re.is_finite() || !diag.im.is_finite() || diag.norm_sqr() == 0.0 {
-                        return Err(crate::Error::BackendFailure {
-                            op: "solve",
-                            message: "singular matrix".into(),
-                        });
-                    }
-                }
-            }
-            Ok(())
-        }
-        _ => Err(crate::Error::BackendFailure {
-            op: "solve",
-            message: format!("unsupported dtype {:?}", u.dtype()),
-        }),
+        Tensor::F64(t) => check_singular_diagonal(t),
+        Tensor::F32(t) => check_singular_diagonal(t),
+        Tensor::C64(t) => check_singular_diagonal(t),
+        Tensor::C32(t) => check_singular_diagonal(t),
     }
 }
 
