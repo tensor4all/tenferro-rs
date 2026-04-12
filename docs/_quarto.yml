@@ -7,6 +7,8 @@ project:
     - guides/**/*.md
     - api/**/*.md
     - internals/**/*.md
+    - architecture/**/*.md
+    - spec/**/*.md
 
 format:
   html:
@@ -40,3 +42,19 @@ website:
       - section: "Internals"
         contents:
           - internals/index.md
+          - section: "Architecture"
+            contents:
+              - architecture/index.md
+              - architecture/tenferro-crates.md
+              - architecture/computegraph.md
+              - architecture/chainrules.md
+              - architecture/tidu.md
+              - architecture/ad-pipeline.md
+          - section: "Specification"
+            contents:
+              - spec/index.md
+              - spec/primitive-catalog.md
+              - spec/backend-contract.md
+              - spec/ad-contract.md
+              - spec/optimizer-passes.md
+              - spec/tensor-semantics.md

@@ -2,6 +2,28 @@
 
 The source code is the source of truth for internal design. Development assumes AI agentic coding. [AGENTS.md](https://github.com/tensor4all/tenferro-rs/blob/main/AGENTS.md) is the entry point.
 
+## Architecture
+
+Design rationale for each subsystem — *what* each layer does and *why*.
+
+- [Crate structure](../architecture/tenferro-crates.md)
+- [Computation graph](../architecture/computegraph.md)
+- [ChainRules AD traits](../architecture/chainrules.md)
+- [tidu AD engine](../architecture/tidu.md)
+- [End-to-end AD pipeline](../architecture/ad-pipeline.md)
+
+## Specification
+
+Normative specs — trait signatures, op semantics, backend contracts.
+
+- [Primitive catalog](../spec/primitive-catalog.md)
+- [Backend contract](../spec/backend-contract.md)
+- [AD contract](../spec/ad-contract.md)
+- [Optimizer passes](../spec/optimizer-passes.md)
+- [Tensor semantics](../spec/tensor-semantics.md)
+
+## Source Pointers
+
 | Topic | Location |
 |---|---|
 | Op vocabulary | `tenferro-ops/src/std_tensor_op.rs` |
