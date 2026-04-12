@@ -1,0 +1,214 @@
+use num_complex::{Complex32, Complex64};
+
+use super::*;
+
+macro_rules! float_singular_tests {
+    ($mod_name:ident, $t:ty) => {
+        mod $mod_name {
+            use super::*;
+
+            #[test]
+            fn nonsingular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![2.0 as $t, 1.0 as $t, 0.0 as $t, 3.0 as $t],
+                );
+                assert!(check_singular_diagonal(&t).is_ok());
+            }
+
+            #[test]
+            fn zero_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![0.0 as $t, 1.0 as $t, 1.0 as $t, 0.0 as $t],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn nan_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![<$t>::NAN, 1.0 as $t, 0.0 as $t, 1.0 as $t],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn inf_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![<$t>::INFINITY, 1.0 as $t, 0.0 as $t, 1.0 as $t],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn batched_singular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2, 2],
+                    vec![
+                        1.0 as $t, 0.0 as $t, 0.0 as $t, 2.0 as $t, 0.0 as $t, 0.0 as $t,
+                        0.0 as $t, 4.0 as $t,
+                    ],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn batched_nonsingular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2, 2],
+                    vec![
+                        1.0 as $t, 0.0 as $t, 0.0 as $t, 2.0 as $t, 3.0 as $t, 0.0 as $t,
+                        0.0 as $t, 4.0 as $t,
+                    ],
+                );
+                assert!(check_singular_diagonal(&t).is_ok());
+            }
+        }
+    };
+}
+
+macro_rules! complex_singular_tests {
+    ($mod_name:ident, $t:ty, $float:ty) => {
+        mod $mod_name {
+            use super::*;
+
+            #[test]
+            fn nonsingular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![
+                        <$t>::new(2.0 as $float, 0.0 as $float),
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(3.0 as $float, 0.0 as $float),
+                    ],
+                );
+                assert!(check_singular_diagonal(&t).is_ok());
+            }
+
+            #[test]
+            fn zero_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                    ],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn nan_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![
+                        <$t>::new(<$float>::NAN, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                    ],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn inf_diagonal() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2],
+                    vec![
+                        <$t>::new(1.0 as $float, <$float>::INFINITY),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                    ],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn batched_singular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2, 2],
+                    vec![
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(2.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(4.0 as $float, 0.0 as $float),
+                    ],
+                );
+                let err = check_singular_diagonal(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+
+            #[test]
+            fn batched_nonsingular() {
+                let t = TypedTensor::<$t>::from_vec(
+                    vec![2, 2, 2],
+                    vec![
+                        <$t>::new(1.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(2.0 as $float, 0.0 as $float),
+                        <$t>::new(3.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(0.0 as $float, 0.0 as $float),
+                        <$t>::new(4.0 as $float, 0.0 as $float),
+                    ],
+                );
+                assert!(check_singular_diagonal(&t).is_ok());
+            }
+        }
+    };
+}
+
+float_singular_tests!(f32_tests, f32);
+float_singular_tests!(f64_tests, f64);
+complex_singular_tests!(c32_tests, Complex32, f32);
+complex_singular_tests!(c64_tests, Complex64, f64);
+
+macro_rules! validate_nonsingular_u_test {
+    ($mod_name:ident, $variant:ident, $inner:ty) => {
+        mod $mod_name {
+            use num_traits::{One, Zero};
+
+            use super::*;
+
+            #[test]
+            fn singular() {
+                let t = Tensor::$variant(TypedTensor::<$inner>::from_vec(
+                    vec![2, 2],
+                    vec![
+                        <$inner>::zero(),
+                        <$inner>::one(),
+                        <$inner>::one(),
+                        <$inner>::zero(),
+                    ],
+                ));
+                let err = validate_nonsingular_u(&t).unwrap_err();
+                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+            }
+        }
+    };
+}
+
+validate_nonsingular_u_test!(validate_f32, F32, f32);
+validate_nonsingular_u_test!(validate_f64, F64, f64);
+validate_nonsingular_u_test!(validate_c32, C32, Complex32);
+validate_nonsingular_u_test!(validate_c64, C64, Complex64);
