@@ -1,17 +1,16 @@
 # tenferro-rs
 
-General-purpose dense tensor computation in Rust.
+General-purpose dense tensor computation in Rust, inspired by PyTorch and JAX.
 
 tenferro provides lazy traced tensors with einsum, linear algebra, and
-first-order autodiff. If you already know PyTorch or JAX, the API should
-feel familiar.
+first-order autodiff on CPU. GPU support is planned.
 
 ## Workspace Crates
 
 | Crate | Role |
 | --- | --- |
 | `tenferro` | Traced frontend: `Engine`, `TracedTensor`, public einsum and linalg APIs, VJP/JVP |
-| `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend, GPU backend stubs |
+| `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend (GPU planned) |
 | `tenferro-einsum` | Subscripts, contraction trees, and fragment-building utilities |
 | `tenferro-ops` | Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rule implementations |
 | `tenferro-algebra` | Semiring/algebra traits |

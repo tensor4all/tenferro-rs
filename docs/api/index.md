@@ -3,23 +3,23 @@
 ## Rustdoc
 
 `tenferro` is the main user-facing crate. See the
-[Rustdoc API documentation](../../api/tenferro/index.html).
+[Rustdoc API documentation](../rustdoc/tenferro/index.html).
 
 For contributors, internal crate APIs are also available in the
-[full workspace API index](../../api/index.html).
+[full workspace Rustdoc index](../rustdoc/index.html).
 
 ## Workspace Crates
 
-- [tenferro](../../api/tenferro/index.html): traced frontend, execution engine, public
+- [tenferro](../rustdoc/tenferro/index.html): traced frontend, execution engine, public
   einsum API, public linalg API, and first-order AD entry points
-- [tenferro-tensor](../../api/tenferro_tensor/index.html): concrete dense `Tensor` /
+- [tenferro-tensor](../rustdoc/tenferro_tensor/index.html): concrete dense `Tensor` /
   `TypedTensor` values, backend traits, CPU backend, and GPU backend stubs
-- [tenferro-einsum](../../api/tenferro_einsum/index.html): subscripts, contraction trees,
+- [tenferro-einsum](../rustdoc/tenferro_einsum/index.html): subscripts, contraction trees,
   contraction optimization, and fragment-building helpers
-- [tenferro-ops](../../api/tenferro_ops/index.html): graph op vocabulary and AD rule
+- [tenferro-ops](../rustdoc/tenferro_ops/index.html): graph op vocabulary and AD rule
   implementations for `StdTensorOp`
-- [tenferro-algebra](../../api/tenferro_algebra/index.html): semiring and algebra traits
-- [tenferro-device](../../api/tenferro_device/index.html): shared device and error types
+- [tenferro-algebra](../rustdoc/tenferro_algebra/index.html): semiring and algebra traits
+- [tenferro-device](../rustdoc/tenferro_device/index.html): shared device and error types
 
 ## Architecture Summary
 
