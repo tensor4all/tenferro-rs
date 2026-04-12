@@ -113,6 +113,9 @@ pub fn lower_to_stablehlo(prog: &CompiledProgram<StdTensorOp>) -> StableHloProgr
                 StdTensorOp::Eig { .. } => StableHloOp::CustomCall {
                     target: "eig".to_string(),
                 },
+                StdTensorOp::ValidateNonsingular { .. } => StableHloOp::CustomCall {
+                    target: "validate_nonsingular".to_string(),
+                },
             };
             let dtype = match &instr.op {
                 StdTensorOp::Constant { dtype, .. } => *dtype,

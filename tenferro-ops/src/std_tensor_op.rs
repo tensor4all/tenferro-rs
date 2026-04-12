@@ -148,6 +148,9 @@ pub enum StdTensorOp {
         lhs_shape: Vec<DimExpr>,
         rhs_shape: Vec<DimExpr>,
     },
+    ValidateNonsingular {
+        input_shape: Vec<DimExpr>,
+    },
 }
 
 impl StdTensorOp {
@@ -337,6 +340,9 @@ impl Hash for StdTensorOp {
                 lhs_shape.hash(state);
                 rhs_shape.hash(state);
             }
+            Self::ValidateNonsingular { input_shape } => {
+                input_shape.hash(state);
+            }
         }
     }
 }
@@ -418,6 +424,7 @@ impl GraphOp for StdTensorOp {
                 rhs_shape,
                 ..
             } => n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape]),
+            Self::ValidateNonsingular { input_shape } => n_inputs_from_dim_exprs(1, &[input_shape]),
         }
     }
 
@@ -466,7 +473,9 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Cholesky { .. } | Self::TriangularSolve { .. } => 1,
+            Self::Cholesky { .. }
+            | Self::TriangularSolve { .. }
+            | Self::ValidateNonsingular { .. } => 1,
             Self::Lu { .. } => 4,
             Self::Svd { .. } => 3,  // U, S, Vt
             Self::Qr { .. } => 2,   // Q, R

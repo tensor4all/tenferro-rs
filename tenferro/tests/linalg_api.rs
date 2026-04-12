@@ -378,3 +378,51 @@ fn assert_tensor_f64_eq(actual: &[f64], expected: &[f64]) {
         assert_f64_eq(actual, expected);
     }
 }
+
+#[test]
+fn traced_solve_rejects_singular_matrix() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
+    let mut x = solve(&a, &b);
+    let mut engine = Engine::new(CpuBackend::new());
+    let err = x.eval(&mut engine).unwrap_err();
+    assert!(
+        err.to_string().contains("singular"),
+        "expected singular matrix error, got: {err}"
+    );
+}
+
+#[test]
+fn traced_solve_rejects_singular_matrix_with_vector_rhs() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![2], vec![1.0, 2.0]));
+    let mut x = solve(&a, &b);
+    let mut engine = Engine::new(CpuBackend::new());
+    let err = x.eval(&mut engine).unwrap_err();
+    assert!(
+        err.to_string().contains("singular"),
+        "expected singular matrix error, got: {err}"
+    );
+}
+
+#[test]
+fn traced_inv_rejects_singular_matrix() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let mut result = inv(&a);
+    let mut engine = Engine::new(CpuBackend::new());
+    let err = result.eval(&mut engine).unwrap_err();
+    assert!(
+        err.to_string().contains("singular"),
+        "expected singular matrix error, got: {err}"
+    );
+}
+
+#[test]
+fn traced_solve_accepts_nonsingular_matrix() {
+    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
+    let mut x = solve(&a, &b);
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = x.eval(&mut engine).unwrap();
+    assert_tensor_f64_eq(get_f64_data(&result), &[4.0, 6.75]);
+}

@@ -266,6 +266,17 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     }
 }
 
+fn validate_nonsingular(u: &TracedTensor) -> TracedTensor {
+    apply_unary(
+        StdTensorOp::ValidateNonsingular {
+            input_shape: input_shape_expr(u),
+        },
+        u,
+        u.rank,
+        u.shape_hint.clone(),
+    )
+}
+
 /// Solve a linear system using LU decomposition and triangular solves.
 ///
 /// # Examples
@@ -282,6 +293,7 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 
     let do_solve = |a: &TracedTensor, b: &TracedTensor| -> TracedTensor {
         let (p, l, u, _) = lu(a);
+        let u = validate_nonsingular(&u);
         let pb = matmul_preserve_trailing_batch(&p, b);
         let z = triangular_solve(&l, &pb, true, true, false, true);
         triangular_solve(&u, &z, true, false, false, false)

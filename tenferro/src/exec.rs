@@ -347,6 +347,11 @@ fn eval_exec_ir_inner(
                     "qr" => exec.qr(get(&slots, &inst.input_slots, 0)?),
                     "eigh" => exec.eigh(get(&slots, &inst.input_slots, 0)?),
                     "eig" => exec.eig(get(&slots, &inst.input_slots, 0)?),
+                    "validate_nonsingular" => {
+                        let input = get(&slots, &inst.input_slots, 0)?;
+                        validate_nonsingular_u(input)?;
+                        Ok(vec![input.clone()])
+                    }
                     _ => todo!("custom call target {target}"),
                 }?;
                 for (i, tensor) in results.into_iter().enumerate() {
@@ -580,4 +585,89 @@ where
                 .ok_or(TensorError::MissingValue { slot }.into())
         })
         .collect()
+}
+
+fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
+    match u {
+        Tensor::F64(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    if !diag.is_finite() || diag == 0.0 {
+                        return Err(TensorError::BackendFailure {
+                            op: "solve",
+                            message: "singular matrix".into(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Tensor::F32(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    if !diag.is_finite() || diag == 0.0 {
+                        return Err(TensorError::BackendFailure {
+                            op: "solve",
+                            message: "singular matrix".into(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Tensor::C64(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    if !diag.re.is_finite() || !diag.im.is_finite() || diag.norm_sqr() == 0.0 {
+                        return Err(TensorError::BackendFailure {
+                            op: "solve",
+                            message: "singular matrix".into(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Tensor::C32(t) => {
+            let n = t.shape[0].min(t.shape[1]);
+            let batch_total: usize = t.shape[2..].iter().product();
+            let batch_total = batch_total.max(1);
+            let slice_size = t.shape[0] * t.shape[1];
+            for batch_idx in 0..batch_total {
+                let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
+                for i in 0..n {
+                    let diag = batch[i + i * t.shape[0]];
+                    if !diag.re.is_finite() || !diag.im.is_finite() || diag.norm_sqr() == 0.0 {
+                        return Err(TensorError::BackendFailure {
+                            op: "solve",
+                            message: "singular matrix".into(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
 }
