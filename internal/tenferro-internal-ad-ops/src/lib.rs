@@ -16,7 +16,7 @@ pub(crate) mod structured;
 pub mod tape;
 
 pub(crate) use core::DynTensor;
-pub use tenferro_internal_ad_core::AdMode;
+pub use tenferro_internal_ad_core::{AdMode, AdTensor};
 pub use tenferro_internal_error::{Error, Result};
 
 pub mod ad {

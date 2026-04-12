@@ -346,7 +346,7 @@ macro_rules! define_scalar_unary_eager_ad_fn {
         where
             T: GenericAdRuntimeValue,
         {
-            super::super::$builder_fn(tensor).run()
+            crate::ops::scalar::ad::$builder_fn(tensor).run()
         }
     };
     ($fn_name:ident, $builder_fn:ident, $doc_op:literal, real) => {
@@ -361,7 +361,7 @@ macro_rules! define_scalar_unary_eager_ad_fn {
         where
             T: RealAdRuntimeValue,
         {
-            super::super::$builder_fn(tensor).run()
+            crate::ops::scalar::ad::$builder_fn(tensor).run()
         }
     };
 }
@@ -379,7 +379,7 @@ macro_rules! define_scalar_binary_eager_ad_fn {
         where
             T: GenericAdRuntimeValue,
         {
-            super::super::$builder_fn(lhs, rhs).run()
+            crate::ops::scalar::ad::$builder_fn(lhs, rhs).run()
         }
     };
     ($fn_name:ident, $builder_fn:ident, $doc_op:literal, real) => {
@@ -394,7 +394,7 @@ macro_rules! define_scalar_binary_eager_ad_fn {
         where
             T: RealAdRuntimeValue,
         {
-            super::super::$builder_fn(lhs, rhs).run()
+            crate::ops::scalar::ad::$builder_fn(lhs, rhs).run()
         }
     };
 }
@@ -412,7 +412,7 @@ macro_rules! define_scalar_reduction_eager_ad_fn {
         where
             T: GenericAdRuntimeValue,
         {
-            super::super::$builder_fn(tensor).run()
+            crate::ops::scalar::ad::$builder_fn(tensor).run()
         }
     };
     ($fn_name:ident, $builder_fn:ident, $doc_label:literal, real) => {
@@ -427,7 +427,7 @@ macro_rules! define_scalar_reduction_eager_ad_fn {
         where
             T: RealAdRuntimeValue,
         {
-            super::super::$builder_fn(tensor).run()
+            crate::ops::scalar::ad::$builder_fn(tensor).run()
         }
     };
 }
@@ -466,7 +466,7 @@ where
     if can_use_edge_unary_reverse(tensor) {
         return edge_exp(tensor);
     }
-    super::super::exp_ad(tensor).run()
+    crate::ops::scalar::ad::exp_ad(tensor).run()
 }
 
 #[doc = "Eager AD `add`."]
@@ -479,5 +479,5 @@ where
     if can_use_edge_binary_reverse(lhs, rhs) {
         return edge_add(lhs, rhs);
     }
-    super::super::add_ad(lhs, rhs).run()
+    crate::ops::scalar::ad::add_ad(lhs, rhs).run()
 }

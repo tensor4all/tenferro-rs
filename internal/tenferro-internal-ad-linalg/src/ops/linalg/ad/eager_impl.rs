@@ -63,6 +63,7 @@ macro_rules! eager_unary {
         $(#[$meta])*
         pub fn $name<T: Scalar>(tensor: &AdTensor<T>) -> Result<$ret>
         where
+            T: DynAdTensorTyped,
             $($bounds)*
         {
             $builder(tensor).run()
@@ -75,6 +76,7 @@ macro_rules! eager_binary {
         $(#[$meta])*
         pub fn $name<T: Scalar>(a: &AdTensor<T>, b: &AdTensor<T>) -> Result<$ret>
         where
+            T: DynAdTensorTyped,
             $($bounds)*
         {
             $builder(a, b).run()

@@ -13,7 +13,9 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue + DynAdTensorTyped,
+    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue
+        + DynAdTensorTyped
+        + tenferro_algebra::LinalgScalar<Real = T>,
 {
     /// Executes AD slogdet.
     /// # Examples
@@ -110,6 +112,7 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::SlogdetCotangent {
+                                        sign: None,
                                         logabsdet: Some(cotangent.payload().clone()),
                                     },
                                 )

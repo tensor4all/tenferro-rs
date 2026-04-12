@@ -20,6 +20,7 @@ tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-linalg = { path = "../../tenferro-linalg" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-prims = { path = "../../tenferro-prims" }
 chainrules-core.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true

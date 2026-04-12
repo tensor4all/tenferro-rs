@@ -257,14 +257,14 @@ where
         };
 
         let (dx, dresidual) = if let Some(d) = tangent {
-            (Some(d.x), Some(d.residual))
+            (Some(d.solution), Some(d.residuals))
         } else {
             (None, None)
         };
 
-        let out_x = wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.x, dx)?;
+        let out_x = wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.solution, dx)?;
         let out_residual =
-            wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.residual, dresidual)?;
+            wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.residuals, dresidual)?;
 
         let reverse_specs = collect_reverse_input_specs(&operands);
         if has_reverse(&operands) {
@@ -290,7 +290,8 @@ where
                                     ctx,
                                     &a_primal,
                                     &b_primal,
-                                    cotangent.payload(),
+                                    Some(cotangent.payload()),
+                                    None,
                                 )
                                 .map_err(Error::from)
                             }
