@@ -28,6 +28,7 @@ website:
           - getting-started/pytorch-jax-mapping.md
       - section: "Guides"
         contents:
+          - guides/eager-operations.md
           - guides/tensor-operations.md
           - guides/einsum.md
           - guides/linear-algebra.md

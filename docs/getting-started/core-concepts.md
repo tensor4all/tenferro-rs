@@ -1,6 +1,64 @@
 # Core Concepts
 
-## TracedTensor: your tensor handle
+## Three tensor layers
+
+tenferro provides three tensor types for different use cases:
+
+| Layer | Type | Use case | Requires Engine? |
+|-------|------|----------|-----------------|
+| `TypedTensor<T>` | Statically typed | Direct computation, compile-time dtype safety | No (needs `CpuBackend`) |
+| `Tensor` | Dynamic dtype enum | Mixed-dtype workflows, FFI | No (needs `CpuBackend`) |
+| `TracedTensor` | Lazy graph handle | Automatic differentiation, graph optimization | Yes |
+
+Choose the simplest layer that meets your needs:
+
+- **No AD needed** -> `Tensor` + `CpuBackend`
+- **AD (grad/vjp/jvp) needed** -> `TracedTensor` + `Engine`
+- **Compile-time dtype safety** -> `TypedTensor<T>` + `CpuBackend`
+
+## TypedTensor<T>: statically typed storage
+
+`TypedTensor<T>` stores concrete tensor data with a compile-time scalar type.
+Use it when you want dtype safety in Rust code and you do not want runtime
+dtype dispatch.
+
+```rust
+use tenferro_tensor::{Tensor, TypedTensor};
+
+// Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
+let typed = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+assert_eq!(typed.as_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+// Wrap a typed tensor in the matching dynamic enum when you need `Tensor`.
+let dynamic = Tensor::F64(typed.clone());
+assert_eq!(dynamic.shape(), &[2, 3]);
+```
+
+## Tensor: eager computation
+
+`Tensor` holds concrete data and supports immediate computation. Every
+operation takes a backend context (`&mut impl TensorBackend`) and returns
+results immediately.
+
+```rust
+use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+
+let mut ctx = CpuBackend::new();
+
+// Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
+let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+let c = a.matmul(&b, &mut ctx).unwrap();
+assert_eq!(c.shape(), &[2, 2]);
+
+let (_u, s, _vt) = a.svd(&mut ctx).unwrap();
+assert_eq!(s.shape(), &[2]); // min(2, 3) singular values
+```
+
+If you have used NumPy or PyTorch in eager mode, this is the familiar pattern.
+
+## TracedTensor: lazy computation with AD
 
 `TracedTensor` is the value you pass around in user code. You create it from a shape and flat data, then combine it with operations such as `+`, `*`, `reshape`, `transpose`, `einsum`, or `svd`.
 
@@ -22,15 +80,30 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 
 ## Execution model comparison
 
-| Library | Typical mental model |
-|---|---|
-| PyTorch | Eager: each operation produces data immediately |
-| JAX | Usually eager arrays, with `jit` used to stage larger computations |
-| tenferro | Lazy by default: compose first, then call `eval` |
+| Library | Mental model | tenferro equivalent |
+|---|---|---|
+| NumPy | Eager, no AD | `Tensor` + `CpuBackend` |
+| PyTorch (eager) | Eager with autograd | `TracedTensor` + `Engine` |
+| JAX (`jit`) | Staged/lazy computation | `TracedTensor` + `Engine` |
 
-## Minimal example
+## Minimal examples
+
+### Eager (no AD)
 
 ```rust
+use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+
+let mut ctx = CpuBackend::new();
+let a = Tensor::new(vec![2], vec![1.0_f64, 2.0]);
+let b = Tensor::new(vec![2], vec![3.0_f64, 4.0]);
+let sum = a.add(&b, &mut ctx).unwrap();
+
+assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+```
+
+### Lazy with AD
+
+```rust,ignore
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
 let a = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);

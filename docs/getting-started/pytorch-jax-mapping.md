@@ -6,6 +6,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 | Concept | PyTorch | JAX | tenferro |
 |---|---|---|---|
+| Eager tensor | `numpy.ndarray` | — | `Tensor` + `CpuBackend` |
 | Tensor handle | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `.eval(&mut engine)` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Lazy until `eval` |
@@ -15,20 +16,20 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 ## Function mapping
 
-| Task | PyTorch | JAX | tenferro |
-|---|---|---|---|
-| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `TracedTensor::new(shape, data)` |
-| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `tenferro::matmul(&a, &b)` |
-| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape)` |
-| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm)` |
-| Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | `x.broadcast(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes)` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `einsum(&mut engine, inputs, spec)` |
-| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro::svd(&x)` |
-| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro::qr(&x)` |
-| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `tenferro::cholesky(&x)` |
-| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `tenferro::solve(&a, &b)` |
-| Reverse-mode gradient | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | `loss.grad(&x)` |
+| Task | PyTorch | JAX | tenferro (eager) | tenferro (lazy/AD) |
+|---|---|---|---|---|
+| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::new(shape, data)` | `TracedTensor::new(shape, data)` |
+| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut ctx)` | `tenferro::matmul(&a, &b)` |
+| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
+| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
+| Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` | `x.reduce_sum(&axes)` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `eager_einsum(&mut ctx, ...)` | `einsum(&mut engine, ...)` |
+| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut ctx)` | `tenferro::svd(&x)` |
+| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut ctx)` | `tenferro::qr(&x)` |
+| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut ctx)` | `tenferro::cholesky(&x)` |
+| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut ctx)` | `tenferro::solve(&a, &b)` |
+| Gradient | `torch.autograd.grad(...)` | `jax.grad(f)(x)` | N/A | `loss.grad(&x)` |
 
 ## Key differences
 
@@ -36,7 +37,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 tenferro stores dense tensors in column-major order. If you write:
 
-```rust
+```rust,ignore
 let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 
