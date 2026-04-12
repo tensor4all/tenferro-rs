@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -48,7 +49,7 @@ pub fn linearize_embed_diag(
 }
 
 pub fn transpose_extract_diag(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,
@@ -56,7 +57,7 @@ pub fn transpose_extract_diag(
     // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::EmbedDiag { axis_a, axis_b },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
@@ -70,7 +71,7 @@ pub fn transpose_extract_diag(
 }
 
 pub fn transpose_embed_diag(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,
@@ -78,7 +79,7 @@ pub fn transpose_embed_diag(
     // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::ExtractDiag { axis_a, axis_b },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {

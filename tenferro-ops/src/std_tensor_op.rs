@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::GraphOp;
+use computegraph::{GraphOp, OpEmitter};
 use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
@@ -526,13 +526,13 @@ impl PrimitiveOp for StdTensorOp {
 
     fn transpose_rule(
         &self,
-        builder: &mut FragmentBuilder<Self>,
+        emitter: &mut impl OpEmitter<Self>,
         cotangent_out: &[Option<LocalValId>],
         inputs: &[ValRef<Self>],
         mode: &OpMode,
         ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
-        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
+        crate::ad::transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
     }
 }
 

@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
 use crate::dim_expr::DimExpr;
@@ -230,7 +231,7 @@ pub fn linearize_reduce_chooser(
 }
 
 pub fn transpose_dot_general(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -257,43 +258,43 @@ pub fn transpose_dot_general(
         &config.rhs_batch_dims,
     );
     let output_rank = config.lhs_batch_dims.len() + lhs_free.len() + rhs_free.len();
-    let cotangent = normalize_scalar_cotangent(builder, ct, output_rank);
+    let cotangent = normalize_scalar_cotangent(emitter, ct, output_rank);
 
     let mut result = vec![None, None];
 
     if active_mask[0] {
         let rhs_conj =
-            builder.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_lhs(config, &lhs_free, &rhs_free);
-        let out = builder.add_op(
+        let out = emitter.add_op(
             StdTensorOp::DotGeneral(transpose_config),
             vec![cotangent.clone(), ValRef::Local(rhs_conj)],
             OpMode::Linear {
                 active_mask: vec![true, false],
             },
         );
-        result[0] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        result[0] = Some(add_transpose_if_needed(emitter, out[0], &perm));
     }
 
     if active_mask[1] {
         let lhs_conj =
-            builder.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_rhs(config, &lhs_free, &rhs_free);
-        let out = builder.add_op(
+        let out = emitter.add_op(
             StdTensorOp::DotGeneral(transpose_config),
             vec![ValRef::Local(lhs_conj), cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
         );
-        result[1] = Some(add_transpose_if_needed(builder, out[0], &perm));
+        result[1] = Some(add_transpose_if_needed(emitter, out[0], &perm));
     }
 
     result
 }
 
 pub fn transpose_nary_einsum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -339,7 +340,7 @@ pub fn transpose_nary_einsum(
             }
 
             vjp_input_parts.push(input_labels[input_idx].to_string());
-            let conjugated = builder.add_op(
+            let conjugated = emitter.add_op(
                 StdTensorOp::Conj,
                 vec![inputs[input_idx].clone()],
                 OpMode::Primal,
@@ -347,7 +348,7 @@ pub fn transpose_nary_einsum(
             vjp_inputs.push(ValRef::Local(conjugated[0]));
         }
 
-        let out = builder.add_op(
+        let out = emitter.add_op(
             StdTensorOp::NaryEinsum {
                 subscripts: format!(
                     "{}->{}",
@@ -370,7 +371,7 @@ pub fn transpose_nary_einsum(
 }
 
 pub fn transpose_reduce_sum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
@@ -385,7 +386,7 @@ pub fn transpose_reduce_sum(
                 .filter(|dim| !axes.contains(dim))
                 .collect::<Vec<_>>();
             let cotangent = if kept_dims.is_empty() {
-                let scalar = builder.add_op(
+                let scalar = emitter.add_op(
                     StdTensorOp::Reshape {
                         from_shape: DimExpr::from_concrete(&[1]),
                         to_shape: vec![],
@@ -408,7 +409,7 @@ pub fn transpose_reduce_sum(
             } else {
                 vec![true]
             };
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims,
@@ -423,7 +424,7 @@ pub fn transpose_reduce_sum(
 }
 
 pub fn transpose_reduce_prod(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
@@ -435,7 +436,7 @@ pub fn transpose_reduce_prod(
     match cotangent_out[0] {
         Some(ct) => {
             let kept_dims = kept_dims(input_shape.len(), axes);
-            let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
+            let cotangent = normalize_reduction_cotangent(emitter, ct, &kept_dims);
             let shape = DimExpr::remap_all(input_shape, 0, 1);
             let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![cotangent];
@@ -445,7 +446,7 @@ pub fn transpose_reduce_prod(
             } else {
                 vec![true]
             };
-            let cotangent = builder.add_op(
+            let cotangent = emitter.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims.clone(),
@@ -453,25 +454,25 @@ pub fn transpose_reduce_prod(
                 op_inputs,
                 OpMode::Linear { active_mask },
             )[0];
-            let prod = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
+            let prod = emitter.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
             let prod_broadcast = broadcast_reduction_output(
-                builder,
+                emitter,
                 ValRef::Local(prod),
                 inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
-            let coeff = builder.add_op(
+            let coeff = emitter.add_op(
                 StdTensorOp::Div,
                 vec![ValRef::Local(prod_broadcast), inputs[0].clone()],
                 OpMode::Primal,
             )[0];
-            let coeff_conj = builder.add_op(
+            let coeff_conj = emitter.add_op(
                 StdTensorOp::Conj,
                 vec![ValRef::Local(coeff)],
                 OpMode::Primal,
             )[0];
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Mul,
                 vec![ValRef::Local(coeff_conj), ValRef::Local(cotangent)],
                 OpMode::Linear {
@@ -485,7 +486,7 @@ pub fn transpose_reduce_prod(
 }
 
 pub fn transpose_reduce_chooser(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
@@ -499,7 +500,7 @@ pub fn transpose_reduce_chooser(
     match cotangent_out[0] {
         Some(ct) => {
             let kept_dims = kept_dims(input_shape.len(), axes);
-            let cotangent = normalize_reduction_cotangent(builder, ct, &kept_dims);
+            let cotangent = normalize_reduction_cotangent(emitter, ct, &kept_dims);
             let shape = DimExpr::remap_all(input_shape, 0, 1);
             let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![cotangent];
@@ -509,7 +510,7 @@ pub fn transpose_reduce_chooser(
             } else {
                 vec![true]
             };
-            let cotangent = builder.add_op(
+            let cotangent = emitter.add_op(
                 StdTensorOp::BroadcastInDim {
                     shape,
                     dims: kept_dims.clone(),
@@ -517,38 +518,38 @@ pub fn transpose_reduce_chooser(
                 op_inputs,
                 OpMode::Linear { active_mask },
             )[0];
-            let answer = builder.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
+            let answer = emitter.add_op(op.clone(), vec![inputs[0].clone()], OpMode::Primal)[0];
             let answer_broadcast = broadcast_reduction_output(
-                builder,
+                emitter,
                 ValRef::Local(answer),
                 inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
             let indicators = reduction_location_indicators(
-                builder,
+                emitter,
                 inputs[0].clone(),
                 ValRef::Local(answer_broadcast),
             );
-            let counts = reduction_location_counts(builder, indicators, axes, input_shape);
+            let counts = reduction_location_counts(emitter, indicators, axes, input_shape);
             let counts_broadcast = broadcast_reduction_output(
-                builder,
+                emitter,
                 ValRef::Local(counts),
                 inputs[0].clone(),
                 input_shape,
                 &kept_dims,
             );
-            let weights = builder.add_op(
+            let weights = emitter.add_op(
                 StdTensorOp::Div,
                 vec![ValRef::Local(indicators), ValRef::Local(counts_broadcast)],
                 OpMode::Primal,
             )[0];
-            let weights_conj = builder.add_op(
+            let weights_conj = emitter.add_op(
                 StdTensorOp::Conj,
                 vec![ValRef::Local(weights)],
                 OpMode::Primal,
             )[0];
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Mul,
                 vec![ValRef::Local(weights_conj), ValRef::Local(cotangent)],
                 OpMode::Linear {
@@ -578,12 +579,12 @@ fn kept_dims(rank: usize, axes: &[usize]) -> Vec<usize> {
 }
 
 fn normalize_reduction_cotangent(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent: LocalValId,
     kept_dims: &[usize],
 ) -> ValRef<StdTensorOp> {
     if kept_dims.is_empty() {
-        let scalar = builder.add_op(
+        let scalar = emitter.add_op(
             StdTensorOp::Reshape {
                 from_shape: DimExpr::from_concrete(&[1]),
                 to_shape: vec![],
@@ -600,7 +601,7 @@ fn normalize_reduction_cotangent(
 }
 
 fn broadcast_reduction_output(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     output: ValRef<StdTensorOp>,
     shape_source: ValRef<StdTensorOp>,
     input_shape: &[DimExpr],
@@ -613,7 +614,7 @@ fn broadcast_reduction_output(
     } else {
         vec![output]
     };
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::BroadcastInDim {
             shape,
             dims: kept_dims.to_vec(),
@@ -624,11 +625,11 @@ fn broadcast_reduction_output(
 }
 
 fn reduction_location_indicators(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     answer_broadcast: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::Compare(CompareDir::Eq),
         vec![input, answer_broadcast],
         OpMode::Primal,
@@ -636,12 +637,12 @@ fn reduction_location_indicators(
 }
 
 fn reduction_location_counts(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     indicators: LocalValId,
     axes: &[usize],
     input_shape: &[DimExpr],
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
             input_shape: input_shape.to_vec(),
@@ -652,12 +653,12 @@ fn reduction_location_counts(
 }
 
 fn normalize_scalar_cotangent(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent: LocalValId,
     output_rank: usize,
 ) -> ValRef<StdTensorOp> {
     if output_rank == 0 {
-        let scalar = builder.add_op(
+        let scalar = emitter.add_op(
             StdTensorOp::Reshape {
                 from_shape: DimExpr::from_concrete(&[1]),
                 to_shape: vec![],
@@ -755,7 +756,7 @@ fn permutation_to_original_order(rank: usize, result_order: &[usize]) -> Vec<usi
 }
 
 fn add_transpose_if_needed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     input: LocalValId,
     perm: &[usize],
 ) -> LocalValId {
@@ -763,7 +764,7 @@ fn add_transpose_if_needed(
         return input;
     }
 
-    let out = builder.add_op(
+    let out = emitter.add_op(
         StdTensorOp::Transpose {
             perm: perm.to_vec(),
         },

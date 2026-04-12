@@ -15,10 +15,13 @@
 //! // ... build and execute traced computations
 //! ```
 
-use tenferro_tensor::DotGeneralConfig;
+pub use tenferro_tensor::DotGeneralConfig;
 
 mod checkpoint;
 pub mod compiler;
+mod eager;
+mod eager_emitter;
+pub mod eager_exec;
 pub mod einsum;
 pub mod engine;
 pub mod error;
@@ -28,6 +31,7 @@ pub mod stablehlo;
 pub mod sym_dim;
 pub mod traced;
 
+pub use eager::EagerTensor;
 pub use engine::Engine;
 pub use linalg_api::{
     cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, inv, lu, norm, pinv,
