@@ -124,6 +124,7 @@ fn linearize_non_semiring(
             input_dtype,
             input_shape,
         } => linalg::linearize_eig(builder, primal_out, tangent_in, *input_dtype, input_shape),
+        StdTensorOp::ValidateNonsingular { .. } => vec![tangent_in[0]],
         _ => return None,
     })
 }
@@ -231,6 +232,7 @@ fn transpose_non_semiring(
             lhs_shape,
             rhs_shape,
         ),
+        StdTensorOp::ValidateNonsingular { .. } => vec![cotangent_out[0]],
         _ => return None,
     })
 }
