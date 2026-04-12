@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 use tenferro_tensor::PadConfig;
 
 use crate::dim_expr::DimExpr;
@@ -181,7 +182,7 @@ pub fn linearize_pad(
 }
 
 pub fn transpose_transpose(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     perm: &[usize],
 ) -> Vec<Option<LocalValId>> {
@@ -192,7 +193,7 @@ pub fn transpose_transpose(
 
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Transpose { perm: inv },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
@@ -206,7 +207,7 @@ pub fn transpose_transpose(
 }
 
 pub fn transpose_reshape(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
@@ -234,7 +235,7 @@ pub fn transpose_reshape(
             } else {
                 vec![true]
             };
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Reshape {
                     from_shape: remapped_from_shape,
                     to_shape: remapped_to_shape,
@@ -249,7 +250,7 @@ pub fn transpose_reshape(
 }
 
 pub fn transpose_broadcast_in_dim(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     shape: &[DimExpr],
     dims: &[usize],
@@ -260,7 +261,7 @@ pub fn transpose_broadcast_in_dim(
     match cotangent_out[0] {
         Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::ReduceSum {
                     axes: broadcast_axes,
                     input_shape: shape.to_vec(),
@@ -277,7 +278,7 @@ pub fn transpose_broadcast_in_dim(
 }
 
 pub fn transpose_convert(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     mode: &OpMode,
     from: tenferro_tensor::DType,
@@ -293,7 +294,7 @@ pub fn transpose_convert(
 
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Convert { from: to, to: from },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
@@ -307,13 +308,13 @@ pub fn transpose_convert(
 }
 
 pub fn transpose_tril(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Tril { k },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
@@ -327,13 +328,13 @@ pub fn transpose_tril(
 }
 
 pub fn transpose_triu(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Triu { k },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {

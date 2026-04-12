@@ -1,14 +1,15 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
 
 fn emit_fixed_unary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         op,
         vec![input],
         OpMode::Linear {
@@ -18,12 +19,12 @@ fn emit_fixed_unary(
 }
 
 fn emit_fixed_binary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         op,
         vec![lhs, rhs],
         OpMode::Linear {
@@ -33,51 +34,51 @@ fn emit_fixed_binary(
 }
 
 fn emit_fixed_neg(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    emit_fixed_unary(builder, StdTensorOp::Neg, input)
+    emit_fixed_unary(emitter, StdTensorOp::Neg, input)
 }
 
 fn emit_fixed_add(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    emit_fixed_binary(builder, StdTensorOp::Add, lhs, rhs)
+    emit_fixed_binary(emitter, StdTensorOp::Add, lhs, rhs)
 }
 
 fn emit_fixed_mul(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    emit_fixed_binary(builder, StdTensorOp::Mul, lhs, rhs)
+    emit_fixed_binary(emitter, StdTensorOp::Mul, lhs, rhs)
 }
 
 fn emit_fixed_div(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    emit_fixed_binary(builder, StdTensorOp::Div, lhs, rhs)
+    emit_fixed_binary(emitter, StdTensorOp::Div, lhs, rhs)
 }
 
 fn emit_one_like_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     anchor: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    let neg = emit_fixed_neg(builder, anchor.clone());
-    let zero = emit_fixed_add(builder, anchor, ValRef::Local(neg));
-    emit_fixed_unary(builder, StdTensorOp::Exp, ValRef::Local(zero))
+    let neg = emit_fixed_neg(emitter, anchor.clone());
+    let zero = emit_fixed_add(emitter, anchor, ValRef::Local(neg));
+    emit_fixed_unary(emitter, StdTensorOp::Exp, ValRef::Local(zero))
 }
 
 fn emit_linear_mul_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     fixed: ValRef<StdTensorOp>,
     active: LocalValId,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::Mul,
         vec![fixed, ValRef::Local(active)],
         OpMode::Linear {
@@ -87,11 +88,11 @@ fn emit_linear_mul_fixed(
 }
 
 fn emit_linear_div_fixed_denominator(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     active: LocalValId,
     denominator: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::Div,
         vec![ValRef::Local(active), denominator],
         OpMode::Linear {
@@ -349,7 +350,7 @@ pub fn linearize_log1p(
 }
 
 pub fn transpose_exp(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -359,9 +360,9 @@ pub fn transpose_exp(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let exp_x = emit_fixed_unary(builder, StdTensorOp::Exp, inputs[0].clone());
+            let exp_x = emit_fixed_unary(emitter, StdTensorOp::Exp, inputs[0].clone());
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(exp_x),
                 ct,
             ))]
@@ -371,7 +372,7 @@ pub fn transpose_exp(
 }
 
 pub fn transpose_log(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -381,7 +382,7 @@ pub fn transpose_log(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Div,
                 vec![ValRef::Local(ct), inputs[0].clone()],
                 OpMode::Linear {
@@ -395,7 +396,7 @@ pub fn transpose_log(
 }
 
 pub fn transpose_sin(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -405,9 +406,9 @@ pub fn transpose_sin(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let cos_x = emit_fixed_unary(builder, StdTensorOp::Cos, inputs[0].clone());
+            let cos_x = emit_fixed_unary(emitter, StdTensorOp::Cos, inputs[0].clone());
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(cos_x),
                 ct,
             ))]
@@ -417,7 +418,7 @@ pub fn transpose_sin(
 }
 
 pub fn transpose_cos(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -427,10 +428,10 @@ pub fn transpose_cos(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let sin_x = emit_fixed_unary(builder, StdTensorOp::Sin, inputs[0].clone());
-            let neg_sin_x = emit_fixed_neg(builder, ValRef::Local(sin_x));
+            let sin_x = emit_fixed_unary(emitter, StdTensorOp::Sin, inputs[0].clone());
+            let neg_sin_x = emit_fixed_neg(emitter, ValRef::Local(sin_x));
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(neg_sin_x),
                 ct,
             ))]
@@ -440,7 +441,7 @@ pub fn transpose_cos(
 }
 
 pub fn transpose_tanh(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -450,13 +451,13 @@ pub fn transpose_tanh(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let tanh_x = emit_fixed_unary(builder, StdTensorOp::Tanh, inputs[0].clone());
-            let tanh_sq = emit_fixed_mul(builder, ValRef::Local(tanh_x), ValRef::Local(tanh_x));
-            let one = emit_one_like_fixed(builder, inputs[0].clone());
-            let neg_tanh_sq = emit_fixed_neg(builder, ValRef::Local(tanh_sq));
-            let coeff = emit_fixed_add(builder, ValRef::Local(one), ValRef::Local(neg_tanh_sq));
+            let tanh_x = emit_fixed_unary(emitter, StdTensorOp::Tanh, inputs[0].clone());
+            let tanh_sq = emit_fixed_mul(emitter, ValRef::Local(tanh_x), ValRef::Local(tanh_x));
+            let one = emit_one_like_fixed(emitter, inputs[0].clone());
+            let neg_tanh_sq = emit_fixed_neg(emitter, ValRef::Local(tanh_sq));
+            let coeff = emit_fixed_add(emitter, ValRef::Local(one), ValRef::Local(neg_tanh_sq));
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(coeff),
                 ct,
             ))]
@@ -466,7 +467,7 @@ pub fn transpose_tanh(
 }
 
 pub fn transpose_sqrt(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -476,9 +477,9 @@ pub fn transpose_sqrt(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let sqrt_x = emit_fixed_unary(builder, StdTensorOp::Sqrt, inputs[0].clone());
-            let two_sqrt_x = emit_fixed_add(builder, ValRef::Local(sqrt_x), ValRef::Local(sqrt_x));
-            let out = builder.add_op(
+            let sqrt_x = emit_fixed_unary(emitter, StdTensorOp::Sqrt, inputs[0].clone());
+            let two_sqrt_x = emit_fixed_add(emitter, ValRef::Local(sqrt_x), ValRef::Local(sqrt_x));
+            let out = emitter.add_op(
                 StdTensorOp::Div,
                 vec![ValRef::Local(ct), ValRef::Local(two_sqrt_x)],
                 OpMode::Linear {
@@ -492,7 +493,7 @@ pub fn transpose_sqrt(
 }
 
 pub fn transpose_rsqrt(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -502,12 +503,12 @@ pub fn transpose_rsqrt(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let rsqrt_x = emit_fixed_unary(builder, StdTensorOp::Rsqrt, inputs[0].clone());
-            let neg_rsqrt_x = emit_fixed_neg(builder, ValRef::Local(rsqrt_x));
-            let two_x = emit_fixed_add(builder, inputs[0].clone(), inputs[0].clone());
-            let coeff = emit_fixed_div(builder, ValRef::Local(neg_rsqrt_x), ValRef::Local(two_x));
+            let rsqrt_x = emit_fixed_unary(emitter, StdTensorOp::Rsqrt, inputs[0].clone());
+            let neg_rsqrt_x = emit_fixed_neg(emitter, ValRef::Local(rsqrt_x));
+            let two_x = emit_fixed_add(emitter, inputs[0].clone(), inputs[0].clone());
+            let coeff = emit_fixed_div(emitter, ValRef::Local(neg_rsqrt_x), ValRef::Local(two_x));
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(coeff),
                 ct,
             ))]
@@ -517,7 +518,7 @@ pub fn transpose_rsqrt(
 }
 
 pub fn transpose_pow(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -536,33 +537,33 @@ pub fn transpose_pow(
 
     if active_mask[0] {
         let pow_xy = emit_fixed_binary(
-            builder,
+            emitter,
             StdTensorOp::Pow,
             inputs[0].clone(),
             inputs[1].clone(),
         );
-        let pow_over_x = emit_fixed_div(builder, ValRef::Local(pow_xy), inputs[0].clone());
-        let coeff = emit_fixed_mul(builder, inputs[1].clone(), ValRef::Local(pow_over_x));
-        result[0] = Some(emit_linear_mul_fixed(builder, ValRef::Local(coeff), ct));
+        let pow_over_x = emit_fixed_div(emitter, ValRef::Local(pow_xy), inputs[0].clone());
+        let coeff = emit_fixed_mul(emitter, inputs[1].clone(), ValRef::Local(pow_over_x));
+        result[0] = Some(emit_linear_mul_fixed(emitter, ValRef::Local(coeff), ct));
     }
 
     if active_mask[1] {
-        let log_x = emit_fixed_unary(builder, StdTensorOp::Log, inputs[0].clone());
+        let log_x = emit_fixed_unary(emitter, StdTensorOp::Log, inputs[0].clone());
         let pow_xy = emit_fixed_binary(
-            builder,
+            emitter,
             StdTensorOp::Pow,
             inputs[0].clone(),
             inputs[1].clone(),
         );
-        let coeff = emit_fixed_mul(builder, ValRef::Local(log_x), ValRef::Local(pow_xy));
-        result[1] = Some(emit_linear_mul_fixed(builder, ValRef::Local(coeff), ct));
+        let coeff = emit_fixed_mul(emitter, ValRef::Local(log_x), ValRef::Local(pow_xy));
+        result[1] = Some(emit_linear_mul_fixed(emitter, ValRef::Local(coeff), ct));
     }
 
     result
 }
 
 pub fn transpose_expm1(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -572,9 +573,9 @@ pub fn transpose_expm1(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let exp_x = emit_fixed_unary(builder, StdTensorOp::Exp, inputs[0].clone());
+            let exp_x = emit_fixed_unary(emitter, StdTensorOp::Exp, inputs[0].clone());
             vec![Some(emit_linear_mul_fixed(
-                builder,
+                emitter,
                 ValRef::Local(exp_x),
                 ct,
             ))]
@@ -584,7 +585,7 @@ pub fn transpose_expm1(
 }
 
 pub fn transpose_log1p(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -594,9 +595,9 @@ pub fn transpose_log1p(
     }
     match cotangent_out[0] {
         Some(ct) => {
-            let one = emit_one_like_fixed(builder, inputs[0].clone());
-            let denom = emit_fixed_add(builder, inputs[0].clone(), ValRef::Local(one));
-            let out = builder.add_op(
+            let one = emit_one_like_fixed(emitter, inputs[0].clone());
+            let denom = emit_fixed_add(emitter, inputs[0].clone(), ValRef::Local(one));
+            let out = emitter.add_op(
                 StdTensorOp::Div,
                 vec![ValRef::Local(ct), ValRef::Local(denom)],
                 OpMode::Linear {

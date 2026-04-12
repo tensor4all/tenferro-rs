@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
 use super::context::{resolve_and_guard, ShapeGuardContext};
@@ -792,7 +793,7 @@ pub fn linearize_qr(
 }
 
 pub fn transpose_triangular_solve(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -812,8 +813,9 @@ pub fn transpose_triangular_solve(
 
     let mut result = vec![None, None];
     if active_mask[1] {
-        let conjugated_a = fixed_unary(builder, StdTensorOp::Conj, inputs[0].clone());
-        let out = builder.add_op(
+        let conjugated_a =
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let out = emitter.add_op(
             StdTensorOp::TriangularSolve {
                 left_side,
                 lower,
@@ -883,11 +885,11 @@ fn solve_in_graph(
 }
 
 fn fixed_unary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
-    builder.add_op(op, vec![input], OpMode::Primal)[0]
+    emitter.add_op(op, vec![input], OpMode::Primal)[0]
 }
 
 fn fixed_binary(
@@ -1133,12 +1135,12 @@ fn embed_diag_fixed(
 }
 
 fn transpose_matrix_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     rank: usize,
 ) -> LocalValId {
     fixed_unary(
-        builder,
+        emitter,
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
         },
@@ -1173,11 +1175,11 @@ fn adjoint_matrix_linear(
 }
 
 fn transpose_matrix_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     input: LocalValId,
     rank: usize,
 ) -> LocalValId {
-    builder.add_op(
+    emitter.add_op(
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
         },

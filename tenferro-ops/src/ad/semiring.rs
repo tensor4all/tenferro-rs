@@ -1,5 +1,6 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
 
@@ -116,7 +117,7 @@ pub fn transpose_add(cotangent_out: &[Option<LocalValId>]) -> Vec<Option<LocalVa
 }
 
 pub fn transpose_mul(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -135,8 +136,8 @@ pub fn transpose_mul(
 
     if active_mask[0] {
         let rhs_conj =
-            builder.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
-        let out = builder.add_op(
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
+        let out = emitter.add_op(
             StdTensorOp::Mul,
             vec![ValRef::Local(rhs_conj), ValRef::Local(ct)],
             OpMode::Linear {
@@ -148,8 +149,8 @@ pub fn transpose_mul(
 
     if active_mask[1] {
         let lhs_conj =
-            builder.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
-        let out = builder.add_op(
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let out = emitter.add_op(
             StdTensorOp::Mul,
             vec![ValRef::Local(lhs_conj), ValRef::Local(ct)],
             OpMode::Linear {
@@ -163,12 +164,12 @@ pub fn transpose_mul(
 }
 
 pub fn transpose_neg(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Neg,
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
@@ -182,12 +183,12 @@ pub fn transpose_neg(
 }
 
 pub fn transpose_conj(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = builder.add_op(
+            let out = emitter.add_op(
                 StdTensorOp::Conj,
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {

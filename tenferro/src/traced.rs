@@ -29,7 +29,7 @@ static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
 
 pub type TracedTensorId = u64;
 
-fn next_input_key() -> TensorInputKey {
+pub(crate) fn next_input_key() -> TensorInputKey {
     TensorInputKey::User {
         id: NEXT_INPUT_ID.fetch_add(1, Ordering::Relaxed),
     }
