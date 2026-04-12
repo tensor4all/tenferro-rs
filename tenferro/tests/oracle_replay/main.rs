@@ -121,12 +121,11 @@ fn run_oracle_replay(registered_shard_index: usize, forced_shard_count: Option<u
         Err(err) => panic!("{err}"),
     };
 
-    let manifest = build_replay_manifest(&case_files, op_filter.as_deref(), case_limit);
-    stats.failed.extend(manifest.load_failures);
+    let entry_count_estimate = count_replay_entries(&case_files, op_filter.as_deref(), case_limit);
 
     let active_shard_count = match forced_shard_count {
-        Some(count) => count.min(manifest.entries.len().max(1)),
-        None => match resolve_active_shard_count(manifest.entries.len()) {
+        Some(count) => count.min(entry_count_estimate.max(1)),
+        None => match resolve_active_shard_count(entry_count_estimate) {
             Ok(count) => count,
             Err(err) => panic!("{err}"),
         },
@@ -134,6 +133,9 @@ fn run_oracle_replay(registered_shard_index: usize, forced_shard_count: Option<u
     if registered_shard_index >= active_shard_count {
         return;
     }
+
+    let manifest = build_replay_manifest(&case_files, op_filter.as_deref(), case_limit);
+    stats.failed.extend(manifest.load_failures);
 
     let backend_threads = oracle_replay_backend_threads(active_shard_count);
 
@@ -581,6 +583,32 @@ fn partition_weighted_indices(weights: &[usize], shard_count: usize) -> Vec<Rang
         ranges.push(weights.len()..weights.len());
     }
     ranges
+}
+
+fn count_replay_entries(
+    case_files: &[(String, std::path::PathBuf)],
+    op_filter: Option<&str>,
+    case_limit: usize,
+) -> usize {
+    let mut total = 0usize;
+    for (op_name, path) in case_files {
+        if op_filter.is_some_and(|filter| op_name != filter) {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in contents.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            total += 1;
+            if total >= case_limit {
+                return total;
+            }
+        }
+    }
+    total
 }
 
 fn build_replay_manifest(
