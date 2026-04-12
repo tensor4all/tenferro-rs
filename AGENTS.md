@@ -37,7 +37,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 - Dense tensor types with CPU/GPU placement metadata
 - Graph-based traced execution via `TracedTensor` + `Engine`
 - High-level einsum with N-ary contraction tree optimization
-- First-order automatic differentiation (VJP/JVP) for the standard dense numeric path
+- Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
 - StableHLO-style lowering plus an execution IR for backend dispatch
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
@@ -317,7 +317,7 @@ of any tensor type. `chainrules` provides engine-independent scalar AD rules,
 and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
 `tenferro-tensor` owns the concrete dense runtime value types and backend
 execution surface. `tenferro-ops/src/ad/` is the semantic source of truth for
-first-order AD rules. `tenferro` owns traced graph construction, lowering, and
+AD rules. `tenferro` owns traced graph construction, lowering, and
 public evaluation APIs.
 
 ## AI Workflow Scripts

@@ -15,7 +15,7 @@
 ## Rule Source Of Truth
 
 - `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` (in `tenferro-ops/src/ad/`)
-  are the semantic source of truth for first-order AD.
+  are the semantic source of truth for AD rules.
 - These are graph-level rules that emit ops into a `FragmentBuilder`.
   `tidu::differentiate` calls `linearize`; `tidu::transpose` calls `transpose_rule`.
 - Reference JAX's implementations (`jax/_src/lax/lax.py`, `jax/_src/lax/linalg.py`)
