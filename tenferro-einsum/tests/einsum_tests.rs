@@ -3770,6 +3770,61 @@ fn einsum_frule_parenthesized_no_tangents_produces_zeros() {
 }
 
 #[test]
+fn einsum_hvp_binary_trace_ii_j_cross_term_delta() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let v = Tensor::<f64>::from_slice(&[5.0, 6.0], &[2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], COL).unwrap();
+    let dv = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii,j->j",
+        &[&a, &v],
+        &[Some(&da), Some(&dv)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 2);
+
+    let (ref grad_a, ref hvp_a) = hvps[0];
+    let (ref grad_v, ref hvp_v) = hvps[1];
+
+    assert_eq!(grad_a.dims(), &[2, 2]);
+    assert_eq!(hvp_a.dims(), &[2, 2]);
+    assert_eq!(grad_v.dims(), &[2]);
+    assert_eq!(hvp_v.dims(), &[2]);
+
+    // grad_A = sum_j(v[j]*cot[j]) * I = (5+6)*I = 11*I
+    let ga = to_col_major_vec(grad_a);
+    assert!((ga[0] - 11.0).abs() < 1e-10, "grad_a[0,0]={}", ga[0]);
+    assert!((ga[3] - 11.0).abs() < 1e-10, "grad_a[1,1]={}", ga[3]);
+
+    // grad_v = trace(A) * cot = 5 * [1,1] = [5,5]
+    let gv = to_col_major_vec(grad_v);
+    assert!((gv[0] - 5.0).abs() < 1e-10, "grad_v[0]={}", gv[0]);
+    assert!((gv[1] - 5.0).abs() < 1e-10, "grad_v[1]={}", gv[1]);
+
+    // hvp_A = (sum_j cot_tan[j]*v[j]) * I + (sum_j cot[j]*dv[j]) * I
+    //       = (2*5+3*6)*I + (1*1+1*1)*I = 28*I + 2*I = 30*I
+    let ha = to_col_major_vec(hvp_a);
+    assert!((ha[0] - 30.0).abs() < 1e-10, "hvp_a[0,0]={}", ha[0]);
+    assert!((ha[3] - 30.0).abs() < 1e-10, "hvp_a[1,1]={}", ha[3]);
+
+    // hvp_v = trace(A)*cot_tan + trace(da)*cot
+    //       = 5*[2,3] + 0.2*[1,1] = [10.2, 15.2]
+    let hv = to_col_major_vec(hvp_v);
+    assert!((hv[0] - 10.2).abs() < 1e-10, "hvp_v[0]={}", hv[0]);
+    assert!((hv[1] - 15.2).abs() < 1e-10, "hvp_v[1]={}", hv[1]);
+}
+
+#[test]
 fn einsum_rrule_partial_trace_with_free_index_delta() {
     let mut ctx = CpuContext::new(1);
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
