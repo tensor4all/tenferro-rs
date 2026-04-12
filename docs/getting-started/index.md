@@ -1,14 +1,18 @@
 # Getting Started
 
-tenferro gives you a lazy tensor handle, an execution engine, and a small set of familiar tensor-building blocks. If you already know PyTorch or JAX, the main difference is that you build a computation first and explicitly evaluate it later.
+tenferro supports both eager tensor execution for direct computation and lazy
+traced tensors for automatic differentiation. If you already know NumPy,
+PyTorch, or JAX, choose the layer that matches the workflow you need.
 
 ## Installation
 
-Use a local checkout while the crate is still evolving:
+Use local checkouts while the crates are still evolving:
 
 ```toml
 [dependencies]
 tenferro = { path = "/path/to/tenferro-rs/tenferro" }
+tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor" }
+tenferro-einsum = { path = "/path/to/tenferro-rs/tenferro-einsum" }
 ```
 
 Or switch to crates.io once published:
@@ -16,15 +20,41 @@ Or switch to crates.io once published:
 ```toml
 [dependencies]
 tenferro = "..."
+tenferro-tensor = "..."
+tenferro-einsum = "..."
 ```
 
-## Hello einsum
+## Hello eager
+
+This is the simplest way to use tenferro: direct computation without tracing or
+AD, similar to NumPy.
+
+```rust
+use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+
+let mut ctx = CpuBackend::new();
+
+// Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
+let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+// SVD
+let (_u, s, _vt) = a.svd(&mut ctx).unwrap();
+assert_eq!(s.shape(), &[2]);
+
+// Matrix multiply
+let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let c = a.matmul(&b, &mut ctx).unwrap();
+assert_eq!(c.shape(), &[2, 2]);
+```
+
+## Hello einsum (lazy)
 
 This is the tenferro equivalent of `torch.einsum("ij,jk->ik", a, b)` or `jnp.einsum("ij,jk->ik", a, b)`.
 
-```rust
+```rust,ignore
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
+// Column-major buffers: `a` has columns [1, 2], [3, 4], [5, 6].
 let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = TracedTensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
@@ -40,7 +70,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
 This is the tenferro equivalent of differentiating `sum(x * x)` in PyTorch or JAX.
 
-```rust
+```rust,ignore
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
 let x = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -58,6 +88,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
 - [Core concepts](./core-concepts.md)
 - [PyTorch and JAX mapping](./pytorch-jax-mapping.md)
+- [Eager operations guide](../guides/eager-operations.md)
 - [Tensor operations guide](../guides/tensor-operations.md)
 - [Einsum guide](../guides/einsum.md)
 - [Autodiff guide](../guides/autodiff.md)
