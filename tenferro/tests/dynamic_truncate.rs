@@ -236,9 +236,6 @@ fn pad_to_match_hvp_correct() {
     let hv_data = get_f64_data(hv.eval(&mut engine).unwrap());
 
     for (i, val) in hv_data.iter().enumerate() {
-        assert!(
-            (*val - 2.0).abs() < TOL,
-            "HVP[{i}]={val}, expected=2.0"
-        );
+        assert!((*val - 2.0).abs() < TOL, "HVP[{i}]={val}, expected=2.0");
     }
 }
