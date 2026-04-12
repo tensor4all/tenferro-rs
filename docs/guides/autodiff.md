@@ -1,10 +1,11 @@
 # Autodiff
 
-tenferro exposes first-order autodiff directly on `TracedTensor`. If you know PyTorch or JAX, the mental model is:
+tenferro exposes autodiff directly on `TracedTensor`. If you know PyTorch or JAX, the mental model is:
 
 - `grad` for scalar-loss reverse mode
 - `vjp` for vector-Jacobian products
 - `jvp` for Jacobian-vector products
+- Higher-order AD via composition (e.g., `jvp(grad(f))` for Hessian-vector products)
 
 ## Reverse-mode gradient with `grad`
 

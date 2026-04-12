@@ -5,8 +5,8 @@ Traced tensor frontend for the `tenferro-rs` v2 workspace.
 `tenferro` is the main user-facing crate for standard dense numeric computation.
 It owns the lazy graph surface (`TracedTensor`), the execution engine
 (`Engine<B>`), StableHLO-style lowering, execution-IR compilation, public
-einsum helpers, public multi-output linalg helpers, and first-order AD entry
-points.
+einsum helpers, public multi-output linalg helpers, and AD entry points
+(VJP/JVP/HVP).
 
 ## Public Surface
 

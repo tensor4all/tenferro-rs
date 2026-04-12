@@ -11,7 +11,7 @@ For contributors, internal crate APIs are also available in the
 ## Workspace Crates
 
 - [tenferro](../rustdoc/tenferro/index.html): traced frontend, execution engine, public
-  einsum API, public linalg API, and first-order AD entry points
+  einsum API, public linalg API, and AD entry points (VJP/JVP/HVP)
 - [tenferro-tensor](../rustdoc/tenferro_tensor/index.html): concrete dense `Tensor` /
   `TypedTensor` values, backend traits, CPU backend, and GPU backend stubs
 - [tenferro-einsum](../rustdoc/tenferro_einsum/index.html): subscripts, contraction trees,
