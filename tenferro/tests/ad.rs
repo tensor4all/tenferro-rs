@@ -897,6 +897,7 @@ fn grad_from_fragment_with_inputs_and_cotangent(
         std::slice::from_ref(&input_key),
         0,
         &mut ad_ctx,
+        &HashMap::new(),
     );
     let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
@@ -963,6 +964,7 @@ fn jvp_from_fragment_with_inputs(
         std::slice::from_ref(&input_key),
         0,
         &mut ad_ctx,
+        &HashMap::new(),
     );
     let tangent_key = linear.tangent_outputs[0]
         .map(|id| linear.fragment.vals()[id].key.clone())

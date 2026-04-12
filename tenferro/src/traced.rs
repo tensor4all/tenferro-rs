@@ -370,6 +370,7 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
+            &HashMap::new(),
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
@@ -415,6 +416,7 @@ impl TracedTensor {
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
+            &HashMap::new(),
         );
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs

@@ -49,3 +49,6 @@ ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "b361eac" }
+
+[patch."https://github.com/tensor4all/tidu-rs.git"]
+tidu = { path = "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/tidu-rs" }
