@@ -33,7 +33,8 @@ use tenferro_tensor::TensorBackend;
 
 use super::engine::Engine;
 use super::error::{Error, Result};
-use super::traced::{next_traced_id, TracedTensor};
+use super::sym_dim::SymDim;
+use super::traced::{concrete_shape, next_traced_id, try_concrete_shape, TracedTensor};
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
@@ -258,20 +259,13 @@ pub fn einsum_with<B: TensorBackend>(
             inputs.len()
         )));
     }
-    if inputs.iter().any(|tensor| tensor.shape_hint.is_none()) {
+    if inputs
+        .iter()
+        .any(|tensor| try_concrete_shape(tensor).is_none())
+    {
         return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
     }
-    let shapes: Vec<Vec<usize>> = inputs
-        .iter()
-        .map(|t| {
-            t.shape_hint.as_ref().cloned().unwrap_or_else(|| {
-                panic!(
-                    "missing concrete shape hint for einsum input traced tensor {}",
-                    t.id
-                )
-            })
-        })
-        .collect();
+    let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| concrete_shape(t)).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
 
     match optimize {
@@ -501,7 +495,7 @@ fn build_traced_from_tree(
                 fragment,
                 val: result_local,
                 data: None,
-                shape_hint: Some(out_shape),
+                shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
                 inputs_map: Arc::new(merged),
                 extra_roots,
             }
@@ -518,7 +512,7 @@ fn build_traced_from_tree(
                         fragment: inputs[i].fragment.clone(),
                         val: inputs[i].val,
                         data: inputs[i].data.clone(),
-                        shape_hint: Some(out_shape),
+                        shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
                         inputs_map: inputs[i].inputs_map.clone(),
                         extra_roots: inputs[i].extra_roots.clone(),
                     };
