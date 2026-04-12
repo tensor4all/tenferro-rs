@@ -1,6 +1,8 @@
 use num_complex::{Complex, Complex32, Complex64};
 use num_traits::{One, Zero};
 
+use crate::{DotGeneralConfig, TensorBackend};
+
 /// Memory location for tensor storage.
 ///
 /// # Examples
@@ -361,6 +363,23 @@ impl<T: Clone> TypedTensor<T> {
         }
     }
 
+    /// View the tensor data as a flat slice.
+    ///
+    /// This is an alias for `host_data()` for API consistency with
+    /// `Tensor::as_slice`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.as_slice(), &[1.0, 2.0]);
+    /// ```
+    pub fn as_slice(&self) -> &[T] {
+        self.host_data()
+    }
+
     /// Mutably borrow the host buffer.
     ///
     /// # Examples
@@ -489,6 +508,23 @@ pub(crate) use dispatch_binary;
 pub(crate) use dispatch_tensor;
 
 impl Tensor {
+    /// Create a tensor from a shape and flat data.
+    ///
+    /// This is the `Tensor`-level equivalent of `TypedTensor::<T>::from_vec`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// assert_eq!(t.shape(), &[2, 3]);
+    /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// ```
+    pub fn new<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        T::into_tensor(shape, data)
+    }
+
     /// Tensor shape.
     ///
     /// # Examples
@@ -543,11 +579,360 @@ impl Tensor {
     pub fn as_slice<T: TensorScalar>(&self) -> Option<&[T]> {
         T::try_as_slice(self)
     }
+
+    /// Singular value decomposition: `A = U diag(S) Vt`.
+    ///
+    /// Returns `(U, S, Vt)` using the thin/economy SVD.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let (u, s, vt) = a.svd(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(u.shape(), &[3, 2]);
+    /// assert_eq!(s.shape(), &[2]);
+    /// assert_eq!(vt.shape(), &[2, 2]);
+    /// ```
+    pub fn svd(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_three("svd", exec.svd(self)?))
+    }
+
+    /// QR decomposition: `A = Q R`.
+    ///
+    /// Returns `(Q, R)` using the thin/economy QR decomposition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let (q, r) = a.qr(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(q.shape(), &[3, 2]);
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// ```
+    pub fn qr(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_two("qr", exec.qr(self)?))
+    }
+
+    /// LU decomposition with partial pivoting: `P A = L U`.
+    ///
+    /// Returns `(P, L, U, parity)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
+    /// let (p, l, u, parity) = a.lu(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(p.shape(), &[2, 2]);
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// assert_eq!(u.shape(), &[2, 2]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
+    /// ```
+    pub fn lu(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self, Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_four("lu", exec.lu(self)?))
+    }
+
+    /// Cholesky decomposition: `A = L L^T` or `A = L L^H` for complex inputs.
+    ///
+    /// Returns the lower-triangular factor `L`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let l = a.cholesky(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// ```
+    pub fn cholesky(&self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.cholesky(self))
+    }
+
+    /// Symmetric or Hermitian eigendecomposition: `A = V diag(W) V^T`.
+    ///
+    /// Returns `(eigenvalues, eigenvectors)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let (w, v) = a.eigh(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(w.shape(), &[2]);
+    /// assert_eq!(v.shape(), &[2, 2]);
+    /// ```
+    pub fn eigh(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_two("eigh", exec.eigh(self)?))
+    }
+
+    /// General eigendecomposition.
+    ///
+    /// Returns `(eigenvalues, eigenvectors)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
+    /// let (w, v) = a.eig(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(w.shape(), &[2]);
+    /// assert_eq!(v.shape(), &[2, 2]);
+    /// ```
+    pub fn eig(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_two("eig", exec.eig(self)?))
+    }
+
+    /// Solve `A x = b` for `x`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    /// let b = Tensor::new(vec![2, 1], vec![1.0_f64, 0.0]);
+    /// let x = a.solve(&b, &mut ctx).unwrap();
+    ///
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// ```
+    pub fn solve(&self, b: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.solve(self, b)
+    }
+
+    /// Solve a triangular system.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    /// let b = Tensor::new(vec![2, 1], vec![2.0_f64, 7.0]);
+    /// let x = a
+    ///     .triangular_solve(&b, true, true, false, false, &mut ctx)
+    ///     .unwrap();
+    ///
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// ```
+    pub fn triangular_solve(
+        &self,
+        b: &Self,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+        ctx: &mut impl TensorBackend,
+    ) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| {
+            exec.triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+        })
+    }
+
+    /// Elementwise addition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let c = a.add(&b, &mut ctx).unwrap();
+    ///
+    /// assert_eq!(c.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
+    /// ```
+    pub fn add(&self, other: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.add(self, other))
+    }
+
+    /// Elementwise multiplication.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let c = a.mul(&b, &mut ctx).unwrap();
+    ///
+    /// assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
+    /// ```
+    pub fn mul(&self, other: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.mul(self, other))
+    }
+
+    /// Negation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![3], vec![1.0_f64, -2.0, 3.0]);
+    /// let b = a.neg(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(b.as_slice::<f64>().unwrap(), &[-1.0, 2.0, -3.0]);
+    /// ```
+    pub fn neg(&self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.neg(self))
+    }
+
+    /// Transpose with an explicit permutation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let b = a.transpose(&[1, 0], &mut ctx).unwrap();
+    ///
+    /// assert_eq!(b.shape(), &[2, 2]);
+    /// assert_eq!(b.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    pub fn transpose(&self, perm: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.transpose(self, perm))
+    }
+
+    /// Reshape to a new shape with the same number of elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let b = a.reshape(&[3, 2], &mut ctx).unwrap();
+    ///
+    /// assert_eq!(b.shape(), &[3, 2]);
+    /// assert_eq!(b.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// ```
+    pub fn reshape(&self, shape: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.reshape(self, shape))
+    }
+
+    /// Reduce sum over the specified axes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let b = a.reduce_sum(&[1], &mut ctx).unwrap();
+    ///
+    /// assert_eq!(b.shape(), &[2]);
+    /// assert_eq!(b.as_slice::<f64>().unwrap(), &[9.0, 12.0]);
+    /// ```
+    pub fn reduce_sum(&self, axes: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.with_exec_session(|exec| exec.reduce_sum(self, axes))
+    }
+
+    /// Matrix multiplication for rank-2 tensors.
+    ///
+    /// This is a convenience wrapper around `dot_general`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let c = a.matmul(&b, &mut ctx).unwrap();
+    ///
+    /// assert_eq!(c.shape(), &[2, 2]);
+    /// assert_eq!(c.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+    /// ```
+    pub fn matmul(&self, other: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: self.shape().len(),
+            rhs_rank: other.shape().len(),
+        };
+        ctx.with_exec_session(|exec| exec.dot_general(self, other, &config))
+    }
 }
 
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
     for i in 0..shape.len() {
         out[i] = flat % shape[i];
         flat /= shape[i];
+    }
+}
+
+fn invalid_output_count(op: &'static str, expected: usize, actual: usize) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: format!("expected {expected} output tensors, got {actual}"),
+    }
+}
+
+fn unpack_two(op: &'static str, results: Vec<Tensor>) -> crate::Result<(Tensor, Tensor)> {
+    let actual = results.len();
+    let mut iter = results.into_iter();
+    match (iter.next(), iter.next(), iter.next()) {
+        (Some(a), Some(b), None) => Ok((a, b)),
+        _ => Err(invalid_output_count(op, 2, actual)),
+    }
+}
+
+fn unpack_three(op: &'static str, results: Vec<Tensor>) -> crate::Result<(Tensor, Tensor, Tensor)> {
+    let actual = results.len();
+    let mut iter = results.into_iter();
+    match (iter.next(), iter.next(), iter.next(), iter.next()) {
+        (Some(a), Some(b), Some(c), None) => Ok((a, b, c)),
+        _ => Err(invalid_output_count(op, 3, actual)),
+    }
+}
+
+fn unpack_four(
+    op: &'static str,
+    results: Vec<Tensor>,
+) -> crate::Result<(Tensor, Tensor, Tensor, Tensor)> {
+    let actual = results.len();
+    let mut iter = results.into_iter();
+    match (
+        iter.next(),
+        iter.next(),
+        iter.next(),
+        iter.next(),
+        iter.next(),
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), None) => Ok((a, b, c, d)),
+        _ => Err(invalid_output_count(op, 4, actual)),
     }
 }

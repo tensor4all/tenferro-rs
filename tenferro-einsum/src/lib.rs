@@ -36,12 +36,14 @@
 //! ```
 
 pub mod builder;
+mod eager;
 pub mod planning;
 pub mod syntax;
 pub(crate) mod util;
 
 // Re-exports for convenience
 pub use builder::build_einsum_fragment;
+pub use eager::eager_einsum;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
