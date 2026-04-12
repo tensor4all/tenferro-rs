@@ -4,8 +4,7 @@
   "exclude": [
     "tenferro/src/error.rs",
     "tenferro/src/lib.rs",
-    "tenferro-tensor/src/cpu/affinity.rs",
-    "tenferro/src/eager_exec.rs"
+    "tenferro-tensor/src/cpu/affinity.rs"
   ],
   "files": {
     "tenferro-einsum/src/lib.rs": 65,
