@@ -169,3 +169,75 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
     assert!(y.grad().is_none());
     assert!(z.grad().is_none());
 }
+
+#[test]
+fn eager_structural_primal_ops_transpose_and_reshape() {
+    let x = EagerTensor::from_tensor(Tensor::new(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let transposed = x.transpose(&[1, 0]).unwrap();
+    assert_eq!(transposed.data().shape(), &[3, 2]);
+    assert_close_slice(
+        f64_data(transposed.data()),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
+        TOL,
+    );
+
+    let reshaped = x.reshape(&[6]).unwrap();
+    assert_eq!(reshaped.data().shape(), &[6]);
+    assert_close_slice(
+        f64_data(reshaped.data()),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        TOL,
+    );
+}
+
+#[test]
+fn eager_elementwise_primal_ops_div_abs_and_sin() {
+    let x = EagerTensor::from_tensor(Tensor::new(vec![3], vec![8.0_f64, -6.0, 9.0]));
+    let y = EagerTensor::from_tensor(Tensor::new(vec![3], vec![2.0_f64, 3.0, 3.0]));
+
+    let div = x.div(&y).unwrap();
+    assert_close_slice(f64_data(div.data()), &[4.0, -2.0, 3.0], TOL);
+
+    let abs = x.abs().unwrap();
+    assert_close_slice(f64_data(abs.data()), &[8.0, 6.0, 9.0], TOL);
+
+    let angles = EagerTensor::from_tensor(Tensor::new(
+        vec![2],
+        vec![0.0_f64, std::f64::consts::FRAC_PI_2],
+    ));
+    let sin = angles.sin().unwrap();
+    assert_close_slice(f64_data(sin.data()), &[0.0, 1.0], TOL);
+}
+
+#[test]
+fn eager_diagonal_primal_ops_extract_diag_and_tril() {
+    let matrix = EagerTensor::from_tensor(Tensor::new(
+        vec![3, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+    ));
+    let diag = matrix.extract_diag(0, 1).unwrap();
+    assert_close_slice(f64_data(diag.data()), &[1.0, 5.0, 9.0], TOL);
+
+    let lower = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]))
+        .tril(0)
+        .unwrap();
+    assert_close_slice(f64_data(lower.data()), &[1.0, 2.0, 0.0, 4.0], TOL);
+}
+
+#[test]
+fn eager_reduction_primal_ops_reduce_prod() {
+    let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+
+    let prod = x.reduce_prod(&[0, 1]).unwrap();
+    assert_close_slice(f64_data(prod.data()), &[24.0], TOL);
+
+    let max = x.reduce_max(&[0, 1]).unwrap();
+    assert_close_slice(f64_data(max.data()), &[4.0], TOL);
+
+    let min = x.reduce_min(&[0, 1]).unwrap();
+    assert_close_slice(f64_data(min.data()), &[1.0], TOL);
+}
