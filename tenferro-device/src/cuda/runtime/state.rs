@@ -98,7 +98,24 @@ pub struct CudaBuffer<T> {
     _marker: PhantomData<T>,
 }
 
+/// # Safety
+///
+/// `CudaBuffer<T>` owns a single CUDA device pointer (`ptr`) backed by an
+/// `Arc<CudaContext>`. The context handle is itself `Send + Sync`. CUDA device
+/// memory is not accessible from the host, so transferring the buffer across
+/// threads does not create data races — the pointer is an opaque handle that
+/// can only be used through the CUDA runtime API, which serialises access to
+/// the same device. The `T: Send` bound ensures the element type is safe to
+/// move between threads.
 unsafe impl<T: Send> Send for CudaBuffer<T> {}
+
+/// # Safety
+///
+/// Shared references to `CudaBuffer<T>` only grant read access to metadata
+/// (`len`, `device_id`). The raw device pointer is not dereferenceable from
+/// the host, and all CUDA operations on the same context are serialised by
+/// the driver. The `T: Sync` bound ensures the element type permits concurrent
+/// reads.
 unsafe impl<T: Sync> Sync for CudaBuffer<T> {}
 
 impl<T> CudaBuffer<T> {
