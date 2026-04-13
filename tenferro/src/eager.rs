@@ -570,15 +570,18 @@ pub(crate) fn saved_forward_values_multi(
     op: &StdTensorOp,
     input_keys: &[GlobalValKey<StdTensorOp>],
     inputs: &[Arc<Tensor>],
-    output_keys: &[GlobalValKey<StdTensorOp>],
+    num_outputs: usize,
     outputs: &[Arc<Tensor>],
 ) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
-    let mut saved = HashMap::with_capacity(input_keys.len() + output_keys.len());
+    let mut saved = HashMap::with_capacity(input_keys.len() + num_outputs);
     for (key, value) in input_keys.iter().zip(inputs.iter()) {
         saved.insert(key.clone(), Arc::clone(value));
     }
-    for (slot, (_key, output)) in output_keys.iter().zip(outputs.iter()).enumerate() {
-        saved.insert(derived_output_key(op, input_keys, slot), Arc::clone(output));
+    for slot in 0..num_outputs {
+        saved.insert(
+            derived_output_key(op, input_keys, slot),
+            Arc::clone(&outputs[slot]),
+        );
     }
     saved
 }

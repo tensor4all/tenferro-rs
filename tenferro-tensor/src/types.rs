@@ -153,6 +153,18 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Real-valued counterpart of this scalar type.
     type Real: TensorScalar;
 
+    /// The [`DType`] tag corresponding to this scalar type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar};
+    ///
+    /// assert_eq!(f64::dtype(), DType::F64);
+    /// assert_eq!(f32::dtype(), DType::F32);
+    /// ```
+    fn dtype() -> DType;
+
     /// Wrap typed data into a [`Tensor`] enum variant.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
 
@@ -188,6 +200,10 @@ mod private {
 impl TensorScalar for f64 {
     type Real = f64;
 
+    fn dtype() -> DType {
+        DType::F64
+    }
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::F64(TypedTensor::from_vec(shape, data))
     }
@@ -209,6 +225,10 @@ impl TensorScalar for f64 {
 
 impl TensorScalar for f32 {
     type Real = f32;
+
+    fn dtype() -> DType {
+        DType::F32
+    }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::F32(TypedTensor::from_vec(shape, data))
@@ -232,6 +252,10 @@ impl TensorScalar for f32 {
 impl TensorScalar for Complex64 {
     type Real = f64;
 
+    fn dtype() -> DType {
+        DType::C64
+    }
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::C64(TypedTensor::from_vec(shape, data))
     }
@@ -253,6 +277,10 @@ impl TensorScalar for Complex64 {
 
 impl TensorScalar for Complex32 {
     type Real = f32;
+
+    fn dtype() -> DType {
+        DType::C32
+    }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::C32(TypedTensor::from_vec(shape, data))
