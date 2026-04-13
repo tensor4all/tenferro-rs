@@ -84,6 +84,16 @@ impl DotGeneralConfig {
     /// };
     /// config.validate_dims().unwrap();
     /// ```
+    fn check_no_duplicates(dims: &[usize], label: &str) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for &d in dims {
+            if !seen.insert(d) {
+                return Err(format!("{} contains duplicate dim {}", label, d));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_dims(&self) -> Result<(), String> {
         for &d in &self.lhs_contracting_dims {
             if d >= self.lhs_rank {
@@ -117,10 +127,14 @@ impl DotGeneralConfig {
                 ));
             }
         }
+        Self::check_no_duplicates(&self.lhs_contracting_dims, "lhs_contracting_dims")?;
+        Self::check_no_duplicates(&self.rhs_contracting_dims, "rhs_contracting_dims")?;
+        Self::check_no_duplicates(&self.lhs_batch_dims, "lhs_batch_dims")?;
+        Self::check_no_duplicates(&self.rhs_batch_dims, "rhs_batch_dims")?;
         for &d in &self.lhs_contracting_dims {
             if self.lhs_batch_dims.contains(&d) {
                 return Err(format!(
-                    "lhs axis {} appears in both contracting and batch dims",
+                    "lhs dim {} appears in both contracting and batch dims",
                     d
                 ));
             }
@@ -128,7 +142,7 @@ impl DotGeneralConfig {
         for &d in &self.rhs_contracting_dims {
             if self.rhs_batch_dims.contains(&d) {
                 return Err(format!(
-                    "rhs axis {} appears in both contracting and batch dims",
+                    "rhs dim {} appears in both contracting and batch dims",
                     d
                 ));
             }

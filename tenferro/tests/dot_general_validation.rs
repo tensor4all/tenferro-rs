@@ -205,6 +205,109 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
 }
 
 #[test]
+fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
+    assert_panic_contains(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![5],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        "out of bounds",
+    );
+}
+
+#[test]
+fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
+    assert_panic_contains(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![5],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        "out of bounds",
+    );
+}
+
+#[test]
+fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
+    assert_panic_contains(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![5],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        "out of bounds",
+    );
+}
+
+#[test]
+fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
+    assert_panic_contains(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![0],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        "both contracting and batch",
+    );
+}
+
+#[test]
+fn traced_dot_general_rejects_duplicate_contracting_dims() {
+    assert_panic_contains(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![0, 0],
+            rhs_contracting_dims: vec![0, 1],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        "duplicate dim",
+    );
+}
+
+#[test]
+fn dot_general_config_validate_dims_rhs_out_of_bounds() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![5],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = config.validate_dims().unwrap_err();
+    assert!(err.contains("out of bounds"));
+}
+
+#[test]
+fn dot_general_config_validate_dims_duplicate_batch_dims() {
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![2],
+        rhs_contracting_dims: vec![2],
+        lhs_batch_dims: vec![0, 0],
+        rhs_batch_dims: vec![1, 1],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = config.validate_dims().unwrap_err();
+    assert!(err.contains("duplicate dim"));
+}
+
+#[test]
 fn eager_dot_general_rejects_stale_lhs_rank() {
     use tenferro::EagerTensor;
 
