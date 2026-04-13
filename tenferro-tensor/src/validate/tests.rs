@@ -344,7 +344,7 @@ complex_singular_tests!(c32_tests, Complex32, f32);
 complex_singular_tests!(c64_tests, Complex64, f64);
 
 #[test]
-fn f64_batched_error_includes_batch_index() {
+fn f64_batched_error_includes_batch_index_and_position() {
     let t =
         TypedTensor::<f64>::from_vec(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 0.0]);
     let err = check_singular_diagonal(&t).unwrap_err();
@@ -357,13 +357,13 @@ fn f64_batched_error_includes_batch_index() {
         "expected batch index in error message, got: {msg}"
     );
     assert!(
-        msg.contains("position"),
-        "expected diagonal position in error message, got: {msg}"
+        msg.contains("position [1,1]"),
+        "expected exact diagonal position in error message, got: {msg}"
     );
 }
 
 #[test]
-fn f64_unbatched_error_omits_batch_index() {
+fn f64_unbatched_error_omits_batch_index_and_includes_position() {
     let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
     let err = check_singular_diagonal(&t).unwrap_err();
     let msg = match &err {
@@ -375,8 +375,111 @@ fn f64_unbatched_error_omits_batch_index() {
         "unbatched error should not mention batch, got: {msg}"
     );
     assert!(
-        msg.contains("position"),
-        "expected diagonal position in error message, got: {msg}"
+        msg.contains("position [0,0]"),
+        "expected exact diagonal position in error message, got: {msg}"
+    );
+}
+
+#[test]
+fn f64_unbatched_error_second_diagonal_reports_correct_position() {
+    let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![3.0, 1.0, 1.0, 0.0]);
+    let err = check_singular_diagonal(&t).unwrap_err();
+    let msg = match &err {
+        Error::BackendFailure { message, .. } => message.clone(),
+        _ => unreachable!(),
+    };
+    assert!(
+        msg.contains("position [1,1]"),
+        "expected second diagonal position in error message, got: {msg}"
+    );
+}
+
+#[test]
+fn f64_batched_error_first_batch_reports_correct_position() {
+    let t =
+        TypedTensor::<f64>::from_vec(vec![2, 2, 2], vec![0.0, 1.0, 1.0, 2.0, 3.0, 0.0, 0.0, 4.0]);
+    let err = check_singular_diagonal(&t).unwrap_err();
+    let msg = match &err {
+        Error::BackendFailure { message, .. } => message.clone(),
+        _ => unreachable!(),
+    };
+    assert!(
+        msg.contains("batch 0"),
+        "expected batch 0 in error message, got: {msg}"
+    );
+    assert!(
+        msg.contains("position [0,0]"),
+        "expected exact diagonal position in error message, got: {msg}"
+    );
+}
+
+#[test]
+fn f32_unbatched_error_includes_exact_position() {
+    let t = TypedTensor::<f32>::from_vec(vec![2, 2], vec![0.0f32, 1.0, 1.0, 0.0]);
+    let err = check_singular_diagonal(&t).unwrap_err();
+    let msg = match &err {
+        Error::BackendFailure { message, .. } => message.clone(),
+        _ => unreachable!(),
+    };
+    assert!(
+        msg.contains("position [0,0]"),
+        "expected exact diagonal position in error message, got: {msg}"
+    );
+    assert!(
+        !msg.contains("batch"),
+        "unbatched f32 error should not mention batch, got: {msg}"
+    );
+}
+
+#[test]
+fn c64_unbatched_error_includes_exact_position() {
+    let t = TypedTensor::<Complex64>::from_vec(
+        vec![2, 2],
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    );
+    let err = check_singular_diagonal(&t).unwrap_err();
+    let msg = match &err {
+        Error::BackendFailure { message, .. } => message.clone(),
+        _ => unreachable!(),
+    };
+    assert!(
+        msg.contains("position [0,0]"),
+        "expected exact position in c64 error, got: {msg}"
+    );
+    assert!(
+        !msg.contains("batch"),
+        "unbatched c64 error should not mention batch, got: {msg}"
+    );
+}
+
+#[test]
+fn c32_unbatched_error_includes_exact_position() {
+    let t = TypedTensor::<Complex32>::from_vec(
+        vec![2, 2],
+        vec![
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 0.0),
+        ],
+    );
+    let err = check_singular_diagonal(&t).unwrap_err();
+    let msg = match &err {
+        Error::BackendFailure { message, .. } => message.clone(),
+        _ => unreachable!(),
+    };
+    assert!(
+        msg.contains("position [0,0]"),
+        "expected exact position in c32 error, got: {msg}"
+    );
+    assert!(
+        !msg.contains("batch"),
+        "unbatched c32 error should not mention batch, got: {msg}"
     );
 }
 
