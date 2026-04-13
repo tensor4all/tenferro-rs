@@ -3,9 +3,10 @@ use std::collections::{HashMap, HashSet};
 use tenferro_device::{Error, Result as DeviceResult};
 
 use crate::planning::classify::classify_modes;
+#[cfg(test)]
+pub(crate) use crate::planning::strict_binary::compile_strict_binary_lowering_plan;
 pub(crate) use crate::planning::strict_binary::{
-    compile_strict_binary_lowering_plan, compile_strict_binary_lowering_step_plan,
-    StrictBinaryLoweringPlan,
+    compile_strict_binary_lowering_step_plan, StrictBinaryLoweringPlan,
 };
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;

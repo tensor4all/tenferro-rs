@@ -482,7 +482,6 @@ impl<B: TensorBackend> EagerTensor<B> {
         Self::nary_op(&[self, other], op)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn multi_output_unary_op(
         &self,
         op: StdTensorOp,
@@ -540,7 +539,6 @@ impl<B: TensorBackend> EagerTensor<B> {
             .collect())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn ternary_op(&self, b: &Self, c: &Self, op: StdTensorOp) -> Result<Self> {
         Self::nary_op(&[self, b, c], op)
     }

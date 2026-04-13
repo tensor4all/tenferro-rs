@@ -565,7 +565,6 @@ pub(crate) fn saved_forward_values(
     saved
 }
 
-#[allow(dead_code)]
 pub(crate) fn saved_forward_values_multi(
     op: &StdTensorOp,
     input_keys: &[GlobalValKey<StdTensorOp>],
