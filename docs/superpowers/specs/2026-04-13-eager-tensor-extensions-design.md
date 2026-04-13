@@ -169,6 +169,34 @@ Ternary op:
 | `reduce_max` | `(&self, axes: &[usize]) -> Result<Self>` | `ReduceMax` |
 | `reduce_min` | `(&self, axes: &[usize]) -> Result<Self>` | `ReduceMin` |
 
+## TensorScalar::Real Associated Type
+
+`TensorScalar` gains a `Real` associated type so that decompositions
+returning real-valued outputs (e.g., singular values from SVD) can be
+properly typed:
+
+```rust
+pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
+    type Real: TensorScalar;
+
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
+}
+```
+
+Implementations:
+
+| T | T::Real |
+|---|---------|
+| `f64` | `f64` |
+| `f32` | `f32` |
+| `Complex64` | `f64` |
+| `Complex32` | `f32` |
+
+This is a prerequisite for the `TypedTensor` convenience methods below and
+may also benefit existing code that currently uses `Tensor` (dynamic dtype)
+where `TypedTensor<T::Real>` would be more precise.
+
 ## TypedTensor Convenience Methods (P2)
 
 Convenience methods on `TypedTensor<T>` wrapping free functions from
@@ -184,8 +212,7 @@ impl<T: TensorScalar> TypedTensor<T> {
 ```
 
 These live in `tenferro-tensor` since they don't depend on the traced/eager
-graph infrastructure. Exact method set TBD based on what tensor4all-rs
-actually needs — start with einsum + linalg decompositions.
+graph infrastructure. Start with einsum + linalg decompositions.
 
 ## File Structure
 
