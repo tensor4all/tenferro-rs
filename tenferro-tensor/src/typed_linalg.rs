@@ -1,4 +1,4 @@
-use crate::{cpu::CpuBackend, Error, Result, Tensor, TensorScalar, TypedTensor};
+use crate::{Error, Result, Tensor, TensorBackend, TensorScalar, TypedTensor};
 
 fn try_into_typed_result<T: TensorScalar>(
     op: &'static str,
@@ -24,7 +24,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
+    /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
@@ -34,7 +34,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// assert_eq!(s.shape, vec![2]);
     /// assert_eq!(vt.shape, vec![2, 2]);
     /// ```
-    pub fn svd(&self, ctx: &mut CpuBackend) -> Result<(Self, TypedTensor<T::Real>, Self)> {
+    pub fn svd(&self, ctx: &mut impl TensorBackend) -> Result<(Self, TypedTensor<T::Real>, Self)> {
         let tensor = T::into_tensor(self.shape.clone(), self.host_data().to_vec());
         let (u, s, vt) = tensor.svd(ctx)?;
         Ok((
@@ -51,7 +51,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
+    /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
@@ -60,7 +60,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// assert_eq!(q.shape, vec![2, 2]);
     /// assert_eq!(r.shape, vec![2, 2]);
     /// ```
-    pub fn qr(&self, ctx: &mut CpuBackend) -> Result<(Self, Self)> {
+    pub fn qr(&self, ctx: &mut impl TensorBackend) -> Result<(Self, Self)> {
         let tensor = T::into_tensor(self.shape.clone(), self.host_data().to_vec());
         let (q, r) = tensor.qr(ctx)?;
         Ok((
@@ -76,7 +76,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
+    /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
@@ -84,7 +84,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     ///
     /// assert_eq!(l.shape, vec![2, 2]);
     /// ```
-    pub fn cholesky(&self, ctx: &mut CpuBackend) -> Result<Self> {
+    pub fn cholesky(&self, ctx: &mut impl TensorBackend) -> Result<Self> {
         let tensor = T::into_tensor(self.shape.clone(), self.host_data().to_vec());
         let factor = tensor.cholesky(ctx)?;
         try_into_typed_result("cholesky", factor)
@@ -101,7 +101,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
+    /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
@@ -110,7 +110,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// assert_eq!(w.shape, vec![2]);
     /// assert_eq!(v.shape, vec![2, 2]);
     /// ```
-    pub fn eigh(&self, ctx: &mut CpuBackend) -> Result<(TypedTensor<T::Real>, Self)> {
+    pub fn eigh(&self, ctx: &mut impl TensorBackend) -> Result<(TypedTensor<T::Real>, Self)> {
         let tensor = T::into_tensor(self.shape.clone(), self.host_data().to_vec());
         let (w, v) = tensor.eigh(ctx)?;
         Ok((
