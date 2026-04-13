@@ -871,6 +871,12 @@ impl TracedTensor {
     /// let y = a.dot_general(&b, config);
     /// ```
     pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
+        config
+            .validate_ranks(self.rank, other.rank)
+            .expect("DotGeneral config rank validation failed");
+        config
+            .validate_dims()
+            .expect("DotGeneral config dimension validation failed");
         let lhs_free: Vec<usize> = (0..config.lhs_rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
