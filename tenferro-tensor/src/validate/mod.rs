@@ -68,19 +68,33 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 /// let t = TypedTensor::from_vec(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]);
 /// assert!(check_singular_diagonal(&t).is_ok());
 /// ```
-pub fn check_singular_diagonal<T: DiagSingularity + Copy>(t: &TypedTensor<T>) -> Result<()> {
-    let n = t.shape[0].min(t.shape[1]);
+pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
+    t: &TypedTensor<T>,
+) -> Result<()> {
+    let rows = t.shape[0];
+    let cols = t.shape[1];
+    let n = rows.min(cols);
     let batch_total: usize = t.shape[2..].iter().product();
     let batch_total = batch_total.max(1);
-    let slice_size = t.shape[0] * t.shape[1];
+    let slice_size = rows * cols;
     for batch_idx in 0..batch_total {
         let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
         for i in 0..n {
-            let diag = batch[i + i * t.shape[0]];
+            let diag = batch[i + i * rows];
             if diag.is_singular_or_nonfinite() {
                 return Err(Error::BackendFailure {
                     op: "solve",
-                    message: "singular matrix".into(),
+                    message: if batch_total > 1 {
+                        format!(
+                            "singular matrix: non-finite or zero diagonal at batch {}, position [{},{}] = {:?}",
+                            batch_idx, i, i, diag
+                        )
+                    } else {
+                        format!(
+                            "singular matrix: non-finite or zero diagonal at position [{},{}] = {:?}",
+                            i, i, diag
+                        )
+                    },
                 });
             }
         }
