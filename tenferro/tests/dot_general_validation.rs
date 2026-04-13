@@ -327,11 +327,10 @@ fn eager_dot_general_rejects_stale_lhs_rank() {
         lhs_rank: 3,
         rhs_rank: 2,
     };
-    let did_panic = catch_unwind(AssertUnwindSafe(|| {
-        let _ = a.dot_general(&b, config);
-    }))
-    .is_err();
-    assert!(did_panic, "expected panic for stale lhs_rank");
+    assert!(
+        a.dot_general(&b, config).is_err(),
+        "expected error for stale lhs_rank"
+    );
 }
 
 #[test]

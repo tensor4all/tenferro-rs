@@ -66,7 +66,11 @@ fn matmul_config() -> DotGeneralConfig {
 fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
     let a = EagerTensor::from_tensor(Tensor::new(vec![2, 3], lhs.to_vec()));
     let b = EagerTensor::from_tensor(Tensor::new(vec![3, 2], rhs.to_vec()));
-    let loss = a.dot_general(&b, matmul_config()).reduce_sum(&[0, 1]);
+    let loss = a
+        .dot_general(&b, matmul_config())
+        .unwrap()
+        .reduce_sum(&[0, 1])
+        .unwrap();
     f64_data(loss.data())[0]
 }
 
@@ -74,7 +78,7 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad(Tensor::new(vec![3], x_data.clone()));
-    let loss = (&x * &x).reduce_sum(&[0]);
+    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap();
 
@@ -98,7 +102,11 @@ fn eager_matmul_gradients_match_finite_difference() {
 
     let a = EagerTensor::requires_grad(Tensor::new(vec![2, 3], a_data.clone()));
     let b = EagerTensor::requires_grad(Tensor::new(vec![3, 2], b_data.clone()));
-    let loss = a.dot_general(&b, matmul_config()).reduce_sum(&[0, 1]);
+    let loss = a
+        .dot_general(&b, matmul_config())
+        .unwrap()
+        .reduce_sum(&[0, 1])
+        .unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad_a = a.grad().unwrap();
@@ -120,7 +128,7 @@ fn eager_matmul_gradients_match_finite_difference() {
 #[test]
 fn eager_exp_gradient_matches_primal() {
     let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![0.0, 1.0, 2.0]));
-    let loss = x.exp().reduce_sum(&[0]);
+    let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap();
@@ -131,7 +139,7 @@ fn eager_exp_gradient_matches_primal() {
 #[test]
 fn eager_fan_out_accumulates_gradient() {
     let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0, 2.0, 3.0]));
-    let loss = (&x + &x).reduce_sum(&[0]);
+    let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap();
@@ -142,7 +150,7 @@ fn eager_fan_out_accumulates_gradient() {
 fn eager_detach_cuts_one_gradient_path() {
     let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0, 2.0, 3.0]));
     let detached = x.detach();
-    let loss = (&detached * &x).reduce_sum(&[0]);
+    let loss = (&detached * &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap();
