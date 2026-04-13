@@ -202,6 +202,11 @@ fn is_identity_order(order: &[usize]) -> bool {
     order.iter().enumerate().all(|(idx, &value)| idx == value)
 }
 
+#[inline]
+fn checked_batch_offset(batch: usize, stride: isize) -> Option<isize> {
+    (batch as isize).checked_mul(stride)
+}
+
 /// Compute permutations that reorder lhs/rhs into canonical GEMM layout.
 ///
 /// Canonical col-major layouts (batch trailing):
@@ -433,9 +438,9 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = batch as isize * dims.a_bs;
-        let b_off = batch as isize * dims.b_bs;
-        let c_off = batch as isize * dims.c_bs;
+        let a_off = checked_batch_offset(batch, dims.a_bs)?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             T::strided_gemm(
                 ctx,
@@ -539,9 +544,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = batch as isize * dims.a_bs;
-        let b_off = batch as isize * dims.b_bs;
-        let c_off = batch as isize * dims.c_bs;
+        let a_off = checked_batch_offset(batch, dims.a_bs)?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             T::strided_gemm(
                 T::one(),
