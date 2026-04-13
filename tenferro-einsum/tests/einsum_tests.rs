@@ -3848,3 +3848,126 @@ fn einsum_rrule_partial_trace_with_free_index_delta() {
         }
     }
 }
+
+#[test]
+fn einsum_rrule_trace_complex64() {
+    use num_complex::Complex64;
+    type CS = Standard<Complex64>;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<Complex64>::from_slice(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 1.0),
+        ],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let cotangent = Tensor::<Complex64>::from_slice(&[Complex64::new(2.0, 0.0)], &[], COL).unwrap();
+
+    let grads = einsum_rrule::<CS, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+
+    let g = grads[0].buffer().as_slice().unwrap();
+    assert!(
+        (g[0] - Complex64::new(2.0, 0.0)).norm() < 1e-12,
+        "g[0,0]={:?}",
+        g[0]
+    );
+    assert!(
+        (g[1] - Complex64::new(0.0, 0.0)).norm() < 1e-12,
+        "g[1,0]={:?}",
+        g[1]
+    );
+    assert!(
+        (g[2] - Complex64::new(0.0, 0.0)).norm() < 1e-12,
+        "g[0,1]={:?}",
+        g[2]
+    );
+    assert!(
+        (g[3] - Complex64::new(2.0, 0.0)).norm() < 1e-12,
+        "g[1,1]={:?}",
+        g[3]
+    );
+}
+
+#[test]
+fn einsum_rrule_diagonal_extraction_3x3() {
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=9).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[3, 3], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->i", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[3, 3]);
+
+    let g = to_col_major_vec(&grads[0]);
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j {
+                cotangent.buffer().as_slice().unwrap()[i]
+            } else {
+                0.0
+            };
+            assert!(
+                (g[j * 3 + i] - expected).abs() < 1e-12,
+                "grad[{i},{j}] = {}, expected {expected}",
+                g[j * 3 + i]
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_hvp_diagonal_extraction_3x3() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=9).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[3, 3], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1; 9], &[3, 3], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0], &[3], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[0.5, 0.5, 0.5], &[3], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii->i",
+        &[&a],
+        &[Some(&da)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp_val) = hvps[0];
+    assert_eq!(grad.dims(), &[3, 3]);
+    assert_eq!(hvp_val.dims(), &[3, 3]);
+
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected_grad = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (get(&grad, &[i, j]) - expected_grad).abs() < 1e-12,
+                "grad[{i},{j}] = {}",
+                get(&grad, &[i, j])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_rrule_trace_empty_cotangent_handled() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[0.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    let g = to_col_major_vec(&grads[0]);
+    assert!((g[0] - 0.0).abs() < 1e-12);
+    assert!((g[3] - 0.0).abs() < 1e-12);
+}
