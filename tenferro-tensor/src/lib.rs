@@ -19,6 +19,7 @@ pub mod cpu;
 pub mod error;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
+mod typed_linalg;
 pub mod types;
 pub mod validate;
 

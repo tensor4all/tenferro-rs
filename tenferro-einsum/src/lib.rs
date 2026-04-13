@@ -39,6 +39,7 @@ pub mod builder;
 mod eager;
 pub mod planning;
 pub mod syntax;
+mod typed_eager;
 pub(crate) mod util;
 
 // Re-exports for convenience
@@ -47,6 +48,7 @@ pub use eager::eager_einsum;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
+pub use typed_eager::typed_eager_einsum;
 pub use util::{build_size_dict, compute_output_shape};
 
 #[cfg(test)]

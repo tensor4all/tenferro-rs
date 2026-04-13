@@ -15,6 +15,12 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
+    if let StdTensorOp::NaryEinsum { subscripts, .. } = op {
+        return Ok(vec![tenferro_einsum::eager_einsum(
+            backend, inputs, subscripts,
+        )?]);
+    }
+
     backend.with_exec_session(|exec| {
         let result = match op {
             StdTensorOp::Add => vec![exec.add(inputs[0], inputs[1])?],
@@ -72,7 +78,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 vec![exec.concatenate(inputs, *axis)?]
             }
             StdTensorOp::NaryEinsum { .. } => {
-                todo!("NaryEinsum eager exec requires contraction tree planning")
+                unreachable!("NaryEinsum is handled before opening an exec session")
             }
             StdTensorOp::Gather(config) => vec![exec.gather(inputs[0], inputs[1], config)?],
             StdTensorOp::Scatter(config) => {
