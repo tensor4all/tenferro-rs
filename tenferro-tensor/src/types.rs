@@ -150,11 +150,30 @@ pub enum DType {
 /// assert_eq!(tensor.as_slice::<f64>(), Some([1.0, 2.0].as_slice()));
 /// ```
 pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
+    /// Real-valued counterpart of this scalar type.
+    type Real: TensorScalar;
+
     /// Wrap typed data into a [`Tensor`] enum variant.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
 
     /// Try to borrow the host data from a [`Tensor`].
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
+
+    /// Try to extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
+    ///
+    /// Returns `None` if the tensor dtype does not match `Self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorScalar};
+    ///
+    /// let tensor = Tensor::new(vec![2], vec![1.0_f64, 2.0]);
+    /// let typed = <f64 as TensorScalar>::try_into_typed(tensor).unwrap();
+    ///
+    /// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
+    /// ```
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>>;
 }
 
 mod private {
@@ -167,6 +186,8 @@ mod private {
 }
 
 impl TensorScalar for f64 {
+    type Real = f64;
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::F64(TypedTensor::from_vec(shape, data))
     }
@@ -177,9 +198,18 @@ impl TensorScalar for f64 {
             _ => None,
         }
     }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::F64(inner) => Some(inner),
+            _ => None,
+        }
+    }
 }
 
 impl TensorScalar for f32 {
+    type Real = f32;
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::F32(TypedTensor::from_vec(shape, data))
     }
@@ -190,9 +220,18 @@ impl TensorScalar for f32 {
             _ => None,
         }
     }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::F32(inner) => Some(inner),
+            _ => None,
+        }
+    }
 }
 
 impl TensorScalar for Complex64 {
+    type Real = f64;
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::C64(TypedTensor::from_vec(shape, data))
     }
@@ -203,9 +242,18 @@ impl TensorScalar for Complex64 {
             _ => None,
         }
     }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::C64(inner) => Some(inner),
+            _ => None,
+        }
+    }
 }
 
 impl TensorScalar for Complex32 {
+    type Real = f32;
+
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::C32(TypedTensor::from_vec(shape, data))
     }
@@ -213,6 +261,13 @@ impl TensorScalar for Complex32 {
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::C32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::C32(inner) => Some(inner),
             _ => None,
         }
     }
