@@ -131,3 +131,100 @@ fn checkpoint_loop_grad_correct() {
         "loop grad: actual={grad_value}, fd={fd}"
     );
 }
+
+#[test]
+fn grad_both_independently_checkpointed_add_wrt_rhs() {
+    let mut engine = Engine::new(CpuBackend::new());
+
+    let x = TracedTensor::from_tensor(f64_scalar(2.0));
+    let y = TracedTensor::from_tensor(f64_scalar(3.0));
+
+    let mut x2 = &x * &x;
+    let mut y2 = &y * &y;
+
+    x2.checkpoint(&mut engine).unwrap();
+    y2.checkpoint(&mut engine).unwrap();
+
+    let z = &x2 + &y2;
+
+    let grad_y = z.grad(&y).unwrap();
+    let mut grad_y = grad_y;
+    let grad_y_value = get_f64_scalar(grad_y.eval(&mut engine).unwrap());
+    assert!(
+        (grad_y_value - 6.0).abs() < TOL,
+        "d/dy (x^2 + y^2) at x=2, y=3: expected 6.0, got {grad_y_value}"
+    );
+}
+
+#[test]
+fn grad_both_independently_checkpointed_add_wrt_lhs() {
+    let mut engine = Engine::new(CpuBackend::new());
+
+    let x = TracedTensor::from_tensor(f64_scalar(2.0));
+    let y = TracedTensor::from_tensor(f64_scalar(3.0));
+
+    let mut x2 = &x * &x;
+    let mut y2 = &y * &y;
+
+    x2.checkpoint(&mut engine).unwrap();
+    y2.checkpoint(&mut engine).unwrap();
+
+    let z = &x2 + &y2;
+
+    let grad_x = z.grad(&x).unwrap();
+    let mut grad_x = grad_x;
+    let grad_x_value = get_f64_scalar(grad_x.eval(&mut engine).unwrap());
+    assert!(
+        (grad_x_value - 4.0).abs() < TOL,
+        "d/dx (x^2 + y^2) at x=2, y=3: expected 4.0, got {grad_x_value}"
+    );
+}
+
+#[test]
+fn grad_both_independently_checkpointed_mul_wrt_rhs() {
+    let mut engine = Engine::new(CpuBackend::new());
+
+    let x = TracedTensor::from_tensor(f64_scalar(2.0));
+    let y = TracedTensor::from_tensor(f64_scalar(3.0));
+
+    let mut x2 = &x * &x;
+    let mut y2 = &y * &y;
+
+    x2.checkpoint(&mut engine).unwrap();
+    y2.checkpoint(&mut engine).unwrap();
+
+    let z = &x2 * &y2;
+
+    let grad_y = z.grad(&y).unwrap();
+    let mut grad_y = grad_y;
+    let grad_y_value = get_f64_scalar(grad_y.eval(&mut engine).unwrap());
+    let expected = 2.0 * 3.0 * 4.0;
+    assert!(
+        (grad_y_value - expected).abs() < TOL,
+        "d/dy (x^2 * y^2) at x=2, y=3: expected {expected}, got {grad_y_value}"
+    );
+}
+
+#[test]
+fn grad_both_independently_checkpointed_matches_fd() {
+    let x_val = 2.0_f64;
+    let y_val = 3.0_f64;
+
+    let f_concrete = |y: f64| x_val * x_val + y * y;
+    let fd = (f_concrete(y_val + FD_H) - f_concrete(y_val - FD_H)) / (2.0 * FD_H);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let x = TracedTensor::from_tensor(f64_scalar(x_val));
+    let y = TracedTensor::from_tensor(f64_scalar(y_val));
+    let mut x2 = &x * &x;
+    let mut y2 = &y * &y;
+    x2.checkpoint(&mut engine).unwrap();
+    y2.checkpoint(&mut engine).unwrap();
+    let z = &x2 + &y2;
+    let mut grad_y = z.grad(&y).unwrap();
+    let ad_value = get_f64_scalar(grad_y.eval(&mut engine).unwrap());
+    assert!(
+        (ad_value - fd).abs() < TOL,
+        "AD grad={ad_value}, FD grad={fd}"
+    );
+}

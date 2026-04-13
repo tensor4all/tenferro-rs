@@ -1320,10 +1320,10 @@ pub(crate) fn apply_binary(
         shape_hint: out_shape_hint,
         inputs_map: Arc::new(merged),
         extra_roots,
-        checkpoint_chain: lhs
-            .checkpoint_chain
-            .clone()
-            .or(rhs.checkpoint_chain.clone()),
+        checkpoint_chain: CheckpointNode::merge_chains(
+            lhs.checkpoint_chain.clone(),
+            rhs.checkpoint_chain.clone(),
+        ),
     }
 }
 
