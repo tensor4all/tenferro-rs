@@ -388,6 +388,12 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(c.data().shape(), &[2, 2]);
     /// ```
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Self {
+        config
+            .validate_ranks(self.data.shape().len(), other.data.shape().len())
+            .expect("DotGeneral config rank validation failed");
+        config
+            .validate_dims()
+            .expect("DotGeneral config dimension validation failed");
         self.binary_op(other, StdTensorOp::DotGeneral(config))
     }
 

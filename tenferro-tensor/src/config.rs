@@ -28,6 +28,143 @@ pub struct DotGeneralConfig {
     pub rhs_rank: usize,
 }
 
+impl DotGeneralConfig {
+    /// Validate that `lhs_rank` and `rhs_rank` match the actual tensor ranks.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DotGeneralConfig;
+    ///
+    /// let config = DotGeneralConfig {
+    ///     lhs_contracting_dims: vec![1],
+    ///     rhs_contracting_dims: vec![0],
+    ///     lhs_batch_dims: vec![],
+    ///     rhs_batch_dims: vec![],
+    ///     lhs_rank: 2,
+    ///     rhs_rank: 2,
+    /// };
+    /// config.validate_ranks(2, 2).unwrap();
+    /// ```
+    pub fn validate_ranks(
+        &self,
+        actual_lhs_rank: usize,
+        actual_rhs_rank: usize,
+    ) -> Result<(), String> {
+        if self.lhs_rank != actual_lhs_rank {
+            return Err(format!(
+                "DotGeneralConfig.lhs_rank ({}) does not match actual lhs tensor rank ({})",
+                self.lhs_rank, actual_lhs_rank
+            ));
+        }
+        if self.rhs_rank != actual_rhs_rank {
+            return Err(format!(
+                "DotGeneralConfig.rhs_rank ({}) does not match actual rhs tensor rank ({})",
+                self.rhs_rank, actual_rhs_rank
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate that all dimension indices are within range for the stored ranks
+    /// and that no axis appears in multiple roles.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DotGeneralConfig;
+    ///
+    /// let config = DotGeneralConfig {
+    ///     lhs_contracting_dims: vec![1],
+    ///     rhs_contracting_dims: vec![0],
+    ///     lhs_batch_dims: vec![],
+    ///     rhs_batch_dims: vec![],
+    ///     lhs_rank: 2,
+    ///     rhs_rank: 2,
+    /// };
+    /// config.validate_dims().unwrap();
+    /// ```
+    fn check_no_duplicates(dims: &[usize], label: &str) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for &d in dims {
+            if !seen.insert(d) {
+                return Err(format!("{} contains duplicate dim {}", label, d));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_dims(&self) -> Result<(), String> {
+        for &d in &self.lhs_contracting_dims {
+            if d >= self.lhs_rank {
+                return Err(format!(
+                    "lhs_contracting_dim {} out of bounds for lhs_rank {}",
+                    d, self.lhs_rank
+                ));
+            }
+        }
+        for &d in &self.rhs_contracting_dims {
+            if d >= self.rhs_rank {
+                return Err(format!(
+                    "rhs_contracting_dim {} out of bounds for rhs_rank {}",
+                    d, self.rhs_rank
+                ));
+            }
+        }
+        for &d in &self.lhs_batch_dims {
+            if d >= self.lhs_rank {
+                return Err(format!(
+                    "lhs_batch_dim {} out of bounds for lhs_rank {}",
+                    d, self.lhs_rank
+                ));
+            }
+        }
+        for &d in &self.rhs_batch_dims {
+            if d >= self.rhs_rank {
+                return Err(format!(
+                    "rhs_batch_dim {} out of bounds for rhs_rank {}",
+                    d, self.rhs_rank
+                ));
+            }
+        }
+        Self::check_no_duplicates(&self.lhs_contracting_dims, "lhs_contracting_dims")?;
+        Self::check_no_duplicates(&self.rhs_contracting_dims, "rhs_contracting_dims")?;
+        Self::check_no_duplicates(&self.lhs_batch_dims, "lhs_batch_dims")?;
+        Self::check_no_duplicates(&self.rhs_batch_dims, "rhs_batch_dims")?;
+        for &d in &self.lhs_contracting_dims {
+            if self.lhs_batch_dims.contains(&d) {
+                return Err(format!(
+                    "lhs dim {} appears in both contracting and batch dims",
+                    d
+                ));
+            }
+        }
+        for &d in &self.rhs_contracting_dims {
+            if self.rhs_batch_dims.contains(&d) {
+                return Err(format!(
+                    "rhs dim {} appears in both contracting and batch dims",
+                    d
+                ));
+            }
+        }
+        if self.lhs_contracting_dims.len() != self.rhs_contracting_dims.len() {
+            return Err(format!(
+                "lhs/rhs contracting dim counts differ ({} vs {})",
+                self.lhs_contracting_dims.len(),
+                self.rhs_contracting_dims.len()
+            ));
+        }
+        if self.lhs_batch_dims.len() != self.rhs_batch_dims.len() {
+            return Err(format!(
+                "lhs/rhs batch dim counts differ ({} vs {})",
+                self.lhs_batch_dims.len(),
+                self.rhs_batch_dims.len()
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Comparison direction.
 ///
 /// # Examples
