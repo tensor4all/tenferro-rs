@@ -24,6 +24,8 @@ pub mod eager_einsum;
 mod eager_emitter;
 pub mod eager_exec;
 pub(crate) mod eager_ops;
+pub(crate) mod eager_ops_elementwise;
+pub(crate) mod eager_ops_linalg;
 pub mod einsum;
 pub mod engine;
 pub mod error;
