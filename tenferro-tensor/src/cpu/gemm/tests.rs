@@ -1,4 +1,4 @@
-use super::try_fuse_dims;
+use super::{checked_batch_offset, try_fuse_dims};
 
 #[cfg(feature = "cpu-blas")]
 use super::dot_general;
@@ -36,6 +36,20 @@ fn try_fuse_dims_single_dim() {
 #[test]
 fn try_fuse_dims_empty() {
     assert_eq!(try_fuse_dims(&[], &[]), Some((1, 0)));
+}
+
+#[test]
+fn checked_batch_offset_normal() {
+    assert_eq!(checked_batch_offset(3, 10), Some(30));
+    assert_eq!(checked_batch_offset(0, 5), Some(0));
+    assert_eq!(checked_batch_offset(1, -3), Some(-3));
+}
+
+#[test]
+fn checked_batch_offset_overflow_returns_none() {
+    assert_eq!(checked_batch_offset(2, isize::MAX), None);
+    assert_eq!(checked_batch_offset(isize::MAX as usize, 2), None);
+    assert_eq!(checked_batch_offset(1, isize::MAX), Some(isize::MAX));
 }
 
 #[cfg(feature = "cpu-blas")]
