@@ -2,10 +2,6 @@ use tenferro_tensor::{Error, Result, Tensor, TensorBackend, TensorScalar, TypedT
 
 use crate::eager_einsum;
 
-fn tensor_scalar_dtype<T: TensorScalar>() -> tenferro_tensor::DType {
-    T::into_tensor(vec![0], Vec::new()).dtype()
-}
-
 /// Execute eager einsum over typed tensors and return a typed result.
 ///
 /// # Examples
@@ -38,6 +34,6 @@ pub fn typed_eager_einsum<T: TensorScalar>(
     T::try_into_typed(result).ok_or_else(|| Error::DTypeMismatch {
         op: "typed_eager_einsum",
         lhs: actual,
-        rhs: tensor_scalar_dtype::<T>(),
+        rhs: T::dtype(),
     })
 }

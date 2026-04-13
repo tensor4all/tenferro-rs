@@ -1,9 +1,5 @@
 use crate::{cpu::CpuBackend, Error, Result, Tensor, TensorScalar, TypedTensor};
 
-fn tensor_scalar_dtype<T: TensorScalar>() -> crate::DType {
-    T::into_tensor(vec![0], Vec::new()).dtype()
-}
-
 fn try_into_typed_result<T: TensorScalar>(
     op: &'static str,
     tensor: Tensor,
@@ -12,7 +8,7 @@ fn try_into_typed_result<T: TensorScalar>(
     T::try_into_typed(tensor).ok_or_else(|| Error::DTypeMismatch {
         op,
         lhs: actual,
-        rhs: tensor_scalar_dtype::<T>(),
+        rhs: T::dtype(),
     })
 }
 

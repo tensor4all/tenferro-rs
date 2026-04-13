@@ -999,7 +999,7 @@ impl<B: TensorBackend> EagerTensor<B> {
                     &op,
                     &input_aliases,
                     &[Arc::clone(&self.data)],
-                    &output_keys,
+                    num_outputs,
                     &outputs,
                 ),
                 input_edges: vec![GradEdge {
