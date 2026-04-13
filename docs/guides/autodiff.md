@@ -1,6 +1,9 @@
 # Autodiff
 
-tenferro exposes autodiff directly on `TracedTensor`. If you know PyTorch or JAX, the mental model is:
+tenferro exposes transform-oriented autodiff directly on `TracedTensor`.
+Eager tensors also support scalar-loss reverse-mode via `backward()`, but
+this page is about the traced APIs. If you know PyTorch or JAX, the mental
+model is:
 
 - `grad` for scalar-loss reverse mode
 - `vjp` for vector-Jacobian products
@@ -9,8 +12,11 @@ tenferro exposes autodiff directly on `TracedTensor`. If you know PyTorch or JAX
 
 ## Reverse-mode gradient with `grad`
 
-PyTorch equivalent: `torch.autograd.grad(loss, x)` or `loss.backward()`  
+PyTorch equivalent: `torch.autograd.grad(loss, x)`  
 JAX equivalent: `jax.grad(f)(x)`
+
+If you want eager scalar-loss accumulation instead, see the eager operations
+guide and use `EagerTensor::backward()`.
 
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};

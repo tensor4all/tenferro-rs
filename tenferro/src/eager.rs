@@ -1,7 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use computegraph::fragment::Fragment;
 use computegraph::{GlobalOpKey, GlobalValKey, OpMode, ValRef};
@@ -16,8 +14,8 @@ use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
 use crate::traced::next_input_key;
 
-pub(crate) type GradSlot = Rc<RefCell<Option<Arc<Tensor>>>>;
-pub(crate) type WeakGradSlot = Weak<RefCell<Option<Arc<Tensor>>>>;
+pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
+pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
 
 /// Shared eager execution context for tensors on a backend.
 ///
@@ -37,15 +35,15 @@ pub(crate) type WeakGradSlot = Weak<RefCell<Option<Arc<Tensor>>>>;
 /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
 pub struct EagerContext<B: TensorBackend> {
-    pub(crate) backend: RefCell<B>,
-    grad_slots: RefCell<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
+    pub(crate) backend: Mutex<B>,
+    grad_slots: Mutex<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
 }
 
 impl<B: TensorBackend> EagerContext<B> {
     fn new(backend: B) -> Self {
         Self {
-            backend: RefCell::new(backend),
-            grad_slots: RefCell::new(HashMap::new()),
+            backend: Mutex::new(backend),
+            grad_slots: Mutex::new(HashMap::new()),
         }
     }
 
@@ -57,30 +55,52 @@ impl<B: TensorBackend> EagerContext<B> {
     /// use tenferro::{CpuBackend, EagerContext};
     ///
     /// let ctx = EagerContext::with_backend(CpuBackend::new());
-    /// assert_eq!(std::rc::Rc::strong_count(&ctx), 1);
+    /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
-    pub fn with_backend(backend: B) -> Rc<Self> {
-        Rc::new(Self::new(backend))
+    pub fn with_backend(backend: B) -> Arc<Self> {
+        Arc::new(Self::new(backend))
     }
 
     pub(crate) fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
         self.grad_slots
-            .borrow_mut()
-            .insert(key.clone(), Rc::downgrade(slot));
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::downgrade(slot));
     }
 
     pub(crate) fn absorb_from(&self, other: &Self) {
-        let other_slots = other.grad_slots.borrow();
-        let mut slots = self.grad_slots.borrow_mut();
+        let other_slots = other.grad_slots.lock().unwrap();
+        let mut slots = self.grad_slots.lock().unwrap();
         for (key, slot) in other_slots.iter() {
             slots.entry(key.clone()).or_insert_with(|| slot.clone());
         }
     }
 
-    fn clear_grads(&self) {
-        self.grad_slots.borrow_mut().retain(|_, slot| {
+    /// Clear all live gradient slots tracked by this context.
+    ///
+    /// This resets the stored gradients to `None` without unregistering the
+    /// tensors, so future `backward()` calls can accumulate again.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    /// let y = EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
+    /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    /// let _ = loss.backward().unwrap();
+    ///
+    /// ctx.clear_grads();
+    ///
+    /// assert!(x.grad().is_none());
+    /// assert!(y.grad().is_none());
+    /// ```
+    pub fn clear_grads(&self) {
+        self.grad_slots.lock().unwrap().retain(|_, slot| {
             if let Some(slot) = slot.upgrade() {
-                *slot.borrow_mut() = None;
+                *slot.lock().unwrap() = None;
                 true
             } else {
                 false
@@ -88,22 +108,53 @@ impl<B: TensorBackend> EagerContext<B> {
         });
     }
 
-    fn store_grads(&self, cotangents: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>) {
-        self.grad_slots.borrow_mut().retain(|key, slot| {
-            let Some(slot) = slot.upgrade() else {
-                return false;
+    fn store_grads(
+        &self,
+        cotangents: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+        backend: &mut B,
+    ) -> Result<()> {
+        let mut updates = Vec::new();
+        let mut staged = Vec::new();
+
+        {
+            let mut slots = self.grad_slots.lock().unwrap();
+            slots.retain(|key, slot| {
+                let Some(slot) = slot.upgrade() else {
+                    return false;
+                };
+
+                if let Some(incoming) = cotangents.get(key) {
+                    updates.push((slot, Arc::clone(incoming)));
+                }
+
+                true
+            });
+        }
+
+        for (slot, incoming) in updates {
+            let next = {
+                let current = slot.lock().unwrap();
+                match current.as_ref() {
+                    Some(existing) => Arc::new(existing.as_ref().add(incoming.as_ref(), backend)?),
+                    None => incoming,
+                }
             };
-            let value = cotangents.get(key).cloned();
-            *slot.borrow_mut() = value;
-            true
-        });
+            staged.push((slot, next));
+        }
+
+        for (slot, next) in staged {
+            *slot.lock().unwrap() = Some(next);
+        }
+
+        Ok(())
     }
 }
 
 /// Eager tensor with reverse-mode autodiff over concrete tensor values.
 ///
 /// This executes each primitive immediately and records a lightweight reverse
-/// DAG for `backward()`.
+/// DAG for `backward()`. Gradients accumulate across repeated `backward()`
+/// calls until they are cleared explicitly.
 ///
 /// # Examples
 ///
@@ -113,8 +164,13 @@ impl<B: TensorBackend> EagerContext<B> {
 /// let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
 /// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
+/// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+/// let _cotangents = loss.backward().unwrap();
 ///
-/// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
+/// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
+/// x.clear_grad();
+///
+/// assert!(x.grad().is_none());
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor<B: TensorBackend = CpuBackend> {
@@ -123,7 +179,7 @@ pub struct EagerTensor<B: TensorBackend = CpuBackend> {
     pub(crate) grad_node: Option<Arc<GradNode<StdTensorOp>>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
-    pub(crate) ctx: Rc<EagerContext<B>>,
+    pub(crate) ctx: Arc<EagerContext<B>>,
 }
 
 impl<B: TensorBackend> std::ops::Add for &EagerTensor<B> {
@@ -194,7 +250,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     ///
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
-    pub fn from_tensor_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self {
+    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerContext<B>>) -> Self {
         Self::new_leaf(ctx, tensor, false)
     }
 
@@ -210,13 +266,13 @@ impl<B: TensorBackend> EagerTensor<B> {
     ///
     /// assert!(x.grad().is_none());
     /// ```
-    pub fn requires_grad_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self {
+    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerContext<B>>) -> Self {
         Self::new_leaf(ctx, tensor, true)
     }
 
-    pub(crate) fn new_leaf(ctx: Rc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
+    pub(crate) fn new_leaf(ctx: Arc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
         let key = eager_val_key();
-        let grad_slot = Rc::new(RefCell::new(None));
+        let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
         }
@@ -232,13 +288,13 @@ impl<B: TensorBackend> EagerTensor<B> {
     }
 
     pub(crate) fn new_result(
-        ctx: Rc<EagerContext<B>>,
+        ctx: Arc<EagerContext<B>>,
         key: GlobalValKey<StdTensorOp>,
         tensor: Tensor,
         requires_grad: bool,
         grad_node: Option<Arc<GradNode<StdTensorOp>>>,
     ) -> Self {
-        let grad_slot = Rc::new(RefCell::new(None));
+        let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
         }
@@ -287,7 +343,10 @@ impl<B: TensorBackend> EagerTensor<B> {
         self.data.as_ref()
     }
 
-    /// Return the accumulated gradient from the last `backward()` call.
+    /// Return the accumulated gradient currently stored for this tensor.
+    ///
+    /// The stored gradient accumulates across repeated `backward()` calls
+    /// until it is cleared explicitly.
     ///
     /// # Examples
     ///
@@ -302,13 +361,63 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(grad.shape(), &[2]);
     /// ```
     pub fn grad(&self) -> Option<Arc<Tensor>> {
-        self.grad_slot.borrow().clone()
+        self.grad_slot.lock().unwrap().clone()
+    }
+
+    /// Clear the accumulated gradient stored for this tensor.
+    ///
+    /// This only affects this tensor's gradient slot. Other tensors in the
+    /// same context retain their gradients until they are cleared explicitly or
+    /// overwritten by later accumulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    /// let y = EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
+    /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    /// let _ = loss.backward().unwrap();
+    ///
+    /// x.clear_grad();
+    ///
+    /// assert!(x.grad().is_none());
+    /// assert!(y.grad().is_some());
+    /// ```
+    pub fn clear_grad(&self) {
+        *self.grad_slot.lock().unwrap() = None;
+    }
+
+    /// Report whether this tensor participates in gradient tracking.
+    ///
+    /// Tracked tensors keep a gradient slot in their eager context; untracked
+    /// tensors and detached tensors do not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let plain = EagerTensor::from_tensor_in(Tensor::new(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
+    /// let tracked = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
+    /// let detached = tracked.detach();
+    ///
+    /// assert!(!plain.tracks_grad());
+    /// assert!(tracked.tracks_grad());
+    /// assert!(!detached.tracks_grad());
+    /// ```
+    pub fn tracks_grad(&self) -> bool {
+        self.requires_grad
     }
 
     /// Run reverse-mode AD from this scalar output.
     ///
     /// Returns the full cotangent map produced by the reverse pass and also
-    /// populates `grad()` for tracked eager tensors reachable from this output.
+    /// accumulates into `grad()` for tracked eager tensors reachable from this
+    /// output.
     ///
     /// # Examples
     ///
@@ -318,8 +427,10 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
     /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
+    /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
+    /// let _cotangents = loss.backward().unwrap();
     ///
-    /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 2.0, 2.0]);
+    /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// ```
     pub fn backward(&self) -> Result<HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>> {
         if !self.data.shape().is_empty() {
@@ -328,17 +439,15 @@ impl<B: TensorBackend> EagerTensor<B> {
             });
         }
 
-        self.ctx.clear_grads();
-
         let sorted = topo_sort_grad_dag(&self.grad_node);
-        let mut backend = self.ctx.backend.borrow_mut();
+        let mut backend = self.ctx.backend.lock().unwrap();
         let seed = Arc::new(one_like_tensor(self.data.as_ref(), &mut *backend));
         let mut callbacks = TenferroBackwardCallbacks {
             backend: &mut *backend,
         };
         let mut ad_ctx = ShapeGuardContext::default();
         let cotangents = backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx);
-        self.ctx.store_grads(&cotangents);
+        self.ctx.store_grads(&cotangents, &mut *backend)?;
         Ok(cotangents)
     }
 }
@@ -494,7 +603,7 @@ pub(crate) fn exec_single_output<B: TensorBackend>(
     inputs: &[&Tensor],
     ctx: &EagerContext<B>,
 ) -> Result<Tensor> {
-    let mut backend = ctx.backend.borrow_mut();
+    let mut backend = ctx.backend.lock().unwrap();
     let mut outputs = exec_op_on_tensors(op, inputs, &mut *backend)?;
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(

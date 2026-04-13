@@ -1,19 +1,24 @@
 # Eager Operations
 
-This guide covers using tenferro for direct computation without automatic
-differentiation: the path you would choose for NumPy-like workflows where you
-control the computation explicitly.
+This guide covers using tenferro for direct computation with eager
+reverse-mode autodiff on scalar losses: the path you would choose for
+NumPy-like workflows where you control the computation explicitly and call
+`backward()` when you need gradients.
 
 ## Setup
 
 ```rust
-use tenferro_tensor::{Tensor, TypedTensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor, TypedTensor};
 
 let mut ctx = CpuBackend::new();
 ```
 
 Every eager operation requires a backend context. `CpuBackend` is the standard
 CPU backend using the faer linear algebra library.
+
+`EagerContext` is the gradient-owning wrapper for eager AD state. If you share
+one context across multiple tracked tensors, their gradients accumulate into
+the same state and you can reset them together with `clear_grads()`.
 
 Most eager operations are methods on `Tensor`. `TypedTensor<T>` is useful when
 you want compile-time dtype safety for construction or direct host-side data
@@ -22,7 +27,7 @@ access.
 ## Creating tensors
 
 ```rust
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro::{Tensor, TypedTensor};
 
 // Dynamic dtype (`Tensor`)
 let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -41,7 +46,7 @@ its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 ## Arithmetic
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -59,7 +64,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 ## Linear algebra
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::new(vec![3, 3], vec![
@@ -94,7 +99,7 @@ assert_eq!(x.shape(), &[3]);
 ## Shape operations
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -115,8 +120,8 @@ assert_eq!(col_sum.shape(), &[3]);
 ## Einsum
 
 ```rust
-use tenferro_einsum::eager_einsum;
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::eager_einsum::eager_einsum;
+use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 
@@ -134,7 +139,7 @@ assert_eq!(c.shape(), &[2, 4]);
 ## Extracting data
 
 ```rust
-use tenferro_tensor::Tensor;
+use tenferro::Tensor;
 
 let t = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let data: &[f64] = t.as_slice::<f64>().unwrap();
@@ -155,6 +160,39 @@ Column 2: [5, 6]
 This matches Fortran, Julia, and MATLAB conventions but differs from C/NumPy
 row-major order.
 
+## Eager reverse-mode gradients
+
+Eager tensors support scalar-loss reverse-mode autodiff with accumulation.
+Repeated `backward()` calls add to the existing gradients, and you clear them
+explicitly when you want a fresh pass.
+
+```rust
+use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+
+let ctx = EagerContext::with_backend(CpuBackend::new());
+let x = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
+let y = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
+
+let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+loss.backward().unwrap();
+assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+
+let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+loss.backward().unwrap();
+assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
+
+x.clear_grad();
+assert!(x.grad().is_none());
+
+let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+loss.backward().unwrap();
+assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+
+ctx.clear_grads();
+assert!(x.grad().is_none());
+assert!(y.grad().is_none());
+```
+
 ## When to use eager vs lazy
 
 | Scenario | Recommended |
@@ -162,6 +200,6 @@ row-major order.
 | Data preprocessing | Eager (`Tensor` + `CpuBackend`) |
 | TCI inner loops | Eager |
 | Exploratory computation | Eager |
-| Need gradients (AD) | Lazy (`TracedTensor` + `Engine`) |
-| Need HVP / higher-order AD | Lazy |
+| Need scalar-loss reverse-mode gradients | Eager (`EagerTensor::backward()`) |
+| Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `Engine`) |
 | GPU execution (future) | Lazy |

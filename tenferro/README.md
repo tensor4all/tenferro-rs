@@ -1,25 +1,43 @@
 # tenferro
 
-Traced tensor frontend for the `tenferro-rs` v2 workspace.
+User-facing tensor facade for the `tenferro-rs` v2 workspace.
 
-`tenferro` is the main user-facing crate for standard dense numeric computation.
-It owns the lazy graph surface (`TracedTensor`), the execution engine
+`tenferro` is the main public crate for standard dense numeric computation.
+It exposes eager execution through `EagerTensor` and `EagerContext`, including
+scalar-loss reverse-mode accumulation via `backward()`, and it exposes
+traced, transform-oriented AD through `TracedTensor` with `grad`, `vjp`,
+`jvp`, and HVP composition. The crate also owns the execution engine
 (`Engine<B>`), StableHLO-style lowering, execution-IR compilation, public
-einsum helpers, public multi-output linalg helpers, and AD entry points
-(VJP/JVP/HVP).
+einsum helpers, and public multi-output linalg helpers.
 
 ## Public Surface
 
 - `TracedTensor`
 - `Engine`
+- `EagerTensor`
+- `EagerContext`
 - `einsum::einsum` and `einsum::einsum_with`
+- `eager_einsum::eager_einsum` and `eager_einsum::eager_einsum_ad`
 - free linalg helpers such as `svd`, `qr`, `eigh`, `solve`, `cholesky`, and
   `triangular_solve`
+- `EagerTensor::backward`, `EagerTensor::clear_grad`, `EagerContext::clear_grads`
 - `TracedTensor::grad`, `TracedTensor::jvp`, `TracedTensor::vjp`
 - re-exported dense runtime types from `tenferro-tensor`:
   `Tensor`, `TypedTensor`, `DType`, `CpuBackend`
 
-## Example
+## Eager Example
+
+```rust
+use tenferro::{EagerTensor, Tensor};
+
+let x = EagerTensor::requires_grad(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
+let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+loss.backward().unwrap();
+
+assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+```
+
+## Traced Example
 
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
