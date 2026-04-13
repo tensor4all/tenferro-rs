@@ -291,9 +291,18 @@ fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
 }
 
 #[test]
-fn cpu_backend_with_threads_creates_custom_pool() {
-    let backend = CpuBackend::with_threads(2);
-    assert_eq!(backend.num_threads(), 2);
+fn test_with_exec_session_runs_in_thread_pool() {
+    let mut backend = CpuBackend::with_threads(2);
+    let result = backend.with_exec_session(|session| {
+        session
+            .add(
+                &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
+                &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+            )
+            .unwrap()
+    });
+    assert_eq!(get_f64(&result, &[0]), 4.0);
+    assert_eq!(get_f64(&result, &[1]), 6.0);
 }
 
 #[test]
@@ -3102,4 +3111,383 @@ fn test_catch_backend_panic_handles_non_string_payload() {
         }
         other => panic!("expected BackendFailure, got {:?}", other),
     }
+}
+
+#[test]
+fn test_solve_zero_dim_rhs_returns_zeros() {
+    let mut backend = CpuBackend::new();
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![0], vec![]));
+    let x = backend.solve(&a, &b).unwrap();
+    assert_eq!(x.shape(), &[0]);
+}
+
+#[test]
+fn test_batched_gemm_rejects_out_of_bounds_rhs_contracting_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![5],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_out_of_bounds_rhs_batch_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![2],
+        rhs_batch_dims: vec![5],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_rhs_contracting_duplicate_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0, 1],
+        rhs_contracting_dims: vec![0, 0],
+        lhs_batch_dims: vec![2],
+        rhs_batch_dims: vec![2],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DuplicateAxis {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_rhs_batch_duplicate_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![1],
+        lhs_batch_dims: vec![0, 2],
+        rhs_batch_dims: vec![0, 0],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DuplicateAxis {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_rhs_axis_role_conflict() {
+    let lhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![2],
+        rhs_batch_dims: vec![0],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisRoleConflict {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_no_free_dims_inner_product() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]);
+    let rhs = TypedTensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 1,
+        rhs_rank: 1,
+    };
+    let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(out.shape, vec![]);
+    assert_eq!(out.host_data(), &[32.0]);
+}
+
+#[test]
+fn test_batched_gemm_with_batched_inner_product() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TypedTensor::from_vec(vec![3, 2], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![1],
+        rhs_batch_dims: vec![1],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(out.shape, vec![2]);
+    assert_f64_close(out.host_data()[0], 1.0 * 7.0 + 2.0 * 8.0 + 3.0 * 9.0);
+    assert_f64_close(out.host_data()[1], 4.0 * 10.0 + 5.0 * 11.0 + 6.0 * 12.0);
+}
+
+#[test]
+fn test_batched_gemm_matrix_multiply_no_batch() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TypedTensor::from_vec(vec![3, 2], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(out.shape, vec![2, 2]);
+    assert_f64_close(out.host_data()[0], 1.0 * 7.0 + 3.0 * 8.0 + 5.0 * 9.0);
+    assert_f64_close(out.host_data()[1], 2.0 * 7.0 + 4.0 * 8.0 + 6.0 * 9.0);
+    assert_f64_close(out.host_data()[2], 1.0 * 10.0 + 3.0 * 11.0 + 5.0 * 12.0);
+    assert_f64_close(out.host_data()[3], 2.0 * 10.0 + 4.0 * 11.0 + 6.0 * 12.0);
+}
+
+#[test]
+fn test_install_with_pool_preserves_buffers() {
+    let mut backend = CpuBackend::with_threads(1);
+    let t = TensorBackend::add(
+        &mut backend,
+        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
+        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+    )
+    .unwrap();
+    assert_eq!(get_f64(&t, &[0]), 4.0);
+    assert_eq!(get_f64(&t, &[1]), 6.0);
+    assert_eq!(backend.buffer_pool_len(), 0);
+}
+
+#[test]
+fn test_solve_with_regular_matrix_rhs() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]));
+    let mut backend = CpuBackend::new();
+    let x = backend.solve(&a, &b).unwrap();
+    assert_eq!(x.shape(), &[2, 2]);
+    let x_data = match &x {
+        Tensor::F64(inner) => inner.host_data().to_vec(),
+        _ => panic!("expected f64 tensor"),
+    };
+    let recon = matmul_f64(&[2.0, 1.0, 0.0, 3.0], &x_data, 2, 2, 2);
+    assert_f64_close_tol(recon[0], 5.0, 1e-10);
+    assert_f64_close_tol(recon[1], 7.0, 1e-10);
+    assert_f64_close_tol(recon[2], 3.0, 1e-10);
+    assert_f64_close_tol(recon[3], 4.0, 1e-10);
+}
+
+#[test]
+fn test_batched_gemm_rejects_out_of_bounds_lhs_batch_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![5],
+        rhs_batch_dims: vec![1],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_lu_unsupported_dtype_returns_error() {
+    let input = Tensor::F32(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![1.0f32, 0.0, 0.0, 1.0],
+    ));
+    let mut backend = CpuBackend::new();
+    assert!(backend.lu(&input).is_err());
+}
+
+#[test]
+fn test_svd_unsupported_dtype_returns_error() {
+    let input = Tensor::F32(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![1.0f32, 0.0, 0.0, 1.0],
+    ));
+    let mut backend = CpuBackend::new();
+    assert!(backend.svd(&input).is_err());
+}
+
+#[test]
+fn test_qr_unsupported_dtype_returns_error() {
+    let input = Tensor::F32(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![1.0f32, 0.0, 0.0, 1.0],
+    ));
+    let mut backend = CpuBackend::new();
+    assert!(backend.qr(&input).is_err());
+}
+
+#[test]
+fn test_eig_returns_complex_outputs_for_real_input() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, -1.0, 1.0, 0.0]));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.eig(&input).unwrap();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].shape(), &[2]);
+    assert_eq!(outputs[1].shape(), &[2, 2]);
+}
+
+#[test]
+fn test_batched_gemm_with_multiple_batch_dims() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::from_vec(vec![2, 2, 2, 2], (0..16).map(|x| x as f64 + 1.0).collect());
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2, 2], (0..16).map(|x| x as f64 + 1.0).collect());
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![2, 3],
+        rhs_batch_dims: vec![2, 3],
+        lhs_rank: 4,
+        rhs_rank: 4,
+    };
+    let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(out.shape, vec![2, 2, 2, 2]);
+}
+
+#[test]
+fn test_batched_gemm_rank1_vectors_with_batch() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TypedTensor::from_vec(vec![3, 2], vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![1],
+        rhs_batch_dims: vec![1],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
+    assert_eq!(out.shape, vec![2]);
+    assert_f64_close(out.host_data()[0], 1.0 * 2.0 + 2.0 * 3.0 + 3.0 * 4.0);
+    assert_f64_close(out.host_data()[1], 4.0 * 5.0 + 5.0 * 6.0 + 6.0 * 7.0);
 }
