@@ -356,6 +356,10 @@ fn f64_batched_error_includes_batch_index() {
         msg.contains("batch 1"),
         "expected batch index in error message, got: {msg}"
     );
+    assert!(
+        msg.contains("position"),
+        "expected diagonal position in error message, got: {msg}"
+    );
 }
 
 #[test]

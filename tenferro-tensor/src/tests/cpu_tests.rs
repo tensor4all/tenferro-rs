@@ -4,16 +4,18 @@ use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
-use crate::backend::TensorBackend;
+use crate::backend::{SemiringBackend, TensorBackend};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+use crate::cpu::backend;
 use crate::cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, embed_diagonal,
     extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
     reduce_sum, reshape, scatter, select, sign, transpose, tril, triu, CpuBackend, CpuContext,
 };
 use crate::types::{DType, Tensor, TypedTensor};
+use tenferro_algebra::Standard;
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
@@ -2630,4 +2632,474 @@ fn test_backend_linalg_returns_errors_for_unsupported_dtypes() {
         .triangular_solve(&f32_matrix, &f32_rhs, true, true, false, false)
         .is_err());
     assert!(backend.cholesky(&c32_matrix).is_err());
+}
+
+#[test]
+fn test_backend_default_and_buffer_pool_len() {
+    let backend = CpuBackend::default();
+    assert!(backend.num_threads() >= 1);
+    assert_eq!(backend.buffer_pool_len(), 0);
+}
+
+#[test]
+fn test_backend_mul_neg_conj_dispatch() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, -2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+    let c = Tensor::C64(TypedTensor::from_vec(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let prod = TensorBackend::mul(&mut backend, &a, &b).unwrap();
+    assert_eq!(get_f64(&prod, &[0]), 3.0);
+    assert_eq!(get_f64(&prod, &[1]), -8.0);
+
+    let negated = backend.neg(&a).unwrap();
+    assert_eq!(get_f64(&negated, &[0]), -1.0);
+    assert_eq!(get_f64(&negated, &[1]), 2.0);
+
+    let conjugated = backend.conj(&c).unwrap();
+    assert_c64_close(get_c64(&conjugated, &[0]), Complex64::new(1.0, -2.0));
+    assert_c64_close(get_c64(&conjugated, &[1]), Complex64::new(-3.0, -0.5));
+}
+
+#[test]
+fn test_backend_structural_ops_dispatch() {
+    let mut backend = CpuBackend::new();
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+
+    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
+    let broadcast = backend.broadcast_in_dim(&scalar, &[2, 2], &[]).unwrap();
+    assert_eq!(broadcast.shape(), &[2, 2]);
+    assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
+    assert_eq!(get_f64(&broadcast, &[1, 1]), 5.0);
+
+    let diag = backend.extract_diagonal(&a, 0, 1).unwrap();
+    assert_eq!(diag.shape(), &[2]);
+    assert_eq!(get_f64(&diag, &[0]), 1.0);
+    assert_eq!(get_f64(&diag, &[1]), 4.0);
+
+    let d = Tensor::F64(TypedTensor::from_vec(vec![2], vec![10.0, 20.0]));
+    let embedded = backend.embed_diagonal(&d, 0, 1).unwrap();
+    assert_eq!(embedded.shape(), &[2, 2]);
+    assert_eq!(get_f64(&embedded, &[0, 0]), 10.0);
+    assert_eq!(get_f64(&embedded, &[1, 1]), 20.0);
+
+    let tril_result = backend.tril(&a, 0).unwrap();
+    assert_eq!(tril_result.shape(), &[2, 2]);
+    assert_eq!(get_f64(&tril_result, &[0, 1]), 0.0);
+
+    let triu_result = backend.triu(&a, 0).unwrap();
+    assert_eq!(triu_result.shape(), &[2, 2]);
+    assert_eq!(get_f64(&triu_result, &[1, 0]), 0.0);
+
+    let summed = TensorBackend::reduce_sum(&mut backend, &a, &[0]).unwrap();
+    assert_eq!(summed.shape(), &[2]);
+    assert_eq!(get_f64(&summed, &[0]), 3.0);
+    assert_eq!(get_f64(&summed, &[1]), 7.0);
+}
+
+#[test]
+fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+
+    let a_f32 = Tensor::F32(TypedTensor::from_vec(vec![1, 2], vec![1.0f32, 2.0]));
+    let b_f32 = Tensor::F32(TypedTensor::from_vec(vec![2, 1], vec![3.0f32, 4.0]));
+    let out_f32 = backend.dot_general(&a_f32, &b_f32, &config).unwrap();
+    assert_eq!(out_f32.shape(), &[1, 1]);
+
+    let a_c32 = Tensor::C32(TypedTensor::from_vec(
+        vec![1, 2],
+        vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+    ));
+    let b_c32 = Tensor::C32(TypedTensor::from_vec(
+        vec![2, 1],
+        vec![Complex32::new(3.0, 0.0), Complex32::new(4.0, 0.0)],
+    ));
+    let out_c32 = backend.dot_general(&a_c32, &b_c32, &config).unwrap();
+    assert_eq!(out_c32.shape(), &[1, 1]);
+
+    let f64_t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let f32_t = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    let err = backend.dot_general(&f64_t, &f32_t, &config).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DTypeMismatch {
+            op: "dot_general",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_backend_gather_scatter_dynamic_slice_dispatch() {
+    let mut backend = CpuBackend::new();
+
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![3, 1], vec![0.0, 2.0, 4.0]));
+    let gathered = backend
+        .gather(&operand, &start_indices, &simple_gather_config())
+        .unwrap();
+    assert_eq!(gathered.shape(), &[3]);
+    assert_eq!(get_f64(&gathered, &[0]), 10.0);
+    assert_eq!(get_f64(&gathered, &[2]), 50.0);
+
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
+    let scatter_indices = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 2],
+        vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
+    ));
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+    let scattered = backend
+        .scatter(
+            &operand,
+            &scatter_indices,
+            &updates,
+            &diagonal_scatter_config(),
+        )
+        .unwrap();
+    assert_eq!(get_f64(&scattered, &[0, 0]), 5.0);
+    assert_eq!(get_f64(&scattered, &[1, 1]), 6.0);
+    assert_eq!(get_f64(&scattered, &[2, 2]), 7.0);
+
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![4, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+        ],
+    ));
+    let starts = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 3.0]));
+    let ds = backend.dynamic_slice(&input, &starts, &[2, 2]).unwrap();
+    assert_eq!(ds.shape(), &[2, 2]);
+    assert_eq!(get_f64(&ds, &[0, 0]), 11.0);
+    assert_eq!(get_f64(&ds, &[1, 1]), 16.0);
+}
+
+#[test]
+fn test_solve_zero_dim_returns_zeros() {
+    let mut backend = CpuBackend::new();
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 0], vec![]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 1], vec![]));
+    let x = backend.solve(&a, &b).unwrap();
+    assert_eq!(x.shape(), &[0, 1]);
+}
+
+#[test]
+fn test_solve_with_1d_vector_rhs() {
+    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![5.0, 7.0]));
+    let mut backend = CpuBackend::new();
+    let x = backend.solve(&a, &b).unwrap();
+    assert_eq!(x.shape(), &[2]);
+    let expected = matmul_f64(
+        &[2.0, 1.0, 0.0, 3.0],
+        &[get_f64(&x, &[0]), get_f64(&x, &[1])],
+        2,
+        2,
+        1,
+    );
+    assert_f64_close_tol(expected[0], 5.0, 1e-10);
+    assert_f64_close_tol(expected[1], 7.0, 1e-10);
+}
+
+#[test]
+fn test_solve_with_batched_vector_rhs() {
+    let a = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2, 2],
+        vec![2.0, 1.0, 0.0, 3.0, 1.0, 0.0, 1.0, 2.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]));
+    let mut backend = CpuBackend::new();
+    let x = backend.solve(&a, &b).unwrap();
+    assert_eq!(x.shape(), &[2, 2]);
+}
+
+#[test]
+fn test_triangular_solve_dtype_mismatch_and_unsupported() {
+    let mut backend = CpuBackend::new();
+    let a_f32 = Tensor::F32(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![1.0f32, 0.0, 0.0, 1.0],
+    ));
+    let b_f64 = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
+    let err = backend
+        .triangular_solve(&a_f32, &b_f64, true, true, false, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DTypeMismatch {
+            op: "triangular_solve",
+            ..
+        }
+    ));
+
+    let a_f32 = Tensor::F32(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![1.0f32, 0.0, 0.0, 1.0],
+    ));
+    let b_f32 = Tensor::F32(TypedTensor::from_vec(vec![2, 1], vec![1.0f32, 2.0]));
+    let err = backend
+        .triangular_solve(&a_f32, &b_f32, true, true, false, false)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "triangular_solve",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_reclaim_buffer_returns_host_buffer_to_pool() {
+    let mut backend = CpuBackend::new();
+    assert_eq!(backend.buffer_pool_len(), 0);
+    let t = TensorBackend::add(
+        &mut backend,
+        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
+        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+    )
+    .unwrap();
+    backend.reclaim_buffer(t);
+    assert!(backend.buffer_pool_len() > 0);
+}
+
+#[test]
+fn test_reclaim_buffer_covers_all_dtypes() {
+    let mut backend = CpuBackend::new();
+    let f32_t = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    backend.reclaim_buffer(f32_t);
+    let c32_t = Tensor::C32(TypedTensor::from_vec(
+        vec![1],
+        vec![Complex32::new(1.0, 0.0)],
+    ));
+    backend.reclaim_buffer(c32_t);
+    let c64_t = Tensor::C64(TypedTensor::from_vec(
+        vec![1],
+        vec![Complex64::new(1.0, 0.0)],
+    ));
+    backend.reclaim_buffer(c64_t);
+    assert!(backend.buffer_pool_len() >= 3);
+}
+
+#[test]
+fn test_batched_gemm_rejects_contracting_dim_count_mismatch() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0, 1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_batch_dim_count_mismatch() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![1],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_axis_role_conflict() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![0],
+        rhs_batch_dims: vec![0],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisRoleConflict {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_duplicate_axis() {
+    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0, 0],
+        rhs_contracting_dims: vec![0, 0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::DuplicateAxis {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_contracting_shape_mismatch() {
+    let lhs = TypedTensor::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TypedTensor::from_vec(vec![4, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+        lhs_rank: 2,
+        rhs_rank: 2,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::ShapeMismatch {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_batched_gemm_rejects_batch_shape_mismatch() {
+    let lhs = TypedTensor::from_vec(vec![2, 2, 3], vec![0.0; 12]);
+    let rhs = TypedTensor::from_vec(vec![2, 2, 2], vec![0.0; 8]);
+    let mut backend = CpuBackend::new();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![2],
+        rhs_batch_dims: vec![2],
+        lhs_rank: 3,
+        rhs_rank: 3,
+    };
+    let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
+        &mut backend,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::ShapeMismatch {
+            op: "batched_gemm",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_catch_backend_panic_extracts_string_and_str_messages() {
+    let result = backend::catch_backend_panic("test_op", || panic!("explicit string message"));
+    let err = result.unwrap_err();
+    match err {
+        crate::Error::BackendFailure { op, message } => {
+            assert_eq!(op, "test_op");
+            assert!(message.contains("explicit string message"));
+        }
+        other => panic!("expected BackendFailure, got {:?}", other),
+    }
+
+    let result = backend::catch_backend_panic("test_op2", || panic!("formatted {}", 42));
+    let err = result.unwrap_err();
+    match err {
+        crate::Error::BackendFailure { op, message } => {
+            assert_eq!(op, "test_op2");
+            assert!(message.contains("formatted 42"));
+        }
+        other => panic!("expected BackendFailure, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_catch_backend_panic_handles_non_string_payload() {
+    let result = backend::catch_backend_panic("test_op3", || std::panic::panic_any(42usize));
+    let err = result.unwrap_err();
+    match err {
+        crate::Error::BackendFailure { op, message } => {
+            assert_eq!(op, "test_op3");
+            assert_eq!(message, "backend panic");
+        }
+        other => panic!("expected BackendFailure, got {:?}", other),
+    }
 }
