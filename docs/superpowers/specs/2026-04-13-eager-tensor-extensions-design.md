@@ -91,6 +91,13 @@ exec_op_on_tensors(&op, &[input], backend) -> Vec<Tensor>  // e.g. [u, s, vt]
       return Vec<EagerTensor> where each holds Arc::clone of the same GradNode
 ```
 
+Note: `GradNode.output_idx` is stored on the `EagerTensor`, not on the
+`GradNode` itself. The shared `GradNode` is traversed once during
+`topo_sort_grad_dag` (deduplicated by `Arc` pointer). Each `EagerTensor`
+knows its own `output_idx` for use by callers that need to identify which
+output they hold, but `backward_dag` does not use `output_idx` — it uses
+`primal_out_keys` to collect cotangents for all outputs.
+
 - When `!requires_grad`, `grad_node` is `None` for all outputs (zero overhead).
 
 Public linalg methods wrap this:
@@ -321,11 +328,43 @@ complex wrapper in faer_linalg is an unnecessary dtype promotion.
 tensor. E.g., for `Complex64` singular values, take `re` of each element
 and build a `TypedTensor<f64>`.
 
-**Decision: Option (A).** Change the faer backend so that SVD/eigh return
-real-dtype tensors for singular values / eigenvalues even when the input is
-complex. This aligns with NumPy/JAX/PyTorch behavior (e.g.,
-`np.linalg.svd(complex_matrix)` returns real singular values). The change
-is localized to `faer_linalg.rs` and `cpu/backend.rs`.
+**Decision: Change the full stack** so that SVD/eigh return real-dtype
+tensors for singular values / eigenvalues, matching NumPy/JAX/PyTorch
+behavior. This requires coordinated changes across backend, op definition,
+and AD rules.
+
+### Required changes for real-valued SVD s / Eigh w
+
+**1. Backend (`tenferro-tensor/src/cpu/linalg/faer_linalg.rs`, `cpu/backend.rs`):**
+Remove the complex wrapper around real singular values / eigenvalues. For
+complex SVD, return `[Tensor::C64(u), Tensor::F64(s), Tensor::C64(vt)]`
+instead of `[Tensor::C64(u), Tensor::C64(s_complex), Tensor::C64(vt)]`.
+Same for Eigh.
+
+**2. Op definition (`tenferro-ops/src/std_tensor_op.rs`):**
+Add `input_dtype: DType` to `StdTensorOp::Svd` and `StdTensorOp::Eigh`,
+following the existing pattern in `StdTensorOp::Eig`. This allows AD rules
+to know the input dtype and insert Convert ops when needed.
+
+**3. AD rules (`tenferro-ops/src/ad/linalg.rs`):**
+In `linearize_svd` and `linearize_eigh`, when `input_dtype` is complex:
+- Before operations that mix `s`/`w` (real) with complex matrices (U, Vt, V),
+  insert `StdTensorOp::Convert { to: input_dtype, from: real_dtype }` to
+  promote the real `s`/`w` to complex.
+- This follows the existing pattern in `linearize_eig` (lines 143-159 in
+  `linalg.rs`), which already inserts `Convert` ops for real→complex promotion.
+
+**4. Traced API (`tenferro/src/linalg_api.rs`):**
+`svd()` / `eigh()` construct `StdTensorOp::Svd` / `Eigh` — pass
+`input_dtype` from the traced tensor's metadata. Currently `TracedTensor`
+does not carry dtype, so `input_dtype` must be inferred from the primal
+tensor at graph construction time. This may require adding dtype to the
+`StdTensorOp` construction site, or deferring dtype resolution to
+compilation time via a `DType::Inferred` variant.
+
+**5. Eager path:**
+`EagerTensor` has the concrete `Tensor`, so `input_dtype` is known at
+construction: `self.data.dtype()`.
 
 ### Method signatures and crate placement
 
@@ -368,7 +407,7 @@ Split `eager.rs` (currently 631 lines) to keep files focused:
 | `eager.rs` | `EagerTensor` struct, `EagerContext` (pub), `new_leaf`, `new_result`, `backward()`, `detach()`, `data()`, `grad()`, internal helpers (`saved_forward_values`, `derived_output_key`, etc.) |
 | `eager_ops.rs` | All op methods: `unary_op`, `binary_op`, `ternary_op`, `multi_output_unary_op`, `nary_op`, and every public method (`add`, `mul`, ..., `svd`, `transpose`, etc.) |
 | `eager_einsum.rs` | `eager_einsum_ad` free function |
-| `eager_exec.rs` | Unchanged — `exec_op_on_tensors` |
+| `eager_exec.rs` | `exec_op_on_tensors` — add `NaryEinsum` branch (delegate to `eager_einsum`) |
 | `eager_emitter.rs` | Unchanged — `EagerEmitter` |
 
 Tests:
@@ -401,8 +440,11 @@ Tests:
 - Implement `NaryEinsum` branch in `eager_exec.rs` (delegate to `eager_einsum`)
 - `eager_einsum_ad` free function (stores `NaryEinsum` in `GradNode`)
 
-**Phase 5 (TypedTensor):**
-- Add `TensorScalar::Real` associated type + `try_into_typed` method
+**Phase 5 (real-dtype SVD/eigh + TypedTensor):**
+- Add `input_dtype: DType` to `StdTensorOp::Svd` and `StdTensorOp::Eigh`
 - Change faer backend to return real dtype for SVD/eigh singular values / eigenvalues
+- Update `linearize_svd` / `linearize_eigh` AD rules to insert `Convert` ops for real→complex promotion
+- Update `svd()` / `eigh()` in traced API (`linalg_api.rs`) and eager API to pass `input_dtype`
+- Add `TensorScalar::Real` associated type + `try_into_typed` method
 - Linalg convenience methods on `TypedTensor<T>` (in `tenferro-tensor`)
 - `typed_eager_einsum` free function (in `tenferro-einsum`)
