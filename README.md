@@ -2,15 +2,15 @@
 
 General-purpose dense tensor computation in Rust, inspired by PyTorch and JAX.
 
-tenferro provides both eager tensor operations (like NumPy) and lazy traced
-execution with einsum, linear algebra, and automatic differentiation
-(VJP/JVP/HVP) on CPU. GPU support is planned.
+tenferro provides both eager tensor operations with scalar-loss reverse-mode
+autodiff and lazy traced execution with einsum, linear algebra, and transform
+AD (VJP/JVP/HVP) on CPU. GPU support is planned.
 
 ## Workspace Crates
 
 | Crate | Role |
 | --- | --- |
-| `tenferro` | Traced frontend: `Engine`, `TracedTensor`, public einsum and linalg APIs, AD (VJP/JVP/HVP) |
+| `tenferro` | User-facing facade: eager execution and scalar-loss reverse-mode AD via `EagerTensor` / `EagerContext`, plus traced execution and transform AD via `TracedTensor`, `Engine`, and public einsum/linalg APIs |
 | `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend (GPU planned) |
 | `tenferro-einsum` | Subscripts, contraction trees, and fragment-building utilities |
 | `tenferro-ops` | Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rule implementations |

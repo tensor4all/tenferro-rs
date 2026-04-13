@@ -1,5 +1,8 @@
 use num_complex::Complex64;
-use tenferro::{DotGeneralConfig, EagerTensor, GatherConfig, PadConfig, SliceConfig, Tensor};
+use tenferro::{
+    CpuBackend, DotGeneralConfig, EagerContext, EagerTensor, GatherConfig, PadConfig, SliceConfig,
+    Tensor,
+};
 
 const FD_H: f64 = 1.0e-6;
 const TOL: f64 = 1.0e-5;
@@ -22,6 +25,8 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 fn c64_data(tensor: &Tensor) -> &[Complex64] {
     tensor.as_slice::<Complex64>().unwrap()
 }
+
+fn assert_send_sync<T: Send + Sync>() {}
 
 fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], index: usize) -> f64 {
     let mut plus = x.to_vec();
@@ -101,6 +106,19 @@ fn eager_x_squared_gradient_matches_finite_difference() {
 }
 
 #[test]
+fn eager_repeated_backward_accumulates_across_calls() {
+    let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
+
+    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
+
+    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[4.0, 8.0, 12.0], TOL);
+}
+
+#[test]
 fn eager_matmul_gradients_match_finite_difference() {
     let a_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let b_data = vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
@@ -149,6 +167,93 @@ fn eager_fan_out_accumulates_gradient() {
 
     let grad = x.grad().unwrap();
     assert_close_slice(f64_data(grad.as_ref()), &[2.0, 2.0, 2.0], TOL);
+}
+
+#[test]
+fn eager_clear_grad_resets_only_one_leaf() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    let y =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
+
+    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    x.clear_grad();
+
+    assert!(x.grad().is_none());
+    assert_close_slice(f64_data(y.grad().unwrap().as_ref()), &[1.0, 2.0, 3.0], TOL);
+
+    let loss = (&x * &x).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
+    assert_close_slice(f64_data(y.grad().unwrap().as_ref()), &[1.0, 2.0, 3.0], TOL);
+}
+
+#[test]
+fn eager_context_clear_grads_resets_all_live_leaves() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    let y =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
+
+    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    ctx.clear_grads();
+
+    assert!(x.grad().is_none());
+    assert!(y.grad().is_none());
+
+    let loss = (&x * &y).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[4.0, 5.0, 6.0], TOL);
+    assert_close_slice(f64_data(y.grad().unwrap().as_ref()), &[1.0, 2.0, 3.0], TOL);
+}
+
+#[test]
+fn eager_unrelated_backward_keeps_existing_leaf_grad() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    let y =
+        EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
+
+    let loss_x = (&x * &x).reduce_sum(&[0]).unwrap();
+    let _ = loss_x.backward().unwrap();
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
+
+    let loss_y = (&y * &y).reduce_sum(&[0]).unwrap();
+    let _ = loss_y.backward().unwrap();
+
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
+    assert_close_slice(
+        f64_data(y.grad().unwrap().as_ref()),
+        &[8.0, 10.0, 12.0],
+        TOL,
+    );
+}
+
+#[test]
+fn eager_tracks_grad_reports_leaf_state() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let plain =
+        EagerTensor::from_tensor_in(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+    let leaf = EagerTensor::requires_grad_in(Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
+
+    assert!(!plain.tracks_grad());
+    assert!(leaf.tracks_grad());
+    assert!(!leaf.detach().tracks_grad());
+}
+
+#[test]
+fn eager_send_sync_contracts_compile() {
+    assert_send_sync::<EagerTensor<CpuBackend>>();
+    assert_send_sync::<EagerContext<CpuBackend>>();
 }
 
 #[test]

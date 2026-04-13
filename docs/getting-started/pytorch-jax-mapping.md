@@ -9,8 +9,9 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Eager tensor | `numpy.ndarray` | — | `Tensor` + `CpuBackend` |
 | Tensor handle | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `.eval(&mut engine)` |
-| Execution | Eager by default | Eager arrays, often staged with `jit` | Lazy until `eval` |
-| Gradients | `loss.backward()`, `torch.autograd.grad` | `jax.grad`, `jax.vjp`, `jax.jvp` | `.grad`, `.vjp`, `.jvp` |
+| Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `.eval()`) |
+| Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
+| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives inside `Engine` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro::einsum::einsum` |
 
@@ -29,7 +30,10 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut ctx)` | `tenferro::qr(&x)` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut ctx)` | `tenferro::cholesky(&x)` |
 | Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut ctx)` | `tenferro::solve(&a, &b)` |
-| Gradient | `torch.autograd.grad(...)` | `jax.grad(f)(x)` | N/A | `loss.grad(&x)` |
+| Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
+| Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | — | `loss.grad(&x)` |
+| VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | — | `y.vjp(&x, &cotangent)` |
+| JVP | `torch.func.jvp` | `jax.jvp` | — | `y.jvp(&x, &tangent)` |
 
 ## Key differences
 
@@ -45,7 +49,16 @@ then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 
 ### Lazy evaluation
 
-PyTorch users usually expect every operation to execute immediately. JAX users often switch between eager execution and `jit`. tenferro stays lazy until you call `.eval(&mut engine)`.
+PyTorch users usually expect every operation to execute immediately. JAX users
+often switch between eager execution and `jit`. tenferro stays lazy until you
+call `.eval(&mut engine)`.
+
+### Autodiff split
+
+Eager tenferro matches PyTorch's scalar-loss `loss.backward()` workflow with
+accumulation semantics. Traced tenferro is the transform surface for
+`torch.autograd.grad`, `jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order
+compositions such as HVPs.
 
 ### Engine ownership
 
