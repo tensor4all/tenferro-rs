@@ -3745,28 +3745,28 @@ fn einsum_frule_no_tangents_produces_zeros() {
 }
 
 #[test]
-fn einsum_frule_parenthesized_no_tangents_produces_zeros() {
+fn einsum_frule_trace_multi_tangent_accumulation() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.5, 0.0, 0.0, 0.5], &[2, 2], COL).unwrap();
+    let db = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
 
-    let result = einsum_frule::<S, CpuBackend>(
-        &mut ctx,
-        "(ij,jk),kl->il",
-        &[&a, &b, &c],
-        &[None, None, None],
-    )
-    .unwrap();
+    let tangent =
+        einsum_frule::<S, CpuBackend>(&mut ctx, "ii,jj->", &[&a, &b], &[Some(&da), Some(&db)])
+            .unwrap();
 
-    assert_eq!(result.dims(), &[2, 2]);
-    let data = result.buffer().as_slice().unwrap();
-    for (i, &v) in data.iter().enumerate() {
-        assert!(
-            v.abs() < 1e-15,
-            "frule nested no-tangent element {i} = {v}, expected 0.0"
-        );
-    }
+    assert!(tangent.dims().is_empty());
+    let t_val = scalar_val(&tangent);
+    let trace_da = 0.5 + 0.5;
+    let trace_b = 5.0 + 8.0;
+    let trace_a = 1.0 + 4.0;
+    let trace_db = 1.0 + 1.0;
+    let expected = trace_da * trace_b + trace_a * trace_db;
+    assert!(
+        (t_val - expected).abs() < 1e-10,
+        "tangent = {t_val}, expected {expected}"
+    );
 }
 
 #[test]
@@ -3970,4 +3970,210 @@ fn einsum_rrule_trace_empty_cotangent_handled() {
     let g = to_col_major_vec(&grads[0]);
     assert!((g[0] - 0.0).abs() < 1e-12);
     assert!((g[3] - 0.0).abs() < 1e-12);
+}
+
+#[test]
+fn dual_einsum_trace_with_tangent() {
+    use tidu::DualValue;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.2], &[2, 2], COL).unwrap();
+    let a_dual = DualValue::with_tangent(a.clone(), da.clone()).unwrap();
+
+    let result = dual_einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&a_dual]).unwrap();
+
+    let expected_primal = scalar_val(result.primal());
+    assert!(
+        (expected_primal - 5.0).abs() < 1e-12,
+        "primal = {expected_primal}"
+    );
+
+    let tangent = result.tangent().expect("should have tangent");
+    let expected_tangent = scalar_val(tangent);
+    assert!(
+        (expected_tangent - 0.3).abs() < 1e-12,
+        "tangent = {expected_tangent}"
+    );
+}
+
+#[test]
+fn dual_einsum_diagonal_extraction_with_tangent() {
+    use tidu::DualValue;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.5, 0.0, 0.0, 0.5], &[2, 2], COL).unwrap();
+    let a_dual = DualValue::with_tangent(a.clone(), da.clone()).unwrap();
+
+    let result = dual_einsum::<S, CpuBackend>(&mut ctx, "ii->i", &[&a_dual]).unwrap();
+
+    let primal = result.primal();
+    assert_eq!(primal.dims(), &[2]);
+    let p = to_col_major_vec(primal);
+    assert!((p[0] - 1.0).abs() < 1e-12, "primal[0] = {}", p[0]);
+    assert!((p[1] - 4.0).abs() < 1e-12, "primal[1] = {}", p[1]);
+
+    let tangent = result.tangent().expect("should have tangent");
+    assert_eq!(tangent.dims(), &[2]);
+    let t = to_col_major_vec(tangent);
+    assert!((t[0] - 0.5).abs() < 1e-12, "tangent[0] = {}", t[0]);
+    assert!((t[1] - 0.5).abs() < 1e-12, "tangent[1] = {}", t[1]);
+}
+
+#[test]
+fn einsum_hvp_partial_trace_iij_with_delta() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2, 3], COL).unwrap();
+    let dt = Tensor::<f64>::from_slice(&[0.1; 12], &[2, 2, 3], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[0.5, 0.5, 0.5], &[3], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "iij->j",
+        &[&t],
+        &[Some(&dt)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp) = hvps[0];
+    assert_eq!(grad.dims(), &[2, 2, 3]);
+    assert_eq!(hvp.dims(), &[2, 2, 3]);
+
+    for i1 in 0..2 {
+        for i2 in 0..2 {
+            for j in 0..3 {
+                let expected_grad = if i1 == i2 { get(&cotangent, &[j]) } else { 0.0 };
+                let actual_grad = get(grad, &[i1, i2, j]);
+                assert!(
+                    (actual_grad - expected_grad).abs() < 1e-10,
+                    "grad[{i1},{i2},{j}]={actual_grad}, expected {expected_grad}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn einsum_rrule_iijj_partial_trace_2x2() {
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=16).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[2, 2, 2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "iijj->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2, 2, 2]);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            let expected = if true { 1.0 } else { 0.0 };
+            let actual = get(&grads[0], &[i, i, j, j]);
+            assert!(
+                (actual - expected).abs() < 1e-10,
+                "grad[{i},{i},{j},{j}]={actual}, expected {expected}"
+            );
+            let off_diag = get(&grads[0], &[i, 1 - i, j, j]);
+            assert!(
+                off_diag.abs() < 1e-10,
+                "off-diag grad[{i},{},{j},{j}]={off_diag}",
+                1 - i
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_rrule_diagonal_extraction_complex64_nontrivial() {
+    use num_complex::Complex64;
+    type CS = Standard<Complex64>;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<Complex64>::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, -1.0),
+        ],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let cotangent = Tensor::<Complex64>::from_slice(
+        &[Complex64::new(0.5, 0.5), Complex64::new(1.0, 0.0)],
+        &[2],
+        COL,
+    )
+    .unwrap();
+
+    let grads = einsum_rrule::<CS, CpuBackend>(&mut ctx, "ii->i", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+
+    let g = grads[0].buffer().as_slice().unwrap();
+    assert!(
+        (g[0] - Complex64::new(0.5, 0.5)).norm() < 1e-12,
+        "g[0,0]={:?}",
+        g[0]
+    );
+    assert!(
+        (g[1].re - 0.0).abs() < 1e-12 && (g[1].im - 0.0).abs() < 1e-12,
+        "g[1,0]={:?}",
+        g[1]
+    );
+    assert!(
+        (g[2].re - 0.0).abs() < 1e-12 && (g[2].im - 0.0).abs() < 1e-12,
+        "g[0,1]={:?}",
+        g[2]
+    );
+    assert!(
+        (g[3] - Complex64::new(1.0, 0.0)).norm() < 1e-12,
+        "g[1,1]={:?}",
+        g[3]
+    );
+}
+
+#[test]
+fn einsum_hvp_multi_pair_trace_iijj_with_tangent() {
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=16).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[2, 2, 2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1; 16], &[2, 2, 2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[0.5], &[], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "iijj->",
+        &[&a],
+        &[Some(&da)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp) = hvps[0];
+    assert_eq!(grad.dims(), &[2, 2, 2, 2]);
+    assert_eq!(hvp.dims(), &[2, 2, 2, 2]);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            let g = get(grad, &[i, i, j, j]);
+            assert!(
+                (g - 2.0).abs() < 1e-10,
+                "grad[{i},{i},{j},{j}]={g}, expected 2.0"
+            );
+        }
+    }
 }
