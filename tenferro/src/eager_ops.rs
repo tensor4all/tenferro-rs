@@ -1,4 +1,3 @@
-use std::rc::Rc;
 use std::sync::Arc;
 
 use tidu::{GradEdge, GradNode};
@@ -957,7 +956,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             })
         });
         Ok(Self::new_result(
-            Rc::clone(&self.ctx),
+            Arc::clone(&self.ctx),
             result_key,
             output,
             self.requires_grad,
@@ -976,7 +975,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         num_outputs: usize,
     ) -> Result<Vec<Self>> {
         let outputs = {
-            let mut backend = self.ctx.backend.borrow_mut();
+            let mut backend = self.ctx.backend.lock().unwrap();
             exec_op_on_tensors(&op, &[self.data.as_ref()], &mut *backend)?
         };
         if outputs.len() != num_outputs {
@@ -1017,7 +1016,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             .zip(outputs)
             .map(|(output_key, output)| {
                 Self::new_result(
-                    Rc::clone(&self.ctx),
+                    Arc::clone(&self.ctx),
                     output_key,
                     output.as_ref().clone(),
                     self.requires_grad,
@@ -1039,9 +1038,9 @@ impl<B: TensorBackend> EagerTensor<B> {
             ));
         };
 
-        let ctx = Rc::clone(&first.ctx);
+        let ctx = Arc::clone(&first.ctx);
         for tensor in tensors.iter().skip(1) {
-            if !Rc::ptr_eq(&ctx, &tensor.ctx) {
+            if !Arc::ptr_eq(&ctx, &tensor.ctx) {
                 ctx.absorb_from(&tensor.ctx);
             }
         }
