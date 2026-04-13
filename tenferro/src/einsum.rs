@@ -31,6 +31,7 @@ use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::TensorBackend;
 
+use super::checkpoint::CheckpointNode;
 use super::engine::Engine;
 use super::error::{Error, Result};
 use super::sym_dim::SymDim;
@@ -489,6 +490,10 @@ fn build_traced_from_tree(
                 extra_roots.extend(input.extra_roots.iter().cloned());
             }
 
+            let merged_chain = inputs.iter().fold(None, |acc, input| {
+                CheckpointNode::merge_chains(acc, input.checkpoint_chain.clone())
+            });
+
             TracedTensor {
                 id: next_traced_id(),
                 rank: out_shape.len(),
@@ -499,7 +504,7 @@ fn build_traced_from_tree(
                 shape_hint: Some(out_shape.into_iter().map(SymDim::from).collect()),
                 inputs_map: Arc::new(merged),
                 extra_roots,
-                checkpoint_chain: None,
+                checkpoint_chain: merged_chain,
             }
         }
         ValRef::External(_) => {
