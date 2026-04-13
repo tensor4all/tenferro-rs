@@ -35,10 +35,39 @@ invokes `PrimitiveOp::linearize` / `transpose_rule`. For linalg ops like SVD,
 the transpose rule consumes all primal outputs (u, s, vt) from `saved_data`
 to produce cotangents for all inputs.
 
-This means multi-output ops need **one shared `GradNode`** that:
-1. Lists all output keys in `primal_out_keys` (not just one).
-2. Saves all output tensors in `saved_data` (one per `output_slot`).
-3. Is referenced by all output `EagerTensor`s (via `Arc`).
+This means multi-output ops need **one `GradNode` per output** that share
+the same `Arc`-wrapped data but carry distinct `output_idx`:
+
+1. All nodes list all output keys in `primal_out_keys` (not just their own).
+2. All nodes share the same `saved_data` containing all output tensors.
+3. `topo_sort_grad_dag` deduplicates by `Arc` pointer — if all output
+   `EagerTensor`s point to the same `Arc<GradNode>`, the node is visited
+   once. However, `GradNode.output_idx` is a field on the struct, so each
+   output needs its own `GradNode` instance with a unique `output_idx`.
+
+To avoid duplicating `saved_data`, we wrap it in `Arc`:
+
+```rust
+pub struct GradNode<Op: GraphOp> {
+    pub op: Op,
+    pub primal_in_keys: Vec<GlobalValKey<Op>>,
+    pub primal_out_keys: Vec<GlobalValKey<Op>>,
+    pub saved_data: Arc<HashMap<GlobalValKey<Op>, Arc<Op::Operand>>>,  // shared
+    pub input_edges: Vec<GradEdge<Op>>,
+    pub output_idx: usize,  // unique per output
+}
+```
+
+This requires a change in `tidu::GradNode` to wrap `saved_data` in `Arc`.
+The change is backward-compatible: single-output ops create `Arc::new(map)`
+as before; multi-output ops clone the `Arc` for each output node.
+
+With separate `GradNode` instances per output, `topo_sort_grad_dag` may
+visit the SVD node up to 3 times (once per output). `backward_dag` will
+then process it multiple times, but only the first visit produces
+cotangent inputs (subsequent visits find cotangents already consumed).
+This is acceptable for correctness; an optimization to deduplicate can
+be added later if needed.
 
 Each output `EagerTensor` holds `Arc<GradNode>` pointing to the same node,
 plus its own `output_idx` to identify which output it represents. When
@@ -83,20 +112,16 @@ fn saved_forward_values_multi(
 ```
 exec_op_on_tensors(&op, &[input], backend) -> Vec<Tensor>  // e.g. [u, s, vt]
                          |
-      build one shared GradNode with:
-        primal_out_keys = [key_u, key_s, key_vt]
-        saved_data      = {input_keys... , derived(slot=0) -> u, derived(slot=1) -> s, derived(slot=2) -> vt}
-        output_idx      = 0  (the node itself; each EagerTensor stores its own output_idx)
+      build Arc<saved_data> shared across all outputs:
+        saved_data = {input_keys..., derived(slot=0)->u, derived(slot=1)->s, derived(slot=2)->vt}
                          |
-      return Vec<EagerTensor> where each holds Arc::clone of the same GradNode
+      build one GradNode per output:
+        node_u:  { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=0 }
+        node_s:  { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=1 }
+        node_vt: { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=2 }
+                         |
+      return Vec<EagerTensor> where each holds its own Arc<GradNode>
 ```
-
-Note: `GradNode.output_idx` is stored on the `EagerTensor`, not on the
-`GradNode` itself. The shared `GradNode` is traversed once during
-`topo_sort_grad_dag` (deduplicated by `Arc` pointer). Each `EagerTensor`
-knows its own `output_idx` for use by callers that need to identify which
-output they hold, but `backward_dag` does not use `output_idx` — it uses
-`primal_out_keys` to collect cotangents for all outputs.
 
 - When `!requires_grad`, `grad_node` is `None` for all outputs (zero overhead).
 
@@ -200,6 +225,14 @@ All follow the existing `unary_op` pattern. Each method constructs a
 
 `concatenate` is a static method taking `&[&Self]` since it has N inputs.
 Context merging follows the same pattern as `binary_op` extended to N inputs.
+
+Note: `StdTensorOp::Concatenate` currently lacks arity metadata, and
+`n_inputs()` / `n_outputs()` are `todo!()` in `std_tensor_op.rs`. As a
+prerequisite, add `n_inputs: usize` to `StdTensorOp::Concatenate` (or
+implement `n_inputs()` to return `None` and handle variable arity in the
+eager path). For the eager `nary_op` helper, the input count is known at
+call time from the slice length, so the `todo!()` does not block eager
+execution — it only matters for traced graph validation.
 
 ## Elementwise Ops
 
@@ -348,19 +381,45 @@ to know the input dtype and insert Convert ops when needed.
 
 **3. AD rules (`tenferro-ops/src/ad/linalg.rs`):**
 In `linearize_svd` and `linearize_eigh`, when `input_dtype` is complex:
-- Before operations that mix `s`/`w` (real) with complex matrices (U, Vt, V),
-  insert `StdTensorOp::Convert { to: input_dtype, from: real_dtype }` to
-  promote the real `s`/`w` to complex.
-- This follows the existing pattern in `linearize_eig` (lines 143-159 in
-  `linalg.rs`), which already inserts `Convert` ops for real→complex promotion.
+
+*Forward (linearize):*
+- At entry: Convert real primal `s`/`w` → complex before mixed-dtype
+  operations with complex U, Vt, V. Use `StdTensorOp::Convert { to:
+  input_dtype, from: real_dtype }`.
+- At exit: The tangent outputs `ds`/`dw` are complex (result of complex
+  arithmetic). Convert complex `ds`/`dw` → real at the output boundary
+  using `StdTensorOp::Convert { to: real_dtype, from: input_dtype }`,
+  since `s`/`w` are real-valued and their tangents must match.
+
+*Reverse (transpose):*
+- The cotangent seed for `s`/`w` arrives as real (matching the primal's
+  real dtype). The transpose rule must Convert it to complex before use
+  in internal complex arithmetic, then Convert the final cotangent for
+  the input `a` stays complex (matching `a`'s dtype).
+
+This follows the existing pattern in `linearize_eig` (lines 143-159 in
+`linalg.rs`), which already inserts `Convert` ops for dtype promotion.
 
 **4. Traced API (`tenferro/src/linalg_api.rs`):**
-`svd()` / `eigh()` construct `StdTensorOp::Svd` / `Eigh` — pass
-`input_dtype` from the traced tensor's metadata. Currently `TracedTensor`
-does not carry dtype, so `input_dtype` must be inferred from the primal
-tensor at graph construction time. This may require adding dtype to the
-`StdTensorOp` construction site, or deferring dtype resolution to
-compilation time via a `DType::Inferred` variant.
+`TracedTensor` already carries a `dtype: DType` field (`traced.rs:50`).
+`svd()` / `eigh()` pass `input_dtype: a.dtype` when constructing the op,
+following the existing pattern in `eig()` (`linalg_api.rs:251-252`).
+
+After `apply_multi_output`, output dtypes must be patched per-output.
+`apply_multi_output` currently stamps all outputs with the input dtype
+(`traced.rs:1324`). For complex SVD, the `s` output must have its dtype
+patched to the real counterpart:
+
+```rust
+// In svd() after apply_multi_output:
+let real_dtype = real_dtype_of(a.dtype); // C64→F64, C32→F32, Fxx→Fxx
+u.dtype = a.dtype;      // complex
+s.dtype = real_dtype;    // real
+vt.dtype = a.dtype;      // complex
+```
+
+This follows the existing pattern in `eig()` (`linalg_api.rs:261-262`)
+which manually patches output dtypes.
 
 **5. Eager path:**
 `EagerTensor` has the concrete `Tensor`, so `input_dtype` is known at
@@ -423,6 +482,7 @@ Tests:
 **Phase 1 (foundation):**
 - Change existing methods to `Result`
 - Split `eager.rs` → `eager.rs` + `eager_ops.rs`
+- Change `tidu::GradNode.saved_data` to `Arc<HashMap<...>>` for multi-output sharing
 - Add `multi_output_unary_op` (with `saved_forward_values_multi`), `ternary_op`, `nary_op` internal helpers
 - Make `EagerContext` public, add `with_backend` / `from_tensor_in` / `requires_grad_in`
 
