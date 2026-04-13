@@ -5,25 +5,39 @@ use std::sync::Arc;
 
 use computegraph::fragment::Fragment;
 use computegraph::{GlobalOpKey, GlobalValKey, OpMode, ValRef};
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend};
-use tidu::{
-    backward_dag, topo_sort_grad_dag, BackwardCallbacks, GradEdge, GradNode, LinearFragment,
-};
+use tenferro_tensor::{Tensor, TensorBackend};
+use tidu::{backward_dag, topo_sort_grad_dag, BackwardCallbacks, GradNode, LinearFragment};
 
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
 use crate::traced::next_input_key;
 
-type GradSlot = Rc<RefCell<Option<Arc<Tensor>>>>;
-type WeakGradSlot = Weak<RefCell<Option<Arc<Tensor>>>>;
+pub(crate) type GradSlot = Rc<RefCell<Option<Arc<Tensor>>>>;
+pub(crate) type WeakGradSlot = Weak<RefCell<Option<Arc<Tensor>>>>;
 
-struct EagerContext<B: TensorBackend> {
-    backend: RefCell<B>,
+/// Shared eager execution context for tensors on a backend.
+///
+/// Reusing one context lets eager tensors share backend state and gradient
+/// storage across a computation.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+///
+/// let ctx = EagerContext::with_backend(CpuBackend::new());
+/// let x = EagerTensor::from_tensor_in(Tensor::new(vec![1], vec![1.0_f64]), ctx.clone());
+/// let y = EagerTensor::from_tensor_in(Tensor::new(vec![1], vec![2.0_f64]), ctx);
+/// let z = &x + &y;
+///
+/// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0]);
+/// ```
+pub struct EagerContext<B: TensorBackend> {
+    pub(crate) backend: RefCell<B>,
     grad_slots: RefCell<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
 }
 
@@ -35,13 +49,27 @@ impl<B: TensorBackend> EagerContext<B> {
         }
     }
 
-    fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
+    /// Create a shared eager execution context for the provided backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// assert_eq!(std::rc::Rc::strong_count(&ctx), 1);
+    /// ```
+    pub fn with_backend(backend: B) -> Rc<Self> {
+        Rc::new(Self::new(backend))
+    }
+
+    pub(crate) fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
         self.grad_slots
             .borrow_mut()
             .insert(key.clone(), Rc::downgrade(slot));
     }
 
-    fn absorb_from(&self, other: &Self) {
+    pub(crate) fn absorb_from(&self, other: &Self) {
         let other_slots = other.grad_slots.borrow();
         let mut slots = self.grad_slots.borrow_mut();
         for (key, slot) in other_slots.iter() {
@@ -83,26 +111,26 @@ impl<B: TensorBackend> EagerContext<B> {
 /// use tenferro::{EagerTensor, Tensor};
 ///
 /// let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
-/// let loss = (&x * &x).reduce_sum(&[0]);
+/// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 ///
 /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 /// ```
 #[derive(Clone)]
 pub struct EagerTensor<B: TensorBackend = CpuBackend> {
-    data: Arc<Tensor>,
-    key: GlobalValKey<StdTensorOp>,
-    grad_node: Option<Arc<GradNode<StdTensorOp>>>,
-    requires_grad: bool,
+    pub(crate) data: Arc<Tensor>,
+    pub(crate) key: GlobalValKey<StdTensorOp>,
+    pub(crate) grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+    pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
-    ctx: Rc<EagerContext<B>>,
+    pub(crate) ctx: Rc<EagerContext<B>>,
 }
 
 impl<B: TensorBackend> std::ops::Add for &EagerTensor<B> {
     type Output = EagerTensor<B>;
 
     fn add(self, rhs: &EagerTensor<B>) -> Self::Output {
-        EagerTensor::add(self, rhs)
+        EagerTensor::add(self, rhs).unwrap_or_else(|err| panic!("eager add failed: {}", err))
     }
 }
 
@@ -110,7 +138,7 @@ impl<B: TensorBackend> std::ops::Mul for &EagerTensor<B> {
     type Output = EagerTensor<B>;
 
     fn mul(self, rhs: &EagerTensor<B>) -> Self::Output {
-        EagerTensor::mul(self, rhs)
+        EagerTensor::mul(self, rhs).unwrap_or_else(|err| panic!("eager mul failed: {}", err))
     }
 }
 
@@ -118,7 +146,7 @@ impl<B: TensorBackend> std::ops::Neg for &EagerTensor<B> {
     type Output = EagerTensor<B>;
 
     fn neg(self) -> Self::Output {
-        EagerTensor::neg(self)
+        EagerTensor::neg(self).unwrap_or_else(|err| panic!("eager neg failed: {}", err))
     }
 }
 
@@ -135,7 +163,7 @@ impl EagerTensor<CpuBackend> {
     /// assert!(x.grad().is_none());
     /// ```
     pub fn from_tensor(tensor: Tensor) -> Self {
-        Self::new_leaf(Rc::new(EagerContext::new(CpuBackend::new())), tensor, false)
+        Self::from_tensor_in(tensor, EagerContext::with_backend(CpuBackend::new()))
     }
 
     /// Create a tracked eager leaf on the default CPU backend.
@@ -149,12 +177,44 @@ impl EagerTensor<CpuBackend> {
     /// assert!(x.grad().is_none());
     /// ```
     pub fn requires_grad(tensor: Tensor) -> Self {
-        Self::new_leaf(Rc::new(EagerContext::new(CpuBackend::new())), tensor, true)
+        Self::requires_grad_in(tensor, EagerContext::with_backend(CpuBackend::new()))
     }
 }
 
 impl<B: TensorBackend> EagerTensor<B> {
-    fn new_leaf(ctx: Rc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
+    /// Create an untracked eager tensor inside an existing eager context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(Tensor::new(vec![2], vec![1.0_f64, 2.0]), ctx);
+    ///
+    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// ```
+    pub fn from_tensor_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self {
+        Self::new_leaf(ctx, tensor, false)
+    }
+
+    /// Create a tracked eager leaf inside an existing eager context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![1.0_f64, 2.0]), ctx);
+    ///
+    /// assert!(x.grad().is_none());
+    /// ```
+    pub fn requires_grad_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self {
+        Self::new_leaf(ctx, tensor, true)
+    }
+
+    pub(crate) fn new_leaf(ctx: Rc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
         let key = eager_val_key();
         let grad_slot = Rc::new(RefCell::new(None));
         if requires_grad {
@@ -171,7 +231,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
     }
 
-    fn new_result(
+    pub(crate) fn new_result(
         ctx: Rc<EagerContext<B>>,
         key: GlobalValKey<StdTensorOp>,
         tensor: Tensor,
@@ -235,7 +295,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// use tenferro::{EagerTensor, Tensor};
     ///
     /// let x = EagerTensor::requires_grad(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let loss = x.exp().reduce_sum(&[0]);
+    /// let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// let grad = x.grad().unwrap();
@@ -256,7 +316,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// use tenferro::{EagerTensor, Tensor};
     ///
     /// let x = EagerTensor::requires_grad(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
-    /// let loss = (&x + &x).reduce_sum(&[0]);
+    /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 2.0, 2.0]);
@@ -281,194 +341,9 @@ impl<B: TensorBackend> EagerTensor<B> {
         self.ctx.store_grads(&cotangents);
         Ok(cotangents)
     }
-
-    /// Elementwise addition.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let y = EagerTensor::from_tensor(Tensor::new(vec![2], vec![3.0_f64, 4.0]));
-    /// let z = x.add(&y);
-    ///
-    /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-    /// ```
-    pub fn add(&self, other: &Self) -> Self {
-        self.binary_op(other, StdTensorOp::Add)
-    }
-
-    /// Elementwise multiplication.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let y = EagerTensor::from_tensor(Tensor::new(vec![2], vec![3.0_f64, 4.0]));
-    /// let z = x.mul(&y);
-    ///
-    /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
-    /// ```
-    pub fn mul(&self, other: &Self) -> Self {
-        self.binary_op(other, StdTensorOp::Mul)
-    }
-
-    /// Negate the tensor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, -2.0]));
-    /// let y = x.neg();
-    ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
-    /// ```
-    pub fn neg(&self) -> Self {
-        self.unary_op(StdTensorOp::Neg)
-    }
-
-    /// Elementwise exponential.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![1], vec![0.0_f64]));
-    /// let y = x.exp();
-    ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0]);
-    /// ```
-    pub fn exp(&self) -> Self {
-        self.unary_op(StdTensorOp::Exp)
-    }
-
-    /// Reduce sum over the requested axes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
-    /// let y = x.reduce_sum(&[0, 1]);
-    ///
-    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[10.0]);
-    /// ```
-    pub fn reduce_sum(&self, axes: &[usize]) -> Self {
-        self.unary_op(StdTensorOp::ReduceSum {
-            axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
-        })
-    }
-
-    /// Execute a dot-general contraction eagerly.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{DotGeneralConfig, EagerTensor, Tensor};
-    ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
-    /// let b = EagerTensor::from_tensor(Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
-    /// let c = a.dot_general(&b, DotGeneralConfig {
-    ///     lhs_contracting_dims: vec![1],
-    ///     rhs_contracting_dims: vec![0],
-    ///     lhs_batch_dims: vec![],
-    ///     rhs_batch_dims: vec![],
-    ///     lhs_rank: 2,
-    ///     rhs_rank: 2,
-    /// });
-    ///
-    /// assert_eq!(c.data().shape(), &[2, 2]);
-    /// ```
-    pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Self {
-        self.binary_op(other, StdTensorOp::DotGeneral(config))
-    }
-
-    fn unary_op(&self, op: StdTensorOp) -> Self {
-        let output = exec_single_output(&op, &[self.data.as_ref()], &self.ctx);
-        let result_key = eager_val_key();
-        let input_aliases = vec![eager_val_key()];
-        let grad_node = self.requires_grad.then(|| {
-            Arc::new(GradNode {
-                op: op.clone(),
-                primal_in_keys: input_aliases.clone(),
-                primal_out_keys: vec![result_key.clone()],
-                saved_data: saved_forward_values(
-                    &op,
-                    &input_aliases,
-                    &[Arc::clone(&self.data)],
-                    Arc::new(output.clone()),
-                ),
-                input_edges: vec![GradEdge {
-                    node: self.grad_node.clone(),
-                    key: self.key.clone(),
-                    requires_grad: self.requires_grad,
-                }],
-                output_idx: 0,
-            })
-        });
-        Self::new_result(
-            self.ctx.clone(),
-            result_key,
-            output,
-            self.requires_grad,
-            grad_node,
-        )
-    }
-
-    fn binary_op(&self, other: &Self, op: StdTensorOp) -> Self {
-        if !Rc::ptr_eq(&self.ctx, &other.ctx) {
-            self.ctx.absorb_from(&other.ctx);
-        }
-
-        let output = exec_single_output(&op, &[self.data.as_ref(), other.data.as_ref()], &self.ctx);
-        let requires_grad = self.requires_grad || other.requires_grad;
-        let result_key = eager_val_key();
-        let input_aliases = vec![eager_val_key(), eager_val_key()];
-        let grad_node = requires_grad.then(|| {
-            Arc::new(GradNode {
-                op: op.clone(),
-                primal_in_keys: input_aliases.clone(),
-                primal_out_keys: vec![result_key.clone()],
-                saved_data: saved_forward_values(
-                    &op,
-                    &input_aliases,
-                    &[Arc::clone(&self.data), Arc::clone(&other.data)],
-                    Arc::new(output.clone()),
-                ),
-                input_edges: vec![
-                    GradEdge {
-                        node: self.grad_node.clone(),
-                        key: self.key.clone(),
-                        requires_grad: self.requires_grad,
-                    },
-                    GradEdge {
-                        node: other.grad_node.clone(),
-                        key: other.key.clone(),
-                        requires_grad: other.requires_grad,
-                    },
-                ],
-                output_idx: 0,
-            })
-        });
-        Self::new_result(
-            self.ctx.clone(),
-            result_key,
-            output,
-            requires_grad,
-            grad_node,
-        )
-    }
 }
 
-struct TenferroBackwardCallbacks<'a, B: TensorBackend> {
+pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend> {
     backend: &'a mut B,
 }
 
@@ -563,11 +438,11 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
     }
 }
 
-fn eager_val_key() -> GlobalValKey<StdTensorOp> {
+pub(crate) fn eager_val_key() -> GlobalValKey<StdTensorOp> {
     GlobalValKey::Input(next_input_key())
 }
 
-fn saved_forward_values(
+pub(crate) fn saved_forward_values(
     op: &StdTensorOp,
     input_keys: &[GlobalValKey<StdTensorOp>],
     inputs: &[Arc<Tensor>],
@@ -577,13 +452,32 @@ fn saved_forward_values(
     for (key, value) in input_keys.iter().zip(inputs.iter()) {
         saved.insert(key.clone(), Arc::clone(value));
     }
-    saved.insert(derived_output_key(op, input_keys), output);
+    saved.insert(derived_output_key(op, input_keys, 0), output);
     saved
 }
 
-fn derived_output_key(
+#[allow(dead_code)]
+pub(crate) fn saved_forward_values_multi(
     op: &StdTensorOp,
     input_keys: &[GlobalValKey<StdTensorOp>],
+    inputs: &[Arc<Tensor>],
+    output_keys: &[GlobalValKey<StdTensorOp>],
+    outputs: &[Arc<Tensor>],
+) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
+    let mut saved = HashMap::with_capacity(input_keys.len() + output_keys.len());
+    for (key, value) in input_keys.iter().zip(inputs.iter()) {
+        saved.insert(key.clone(), Arc::clone(value));
+    }
+    for (slot, (_key, output)) in output_keys.iter().zip(outputs.iter()).enumerate() {
+        saved.insert(derived_output_key(op, input_keys, slot), Arc::clone(output));
+    }
+    saved
+}
+
+pub(crate) fn derived_output_key(
+    op: &StdTensorOp,
+    input_keys: &[GlobalValKey<StdTensorOp>],
+    output_slot: usize,
 ) -> GlobalValKey<StdTensorOp> {
     GlobalValKey::Derived {
         op: GlobalOpKey {
@@ -591,29 +485,28 @@ fn derived_output_key(
             inputs: input_keys.to_vec(),
             mode: OpMode::Primal,
         },
-        output_slot: 0,
+        output_slot: output_slot as u8,
     }
 }
 
-fn exec_single_output<B: TensorBackend>(
+pub(crate) fn exec_single_output<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     ctx: &EagerContext<B>,
-) -> Tensor {
+) -> Result<Tensor> {
     let mut backend = ctx.backend.borrow_mut();
-    let mut outputs = exec_op_on_tensors(op, inputs, &mut *backend)
-        .unwrap_or_else(|err| panic!("eager exec failed for {:?}: {}", op, err));
-    assert_eq!(
-        outputs.len(),
-        1,
-        "expected one eager output for {:?}, got {}",
-        op,
-        outputs.len()
-    );
-    outputs.remove(0)
+    let mut outputs = exec_op_on_tensors(op, inputs, &mut *backend)?;
+    if outputs.len() != 1 {
+        return Err(Error::Internal(format!(
+            "expected one eager output for {:?}, got {}",
+            op,
+            outputs.len()
+        )));
+    }
+    Ok(outputs.remove(0))
 }
 
-fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
     let neg = input
         .neg(backend)
         .unwrap_or_else(|err| panic!("zero_like neg failed: {}", err));
@@ -622,7 +515,7 @@ fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor
         .unwrap_or_else(|err| panic!("zero_like add failed: {}", err))
 }
 
-fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
+pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
     let zero = zero_like_tensor(input, backend);
     backend
         .exp(&zero)
