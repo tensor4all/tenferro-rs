@@ -51,6 +51,11 @@ impl CheckpointNode {
         inputs
     }
 
+    /// Merge two checkpoint chains into a single linked list.
+    ///
+    /// The lhs chain is reconstructed on top of the rhs chain so that
+    /// `collect_aliases`, `collect_fragments`, and `collect_inputs`
+    /// traverse both sides during the AD pass.
     pub(crate) fn merge_chains(
         lhs: Option<Arc<CheckpointNode>>,
         rhs: Option<Arc<CheckpointNode>>,
