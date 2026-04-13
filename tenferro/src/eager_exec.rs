@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::{DType, PadConfig, SliceConfig, Tensor, TensorBackend, TypedTensor};
 
 use crate::error::{Error, Result};
@@ -213,62 +214,4 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
     let mut out = [0u8; N];
     out.copy_from_slice(bytes);
     out
-}
-
-trait DiagSingularity {
-    fn is_singular_or_nonfinite(&self) -> bool;
-}
-
-impl DiagSingularity for f64 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.is_finite() || *self == 0.0
-    }
-}
-
-impl DiagSingularity for f32 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.is_finite() || *self == 0.0
-    }
-}
-
-impl DiagSingularity for Complex64 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
-    }
-}
-
-impl DiagSingularity for Complex32 {
-    fn is_singular_or_nonfinite(&self) -> bool {
-        !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
-    }
-}
-
-fn check_singular_diagonal<T: DiagSingularity + Copy>(t: &TypedTensor<T>) -> Result<()> {
-    let n = t.shape[0].min(t.shape[1]);
-    let batch_total: usize = t.shape[2..].iter().product();
-    let batch_total = batch_total.max(1);
-    let slice_size = t.shape[0] * t.shape[1];
-    for batch_idx in 0..batch_total {
-        let batch = &t.host_data()[batch_idx * slice_size..(batch_idx + 1) * slice_size];
-        for i in 0..n {
-            let diag = batch[i + i * t.shape[0]];
-            if diag.is_singular_or_nonfinite() {
-                return Err(tenferro_tensor::Error::BackendFailure {
-                    op: "solve",
-                    message: "singular matrix".into(),
-                }
-                .into());
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
-    match u {
-        Tensor::F64(t) => check_singular_diagonal(t),
-        Tensor::F32(t) => check_singular_diagonal(t),
-        Tensor::C64(t) => check_singular_diagonal(t),
-        Tensor::C32(t) => check_singular_diagonal(t),
-    }
 }
