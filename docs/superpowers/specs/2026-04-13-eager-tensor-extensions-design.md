@@ -35,39 +35,26 @@ invokes `PrimitiveOp::linearize` / `transpose_rule`. For linalg ops like SVD,
 the transpose rule consumes all primal outputs (u, s, vt) from `saved_data`
 to produce cotangents for all inputs.
 
-This means multi-output ops need **one `GradNode` per output** that share
-the same `Arc`-wrapped data but carry distinct `output_idx`:
+This means multi-output ops need **one shared `Arc<GradNode>`** referenced
+by all output `EagerTensor`s:
 
-1. All nodes list all output keys in `primal_out_keys` (not just their own).
-2. All nodes share the same `saved_data` containing all output tensors.
-3. `topo_sort_grad_dag` deduplicates by `Arc` pointer — if all output
-   `EagerTensor`s point to the same `Arc<GradNode>`, the node is visited
-   once. However, `GradNode.output_idx` is a field on the struct, so each
-   output needs its own `GradNode` instance with a unique `output_idx`.
+1. The single `GradNode` lists all output keys in `primal_out_keys`.
+2. `saved_data` contains all input and output tensors.
+3. All output `EagerTensor`s hold `Arc::clone` of the same `GradNode`.
+4. `topo_sort_grad_dag` deduplicates by `Arc` pointer → the node is
+   visited exactly once.
+5. `backward_dag` processes the node once, collecting cotangents for
+   **all** outputs from `primal_out_keys` (L84-88), running transpose
+   once, and accumulating input cotangents once. This is correct even
+   when the loss depends on multiple outputs (e.g., `loss = f(u) + g(s)`).
 
-To avoid duplicating `saved_data`, we wrap it in `Arc`:
+`GradNode.output_idx` (field on the struct, L22 in `grad_node.rs`) is
+**not consumed** by `backward_dag` or `topo_sort_grad_dag`. It is set
+to 0 for the shared node. Each `EagerTensor` tracks its own output
+position via the index in the `Vec` returned by `multi_output_unary_op`.
 
-```rust
-pub struct GradNode<Op: GraphOp> {
-    pub op: Op,
-    pub primal_in_keys: Vec<GlobalValKey<Op>>,
-    pub primal_out_keys: Vec<GlobalValKey<Op>>,
-    pub saved_data: Arc<HashMap<GlobalValKey<Op>, Arc<Op::Operand>>>,  // shared
-    pub input_edges: Vec<GradEdge<Op>>,
-    pub output_idx: usize,  // unique per output
-}
-```
-
-This requires a change in `tidu::GradNode` to wrap `saved_data` in `Arc`.
-The change is backward-compatible: single-output ops create `Arc::new(map)`
-as before; multi-output ops clone the `Arc` for each output node.
-
-With separate `GradNode` instances per output, `topo_sort_grad_dag` may
-visit the SVD node up to 3 times (once per output). `backward_dag` will
-then process it multiple times, but only the first visit produces
-cotangent inputs (subsequent visits find cotangents already consumed).
-This is acceptable for correctness; an optimization to deduplicate can
-be added later if needed.
+**No changes to `tidu` are required.** The existing `GradNode` struct
+and `backward_dag` already support this pattern.
 
 Each output `EagerTensor` holds `Arc<GradNode>` pointing to the same node,
 plus its own `output_idx` to identify which output it represents. When
@@ -112,15 +99,18 @@ fn saved_forward_values_multi(
 ```
 exec_op_on_tensors(&op, &[input], backend) -> Vec<Tensor>  // e.g. [u, s, vt]
                          |
-      build Arc<saved_data> shared across all outputs:
-        saved_data = {input_keys..., derived(slot=0)->u, derived(slot=1)->s, derived(slot=2)->vt}
+      build ONE shared GradNode:
+        op              = Svd { eps, input_shape, input_dtype }
+        primal_in_keys  = [key_input]
+        primal_out_keys = [key_u, key_s, key_vt]
+        saved_data      = {key_input->input, derived(slot=0)->u, derived(slot=1)->s, derived(slot=2)->vt}
+        input_edges     = [edge_input]
+        output_idx      = 0  (unused by backward_dag)
                          |
-      build one GradNode per output:
-        node_u:  { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=0 }
-        node_s:  { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=1 }
-        node_vt: { op, primal_out_keys=[key_u,key_s,key_vt], saved_data=Arc::clone, output_idx=2 }
+      wrap in Arc<GradNode>
                          |
-      return Vec<EagerTensor> where each holds its own Arc<GradNode>
+      return Vec<EagerTensor> where ALL hold Arc::clone of the SAME GradNode
+      (each EagerTensor knows its output position from its Vec index)
 ```
 
 - When `!requires_grad`, `grad_node` is `None` for all outputs (zero overhead).
@@ -482,8 +472,7 @@ Tests:
 **Phase 1 (foundation):**
 - Change existing methods to `Result`
 - Split `eager.rs` → `eager.rs` + `eager_ops.rs`
-- Change `tidu::GradNode.saved_data` to `Arc<HashMap<...>>` for multi-output sharing
-- Add `multi_output_unary_op` (with `saved_forward_values_multi`), `ternary_op`, `nary_op` internal helpers
+- Add `multi_output_unary_op` (with `saved_forward_values_multi`, shared `Arc<GradNode>`), `ternary_op`, `nary_op` internal helpers
 - Make `EagerContext` public, add `with_backend` / `from_tensor_in` / `requires_grad_in`
 
 **Phase 2 (ops — parallelizable):**
