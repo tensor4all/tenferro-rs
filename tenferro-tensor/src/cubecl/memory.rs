@@ -89,7 +89,6 @@ fn upload_typed<T: CubeElement + Clone>(
                 message: "expected host buffer".into(),
             });
         }
-        #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => {
             return Err(crate::Error::BackendFailure {
                 op: "upload",
@@ -129,7 +128,6 @@ fn download_typed<T: CubeElement + Clone>(
                 message: "expected CubeCL buffer".into(),
             });
         }
-        #[cfg(feature = "cubecl")]
         Buffer::Cubecl(buffer) => buffer.handle.clone(),
     };
 
@@ -158,7 +156,6 @@ fn cubecl_handle_from_buffer<T>(buffer: &Buffer<T>) -> crate::Result<cubecl::ser
             op: "cubecl_handle",
             message: "expected CubeCL buffer".into(),
         }),
-        #[cfg(feature = "cubecl")]
         Buffer::Cubecl(buffer) => Ok(buffer.handle.clone()),
     }
 }

@@ -5,6 +5,7 @@ use super::{
 };
 
 #[test]
+#[ignore]
 fn test_cubecl_float_reductions_match_cpu() {
     let input = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
@@ -34,6 +35,7 @@ fn test_cubecl_float_reductions_match_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_complex_sum_and_prod_match_cpu() {
     let input = tensor_c64(
         vec![2, 2],

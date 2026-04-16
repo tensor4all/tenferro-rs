@@ -24,6 +24,7 @@ fn add_mul_plan() -> ElementwiseFusionPlan {
 }
 
 #[test]
+#[ignore]
 fn test_fused_add_mul_matches_cpu() {
     let a = tensor_f64(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
     let b = tensor_f64(vec![4], vec![0.5, -1.0, 2.0, 0.0]);
@@ -66,6 +67,7 @@ fn add_neg_plan() -> ElementwiseFusionPlan {
 }
 
 #[test]
+#[ignore]
 fn test_fused_add_neg() {
     let a = tensor_f64(vec![3], vec![1.0, -2.0, 3.0]);
     let b = tensor_f64(vec![3], vec![4.0, 5.0, -6.0]);
@@ -107,6 +109,7 @@ fn multi_output_plan() -> ElementwiseFusionPlan {
 }
 
 #[test]
+#[ignore]
 fn test_fused_multi_output() {
     let a = tensor_f64(vec![3], vec![1.0, 2.0, 3.0]);
     let b = tensor_f64(vec![3], vec![4.0, 5.0, 6.0]);
@@ -153,6 +156,7 @@ fn unary_chain_plan() -> ElementwiseFusionPlan {
 }
 
 #[test]
+#[ignore]
 fn test_fused_unary_chain() {
     let a = tensor_f64(vec![4], vec![-4.0, 1.0, 9.0, 0.25]);
 
@@ -174,6 +178,7 @@ fn test_fused_unary_chain() {
 }
 
 #[test]
+#[ignore]
 fn test_fused_empty_tensor() {
     let a = tensor_f64(vec![0], vec![]);
     let b = tensor_f64(vec![0], vec![]);
@@ -205,6 +210,7 @@ fn compare_plan() -> ElementwiseFusionPlan {
 }
 
 #[test]
+#[ignore]
 fn test_fused_compare() {
     let a = tensor_f64(vec![4], vec![1.0, 5.0, 3.0, 2.0]);
     let b = tensor_f64(vec![4], vec![2.0, 3.0, 3.0, 4.0]);

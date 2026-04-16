@@ -193,10 +193,12 @@ python3 scripts/check-docs-site.py
 
 # GPU (CubeCL) tests — requires NVIDIA GPU + CUDA 12
 # Set CUBECL_DEBUG_LOG=0 to suppress verbose JIT compilation logs.
+# GPU tests are marked #[ignore] so they don't fail on non-GPU machines.
+# Use --ignored to actually run them.
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-tensor --features cubecl
+  cargo test -p tenferro-tensor --features cubecl -- --ignored
 ```
 
 ### CubeCL Environment Variables

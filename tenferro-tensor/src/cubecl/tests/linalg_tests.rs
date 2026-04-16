@@ -145,6 +145,7 @@ fn assert_slice_close_c64(actual: &[Complex64], expected: &[Complex64], tol: f64
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_cholesky_batched_f64_matches_cpu() {
     let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
@@ -162,6 +163,7 @@ fn test_cubecl_cholesky_batched_f64_matches_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_triangular_solve_c32_reconstructs_rhs() {
     let a = tensor_c32(
         vec![2, 2],
@@ -196,6 +198,7 @@ fn test_cubecl_triangular_solve_c32_reconstructs_rhs() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
     let input = tensor_f32(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
     let mut gpu = gpu_backend();
@@ -215,6 +218,7 @@ fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_svd_c32_reconstructs_input() {
     let input = tensor_c32(
         vec![3, 2],
@@ -250,6 +254,7 @@ fn test_cubecl_svd_c32_reconstructs_input() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_qr_f32_reconstructs_input() {
     let input = tensor_f32(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0]);
     let mut gpu = gpu_backend();
@@ -267,6 +272,7 @@ fn test_cubecl_qr_f32_reconstructs_input() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_eigh_c64_reconstructs_input() {
     let l = vec![
         Complex64::new(2.0, 0.0),
@@ -305,6 +311,7 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_eig_f32_host_fallback_returns_complex32_outputs() {
     let input = tensor_f32(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]);
     let mut gpu = gpu_backend();
@@ -331,6 +338,7 @@ fn test_cubecl_eig_f32_host_fallback_returns_complex32_outputs() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_eig_c32_host_fallback_returns_complex32_outputs() {
     let input = tensor_c32(
         vec![2, 2],
@@ -358,6 +366,7 @@ fn test_cubecl_eig_c32_host_fallback_returns_complex32_outputs() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_solve_f64_matches_cpu() {
     let a = tensor_f64(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]);
     let b = tensor_f64(vec![2, 2], vec![5.0, 1.0, -2.0, 4.0]);

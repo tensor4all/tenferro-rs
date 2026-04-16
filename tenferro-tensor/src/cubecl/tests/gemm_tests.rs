@@ -35,6 +35,7 @@ fn matmul_config() -> DotGeneralConfig {
 }
 
 #[test]
+#[ignore]
 fn test_dot_general_matmul_f32() {
     run_dot_general_case(
         tensor_f32(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]),
@@ -50,6 +51,7 @@ fn test_dot_general_matmul_f32() {
 }
 
 #[test]
+#[ignore]
 fn test_dot_general_matmul_f64() {
     run_dot_general_case(
         tensor_f64(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]),
@@ -65,6 +67,7 @@ fn test_dot_general_matmul_f64() {
 }
 
 #[test]
+#[ignore]
 fn test_dot_general_batched_matmul_f32() {
     run_dot_general_case(
         tensor_f32(
@@ -96,6 +99,7 @@ fn test_dot_general_batched_matmul_f32() {
 }
 
 #[test]
+#[ignore]
 fn test_dot_general_complex_matmul_c32() {
     run_dot_general_case(
         tensor_c32(
@@ -132,6 +136,7 @@ fn test_dot_general_complex_matmul_c32() {
 }
 
 #[test]
+#[ignore]
 fn test_dot_general_complex_matmul_c64() {
     run_dot_general_case(
         tensor_c64(
