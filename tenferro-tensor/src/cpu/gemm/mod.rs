@@ -423,13 +423,13 @@ where
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     // SAFETY: this GEMM path uses beta = 0 and overwrites every output element.
@@ -533,13 +533,13 @@ where
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0.

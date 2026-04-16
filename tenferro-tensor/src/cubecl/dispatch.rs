@@ -41,7 +41,9 @@ pub(crate) fn cubecl_buffer<'a, T>(
     match &tensor.buffer {
         Buffer::Host(_) | Buffer::Backend(_) => Err(crate::Error::BackendFailure {
             op,
-            message: "expected CubeCL buffer".into(),
+            message: "expected GPU tensor (Buffer::Cubecl), got CPU tensor. \
+                      Use cubecl::upload_tensor() to transfer to GPU before calling GPU ops."
+                .into(),
         }),
         Buffer::Cubecl(buffer) => Ok(buffer),
     }

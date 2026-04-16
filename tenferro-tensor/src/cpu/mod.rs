@@ -34,7 +34,7 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
         }
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 

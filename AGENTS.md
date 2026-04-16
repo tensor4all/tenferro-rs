@@ -225,6 +225,31 @@ Override with environment variables:
 
 Colon-separated paths are supported (like `LD_LIBRARY_PATH`).
 
+### Device Transfer Policy
+
+tenferro follows the **PyTorch convention**: no implicit CPU↔GPU transfer.
+Tensors must be on the correct device before passing to backend ops.
+
+```rust
+// Upload to GPU
+let gpu_tensor = cubecl::upload_tensor(backend.runtime(), &cpu_tensor)?;
+// Compute on GPU
+let result = backend.add(&gpu_a, &gpu_b)?;
+// Download to CPU
+let cpu_result = cubecl::download_tensor(backend.runtime(), &result)?;
+```
+
+**Error behavior:**
+- GPU op receives CPU tensor → `Error::BackendFailure` with message
+  "expected GPU tensor ... use upload_tensor()"
+- CPU op receives GPU tensor → panic (programming error, not recoverable)
+- `TypedTensor::host_data()` on GPU buffer → panic with diagnostic message
+
+The execution pipeline (`eval_exec_ir`, segmented dispatch) handles device
+placement internally — `Constant` ops auto-upload via `upload_host_tensor()`,
+and host-dependent ops (`ShapeOf`, `DynamicTruncate`) read only metadata or
+download single scalars.
+
 **cuSOLVER feature coverage:**
 
 | Feature | cuSOLVER support | GPU status |
