@@ -1,3 +1,4 @@
+// Run with: cargo test --features cubecl -- --ignored
 use crate::backend::ElementwiseFusionPlan;
 use crate::config::CompareDir;
 use crate::{ElementwiseFusionInst, ElementwiseFusionOp, TensorBackend};

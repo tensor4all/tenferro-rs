@@ -1,3 +1,4 @@
+// Run with: cargo test --features cubecl -- --ignored
 use num_complex::{Complex32, Complex64};
 
 use crate::{Tensor, TensorBackend};
