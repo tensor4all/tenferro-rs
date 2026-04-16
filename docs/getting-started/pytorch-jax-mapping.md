@@ -41,7 +41,8 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 tenferro stores dense tensors in column-major order. If you write:
 
-```rust,ignore
+```rust
+use tenferro::TracedTensor;
 let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 

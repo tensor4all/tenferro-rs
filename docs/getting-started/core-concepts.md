@@ -103,7 +103,7 @@ assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
 ### Lazy with AD
 
-```rust,ignore
+```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
 let a = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);

@@ -2,13 +2,13 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
+//! ```
+//! use tenferro_tensor::{Tensor, cpu::CpuBackend};
 //!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-//! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
-//! let c = tenferro_tensor::cpu::add(&a, &b);
+//! let mut ctx = CpuBackend::new();
+//! let a = Tensor::new(vec![2], vec![1.0_f64, 2.0]);
+//! let b = Tensor::new(vec![2], vec![3.0_f64, 4.0]);
+//! let c = a.add(&b, &mut ctx).unwrap();
 //! assert_eq!(c.shape(), &[2]);
 //! ```
 
