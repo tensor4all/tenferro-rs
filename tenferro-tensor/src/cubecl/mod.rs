@@ -17,6 +17,7 @@ mod dispatch;
 mod ffi;
 mod gemm;
 mod kernels;
+mod linalg;
 mod memory;
 mod runtime;
 
@@ -43,6 +44,7 @@ pub use runtime::CubeclRuntime;
 pub struct CubeclBackend {
     rt: CubeclRuntime,
     cutensor: OnceCell<crate::Result<ffi::cutensor::CutensorHandle>>,
+    linalg: OnceCell<crate::Result<ffi::cusolver::CudaLinalgHandles>>,
 }
 
 impl CubeclBackend {
@@ -59,6 +61,7 @@ impl CubeclBackend {
         Ok(Self {
             rt: CubeclRuntime::new(device_ordinal)?,
             cutensor: OnceCell::new(),
+            linalg: OnceCell::new(),
         })
     }
 
@@ -81,6 +84,16 @@ impl CubeclBackend {
             .get_or_init(ffi::cutensor::CutensorHandle::load)
         {
             Ok(handle) => Ok(handle),
+            Err(err) => Err(err.clone()),
+        }
+    }
+
+    fn linalg_handles(&self) -> crate::Result<&ffi::cusolver::CudaLinalgHandles> {
+        match self
+            .linalg
+            .get_or_init(ffi::cusolver::CudaLinalgHandles::load)
+        {
+            Ok(handles) => Ok(handles),
             Err(err) => Err(err.clone()),
         }
     }
@@ -2250,44 +2263,44 @@ impl TensorBackend for CubeclBackend {
         }
     }
 
-    fn cholesky(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        todo!("cubecl cholesky")
+    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        linalg::cholesky(self, input)
     }
 
     fn triangular_solve(
         &mut self,
-        _a: &Tensor,
-        _b: &Tensor,
-        _left_side: bool,
-        _lower: bool,
-        _transpose_a: bool,
-        _unit_diagonal: bool,
+        a: &Tensor,
+        b: &Tensor,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
     ) -> crate::Result<Tensor> {
-        todo!("cubecl triangular_solve")
+        linalg::triangular_solve(self, a, b, left_side, lower, transpose_a, unit_diagonal)
     }
 
-    fn lu(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        todo!("cubecl lu")
+    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::lu(self, input)
     }
 
-    fn svd(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        todo!("cubecl svd")
+    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::svd(self, input)
     }
 
-    fn qr(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        todo!("cubecl qr")
+    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::qr(self, input)
     }
 
-    fn eigh(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        todo!("cubecl eigh")
+    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::eigh(self, input)
     }
 
-    fn eig(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        todo!("cubecl eig")
+    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::eig(self, input)
     }
 
-    fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> crate::Result<Tensor> {
-        todo!("cubecl solve")
+    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
+        linalg::solve(self, a, b)
     }
 }
 
