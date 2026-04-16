@@ -5,3 +5,6 @@ mod runtime;
 
 pub use memory::upload_tensor;
 pub use runtime::CubeclRuntime;
+
+#[cfg(test)]
+mod tests;

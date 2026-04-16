@@ -114,7 +114,7 @@ fn tensor_shape_and_dtype_cover_all_variants() {
 
     assert_eq!(f32_tensor.shape(), &[2]);
     assert_eq!(f32_tensor.dtype(), DType::F32);
-    assert_eq!(f64_tensor.shape(), &[]);
+    assert_eq!(f64_tensor.shape(), &[] as &[usize]);
     assert_eq!(f64_tensor.dtype(), DType::F64);
     assert_eq!(c32_tensor.shape(), &[1]);
     assert_eq!(c32_tensor.dtype(), DType::C32);

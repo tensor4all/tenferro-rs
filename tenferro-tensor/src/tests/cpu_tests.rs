@@ -526,7 +526,7 @@ fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
 #[test]
 fn test_rank0_typed_tensor_behaves_like_scalar() {
     let mut zeros = TypedTensor::<f64>::zeros(vec![]);
-    assert_eq!(zeros.shape, vec![]);
+    assert_eq!(zeros.shape, Vec::<usize>::new());
     assert_eq!(zeros.n_elements(), 1);
     assert_eq!(zeros.linear_offset(&[]), 0);
     assert_eq!(zeros.get(&[]), &0.0);
@@ -535,12 +535,12 @@ fn test_rank0_typed_tensor_behaves_like_scalar() {
     assert_eq!(zeros.host_data(), &[2.5]);
 
     let ones = TypedTensor::<f64>::ones(vec![]);
-    assert_eq!(ones.shape, vec![]);
+    assert_eq!(ones.shape, Vec::<usize>::new());
     assert_eq!(ones.n_elements(), 1);
     assert_eq!(ones.get(&[]), &1.0);
 
     let scalar = TypedTensor::<f64>::from_vec(vec![], vec![7.0]);
-    assert_eq!(scalar.shape, vec![]);
+    assert_eq!(scalar.shape, Vec::<usize>::new());
     assert_eq!(scalar.n_elements(), 1);
     assert_eq!(scalar.linear_offset(&[]), 0);
     assert_eq!(scalar.get(&[]), &7.0);
@@ -3287,7 +3287,7 @@ fn test_batched_gemm_no_free_dims_inner_product() {
         &config,
     )
     .unwrap();
-    assert_eq!(out.shape, vec![]);
+    assert_eq!(out.shape, Vec::<usize>::new());
     assert_eq!(out.host_data(), &[32.0]);
 }
 

@@ -86,7 +86,7 @@ fn eager_tensor_linalg_methods_return_expected_shapes_and_values() {
     assert_eq!(p.shape(), &[2, 2]);
     assert_eq!(l.shape(), &[2, 2]);
     assert_eq!(u.shape(), &[2, 2]);
-    assert_eq!(parity.shape(), &[]);
+    assert_eq!(parity.shape(), &[] as &[usize]);
 
     let spd = Tensor::new(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 5.0]);
     let chol = spd.cholesky(&mut ctx).unwrap();
