@@ -419,6 +419,13 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
     match &inst.op {
         ExecOp::ShapeOf { axis } => {
             let input = get(slots, &inst.input_slots, 0)?;
+            if *axis >= input.shape().len() {
+                return Err(Error::Internal(format!(
+                    "ShapeOf: axis {} out of bounds for rank {}",
+                    axis,
+                    input.shape().len()
+                )));
+            }
             let host = Tensor::F64(TypedTensor::from_vec(
                 vec![],
                 vec![input.shape()[*axis] as f64],
@@ -427,6 +434,13 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
         }
         ExecOp::DynamicTruncate { axis } => {
             let input = get(slots, &inst.input_slots, 0)?;
+            if *axis >= input.shape().len() {
+                return Err(Error::Internal(format!(
+                    "DynamicTruncate: axis {} out of bounds for rank {}",
+                    axis,
+                    input.shape().len()
+                )));
+            }
             let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
             let axis_extent = input.shape()[*axis];
             let size_f64 = scalar_size_value(&size_tensor)?;
@@ -449,6 +463,13 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
         ExecOp::PadToMatch { axis } => {
             let input = get(slots, &inst.input_slots, 0)?;
             let reference = get(slots, &inst.input_slots, 1)?;
+            if *axis >= input.shape().len() {
+                return Err(Error::Internal(format!(
+                    "PadToMatch: axis {} out of bounds for rank {}",
+                    axis,
+                    input.shape().len()
+                )));
+            }
             let target_size = reference.shape()[*axis];
             let current_size = input.shape()[*axis];
             if current_size >= target_size {

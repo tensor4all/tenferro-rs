@@ -110,11 +110,26 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Eigh { .. } => exec.eigh(inputs[0])?,
             StdTensorOp::Eig { .. } => exec.eig(inputs[0])?,
             StdTensorOp::ShapeOf { axis } => {
-                let size = inputs[0].shape()[*axis] as f64;
+                let input = inputs[0];
+                if *axis >= input.shape().len() {
+                    return Err(Error::Internal(format!(
+                        "ShapeOf: axis {} out of bounds for rank {}",
+                        axis,
+                        input.shape().len()
+                    )));
+                }
+                let size = input.shape()[*axis] as f64;
                 vec![Tensor::F64(TypedTensor::from_vec(vec![], vec![size]))]
             }
             StdTensorOp::DynamicTruncate { axis } => {
                 let input = inputs[0];
+                if *axis >= input.shape().len() {
+                    return Err(Error::Internal(format!(
+                        "DynamicTruncate: axis {} out of bounds for rank {}",
+                        axis,
+                        input.shape().len()
+                    )));
+                }
                 let size_tensor = inputs[1];
                 let axis_extent = input.shape()[*axis];
                 let size_f64 = match size_tensor {
@@ -145,6 +160,13 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::PadToMatch { axis } => {
                 let input = inputs[0];
                 let reference = inputs[1];
+                if *axis >= input.shape().len() {
+                    return Err(Error::Internal(format!(
+                        "PadToMatch: axis {} out of bounds for rank {}",
+                        axis,
+                        input.shape().len()
+                    )));
+                }
                 let target_size = reference.shape()[*axis];
                 let current_size = input.shape()[*axis];
                 if current_size >= target_size {
