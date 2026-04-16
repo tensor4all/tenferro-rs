@@ -18,6 +18,7 @@ use cubecl_cuda::{CudaDevice, CudaRuntime};
 /// ```
 pub struct CubeclRuntime {
     client: ComputeClient<CudaRuntime>,
+    device_ordinal: usize,
 }
 
 impl CubeclRuntime {
@@ -33,7 +34,10 @@ impl CubeclRuntime {
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         let device = CudaDevice::new(device_ordinal);
         let client = CudaRuntime::client(&device);
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            device_ordinal,
+        })
     }
 
     /// Borrow the underlying CubeCL compute client.
@@ -49,6 +53,19 @@ impl CubeclRuntime {
     /// ```
     pub fn client(&self) -> &ComputeClient<CudaRuntime> {
         &self.client
+    }
+
+    /// Return the CUDA device ordinal that this runtime targets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cubecl::CubeclRuntime;
+    ///
+    /// let _device_ordinal: fn(&CubeclRuntime) -> usize = CubeclRuntime::device_ordinal;
+    /// ```
+    pub fn device_ordinal(&self) -> usize {
+        self.device_ordinal
     }
 
     /// Extract the raw CUDA stream pointer used by the current CubeCL stream.

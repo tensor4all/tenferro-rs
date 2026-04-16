@@ -3,7 +3,7 @@
 mod memory;
 mod runtime;
 
-pub use memory::upload_tensor;
+pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::CubeclRuntime;
 
 #[cfg(test)]
