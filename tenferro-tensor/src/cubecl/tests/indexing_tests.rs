@@ -1,3 +1,4 @@
+// Run with: cargo test --features cubecl -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use crate::TensorBackend;
 
