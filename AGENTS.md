@@ -190,6 +190,58 @@ python3 scripts/check-coverage.py coverage.json
 # Build rustdoc and docs site inputs
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
+
+# GPU (CubeCL) tests — requires NVIDIA GPU + CUDA 12
+# Set CUBECL_DEBUG_LOG=0 to suppress verbose JIT compilation logs.
+CUBECL_DEBUG_LOG=0 \
+CUDA_PATH=/usr/local/cuda-12.0 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+  cargo test -p tenferro-tensor --features cubecl
+```
+
+### CubeCL Environment Variables
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `CUBECL_DEBUG_LOG` | `0` | Suppress JIT compilation log output (default is verbose) |
+| `CUDA_PATH` | `/usr/local/cuda-12.0` | CUDA toolkit root for NVRTC header resolution |
+| `LD_LIBRARY_PATH` | Include CUDA + cuTENSOR lib dirs | Runtime library loading |
+
+Set these in CI and local dev shells. Without `CUBECL_DEBUG_LOG=0`, cubecl
+emits generated CUDA source for every JIT-compiled kernel, producing
+millions of log lines during test runs.
+
+### FFI Library Path Configuration
+
+The CubeCL backend loads cuTENSOR, cuSOLVER, and cuBLAS at runtime via
+`dlopen`. Default search paths try v12 first, then v11, then bare soname.
+Override with environment variables:
+
+| Variable | Library | Example |
+|----------|---------|---------|
+| `TENFERRO_CUTENSOR_PATH` | cuTENSOR | `/opt/cuda-12.4/lib64/libcutensor.so.2` |
+| `TENFERRO_CUSOLVER_PATH` | cuSOLVER | `/opt/cuda-12.4/lib64/libcusolver.so.12` |
+| `TENFERRO_CUBLAS_PATH` | cuBLAS | `/opt/cuda-12.4/lib64/libcublas.so.12` |
+
+Colon-separated paths are supported (like `LD_LIBRARY_PATH`).
+
+**cuSOLVER version requirements:**
+
+| Feature | Minimum cuSOLVER | CUDA toolkit |
+|---------|-----------------|--------------|
+| SVD, QR, Cholesky, LU, Eigh | 11.4+ | CUDA 12.0+ |
+| General eigendecomposition (eig) | 11.6+ | CUDA 12.4+ |
+
+On cuSOLVER < 11.6, `eig` falls back to CPU. Upgrade to CUDA 12.4+
+for full GPU eigendecomposition:
+
+```bash
+# Ubuntu: install CUDA 12.4+ toolkit
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+sudo apt-get install cuda-toolkit-12-4
+export TENFERRO_CUSOLVER_PATH=/usr/local/cuda-12.4/lib64/libcusolver.so.12
 ```
 
 ## CPU Kernel Implementation Rules
