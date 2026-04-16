@@ -74,6 +74,20 @@ impl<B: TensorBackend> Engine<B> {
         }
     }
 
+    /// Borrow the backend used by this engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// let _backend = engine.backend();
+    /// ```
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
     /// Number of cached einsum contraction trees currently retained by the engine.
     ///
     /// # Examples

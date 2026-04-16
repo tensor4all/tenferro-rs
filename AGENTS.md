@@ -190,7 +190,78 @@ python3 scripts/check-coverage.py coverage.json
 # Build rustdoc and docs site inputs
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
+
+# GPU (CubeCL) tests — requires NVIDIA GPU + CUDA 12
+# Set CUBECL_DEBUG_LOG=0 to suppress verbose JIT compilation logs.
+CUBECL_DEBUG_LOG=0 \
+CUDA_PATH=/usr/local/cuda-12.0 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+  cargo test -p tenferro-tensor --features cubecl
 ```
+
+### CubeCL Environment Variables
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `CUBECL_DEBUG_LOG` | `0` | Suppress JIT compilation log output (default is verbose) |
+| `CUDA_PATH` | `/usr/local/cuda-12.0` | CUDA toolkit root for NVRTC header resolution |
+| `LD_LIBRARY_PATH` | Include CUDA + cuTENSOR lib dirs | Runtime library loading |
+
+Set these in CI and local dev shells. Without `CUBECL_DEBUG_LOG=0`, cubecl
+emits generated CUDA source for every JIT-compiled kernel, producing
+millions of log lines during test runs.
+
+### FFI Library Path Configuration
+
+The CubeCL backend loads cuTENSOR, cuSOLVER, and cuBLAS at runtime via
+`dlopen`. Default search paths try v12 first, then v11, then bare soname.
+Override with environment variables:
+
+| Variable | Library | Example |
+|----------|---------|---------|
+| `TENFERRO_CUTENSOR_PATH` | cuTENSOR | `/opt/cuda-12.4/lib64/libcutensor.so.2` |
+| `TENFERRO_CUSOLVER_PATH` | cuSOLVER | `/opt/cuda-12.4/lib64/libcusolver.so.12` |
+| `TENFERRO_CUBLAS_PATH` | cuBLAS | `/opt/cuda-12.4/lib64/libcublas.so.12` |
+
+Colon-separated paths are supported (like `LD_LIBRARY_PATH`).
+
+### Device Transfer Policy
+
+tenferro follows the **PyTorch convention**: no implicit CPU↔GPU transfer.
+Tensors must be on the correct device before passing to backend ops.
+
+```rust
+// Upload to GPU
+let gpu_tensor = cubecl::upload_tensor(backend.runtime(), &cpu_tensor)?;
+// Compute on GPU
+let result = backend.add(&gpu_a, &gpu_b)?;
+// Download to CPU
+let cpu_result = cubecl::download_tensor(backend.runtime(), &result)?;
+```
+
+**Error behavior:**
+- GPU op receives CPU tensor → `Error::BackendFailure` with message
+  "expected GPU tensor ... use upload_tensor()"
+- CPU op receives GPU tensor → panic (programming error, not recoverable)
+- `TypedTensor::host_data()` on GPU buffer → panic with diagnostic message
+
+The execution pipeline (`eval_exec_ir`, segmented dispatch) handles device
+placement internally — `Constant` ops auto-upload via `upload_host_tensor()`,
+and host-dependent ops (`ShapeOf`, `DynamicTruncate`) read only metadata or
+download single scalars.
+
+**cuSOLVER feature coverage:**
+
+| Feature | cuSOLVER support | GPU status |
+|---------|-----------------|------------|
+| SVD, QR, Cholesky, LU, Eigh | All versions (11.4+) | GPU |
+| Triangular solve | Via cuBLAS (all versions) | GPU |
+| General eigendecomposition (eig) | **Not in cuSOLVER** | Host fallback (CPU) |
+
+`eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
+provided by any version of cuSOLVER. The `eig` op always falls back to
+CPU via download → CpuBackend → re-upload. This is a permanent
+cuSOLVER limitation, not a version issue.
 
 ## CPU Kernel Implementation Rules
 

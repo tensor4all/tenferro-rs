@@ -145,14 +145,69 @@ pub struct ExecProgram {
     pub n_slots: usize,
 }
 
-fn get<'a, T>(slots: &'a [Option<T>], input_slots: &[usize], idx: usize) -> Result<&'a T> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DispatchMode {
+    Unsegmented,
+    Segmented,
+}
+
+pub(crate) fn get<'a, T>(
+    slots: &'a [Option<T>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<&'a T> {
     let slot = input_slots[idx];
     slots[slot]
         .as_ref()
         .ok_or(TensorError::MissingValue { slot }.into())
 }
 
-fn resolve_tensor_shape_exprs(
+pub(crate) fn initialize_slots(program: &ExecProgram, inputs: Vec<Tensor>) -> Vec<Option<Tensor>> {
+    let mut slots: Vec<Option<Tensor>> = vec![None; program.n_slots];
+    for (i, tensor) in inputs.into_iter().enumerate() {
+        slots[program.input_slots[i]] = Some(tensor);
+    }
+    slots
+}
+
+pub(crate) fn collect_outputs(
+    program: &ExecProgram,
+    mut slots: Vec<Option<Tensor>>,
+) -> Result<Vec<Tensor>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            slots[slot]
+                .take()
+                .ok_or(TensorError::MissingValue { slot }.into())
+        })
+        .collect()
+}
+
+pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
+    match &inst.op {
+        ExecOp::ShapeOf { .. }
+        | ExecOp::DynamicTruncate { .. }
+        | ExecOp::PadToMatch { .. }
+        | ExecOp::Constant { .. } => true,
+        ExecOp::CustomCall { target } => target == "validate_nonsingular",
+        _ => false,
+    }
+}
+
+pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
+    matches!(
+        &inst.op,
+        ExecOp::BatchedGemm(_)
+            | ExecOp::NaryEinsum { .. }
+            | ExecOp::Cholesky
+            | ExecOp::TriangularSolve { .. }
+            | ExecOp::CustomCall { .. }
+    ) && !is_host_instruction(inst)
+}
+
+pub(crate) fn resolve_tensor_shape_exprs(
     slots: &[Option<Tensor>],
     input_slots: &[usize],
     exprs: &[DimExpr],
@@ -187,262 +242,342 @@ fn resolve_semiring_shape_exprs<Alg: Semiring>(
     Ok(DimExpr::eval_all(exprs, &input_shapes))
 }
 
+/// Evaluate an [`ExecProgram`] using segmented dispatch.
+///
+/// Consecutive fusible ops are executed within one backend execution session.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::exec::{eval_exec_ir, ExecProgram};
+/// use tenferro::CpuBackend;
+///
+/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
+///     eval_exec_ir::<CpuBackend>;
+/// ```
 pub fn eval_exec_ir<B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
-    backend.with_exec_session(|exec| eval_exec_ir_inner(exec, program, inputs))
+    crate::segment::eval_exec_segmented(backend, program, inputs)
 }
 
-fn eval_exec_ir_inner(
-    exec: &mut dyn TensorExec,
+/// Evaluate an [`ExecProgram`] one instruction at a time.
+///
+/// This is retained for parity tests against segmented dispatch.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::exec::{eval_exec_ir_unsegmented, ExecProgram};
+/// use tenferro::CpuBackend;
+///
+/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
+///     eval_exec_ir_unsegmented::<CpuBackend>;
+/// ```
+pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
+    backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
-    let mut slots: Vec<Option<Tensor>> = vec![None; program.n_slots];
-    for (i, tensor) in inputs.into_iter().enumerate() {
-        slots[program.input_slots[i]] = Some(tensor);
-    }
+    let mut slots = initialize_slots(program, inputs);
 
     for inst in &program.instructions {
-        let result = match &inst.op {
-            ExecOp::Permute { perm } => exec.transpose(get(&slots, &inst.input_slots, 0)?, perm)?,
-            ExecOp::Reshape { shape } => {
-                let shape = resolve_tensor_shape_exprs(&slots, &inst.input_slots, shape)?;
-                exec.reshape(get(&slots, &inst.input_slots, 0)?, &shape)?
-            }
-            ExecOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_tensor_shape_exprs(&slots, &inst.input_slots, shape)?;
-                exec.broadcast_in_dim(get(&slots, &inst.input_slots, 0)?, &shape, dims)?
-            }
-            ExecOp::Convert { to } => exec.convert(get(&slots, &inst.input_slots, 0)?, *to)?,
-            ExecOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes),
-            ExecOp::BatchedGemm(config) => exec.dot_general(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                config,
-            )?,
-            ExecOp::NaryEinsum { subscripts } => {
-                let mut inputs = Vec::with_capacity(inst.input_slots.len());
-                for &slot in &inst.input_slots {
-                    inputs.push(
-                        slots[slot]
-                            .as_ref()
-                            .ok_or(TensorError::MissingValue { slot })?,
-                    );
-                }
-                execute_nary_einsum(exec, &inputs, subscripts)?
-            }
-            ExecOp::ReduceSum { axes } => {
-                exec.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)?
-            }
-            ExecOp::ExtractDiag { axis_a, axis_b } => {
-                exec.extract_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
-            }
-            ExecOp::EmbedDiag { axis_a, axis_b } => {
-                exec.embed_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
-            }
-            ExecOp::Tril { k } => exec.tril(get(&slots, &inst.input_slots, 0)?, *k)?,
-            ExecOp::Triu { k } => exec.triu(get(&slots, &inst.input_slots, 0)?, *k)?,
-            ExecOp::Add => exec.add(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Multiply => exec.mul(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Negate => exec.neg(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Conj => exec.conj(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Divide => exec.div(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Abs => exec.abs(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Sign => exec.sign(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Maximum => exec.maximum(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Minimum => exec.minimum(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Compare(dir) => exec.compare(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                dir,
-            )?,
-            ExecOp::Select => exec.select(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                get(&slots, &inst.input_slots, 2)?,
-            )?,
-            ExecOp::Clamp => exec.clamp(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                get(&slots, &inst.input_slots, 2)?,
-            )?,
-            ExecOp::Exp => exec.exp(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Log => exec.log(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Sin => exec.sin(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Cos => exec.cos(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Tanh => exec.tanh(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Sqrt => exec.sqrt(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Rsqrt => exec.rsqrt(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Pow => exec.pow(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            )?,
-            ExecOp::Expm1 => exec.expm1(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Log1p => exec.log1p(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::Gather(config) => exec.gather(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                config,
-            )?,
-            ExecOp::Scatter(config) => exec.scatter(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                get(&slots, &inst.input_slots, 2)?,
-                config,
-            )?,
-            ExecOp::Slice(config) => exec.slice(get(&slots, &inst.input_slots, 0)?, config)?,
-            ExecOp::DynamicSlice { slice_sizes } => exec.dynamic_slice(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                slice_sizes,
-            )?,
-            ExecOp::Pad(config) => exec.pad(get(&slots, &inst.input_slots, 0)?, config)?,
-            ExecOp::Concatenate { axis } => {
-                let mut inputs = Vec::with_capacity(inst.input_slots.len());
-                for &slot in &inst.input_slots {
-                    inputs.push(
-                        slots[slot]
-                            .as_ref()
-                            .ok_or(TensorError::MissingValue { slot })?,
-                    );
-                }
-                exec.concatenate(&inputs, *axis)?
-            }
-            ExecOp::Reverse { axes } => exec.reverse(get(&slots, &inst.input_slots, 0)?, axes)?,
-            ExecOp::ShapeOf { axis } => {
-                let input = get(&slots, &inst.input_slots, 0)?;
-                let size = input.shape()[*axis] as f64;
-                Tensor::F64(TypedTensor::from_vec(vec![], vec![size]))
-            }
-            ExecOp::DynamicTruncate { axis } => {
-                let input = get(&slots, &inst.input_slots, 0)?;
-                let size_tensor = get(&slots, &inst.input_slots, 1)?;
-                let axis_extent = input.shape()[*axis];
-                let size_f64 = match size_tensor {
-                    Tensor::F64(inner) => inner.host_data()[0],
-                    Tensor::F32(inner) => inner.host_data()[0] as f64,
-                    _ => {
-                        return Err(Error::Internal(
-                            "DynamicTruncate size must be an f32 or f64 scalar".into(),
-                        ))
-                    }
-                };
-                let rounded_size = if size_f64.is_finite() {
-                    size_f64.round()
-                } else {
-                    0.0
-                };
-                let size = rounded_size.max(0.0).min(axis_extent as f64) as usize;
+        if is_host_instruction(inst) {
+            execute_host_instruction(backend, &mut slots, inst)?;
+        } else if is_ffi_instruction(inst) {
+            execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented)?;
+        } else {
+            let result = backend
+                .with_exec_session(|exec| execute_fusible_instruction(exec, &slots, inst))?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        reclaim_last_use_inputs_backend(&mut slots, inst, backend);
+    }
+
+    collect_outputs(program, slots)
+}
+
+pub(crate) fn execute_fusible_instruction(
+    exec: &mut dyn TensorExec,
+    slots: &[Option<Tensor>],
+    inst: &ExecInstruction,
+) -> Result<Tensor> {
+    let result = match &inst.op {
+        ExecOp::Permute { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
+        ExecOp::Reshape { shape } => {
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
+            exec.reshape(get(slots, &inst.input_slots, 0)?, &shape)?
+        }
+        ExecOp::BroadcastInDim { shape, dims } => {
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
+            exec.broadcast_in_dim(get(slots, &inst.input_slots, 0)?, &shape, dims)?
+        }
+        ExecOp::Convert { to } => exec.convert(get(slots, &inst.input_slots, 0)?, *to)?,
+        ExecOp::ReduceSum { axes } => exec.reduce_sum(get(slots, &inst.input_slots, 0)?, axes)?,
+        ExecOp::ExtractDiag { axis_a, axis_b } => {
+            exec.extract_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
+        }
+        ExecOp::EmbedDiag { axis_a, axis_b } => {
+            exec.embed_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
+        }
+        ExecOp::Tril { k } => exec.tril(get(slots, &inst.input_slots, 0)?, *k)?,
+        ExecOp::Triu { k } => exec.triu(get(slots, &inst.input_slots, 0)?, *k)?,
+        ExecOp::Add => exec.add(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Multiply => exec.mul(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Negate => exec.neg(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Conj => exec.conj(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Divide => exec.div(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Abs => exec.abs(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Sign => exec.sign(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Maximum => exec.maximum(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Minimum => exec.minimum(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Compare(dir) => exec.compare(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            dir,
+        )?,
+        ExecOp::Select => exec.select(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            get(slots, &inst.input_slots, 2)?,
+        )?,
+        ExecOp::Clamp => exec.clamp(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            get(slots, &inst.input_slots, 2)?,
+        )?,
+        ExecOp::Exp => exec.exp(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Log => exec.log(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Sin => exec.sin(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Cos => exec.cos(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Tanh => exec.tanh(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Sqrt => exec.sqrt(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Rsqrt => exec.rsqrt(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Pow => exec.pow(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+        )?,
+        ExecOp::Expm1 => exec.expm1(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Log1p => exec.log1p(get(slots, &inst.input_slots, 0)?)?,
+        ExecOp::Gather(config) => exec.gather(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            config,
+        )?,
+        ExecOp::Scatter(config) => exec.scatter(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            get(slots, &inst.input_slots, 2)?,
+            config,
+        )?,
+        ExecOp::Slice(config) => exec.slice(get(slots, &inst.input_slots, 0)?, config)?,
+        ExecOp::DynamicSlice { slice_sizes } => exec.dynamic_slice(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            slice_sizes,
+        )?,
+        ExecOp::Pad(config) => exec.pad(get(slots, &inst.input_slots, 0)?, config)?,
+        ExecOp::Concatenate { axis } => {
+            let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
+            exec.concatenate(&inputs, *axis)?
+        }
+        ExecOp::Reverse { axes } => exec.reverse(get(slots, &inst.input_slots, 0)?, axes)?,
+        ExecOp::ReduceProd { axes } => exec.reduce_prod(get(slots, &inst.input_slots, 0)?, axes)?,
+        ExecOp::ReduceMax { axes } => exec.reduce_max(get(slots, &inst.input_slots, 0)?, axes)?,
+        ExecOp::ReduceMin { axes } => exec.reduce_min(get(slots, &inst.input_slots, 0)?, axes)?,
+        other => {
+            return Err(Error::Internal(format!(
+                "non-fusible op reached fused executor: {other:?}"
+            )))
+        }
+    };
+    Ok(result)
+}
+
+pub(crate) fn execute_host_instruction<B: TensorBackend>(
+    backend: &mut B,
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+) -> Result<()> {
+    match &inst.op {
+        ExecOp::ShapeOf { axis } => {
+            let input = get(slots, &inst.input_slots, 0)?;
+            let host = Tensor::F64(TypedTensor::from_vec(
+                vec![],
+                vec![input.shape()[*axis] as f64],
+            ));
+            slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+        }
+        ExecOp::DynamicTruncate { axis } => {
+            let input = get(slots, &inst.input_slots, 0)?;
+            let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
+            let axis_extent = input.shape()[*axis];
+            let size_f64 = scalar_size_value(&size_tensor)?;
+            let rounded_size = if size_f64.is_finite() {
+                size_f64.round()
+            } else {
+                0.0
+            };
+            let size = rounded_size.max(0.0).min(axis_extent as f64) as usize;
+            let rank = input.shape().len();
+            let mut limits = input.shape().to_vec();
+            limits[*axis] = size;
+            let config = SliceConfig {
+                starts: vec![0; rank],
+                limits,
+                strides: vec![1; rank],
+            };
+            slots[inst.output_slots[0]] = Some(backend.slice(input, &config)?);
+        }
+        ExecOp::PadToMatch { axis } => {
+            let input = get(slots, &inst.input_slots, 0)?;
+            let reference = get(slots, &inst.input_slots, 1)?;
+            let target_size = reference.shape()[*axis];
+            let current_size = input.shape()[*axis];
+            if current_size >= target_size {
+                slots[inst.output_slots[0]] = Some(input.clone());
+            } else {
                 let rank = input.shape().len();
-                let mut limits = input.shape().to_vec();
-                limits[*axis] = size;
-                let config = SliceConfig {
-                    starts: vec![0; rank],
-                    limits,
-                    strides: vec![1; rank],
+                let mut high = vec![0i64; rank];
+                high[*axis] = (target_size - current_size) as i64;
+                let config = PadConfig {
+                    edge_padding_low: vec![0i64; rank],
+                    edge_padding_high: high,
+                    interior_padding: vec![0i64; rank],
                 };
-                exec.slice(input, &config)?
+                slots[inst.output_slots[0]] = Some(backend.pad(input, &config)?);
             }
-            ExecOp::PadToMatch { axis } => {
-                let input = get(&slots, &inst.input_slots, 0)?;
-                let reference = get(&slots, &inst.input_slots, 1)?;
-                let target_size = reference.shape()[*axis];
-                let current_size = input.shape()[*axis];
-                if current_size >= target_size {
-                    input.clone()
-                } else {
-                    let rank = input.shape().len();
-                    let mut high = vec![0i64; rank];
-                    high[*axis] = (target_size - current_size) as i64;
-                    let config = PadConfig {
-                        edge_padding_low: vec![0i64; rank],
-                        edge_padding_high: high,
-                        interior_padding: vec![0i64; rank],
-                    };
-                    exec.pad(input, &config)?
-                }
-            }
-            ExecOp::ReduceProd { axes } => {
-                exec.reduce_prod(get(&slots, &inst.input_slots, 0)?, axes)?
-            }
-            ExecOp::ReduceMax { axes } => {
-                exec.reduce_max(get(&slots, &inst.input_slots, 0)?, axes)?
-            }
-            ExecOp::ReduceMin { axes } => {
-                exec.reduce_min(get(&slots, &inst.input_slots, 0)?, axes)?
-            }
-            ExecOp::Cholesky => exec.cholesky(get(&slots, &inst.input_slots, 0)?)?,
-            ExecOp::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            } => exec.triangular_solve(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
+        }
+        ExecOp::Constant { dtype, bytes } => {
+            let host = constant_tensor(*dtype, bytes);
+            slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+        }
+        ExecOp::CustomCall { target } if target == "validate_nonsingular" => {
+            let input = get(slots, &inst.input_slots, 0)?;
+            let host_input = backend.download_to_host(input)?;
+            validate_nonsingular_u(&host_input)?;
+            slots[inst.output_slots[0]] = Some(input.clone());
+        }
+        other => {
+            return Err(Error::Internal(format!(
+                "non-host op reached host executor: {other:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
+    backend: &mut B,
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    mode: DispatchMode,
+) -> Result<()> {
+    match &inst.op {
+        ExecOp::BatchedGemm(config) => {
+            let result = backend.dot_general(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::NaryEinsum { subscripts } => {
+            let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
+            let result = execute_nary_einsum(backend, &inputs, subscripts, mode)?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Cholesky => {
+            let result = backend.cholesky(get(slots, &inst.input_slots, 0)?)?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        } => {
+            let result = backend.triangular_solve(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
                 *left_side,
                 *lower,
                 *transpose_a,
                 *unit_diagonal,
-            )?,
-            ExecOp::CustomCall { target } => {
-                let results: Vec<Tensor> = match target.as_str() {
-                    "lu" => exec.lu(get(&slots, &inst.input_slots, 0)?),
-                    "svd" => exec.svd(get(&slots, &inst.input_slots, 0)?),
-                    "qr" => exec.qr(get(&slots, &inst.input_slots, 0)?),
-                    "eigh" => exec.eigh(get(&slots, &inst.input_slots, 0)?),
-                    "eig" => exec.eig(get(&slots, &inst.input_slots, 0)?),
-                    "validate_nonsingular" => {
-                        let input = get(&slots, &inst.input_slots, 0)?;
-                        validate_nonsingular_u(input)?;
-                        Ok(vec![input.clone()])
-                    }
-                    _ => todo!("custom call target {target}"),
-                }?;
-                for (i, tensor) in results.into_iter().enumerate() {
-                    slots[inst.output_slots[i]] = Some(tensor);
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::CustomCall { target } => {
+            let results: Vec<Tensor> = match target.as_str() {
+                "lu" => backend.lu(get(slots, &inst.input_slots, 0)?),
+                "svd" => backend.svd(get(slots, &inst.input_slots, 0)?),
+                "qr" => backend.qr(get(slots, &inst.input_slots, 0)?),
+                "eigh" => backend.eigh(get(slots, &inst.input_slots, 0)?),
+                "eig" => backend.eig(get(slots, &inst.input_slots, 0)?),
+                "validate_nonsingular" => {
+                    return Err(Error::Internal(
+                        "validate_nonsingular must execute in the host segment".into(),
+                    ))
                 }
-                reclaim_last_use_inputs_exec(&mut slots, inst, exec);
-                continue;
+                _ => todo!("custom call target {target}"),
+            }?;
+            if results.len() != inst.output_slots.len() {
+                return Err(Error::Internal(format!(
+                    "custom call {target} produced {} outputs for {} slots",
+                    results.len(),
+                    inst.output_slots.len()
+                )));
             }
-        };
-        slots[inst.output_slots[0]] = Some(result);
-        reclaim_last_use_inputs_exec(&mut slots, inst, exec);
+            for (slot, tensor) in inst.output_slots.iter().copied().zip(results.into_iter()) {
+                slots[slot] = Some(tensor);
+            }
+        }
+        other => {
+            return Err(Error::Internal(format!(
+                "non-ffi op reached ffi executor: {other:?}"
+            )))
+        }
     }
-
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            slots[slot]
-                .take()
-                .ok_or(TensorError::MissingValue { slot }.into())
-        })
-        .collect()
+    Ok(())
 }
 
-fn execute_nary_einsum(
-    exec: &mut dyn TensorExec,
+fn collect_tensor_refs<'a>(
+    slots: &'a [Option<Tensor>],
+    input_slots: &[usize],
+) -> Result<Vec<&'a Tensor>> {
+    let mut inputs = Vec::with_capacity(input_slots.len());
+    for &slot in input_slots {
+        inputs.push(
+            slots[slot]
+                .as_ref()
+                .ok_or(TensorError::MissingValue { slot })?,
+        );
+    }
+    Ok(inputs)
+}
+
+fn execute_nary_einsum<B: TensorBackend>(
+    backend: &mut B,
     inputs: &[&Tensor],
     subscripts: &str,
+    mode: DispatchMode,
 ) -> Result<Tensor> {
     use tenferro_einsum::{
         build_einsum_fragment, ContractionOptimizerOptions, ContractionTree, Subscripts,
@@ -516,7 +651,12 @@ fn execute_nary_einsum(
         }
     }
 
-    let mut outputs = eval_exec_ir_inner(exec, &program, program_inputs)?;
+    let mut outputs = match mode {
+        DispatchMode::Unsegmented => eval_exec_ir_unsegmented(backend, &program, program_inputs)?,
+        DispatchMode::Segmented => {
+            crate::segment::eval_exec_segmented(backend, &program, program_inputs)?
+        }
+    };
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(
             "runtime nary einsum expected 1 output, got {}",
@@ -526,7 +666,7 @@ fn execute_nary_einsum(
     Ok(outputs.remove(0))
 }
 
-fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
+pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
     match dtype {
         DType::F64 => Tensor::F64(TypedTensor::from_vec(
             vec![],
@@ -573,7 +713,17 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
     out
 }
 
-fn reclaim_last_use_inputs_exec(
+fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
+    match size_tensor {
+        Tensor::F64(inner) => Ok(inner.host_data()[0]),
+        Tensor::F32(inner) => Ok(inner.host_data()[0] as f64),
+        _ => Err(Error::Internal(
+            "DynamicTruncate size must be an f32 or f64 scalar".into(),
+        )),
+    }
+}
+
+pub(crate) fn reclaim_last_use_inputs_exec(
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
     exec: &mut dyn TensorExec,
@@ -582,6 +732,20 @@ fn reclaim_last_use_inputs_exec(
         if is_last {
             if let Some(tensor) = slots[inst.input_slots[i]].take() {
                 exec.reclaim_buffer(tensor);
+            }
+        }
+    }
+}
+
+pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    backend: &mut B,
+) {
+    for (i, &is_last) in inst.last_use.iter().enumerate() {
+        if is_last {
+            if let Some(tensor) = slots[inst.input_slots[i]].take() {
+                backend.reclaim_buffer(tensor);
             }
         }
     }

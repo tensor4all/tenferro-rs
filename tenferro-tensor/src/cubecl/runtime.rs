@@ -4,6 +4,7 @@ use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
 use cubecl::Runtime;
 use cubecl_cuda::{CudaDevice, CudaRuntime};
+use cudarc::driver::sys::{CUcontext, CUdevice};
 
 /// CubeCL CUDA runtime wrapper.
 ///
@@ -19,6 +20,8 @@ use cubecl_cuda::{CudaDevice, CudaRuntime};
 pub struct CubeclRuntime {
     client: ComputeClient<CudaRuntime>,
     device_ordinal: usize,
+    cuda_device: CUdevice,
+    cuda_context: CUcontext,
 }
 
 impl CubeclRuntime {
@@ -34,9 +37,39 @@ impl CubeclRuntime {
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         let device = CudaDevice::new(device_ordinal);
         let client = CudaRuntime::client(&device);
+        cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
+            crate::Error::BackendFailure {
+                op: "cubecl_runtime_init",
+                message: format!("failed to set CUDA runtime device: {err:?}"),
+            }
+        })?;
+        cudarc::driver::result::init().map_err(|err| crate::Error::BackendFailure {
+            op: "cubecl_runtime_init",
+            message: format!("failed to initialize CUDA driver: {err:?}"),
+        })?;
+        let cuda_device =
+            cudarc::driver::result::device::get(device_ordinal as i32).map_err(|err| {
+                crate::Error::BackendFailure {
+                    op: "cubecl_runtime_init",
+                    message: format!("failed to obtain CUDA device {device_ordinal}: {err:?}"),
+                }
+            })?;
+        let cuda_context = unsafe { cudarc::driver::result::primary_ctx::retain(cuda_device) }
+            .map_err(|err| crate::Error::BackendFailure {
+                op: "cubecl_runtime_init",
+                message: format!("failed to retain CUDA primary context: {err:?}"),
+            })?;
+        unsafe { cudarc::driver::result::ctx::set_current(cuda_context) }.map_err(|err| {
+            crate::Error::BackendFailure {
+                op: "cubecl_runtime_init",
+                message: format!("failed to set CUDA primary context current: {err:?}"),
+            }
+        })?;
         Ok(Self {
             client,
             device_ordinal,
+            cuda_device,
+            cuda_context,
         })
     }
 
@@ -68,6 +101,21 @@ impl CubeclRuntime {
         self.device_ordinal
     }
 
+    pub(crate) fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+        cudarc::runtime::result::device::set(self.device_ordinal as i32).map_err(|err| {
+            crate::Error::BackendFailure {
+                op,
+                message: format!("failed to set CUDA runtime device: {err:?}"),
+            }
+        })?;
+        unsafe { cudarc::driver::result::ctx::set_current(self.cuda_context) }.map_err(|err| {
+            crate::Error::BackendFailure {
+                op,
+                message: format!("failed to activate CUDA primary context: {err:?}"),
+            }
+        })
+    }
+
     /// Extract the raw CUDA stream pointer used by the current CubeCL stream.
     ///
     /// # Examples
@@ -93,5 +141,11 @@ impl CubeclRuntime {
                 op: "raw_cuda_stream",
                 message: "with_server returned None".into(),
             })?
+    }
+}
+
+impl Drop for CubeclRuntime {
+    fn drop(&mut self) {
+        let _ = unsafe { cudarc::driver::result::primary_ctx::release(self.cuda_device) };
     }
 }

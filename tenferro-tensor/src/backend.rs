@@ -14,7 +14,7 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
         }
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
         #[cfg(feature = "cubecl")]
-        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 
@@ -428,6 +428,44 @@ pub trait TensorBackend {
     /// ```
     fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
         default_exec_session(self, f)
+    }
+
+    /// Materialize a backend tensor into host memory.
+    ///
+    /// Backends that already operate on host tensors can keep the default
+    /// implementation, which clones the input tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let host = backend.download_to_host(&tensor).unwrap();
+    /// assert_eq!(host.shape(), &[2]);
+    /// ```
+    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        Ok(tensor.clone())
+    }
+
+    /// Upload a host tensor into backend-owned storage when needed.
+    ///
+    /// Backends that already use host tensors can keep the default
+    /// implementation, which clones the input tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let uploaded = backend.upload_host_tensor(&tensor).unwrap();
+    /// assert_eq!(uploaded.shape(), &[2]);
+    /// ```
+    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        Ok(tensor.clone())
     }
 
     /// Reclaim a tensor buffer for backend-specific reuse.

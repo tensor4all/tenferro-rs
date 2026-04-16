@@ -486,7 +486,10 @@ impl<T: Clone> TypedTensor<T> {
             Buffer::Backend(_) => panic!("host_data called on backend buffer"),
             #[cfg(feature = "cubecl")]
             Buffer::Cubecl(_) => {
-                panic!("Cannot access GPU buffer as host data; download to host first")
+                panic!(
+                    "Cannot access GPU buffer (Buffer::Cubecl) as host data. \
+                       Use cubecl::download_tensor() to transfer to CPU first."
+                )
             }
         }
     }
@@ -525,7 +528,10 @@ impl<T: Clone> TypedTensor<T> {
             Buffer::Backend(_) => panic!("host_data_mut called on backend buffer"),
             #[cfg(feature = "cubecl")]
             Buffer::Cubecl(_) => {
-                panic!("Cannot access GPU buffer as host data; download to host first")
+                panic!(
+                    "Cannot access GPU buffer (Buffer::Cubecl) as host data. \
+                       Use cubecl::download_tensor() to transfer to CPU first."
+                )
             }
         }
     }
