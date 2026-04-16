@@ -5,7 +5,8 @@ use tidu::{GradEdge, GradNode};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
-    DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend,
+    DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
+    TensorBackend,
 };
 
 use crate::eager::{
@@ -211,6 +212,26 @@ impl<B: TensorBackend> EagerTensor<B> {
         })
     }
 
+    /// Convert the tensor to a different dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{DType, EagerTensor, Tensor};
+    ///
+    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, -2.0]));
+    /// let y = x.convert(DType::C64).unwrap();
+    ///
+    /// assert_eq!(y.data().dtype(), DType::C64);
+    /// assert_eq!(y.data().shape(), &[2]);
+    /// ```
+    pub fn convert(&self, to: DType) -> Result<Self> {
+        self.unary_op(StdTensorOp::Convert {
+            from: self.data.dtype(),
+            to,
+        })
+    }
+
     /// Pad with zeros using StableHLO-style edge and interior padding.
     ///
     /// # Examples
@@ -280,6 +301,35 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn gather(&self, indices: &Self, config: GatherConfig) -> Result<Self> {
         self.binary_op(indices, StdTensorOp::Gather(config))
+    }
+
+    /// Scatter updates into `self` using StableHLO scatter semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{EagerTensor, ScatterConfig, Tensor};
+    ///
+    /// let operand = EagerTensor::from_tensor(Tensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
+    /// let indices = EagerTensor::from_tensor(Tensor::new(vec![2, 1], vec![1.0_f64, 3.0]));
+    /// let updates = EagerTensor::from_tensor(Tensor::new(vec![2], vec![5.0_f64, 7.0]));
+    /// let result = operand
+    ///     .scatter(
+    ///         &indices,
+    ///         &updates,
+    ///         ScatterConfig {
+    ///             update_window_dims: vec![],
+    ///             inserted_window_dims: vec![0],
+    ///             scatter_dims_to_operand_dims: vec![0],
+    ///             index_vector_dim: 1,
+    ///         },
+    ///     )
+    ///     .unwrap();
+    ///
+    /// assert_eq!(result.data().as_slice::<f64>().unwrap(), &[0.0, 5.0, 0.0, 7.0]);
+    /// ```
+    pub fn scatter(&self, indices: &Self, updates: &Self, config: ScatterConfig) -> Result<Self> {
+        self.ternary_op(indices, updates, StdTensorOp::Scatter(config))
     }
 
     /// Slice using runtime start indices.
