@@ -1,7 +1,17 @@
+use cubecl::prelude::*;
+use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
+
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
 use crate::cubecl::{CubeclBackend, CubeclRuntime};
 use crate::Tensor;
 use crate::TensorBackend;
+
+#[cube(launch_unchecked)]
+fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
+    if ABSOLUTE_POS < output.len() {
+        output[ABSOLUTE_POS] = a[ABSOLUTE_POS] + b[ABSOLUTE_POS];
+    }
+}
 
 #[test]
 fn test_runtime_init() {
@@ -69,4 +79,34 @@ fn test_backend_stub_panics() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.add(&gpu_a, &gpu_b)));
 
     assert!(result.is_err(), "add should panic with todo!()");
+}
+
+#[test]
+fn test_trivial_cube_kernel() {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let client = rt.client();
+
+    let a_data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let b_data = vec![10.0_f64, 20.0, 30.0, 40.0];
+    let expected = vec![11.0_f64, 22.0, 33.0, 44.0];
+    let n = a_data.len();
+
+    let handle_a = client.create_from_slice(f64::as_bytes(&a_data));
+    let handle_b = client.create_from_slice(f64::as_bytes(&b_data));
+    let handle_out = client.empty(n * std::mem::size_of::<f64>());
+
+    unsafe {
+        kernel_add_f64::launch_unchecked::<CubeclCudaRuntime>(
+            client,
+            CubeCount::new_single(),
+            CubeDim::new_1d(n as u32),
+            ArrayArg::from_raw_parts(handle_out.clone(), n),
+            ArrayArg::from_raw_parts(handle_a, n),
+            ArrayArg::from_raw_parts(handle_b, n),
+        );
+    }
+
+    let result_bytes = client.read_one_unchecked(handle_out);
+    let result = f64::from_bytes(&result_bytes);
+    assert_eq!(result, &expected);
 }
