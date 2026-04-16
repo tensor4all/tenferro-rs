@@ -30,6 +30,7 @@ pub mod einsum;
 pub mod engine;
 pub mod error;
 pub mod exec;
+pub mod segment;
 mod linalg_api;
 pub mod stablehlo;
 pub mod sym_dim;

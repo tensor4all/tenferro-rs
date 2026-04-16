@@ -430,6 +430,44 @@ pub trait TensorBackend {
         default_exec_session(self, f)
     }
 
+    /// Materialize a backend tensor into host memory.
+    ///
+    /// Backends that already operate on host tensors can keep the default
+    /// implementation, which clones the input tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let host = backend.download_to_host(&tensor).unwrap();
+    /// assert_eq!(host.shape(), &[2]);
+    /// ```
+    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        Ok(tensor.clone())
+    }
+
+    /// Upload a host tensor into backend-owned storage when needed.
+    ///
+    /// Backends that already use host tensors can keep the default
+    /// implementation, which clones the input tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let uploaded = backend.upload_host_tensor(&tensor).unwrap();
+    /// assert_eq!(uploaded.shape(), &[2]);
+    /// ```
+    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        Ok(tensor.clone())
+    }
+
     /// Reclaim a tensor buffer for backend-specific reuse.
     ///
     /// Backends that do not pool buffers can ignore the tensor and let it drop.

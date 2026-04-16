@@ -2302,6 +2302,14 @@ impl TensorBackend for CubeclBackend {
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
         linalg::solve(self, a, b)
     }
+
+    fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        download_tensor(self.runtime(), tensor)
+    }
+
+    fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+        upload_tensor(self.runtime(), tensor)
+    }
 }
 
 impl<Alg: Semiring> SemiringBackend<Alg> for CubeclBackend {
