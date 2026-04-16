@@ -33,6 +33,8 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
             StridedView::new(data, &tensor.shape, &strides, 0).expect("contiguous host tensor")
         }
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     }
 }
 

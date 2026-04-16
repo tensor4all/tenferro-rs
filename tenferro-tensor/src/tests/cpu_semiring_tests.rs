@@ -32,7 +32,7 @@ fn semiring_backend_default_add_mul_and_reduce_sum_work_for_standard_f64() {
     assert_eq!(prod.host_data(), &[10.0, 40.0, 90.0, 160.0]);
     assert_eq!(reduced.shape, vec![2]);
     assert_eq!(reduced.host_data(), &[4.0, 6.0]);
-    assert_eq!(scalar.shape, vec![]);
+    assert_eq!(scalar.shape, Vec::<usize>::new());
     assert_eq!(scalar.host_data(), &[10.0]);
     assert_eq!(unchanged.host_data(), lhs.host_data());
 }
@@ -92,6 +92,6 @@ fn semiring_backend_batched_gemm_inner_product_returns_rank0_scalar() {
     )
     .unwrap();
 
-    assert_eq!(out.shape, vec![]);
+    assert_eq!(out.shape, Vec::<usize>::new());
     assert_eq!(out.host_data(), &[32.0]);
 }

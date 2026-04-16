@@ -100,6 +100,47 @@ impl<T> BufferHandle<T> {
 pub enum Buffer<T> {
     Host(Vec<T>),
     Backend(BufferHandle<T>),
+    #[cfg(feature = "cubecl")]
+    Cubecl(CubeclBuffer<T>),
+}
+
+/// CubeCL-managed GPU buffer.
+///
+/// This wraps a CubeCL server handle that owns the underlying GPU allocation.
+///
+/// # Examples
+///
+/// ```
+/// let _name = core::any::type_name::<tenferro_tensor::CubeclBuffer<f64>>();
+/// assert!(_name.contains("CubeclBuffer"));
+/// ```
+#[cfg(feature = "cubecl")]
+#[derive(Clone, Debug)]
+pub struct CubeclBuffer<T> {
+    /// CubeCL server handle that owns the GPU allocation.
+    pub handle: cubecl::server::Handle,
+    /// Number of elements stored in the allocation.
+    pub len: usize,
+    pub(crate) _marker: std::marker::PhantomData<T>,
+}
+
+#[cfg(feature = "cubecl")]
+impl<T> CubeclBuffer<T> {
+    /// Create a CubeCL buffer wrapper from a handle and element count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _new = tenferro_tensor::CubeclBuffer::<f64>::new;
+    /// let _ = _new;
+    /// ```
+    pub fn new(handle: cubecl::server::Handle, len: usize) -> Self {
+        Self {
+            handle,
+            len,
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 /// Contiguous column-major typed tensor storage.
@@ -443,6 +484,10 @@ impl<T: Clone> TypedTensor<T> {
         match &self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data called on backend buffer"),
+            #[cfg(feature = "cubecl")]
+            Buffer::Cubecl(_) => {
+                panic!("Cannot access GPU buffer as host data; download to host first")
+            }
         }
     }
 
@@ -478,6 +523,10 @@ impl<T: Clone> TypedTensor<T> {
         match &mut self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data_mut called on backend buffer"),
+            #[cfg(feature = "cubecl")]
+            Buffer::Cubecl(_) => {
+                panic!("Cannot access GPU buffer as host data; download to host first")
+            }
         }
     }
 

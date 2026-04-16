@@ -725,8 +725,11 @@ fn matmul_preserve_trailing_batch(
 }
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
-    if let Buffer::Host(data) = typed.buffer {
-        T::pool_release(pool, data);
+    match typed.buffer {
+        Buffer::Host(data) => T::pool_release(pool, data),
+        Buffer::Backend(_) => {}
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     }
 }
 

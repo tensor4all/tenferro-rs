@@ -422,10 +422,14 @@ where
     let a_data = match &lhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     };
 
     // SAFETY: this GEMM path uses beta = 0 and overwrites every output element.
@@ -528,10 +532,14 @@ where
     let a_data = match &lhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
         Buffer::Backend(_) => return None,
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
     };
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0.
