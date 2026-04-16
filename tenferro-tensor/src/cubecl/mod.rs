@@ -1,5 +1,7 @@
 //! CubeCL-based GPU backend for tenferro tensors.
 
+use std::cell::OnceCell;
+
 use cubecl::prelude::{Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
@@ -12,6 +14,8 @@ use crate::config::{
 use crate::{Tensor, TypedTensor};
 
 mod dispatch;
+mod ffi;
+mod gemm;
 mod kernels;
 mod memory;
 mod runtime;
@@ -38,6 +42,7 @@ pub use runtime::CubeclRuntime;
 /// ```
 pub struct CubeclBackend {
     rt: CubeclRuntime,
+    cutensor: OnceCell<crate::Result<ffi::cutensor::CutensorHandle>>,
 }
 
 impl CubeclBackend {
@@ -53,6 +58,7 @@ impl CubeclBackend {
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         Ok(Self {
             rt: CubeclRuntime::new(device_ordinal)?,
+            cutensor: OnceCell::new(),
         })
     }
 
@@ -67,6 +73,16 @@ impl CubeclBackend {
     /// ```
     pub fn runtime(&self) -> &CubeclRuntime {
         &self.rt
+    }
+
+    fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
+        match self
+            .cutensor
+            .get_or_init(ffi::cutensor::CutensorHandle::load)
+        {
+            Ok(handle) => Ok(handle),
+            Err(err) => Err(err.clone()),
+        }
     }
 
     fn transpose_typed<T>(
@@ -2027,11 +2043,11 @@ impl TensorBackend for CubeclBackend {
 
     fn dot_general(
         &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _config: &DotGeneralConfig,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        todo!("cubecl dot_general")
+        gemm::dot_general(self, lhs, rhs, config)
     }
 
     fn gather(
