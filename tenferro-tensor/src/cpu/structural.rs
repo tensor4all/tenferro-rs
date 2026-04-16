@@ -74,7 +74,7 @@ fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, 
             message: "backend buffers are not supported for structural CPU helpers".into(),
         }),
         #[cfg(feature = "cubecl")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 
@@ -255,7 +255,7 @@ pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
             })
         }
         #[cfg(feature = "cubecl")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
@@ -330,7 +330,7 @@ pub fn typed_embed_diagonal<T: Copy + Zero + Clone>(
             })
         }
         #[cfg(feature = "cubecl")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     for flat in 0..tensor.n_elements() {
@@ -395,7 +395,7 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
             })
         }
         #[cfg(feature = "cubecl")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor reached CPU kernel path"),
+        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     for batch_idx in 0..batch_count {

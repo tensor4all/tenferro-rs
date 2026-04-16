@@ -1,0 +1,196 @@
+use cubecl::prelude::*;
+
+pub(crate) const COMPARE_EQ: usize = 0;
+pub(crate) const COMPARE_LT: usize = 1;
+pub(crate) const COMPARE_LE: usize = 2;
+pub(crate) const COMPARE_GT: usize = 3;
+pub(crate) const COMPARE_GE: usize = 4;
+
+macro_rules! binary_kernel {
+    ($float_name:ident, $complex_name:ident, $op:tt) => {
+        #[cube(launch_unchecked)]
+        pub(crate) fn $float_name<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+            if ABSOLUTE_POS < out.len() {
+                out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
+            }
+        }
+
+        #[cube(launch_unchecked)]
+        pub(crate) fn $complex_name<C: Complex>(
+            out: &mut Array<C>,
+            lhs: &Array<C>,
+            rhs: &Array<C>,
+        ) {
+            if ABSOLUTE_POS < out.len() {
+                out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
+            }
+        }
+    };
+}
+
+macro_rules! unary_float_kernel {
+    ($name:ident, $method:ident) => {
+        #[cube(launch_unchecked)]
+        pub(crate) fn $name<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+            if ABSOLUTE_POS < out.len() {
+                out[ABSOLUTE_POS] = input[ABSOLUTE_POS].$method();
+            }
+        }
+    };
+}
+
+macro_rules! unary_both_kernel {
+    ($float_name:ident, $complex_name:ident, |$value:ident| $body:expr) => {
+        #[cube(launch_unchecked)]
+        pub(crate) fn $float_name<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+            if ABSOLUTE_POS < out.len() {
+                let $value = input[ABSOLUTE_POS];
+                out[ABSOLUTE_POS] = $body;
+            }
+        }
+
+        #[cube(launch_unchecked)]
+        pub(crate) fn $complex_name<C: Complex>(out: &mut Array<C>, input: &Array<C>) {
+            if ABSOLUTE_POS < out.len() {
+                let $value = input[ABSOLUTE_POS];
+                out[ABSOLUTE_POS] = $body;
+            }
+        }
+    };
+}
+
+binary_kernel!(add_float, add_complex, +);
+binary_kernel!(mul_float, mul_complex, *);
+binary_kernel!(div_float, div_complex, /);
+unary_both_kernel!(neg_float, neg_complex, |value| -value);
+unary_float_kernel!(exp_float, exp);
+unary_float_kernel!(log_float, ln);
+unary_float_kernel!(sin_float, sin);
+unary_float_kernel!(cos_float, cos);
+unary_float_kernel!(tanh_float, tanh);
+unary_float_kernel!(sqrt_float, sqrt);
+
+#[cube(launch_unchecked)]
+pub(crate) fn rsqrt_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].inverse_sqrt();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn expm1_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = value.exp() - F::new(1.0);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn log1p_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = (value + F::new(1.0)).ln();
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn abs_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        let zero = F::new(0.0);
+        out[ABSOLUTE_POS] = if value < zero { -value } else { value };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn sign_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let value = input[ABSOLUTE_POS];
+        let zero = F::new(0.0);
+        out[ABSOLUTE_POS] = if value == zero {
+            zero
+        } else if value > zero {
+            F::new(1.0)
+        } else {
+            -F::new(1.0)
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn maximum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].max(rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn minimum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].min(rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn pow_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].powf(rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn compare_float<F: Float>(
+    out: &mut Array<F>,
+    lhs: &Array<F>,
+    rhs: &Array<F>,
+    #[comptime] mode: usize,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let x = lhs[ABSOLUTE_POS];
+        let y = rhs[ABSOLUTE_POS];
+        let pred = match mode {
+            COMPARE_EQ => x == y,
+            COMPARE_LT => x < y,
+            COMPARE_LE => x <= y,
+            COMPARE_GT => x > y,
+            COMPARE_GE => x >= y,
+            _ => false,
+        };
+        out[ABSOLUTE_POS] = if pred { F::new(1.0) } else { F::new(0.0) };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn select_float<F: Float>(
+    out: &mut Array<F>,
+    pred: &Array<F>,
+    on_true: &Array<F>,
+    on_false: &Array<F>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] != F::new(0.0) {
+            on_true[ABSOLUTE_POS]
+        } else {
+            on_false[ABSOLUTE_POS]
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn clamp_float<F: Float>(
+    out: &mut Array<F>,
+    input: &Array<F>,
+    lower: &Array<F>,
+    upper: &Array<F>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].clamp(lower[ABSOLUTE_POS], upper[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn conj_complex<C: Complex>(out: &mut Array<C>, input: &Array<C>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
+    }
+}

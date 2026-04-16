@@ -13,17 +13,13 @@ fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
     }
 }
 
-// Run with: cargo test -p tenferro-tensor --features cubecl -- --ignored
-
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_runtime_init() {
     let rt = CubeclRuntime::new(0);
     assert!(rt.is_ok(), "CubeCL runtime should init on device 0");
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_raw_stream_extraction() {
     let rt = CubeclRuntime::new(0).unwrap();
     let stream_ptr = rt.raw_cuda_stream().unwrap();
@@ -31,7 +27,6 @@ fn test_raw_stream_extraction() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_upload_download_f64() {
     let rt = CubeclRuntime::new(0).unwrap();
     let host = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -48,7 +43,6 @@ fn test_upload_download_f64() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_upload_download_c64() {
     use num_complex::Complex64;
 
@@ -63,7 +57,6 @@ fn test_upload_download_c64() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_pointer_bridge() {
     let rt = CubeclRuntime::new(0).unwrap();
     let host = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
@@ -75,22 +68,24 @@ fn test_pointer_bridge() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
-fn test_backend_stub_panics() {
+fn test_backend_add_matches_cpu_reference() {
     let mut backend = CubeclBackend::new(0).unwrap();
+    let mut cpu = crate::cpu::CpuBackend::new();
     let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.add(&gpu_a, &gpu_b)));
-
-    assert!(result.is_err(), "add should panic with todo!()");
+    let expected = cpu.add(&a, &b).unwrap();
+    let actual_gpu = backend.add(&gpu_a, &gpu_b).unwrap();
+    let actual = download_tensor(backend.runtime(), &actual_gpu).unwrap();
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        expected.as_slice::<f64>().unwrap()
+    );
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_trivial_cube_kernel() {
     let rt = CubeclRuntime::new(0).unwrap();
     let client = rt.client();
@@ -121,7 +116,6 @@ fn test_trivial_cube_kernel() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_full_round_trip_all_dtypes() {
     use num_complex::{Complex32, Complex64};
 
@@ -167,7 +161,6 @@ fn test_full_round_trip_all_dtypes() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
 fn test_pointer_and_stream_bridge() {
     let rt = CubeclRuntime::new(0).unwrap();
     let t = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
