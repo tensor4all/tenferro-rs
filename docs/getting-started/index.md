@@ -6,13 +6,12 @@ PyTorch, or JAX, choose the layer that matches the workflow you need.
 
 ## Installation
 
-Use local checkouts while the crates are still evolving:
+The `tenferro` crate re-exports everything you need. Use a local checkout
+while the crates are still evolving:
 
 ```toml
 [dependencies]
 tenferro = { path = "/path/to/tenferro-rs/tenferro" }
-tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor" }
-tenferro-einsum = { path = "/path/to/tenferro-rs/tenferro-einsum" }
 ```
 
 Or switch to crates.io once published:
@@ -20,9 +19,10 @@ Or switch to crates.io once published:
 ```toml
 [dependencies]
 tenferro = "..."
-tenferro-tensor = "..."
-tenferro-einsum = "..."
 ```
+
+> If you only need eager tensor operations without tracing or AD, you can
+> depend on `tenferro-tensor` alone for a smaller build.
 
 ## Hello eager
 
@@ -30,11 +30,13 @@ This is the simplest way to use tenferro: direct computation without tracing or
 AD, similar to NumPy.
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro_tensor::{Tensor, cpu::CpuBackend};
 
 let mut ctx = CpuBackend::new();
 
-// Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
+// tenferro uses column-major (Fortran) storage, not row-major like NumPy.
+// For shape [2, 3] with data [1,2,3,4,5,6]:
+//   column 0 = [1, 2], column 1 = [3, 4], column 2 = [5, 6]
 let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // SVD
