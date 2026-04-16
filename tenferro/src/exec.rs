@@ -151,7 +151,11 @@ pub(crate) enum DispatchMode {
     Segmented,
 }
 
-pub(crate) fn get<'a, T>(slots: &'a [Option<T>], input_slots: &[usize], idx: usize) -> Result<&'a T> {
+pub(crate) fn get<'a, T>(
+    slots: &'a [Option<T>],
+    input_slots: &[usize],
+    idx: usize,
+) -> Result<&'a T> {
     let slot = input_slots[idx];
     slots[slot]
         .as_ref()
@@ -412,15 +416,17 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<()> {
-    let mut cpu = tenferro_tensor::cpu::CpuBackend::new();
     match &inst.op {
         ExecOp::ShapeOf { axis } => {
             let input = get(slots, &inst.input_slots, 0)?;
-            let host = Tensor::F64(TypedTensor::from_vec(vec![], vec![input.shape()[*axis] as f64]));
+            let host = Tensor::F64(TypedTensor::from_vec(
+                vec![],
+                vec![input.shape()[*axis] as f64],
+            ));
             slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
         }
         ExecOp::DynamicTruncate { axis } => {
-            let input = backend.download_to_host(get(slots, &inst.input_slots, 0)?)?;
+            let input = get(slots, &inst.input_slots, 0)?;
             let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
             let axis_extent = input.shape()[*axis];
             let size_f64 = scalar_size_value(&size_tensor)?;
@@ -438,8 +444,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
                 limits,
                 strides: vec![1; rank],
             };
-            let host = cpu.slice(&input, &config)?;
-            slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+            slots[inst.output_slots[0]] = Some(backend.slice(input, &config)?);
         }
         ExecOp::PadToMatch { axis } => {
             let input = get(slots, &inst.input_slots, 0)?;
@@ -449,8 +454,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
             if current_size >= target_size {
                 slots[inst.output_slots[0]] = Some(input.clone());
             } else {
-                let host_input = backend.download_to_host(input)?;
-                let rank = host_input.shape().len();
+                let rank = input.shape().len();
                 let mut high = vec![0i64; rank];
                 high[*axis] = (target_size - current_size) as i64;
                 let config = PadConfig {
@@ -458,8 +462,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
                     edge_padding_high: high,
                     interior_padding: vec![0i64; rank],
                 };
-                let host = cpu.pad(&host_input, &config)?;
-                slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
+                slots[inst.output_slots[0]] = Some(backend.pad(input, &config)?);
             }
         }
         ExecOp::Constant { dtype, bytes } => {
@@ -650,7 +653,9 @@ fn execute_nary_einsum<B: TensorBackend>(
 
     let mut outputs = match mode {
         DispatchMode::Unsegmented => eval_exec_ir_unsegmented(backend, &program, program_inputs)?,
-        DispatchMode::Segmented => crate::segment::eval_exec_segmented(backend, &program, program_inputs)?,
+        DispatchMode::Segmented => {
+            crate::segment::eval_exec_segmented(backend, &program, program_inputs)?
+        }
     };
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(

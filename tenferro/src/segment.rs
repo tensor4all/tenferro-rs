@@ -4,9 +4,10 @@ use std::collections::HashSet;
 
 use crate::error::Result;
 use crate::exec::{
-    collect_outputs, execute_ffi_instruction, execute_fusible_instruction, execute_host_instruction,
-    initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
-    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecProgram,
+    collect_outputs, execute_ffi_instruction, execute_fusible_instruction,
+    execute_host_instruction, initialize_slots, is_ffi_instruction, is_host_instruction,
+    reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction,
+    ExecProgram,
 };
 use tenferro_tensor::{Tensor, TensorBackend};
 
