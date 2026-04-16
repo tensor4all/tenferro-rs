@@ -1,6 +1,7 @@
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
-use crate::cubecl::CubeclRuntime;
+use crate::cubecl::{CubeclBackend, CubeclRuntime};
 use crate::Tensor;
+use crate::TensorBackend;
 
 #[test]
 fn test_runtime_init() {
@@ -54,4 +55,18 @@ fn test_pointer_bridge() {
     let ptr = device_ptr(&rt, &gpu).unwrap();
 
     assert!(ptr != 0, "Device pointer should be non-null");
+}
+
+#[test]
+fn test_backend_stub_panics() {
+    let mut backend = CubeclBackend::new(0).unwrap();
+    let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
+    let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
+
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.add(&gpu_a, &gpu_b)));
+
+    assert!(result.is_err(), "add should panic with todo!()");
 }
