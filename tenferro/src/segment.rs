@@ -1,15 +1,17 @@
 //! ExecProgram segmentation and segment-based dispatch.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::exec::{
     collect_outputs, execute_ffi_instruction, execute_fusible_instruction,
     execute_host_instruction, initialize_slots, is_ffi_instruction, is_host_instruction,
     reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction,
-    ExecProgram,
+    ExecOp, ExecProgram,
 };
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{
+    ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
+};
 
 /// A compiled execution segment.
 ///
@@ -143,8 +145,35 @@ pub fn eval_exec_segmented<B: TensorBackend>(
 
     for segment in &segments {
         match segment {
-            Segment::Fused { instructions, .. } => {
+            Segment::Fused {
+                instructions,
+                input_slots,
+                output_slots,
+                last_use,
+            } => {
                 backend.with_exec_session(|exec| -> Result<()> {
+                    if let Some(plan) =
+                        build_elementwise_fusion_plan(instructions, input_slots, output_slots)
+                    {
+                        let inputs = collect_segment_inputs(&slots, input_slots)?;
+                        if let Some(outputs) = exec.execute_elementwise_fusion(&inputs, &plan)? {
+                            if outputs.len() != output_slots.len() {
+                                return Err(crate::error::Error::Internal(format!(
+                                    "fused elementwise kernel produced {} outputs for {} slots",
+                                    outputs.len(),
+                                    output_slots.len()
+                                )));
+                            }
+                            for (slot, tensor) in
+                                output_slots.iter().copied().zip(outputs.into_iter())
+                            {
+                                slots[slot] = Some(tensor);
+                            }
+                            reclaim_segment_inputs_exec(&mut slots, input_slots, last_use, exec);
+                            return Ok(());
+                        }
+                    }
+
                     for inst in instructions {
                         let result = execute_fusible_instruction(exec, &slots, inst)?;
                         slots[inst.output_slots[0]] = Some(result);
@@ -228,5 +257,102 @@ fn build_fused_segment(program: &ExecProgram, start: usize, end: usize) -> Segme
         input_slots,
         output_slots,
         last_use,
+    }
+}
+
+fn collect_segment_inputs<'a>(
+    slots: &'a [Option<Tensor>],
+    input_slots: &[usize],
+) -> Result<Vec<&'a Tensor>> {
+    input_slots
+        .iter()
+        .map(|&slot| {
+            slots[slot]
+                .as_ref()
+                .ok_or(tenferro_tensor::Error::MissingValue { slot }.into())
+        })
+        .collect()
+}
+
+fn reclaim_segment_inputs_exec(
+    slots: &mut [Option<Tensor>],
+    input_slots: &[usize],
+    last_use: &[bool],
+    exec: &mut dyn tenferro_tensor::TensorExec,
+) {
+    for (&slot, &is_last_use) in input_slots.iter().zip(last_use.iter()) {
+        if is_last_use {
+            if let Some(tensor) = slots[slot].take() {
+                exec.reclaim_buffer(tensor);
+            }
+        }
+    }
+}
+
+fn build_elementwise_fusion_plan(
+    instructions: &[ExecInstruction],
+    input_slots: &[usize],
+    output_slots: &[usize],
+) -> Option<ElementwiseFusionPlan> {
+    let first = instructions.first()?;
+    let dtype = first.dtype;
+    let mut slot_to_value = HashMap::with_capacity(input_slots.len() + instructions.len());
+    for (value, &slot) in input_slots.iter().enumerate() {
+        slot_to_value.insert(slot, value);
+    }
+
+    let mut ops = Vec::with_capacity(instructions.len());
+    let mut next_value = input_slots.len();
+    for inst in instructions {
+        if inst.dtype != dtype || inst.output_slots.len() != 1 {
+            return None;
+        }
+        let op = map_exec_op_to_elementwise_fusion(&inst.op)?;
+        let inputs = inst
+            .input_slots
+            .iter()
+            .map(|slot| slot_to_value.get(slot).copied())
+            .collect::<Option<Vec<_>>>()?;
+        ops.push(ElementwiseFusionInst { op, inputs });
+        slot_to_value.insert(inst.output_slots[0], next_value);
+        next_value += 1;
+    }
+
+    let outputs = output_slots
+        .iter()
+        .map(|slot| slot_to_value.get(slot).copied())
+        .collect::<Option<Vec<_>>>()?;
+
+    Some(ElementwiseFusionPlan {
+        dtype,
+        n_inputs: input_slots.len(),
+        outputs,
+        ops,
+    })
+}
+
+fn map_exec_op_to_elementwise_fusion(op: &ExecOp) -> Option<ElementwiseFusionOp> {
+    match op {
+        ExecOp::Add => Some(ElementwiseFusionOp::Add),
+        ExecOp::Multiply => Some(ElementwiseFusionOp::Multiply),
+        ExecOp::Negate => Some(ElementwiseFusionOp::Negate),
+        ExecOp::Conj => Some(ElementwiseFusionOp::Conj),
+        ExecOp::Divide => Some(ElementwiseFusionOp::Divide),
+        ExecOp::Abs => Some(ElementwiseFusionOp::Abs),
+        ExecOp::Maximum => Some(ElementwiseFusionOp::Maximum),
+        ExecOp::Minimum => Some(ElementwiseFusionOp::Minimum),
+        ExecOp::Compare(dir) => Some(ElementwiseFusionOp::Compare(dir.clone())),
+        ExecOp::Select => Some(ElementwiseFusionOp::Select),
+        ExecOp::Clamp => Some(ElementwiseFusionOp::Clamp),
+        ExecOp::Exp => Some(ElementwiseFusionOp::Exp),
+        ExecOp::Log => Some(ElementwiseFusionOp::Log),
+        ExecOp::Sin => Some(ElementwiseFusionOp::Sin),
+        ExecOp::Cos => Some(ElementwiseFusionOp::Cos),
+        ExecOp::Tanh => Some(ElementwiseFusionOp::Tanh),
+        ExecOp::Sqrt => Some(ElementwiseFusionOp::Sqrt),
+        ExecOp::Rsqrt => Some(ElementwiseFusionOp::Rsqrt),
+        ExecOp::Pow => Some(ElementwiseFusionOp::Pow),
+        ExecOp::Log1p => Some(ElementwiseFusionOp::Log1p),
+        _ => None,
     }
 }

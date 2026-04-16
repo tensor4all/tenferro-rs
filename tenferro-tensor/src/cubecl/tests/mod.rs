@@ -6,6 +6,7 @@ use crate::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use crate::{Tensor, TypedTensor};
 
 mod elementwise_tests;
+mod fusion_tests;
 mod gemm_tests;
 mod indexing_tests;
 mod linalg_tests;
