@@ -110,3 +110,64 @@ fn test_trivial_cube_kernel() {
     let result = f64::from_bytes(&result_bytes);
     assert_eq!(result, &expected);
 }
+
+#[test]
+fn test_full_round_trip_all_dtypes() {
+    use num_complex::{Complex32, Complex64};
+
+    let rt = CubeclRuntime::new(0).unwrap();
+
+    let t = Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<f64>().unwrap(),
+        t.as_slice::<f64>().unwrap()
+    );
+
+    let t = Tensor::new(vec![3], vec![1.0_f32, 2.0, 3.0]);
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<f32>().unwrap(),
+        t.as_slice::<f32>().unwrap()
+    );
+
+    let t = Tensor::new(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    );
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<Complex64>().unwrap(),
+        t.as_slice::<Complex64>().unwrap()
+    );
+
+    let t = Tensor::new(
+        vec![2],
+        vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
+    );
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<Complex32>().unwrap(),
+        t.as_slice::<Complex32>().unwrap()
+    );
+}
+
+#[test]
+fn test_pointer_and_stream_bridge() {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let t = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let gpu = upload_tensor(&rt, &t).unwrap();
+
+    let ptr = device_ptr(&rt, &gpu).unwrap();
+    assert!(ptr != 0);
+
+    let stream = rt.raw_cuda_stream().unwrap();
+    assert!(stream != 0);
+
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(back.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
