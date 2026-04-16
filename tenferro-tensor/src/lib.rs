@@ -29,6 +29,9 @@ pub mod cuda;
 #[cfg(feature = "rocm")]
 pub mod rocm;
 
+#[cfg(feature = "cubecl")]
+pub mod cubecl;
+
 pub use backend::{default_exec_session, SemiringBackend, TensorBackend, TensorExec};
 pub use config::*;
 pub use error::*;
