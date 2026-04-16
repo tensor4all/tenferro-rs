@@ -6,6 +6,50 @@ use crate::config::{
 };
 use crate::{Buffer, Tensor, TypedTensor};
 
+/// Canonical elementwise fusion plan shared between segmented execution and backends.
+#[doc(hidden)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ElementwiseFusionPlan {
+    pub dtype: crate::DType,
+    pub n_inputs: usize,
+    pub outputs: Vec<usize>,
+    pub ops: Vec<ElementwiseFusionInst>,
+}
+
+/// One node in a canonical elementwise fusion plan.
+#[doc(hidden)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ElementwiseFusionInst {
+    pub op: ElementwiseFusionOp,
+    pub inputs: Vec<usize>,
+}
+
+/// Elementwise op kinds supported by backend fusion implementations.
+#[doc(hidden)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum ElementwiseFusionOp {
+    Add,
+    Multiply,
+    Negate,
+    Conj,
+    Divide,
+    Abs,
+    Maximum,
+    Minimum,
+    Compare(CompareDir),
+    Select,
+    Clamp,
+    Exp,
+    Log,
+    Sin,
+    Cos,
+    Tanh,
+    Sqrt,
+    Rsqrt,
+    Pow,
+    Log1p,
+}
+
 pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     match &tensor.buffer {
         Buffer::Host(data) => {
@@ -192,6 +236,15 @@ pub trait TensorExec {
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
 
     fn reclaim_buffer(&mut self, tensor: Tensor);
+
+    #[doc(hidden)]
+    fn execute_elementwise_fusion(
+        &mut self,
+        _inputs: &[&Tensor],
+        _plan: &ElementwiseFusionPlan,
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        Ok(None)
+    }
 }
 
 struct BackendExecAdapter<'a, B: TensorBackend + ?Sized> {
@@ -272,6 +325,10 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
         eigh(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         eig(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         reclaim_buffer(tensor: Tensor) -> ();
+        execute_elementwise_fusion(
+            inputs: &[&Tensor],
+            plan: &ElementwiseFusionPlan
+        ) -> crate::Result<Option<Vec<Tensor>>>;
     }
 }
 
@@ -482,6 +539,15 @@ pub trait TensorBackend {
     /// backend.reclaim_buffer(tensor);
     /// ```
     fn reclaim_buffer(&mut self, _tensor: Tensor) {}
+
+    #[doc(hidden)]
+    fn execute_elementwise_fusion(
+        &mut self,
+        _inputs: &[&Tensor],
+        _plan: &ElementwiseFusionPlan,
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        Ok(None)
+    }
 }
 
 /// Algebra-generic backend over typed tensors.

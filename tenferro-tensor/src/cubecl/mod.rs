@@ -15,6 +15,7 @@ use crate::{Tensor, TypedTensor};
 
 mod dispatch;
 mod ffi;
+mod fusion;
 mod gemm;
 mod kernels;
 mod linalg;
@@ -2436,6 +2437,14 @@ impl TensorBackend for CubeclBackend {
 
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         upload_tensor(self.runtime(), tensor)
+    }
+
+    fn execute_elementwise_fusion(
+        &mut self,
+        inputs: &[&Tensor],
+        plan: &crate::ElementwiseFusionPlan,
+    ) -> crate::Result<Option<Vec<Tensor>>> {
+        fusion::execute_elementwise_fusion(self, inputs, plan)
     }
 }
 
