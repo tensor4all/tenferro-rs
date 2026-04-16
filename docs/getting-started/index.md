@@ -53,7 +53,7 @@ assert_eq!(c.shape(), &[2, 2]);
 
 This is the tenferro equivalent of `torch.einsum("ij,jk->ik", a, b)` or `jnp.einsum("ij,jk->ik", a, b)`.
 
-```rust,ignore
+```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
 // Column-major buffers: `a` has columns [1, 2], [3, 4], [5, 6].
@@ -72,7 +72,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
 This is the tenferro equivalent of differentiating `sum(x * x)` in PyTorch or JAX.
 
-```rust,ignore
+```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
 let x = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
