@@ -15,7 +15,7 @@
 //! // ... build and execute traced computations
 //! ```
 
-pub use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
+pub use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 mod checkpoint;
 pub mod compiler;

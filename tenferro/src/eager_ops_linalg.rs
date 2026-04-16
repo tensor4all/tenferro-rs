@@ -6,7 +6,7 @@ use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
 
 impl<B: TensorBackend> EagerTensor<B> {
-    /// Singular value decomposition: `A = U diag(S) Vt`.
+    /// Singular value decomposition: `A = U diag(S) Vh`.
     ///
     /// # Examples
     ///
@@ -14,17 +14,17 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// use tenferro::{EagerTensor, Tensor};
     ///
     /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
-    /// let (u, s, vt) = a.svd().unwrap();
+    /// let (u, s, vh) = a.svd().unwrap();
     ///
     /// assert_eq!(u.data().shape(), &[2, 2]);
     /// assert_eq!(s.data().shape(), &[2]);
-    /// assert_eq!(vt.data().shape(), &[2, 2]);
+    /// assert_eq!(vh.data().shape(), &[2, 2]);
     /// ```
     pub fn svd(&self) -> Result<(Self, Self, Self)> {
         let mut outputs = self
             .multi_output_unary_op(
                 StdTensorOp::Svd {
-                    eps: 1.0e-12,
+                    eps: 0.0,
                     input_shape: DimExpr::from_concrete(self.data.shape()),
                 },
                 3,
@@ -36,7 +36,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             outputs.next(),
             outputs.next(),
         ) {
-            (Some(u), Some(s), Some(vt), None) => Ok((u, s, vt)),
+            (Some(u), Some(s), Some(vh), None) => Ok((u, s, vh)),
             _ => Err(Error::Internal(
                 "svd eager op returned an unexpected number of outputs".to_string(),
             )),
@@ -147,7 +147,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         let mut outputs = self
             .multi_output_unary_op(
                 StdTensorOp::Eigh {
-                    eps: 1.0e-12,
+                    eps: 0.0,
                     input_shape: DimExpr::from_concrete(self.data.shape()),
                 },
                 2,
