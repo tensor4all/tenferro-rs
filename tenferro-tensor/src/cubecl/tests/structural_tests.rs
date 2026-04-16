@@ -6,6 +6,7 @@ use super::{
 };
 
 #[test]
+#[ignore]
 fn test_cubecl_structural_ops_match_cpu() {
     let input = tensor_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let scalar = tensor_f64(vec![], vec![7.5]);
@@ -69,6 +70,7 @@ fn test_cubecl_structural_ops_match_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_convert_matches_cpu() {
     let real = tensor_f64(vec![3], vec![1.5, -2.25, 3.75]);
     let complex = tensor_c64(

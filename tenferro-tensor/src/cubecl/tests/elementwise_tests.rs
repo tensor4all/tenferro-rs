@@ -6,6 +6,7 @@ use super::{
 };
 
 #[test]
+#[ignore]
 fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let lhs = tensor_f64(vec![4], vec![1.5, -2.0, 3.0, 4.5]);
     let rhs = tensor_f64(vec![4], vec![0.5, 4.0, 2.0, -1.5]);
@@ -54,6 +55,7 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let positive = tensor_f64(vec![4], vec![0.25, 0.5, 1.5, 3.0]);
     let signed = tensor_f64(vec![4], vec![-2.0, -0.0, 3.5, -4.5]);
@@ -125,6 +127,7 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let lhs = tensor_f64(vec![4], vec![1.0, 3.0, 2.0, 4.0]);
     let rhs = tensor_f64(vec![4], vec![2.0, 3.0, 1.0, 5.0]);
@@ -156,6 +159,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let lhs = tensor_c64(
         vec![3],

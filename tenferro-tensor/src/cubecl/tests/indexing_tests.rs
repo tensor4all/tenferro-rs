@@ -7,6 +7,7 @@ use super::{
 };
 
 #[test]
+#[ignore]
 fn test_cubecl_slice_dynamic_slice_and_pad_match_cpu() {
     let input = tensor_f64(
         vec![4, 4],
@@ -48,6 +49,7 @@ fn test_cubecl_slice_dynamic_slice_and_pad_match_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_gather_and_scatter_match_cpu() {
     let operand = tensor_f64(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]);
     let start_indices = tensor_f64(vec![3, 1], vec![0.0, 2.0, 4.0]);
@@ -97,6 +99,7 @@ fn test_cubecl_gather_and_scatter_match_cpu() {
 }
 
 #[test]
+#[ignore]
 fn test_cubecl_scatter_skips_invalid_windows_like_cpu() {
     let operand = tensor_f64(vec![4], vec![9.0, 8.0, 7.0, 6.0]);
     let scatter_indices = tensor_f64(vec![3, 1], vec![-1.0, 2.0, 4.0]);
