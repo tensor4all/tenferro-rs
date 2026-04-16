@@ -5,10 +5,19 @@ use std::sync::Arc;
 use libloading::Library;
 use num_complex::{Complex32, Complex64};
 
-const CUSOLVER_LIBRARY_PATH: &str = "/usr/lib/x86_64-linux-gnu/libcusolver.so.11";
-const CUSOLVER_FALLBACK_LIBRARY_PATH: &str = "libcusolver.so";
-const CUBLAS_LIBRARY_PATH: &str = "/usr/lib/x86_64-linux-gnu/libcublas.so";
-const CUBLAS_FALLBACK_LIBRARY_PATH: &str = "libcublas.so";
+/// Default cuSOLVER search paths. Override with `TENFERRO_CUSOLVER_PATH` env var.
+const CUSOLVER_DEFAULT_PATHS: &[&str] = &[
+    "libcusolver.so.12",
+    "libcusolver.so.11",
+    "/usr/lib/x86_64-linux-gnu/libcusolver.so.11",
+    "libcusolver.so",
+];
+/// Default cuBLAS search paths. Override with `TENFERRO_CUBLAS_PATH` env var.
+const CUBLAS_DEFAULT_PATHS: &[&str] = &[
+    "libcublas.so.12",
+    "libcublas.so",
+    "/usr/lib/x86_64-linux-gnu/libcublas.so",
+];
 
 pub(crate) type CusolverDnHandleRaw = *mut c_void;
 pub(crate) type CublasHandleRaw = *mut c_void;
@@ -731,15 +740,20 @@ unsafe fn load_symbol<T: Copy>(
     Ok(*symbol)
 }
 
+type GetVersionFn = unsafe extern "C" fn(*mut i32) -> CusolverStatus;
+
 struct CusolverLibrary {
     _lib: Library,
     vtable: CusolverVtable,
+    /// cuSOLVER library version (e.g. 11403 for 11.4.3).
+    version: i32,
 }
 
 impl CusolverLibrary {
     fn load() -> crate::Result<Arc<Self>> {
+        let paths = super::library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
         let mut errors = Vec::new();
-        for path in [CUSOLVER_LIBRARY_PATH, CUSOLVER_FALLBACK_LIBRARY_PATH] {
+        for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
@@ -748,13 +762,29 @@ impl CusolverLibrary {
                 }
             };
             let vtable = unsafe { CusolverVtable::load(&lib) }?;
-            return Ok(Arc::new(Self { _lib: lib, vtable }));
+            // Query version if available
+            let version = unsafe {
+                if let Ok(get_ver) = lib.get::<GetVersionFn>(b"cusolverGetVersion\0") {
+                    let mut ver = 0i32;
+                    (*get_ver)(&mut ver);
+                    ver
+                } else {
+                    0
+                }
+            };
+            // Version is available for diagnostics via CusolverLibrary::version
+            return Ok(Arc::new(Self {
+                _lib: lib,
+                vtable,
+                version,
+            }));
         }
 
         Err(crate::Error::BackendFailure {
             op: "cubecl_linalg",
             message: format!(
-                "failed to load cuSOLVER library (tried {CUSOLVER_LIBRARY_PATH}, {CUSOLVER_FALLBACK_LIBRARY_PATH}): {}",
+                "failed to load cuSOLVER library (tried {}): {}",
+                paths.join(", "),
                 errors.join("; ")
             ),
         })
@@ -786,8 +816,9 @@ struct CublasLibrary {
 
 impl CublasLibrary {
     fn load() -> crate::Result<Arc<Self>> {
+        let paths = super::library_search_paths("TENFERRO_CUBLAS_PATH", CUBLAS_DEFAULT_PATHS);
         let mut errors = Vec::new();
-        for path in [CUBLAS_LIBRARY_PATH, CUBLAS_FALLBACK_LIBRARY_PATH] {
+        for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
@@ -802,7 +833,8 @@ impl CublasLibrary {
         Err(crate::Error::BackendFailure {
             op: "triangular_solve",
             message: format!(
-                "failed to load cuBLAS library (tried {CUBLAS_LIBRARY_PATH}, {CUBLAS_FALLBACK_LIBRARY_PATH}): {}",
+                "failed to load cuBLAS library (tried {}): {}",
+                paths.join(", "),
                 errors.join("; ")
             ),
         })

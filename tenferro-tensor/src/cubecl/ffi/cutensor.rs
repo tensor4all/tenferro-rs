@@ -5,8 +5,12 @@ use std::sync::Arc;
 use libloading::Library;
 
 const OP: &str = "dot_general";
-const PRIMARY_LIBRARY_PATH: &str = "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2";
-const FALLBACK_LIBRARY_PATH: &str = "libcutensor.so";
+/// Default cuTENSOR search paths. Override with `TENFERRO_CUTENSOR_PATH` env var.
+const CUTENSOR_DEFAULT_PATHS: &[&str] = &[
+    "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2",
+    "libcutensor.so.2",
+    "libcutensor.so",
+];
 
 pub(crate) type CutensorHandleRaw = *mut c_void;
 pub(crate) type CutensorTensorDescriptorRaw = *mut c_void;
@@ -197,8 +201,9 @@ struct CutensorLibrary {
 
 impl CutensorLibrary {
     fn load() -> crate::Result<Arc<Self>> {
+        let paths = super::library_search_paths("TENFERRO_CUTENSOR_PATH", CUTENSOR_DEFAULT_PATHS);
         let mut errors = Vec::new();
-        for path in [PRIMARY_LIBRARY_PATH, FALLBACK_LIBRARY_PATH] {
+        for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
@@ -213,7 +218,8 @@ impl CutensorLibrary {
         Err(crate::Error::BackendFailure {
             op: OP,
             message: format!(
-                "failed to load cuTENSOR library (tried {PRIMARY_LIBRARY_PATH}, {FALLBACK_LIBRARY_PATH}): {}",
+                "failed to load cuTENSOR library (tried {}): {}",
+                paths.join(", "),
                 errors.join("; ")
             ),
         })
