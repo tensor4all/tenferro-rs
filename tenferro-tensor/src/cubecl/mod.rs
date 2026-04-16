@@ -2526,11 +2526,18 @@ fn embed_diagonal_shape(
 }
 
 fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    input_shape
+    let shape: Vec<usize> = input_shape
         .iter()
         .enumerate()
         .filter_map(|(axis, &dim)| (!axes.contains(&axis)).then_some(dim))
-        .collect()
+        .collect();
+    // cubecl Array::new(0) generates uint32 arr[0] which is invalid CUDA.
+    // When all axes are reduced (scalar output), use shape [1] instead.
+    if shape.is_empty() {
+        vec![1]
+    } else {
+        shape
+    }
 }
 
 fn reduction_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {

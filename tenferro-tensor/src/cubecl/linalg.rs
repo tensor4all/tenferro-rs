@@ -14,7 +14,8 @@ use super::ffi::cusolver::{
 };
 use super::{download_tensor, upload_tensor, CubeclBackend, CubeclRuntime};
 use crate::config::{DotGeneralConfig, SliceConfig};
-use crate::validate::validate_nonsingular_u;
+// validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
+// then downloads a single scalar — no bulk host roundtrip.
 use crate::{CubeclBuffer, Tensor, TensorBackend, TypedTensor};
 
 trait LinalgScalar:
@@ -208,8 +209,7 @@ pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> crat
     let p = &outputs[0];
     let l = &outputs[1];
     let u = &outputs[2];
-    let host_u = download_tensor(backend.runtime(), u)?;
-    validate_nonsingular_u(&host_u)?;
+    validate_nonsingular_gpu(backend, u)?;
 
     let pb = matmul_preserve_trailing_batch(backend, p, &rhs)?;
     let z = triangular_solve(backend, l, &pb, true, true, false, true)?;
@@ -1266,4 +1266,50 @@ fn matmul_preserve_trailing_batch(
             rhs_rank: rank,
         },
     )
+}
+
+/// Validate that U's diagonal has no singular/zero entries — GPU-accelerated.
+///
+/// Strategy: extract_diagonal → abs → reshape to 1D → reduce_min(axis=0) →
+/// download 1 scalar → check > 0.
+///
+/// Only the final scalar (8 bytes) is transferred to host.
+fn validate_nonsingular_gpu(backend: &mut CubeclBackend, u: &Tensor) -> crate::Result<()> {
+    let diag = backend.extract_diagonal(u, 0, 1)?;
+
+    // abs — convert complex to real first (complex abs not supported)
+    let abs_diag = match &diag {
+        Tensor::C32(_) | Tensor::C64(_) => {
+            let real_diag = backend.convert(&diag, crate::DType::F64)?;
+            backend.abs(&real_diag)?
+        }
+        _ => backend.abs(&diag)?,
+    };
+
+    // Flatten to 1D then reduce_min on axis 0 to get a single scalar.
+    let total: usize = abs_diag.shape().iter().product();
+    let flat = backend.reshape(&abs_diag, &[total])?;
+    let min_val = backend.reduce_min(&flat, &[0])?;
+
+    // Download single scalar
+    let host_min = super::memory::download_tensor(backend.runtime(), &min_val)?;
+    let is_singular = match &host_min {
+        Tensor::F64(t) => t.host_data()[0] == 0.0 || !t.host_data()[0].is_finite(),
+        Tensor::F32(t) => t.host_data()[0] == 0.0 || !t.host_data()[0].is_finite(),
+        _ => {
+            return Err(crate::Error::BackendFailure {
+                op: "solve",
+                message: "unexpected dtype after abs reduction".into(),
+            });
+        }
+    };
+
+    if is_singular {
+        Err(crate::Error::BackendFailure {
+            op: "solve",
+            message: "singular matrix: zero or non-finite diagonal entry in U".into(),
+        })
+    } else {
+        Ok(())
+    }
 }
