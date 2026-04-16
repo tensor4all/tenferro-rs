@@ -68,17 +68,21 @@ fn test_pointer_bridge() {
 }
 
 #[test]
-fn test_backend_stub_panics() {
+fn test_backend_add_matches_cpu_reference() {
     let mut backend = CubeclBackend::new(0).unwrap();
+    let mut cpu = crate::cpu::CpuBackend::new();
     let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.add(&gpu_a, &gpu_b)));
-
-    assert!(result.is_err(), "add should panic with todo!()");
+    let expected = cpu.add(&a, &b).unwrap();
+    let actual_gpu = backend.add(&gpu_a, &gpu_b).unwrap();
+    let actual = download_tensor(backend.runtime(), &actual_gpu).unwrap();
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap(),
+        expected.as_slice::<f64>().unwrap()
+    );
 }
 
 #[test]
