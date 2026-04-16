@@ -94,6 +94,46 @@ pub(crate) fn convert_c64_to_f64(out: &mut Array<f64>, input: &Array<Complex64>)
     }
 }
 
+/// Float-to-complex conversion kernels.
+///
+/// These write interleaved (re, im) pairs to the output buffer viewed as
+/// raw floats. Output array has 2x the length of input (re, 0, re, 0, ...).
+#[cube(launch_unchecked)]
+pub(crate) fn convert_f32_to_c32_raw(out: &mut Array<f32>, input: &Array<f32>) {
+    if ABSOLUTE_POS < input.len() {
+        let re = input[ABSOLUTE_POS];
+        out[ABSOLUTE_POS * 2] = re;
+        out[ABSOLUTE_POS * 2 + 1] = 0.0f32;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn convert_f32_to_c64_raw(out: &mut Array<f64>, input: &Array<f32>) {
+    if ABSOLUTE_POS < input.len() {
+        let re = f64::cast_from(input[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS * 2] = re;
+        out[ABSOLUTE_POS * 2 + 1] = 0.0f64;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn convert_f64_to_c32_raw(out: &mut Array<f32>, input: &Array<f64>) {
+    if ABSOLUTE_POS < input.len() {
+        let re = f32::cast_from(input[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS * 2] = re;
+        out[ABSOLUTE_POS * 2 + 1] = 0.0f32;
+    }
+}
+
+#[cube(launch_unchecked)]
+pub(crate) fn convert_f64_to_c64_raw(out: &mut Array<f64>, input: &Array<f64>) {
+    if ABSOLUTE_POS < input.len() {
+        let re = input[ABSOLUTE_POS];
+        out[ABSOLUTE_POS * 2] = re;
+        out[ABSOLUTE_POS * 2 + 1] = 0.0f64;
+    }
+}
+
 #[cube(launch_unchecked)]
 pub(crate) fn convert_complex_to_complex<Out: Complex, In: Complex>(
     out: &mut Array<Out>,

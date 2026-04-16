@@ -207,11 +207,138 @@ impl CubeclBackend {
         )
     }
 
-    fn convert_via_host(&self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        let host = download_tensor(self.runtime(), input)?;
-        let mut cpu = crate::cpu::CpuBackend::new();
-        let converted = cpu.convert(&host, to)?;
-        upload_tensor(self.runtime(), &converted)
+    fn convert_f32_to_c32(
+        &self,
+        input: &TypedTensor<f32>,
+    ) -> crate::Result<TypedTensor<Complex32>> {
+        self.convert_float_to_complex_raw::<f32, Complex32>(
+            input,
+            std::mem::size_of::<f32>(),
+            |client, out_h, inp_h, n| {
+                let count = cubecl::prelude::CubeCount::new_single();
+                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
+                unsafe {
+                    structural::convert_f32_to_c32_raw::launch_unchecked::<CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
+                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
+                    );
+                }
+            },
+        )
+    }
+
+    fn convert_f32_to_c64(
+        &self,
+        input: &TypedTensor<f32>,
+    ) -> crate::Result<TypedTensor<Complex64>> {
+        self.convert_float_to_complex_raw::<f32, Complex64>(
+            input,
+            std::mem::size_of::<f64>(),
+            |client, out_h, inp_h, n| {
+                let count = cubecl::prelude::CubeCount::new_single();
+                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
+                unsafe {
+                    structural::convert_f32_to_c64_raw::launch_unchecked::<CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
+                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
+                    );
+                }
+            },
+        )
+    }
+
+    fn convert_f64_to_c32(
+        &self,
+        input: &TypedTensor<f64>,
+    ) -> crate::Result<TypedTensor<Complex32>> {
+        self.convert_float_to_complex_raw::<f64, Complex32>(
+            input,
+            std::mem::size_of::<f32>(),
+            |client, out_h, inp_h, n| {
+                let count = cubecl::prelude::CubeCount::new_single();
+                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
+                unsafe {
+                    structural::convert_f64_to_c32_raw::launch_unchecked::<CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
+                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
+                    );
+                }
+            },
+        )
+    }
+
+    fn convert_f64_to_c64(
+        &self,
+        input: &TypedTensor<f64>,
+    ) -> crate::Result<TypedTensor<Complex64>> {
+        self.convert_float_to_complex_raw::<f64, Complex64>(
+            input,
+            std::mem::size_of::<f64>(),
+            |client, out_h, inp_h, n| {
+                let count = cubecl::prelude::CubeCount::new_single();
+                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
+                unsafe {
+                    structural::convert_f64_to_c64_raw::launch_unchecked::<CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
+                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
+                    );
+                }
+            },
+        )
+    }
+
+    /// Generic float-to-complex conversion via raw interleaved kernel.
+    ///
+    /// The kernel writes `(re, 0, re, 0, ...)` into a raw float buffer that
+    /// is then reinterpreted as complex. `out_float_size` is `size_of::<OutFloat>()`.
+    fn convert_float_to_complex_raw<InFloat, OutComplex>(
+        &self,
+        input: &TypedTensor<InFloat>,
+        out_float_size: usize,
+        launch: impl FnOnce(
+            &cubecl::client::ComputeClient<CudaRuntime>,
+            cubecl::server::Handle,
+            cubecl::server::Handle,
+            usize,
+        ),
+    ) -> crate::Result<TypedTensor<OutComplex>>
+    where
+        InFloat: CubeElement + Clone,
+        OutComplex: Clone,
+    {
+        let n = input.shape.iter().product::<usize>();
+        let client = self.rt.client();
+        let input_handle = match &input.buffer {
+            crate::Buffer::Cubecl(buf) => buf.handle.clone(),
+            _ => {
+                return Err(crate::Error::BackendFailure {
+                    op: "convert",
+                    message: "expected cubecl buffer".into(),
+                })
+            }
+        };
+        let out_handle = client.empty(n * 2 * out_float_size);
+        launch(client, out_handle.clone(), input_handle, n);
+        Ok(TypedTensor {
+            buffer: crate::Buffer::Cubecl(crate::CubeclBuffer::new(out_handle, n)),
+            shape: input.shape.clone(),
+            placement: crate::Placement {
+                memory_kind: crate::MemoryKind::Device,
+                resident_device: None,
+            },
+        })
     }
 
     fn convert_c32_to_f32(
@@ -1929,14 +2056,14 @@ impl TensorBackend for CubeclBackend {
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
-            (Tensor::F32(_), crate::DType::C32) => self.convert_via_host(input, to),
-            (Tensor::F32(_), crate::DType::C64) => self.convert_via_host(input, to),
+            (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
+            (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
             (Tensor::F64(t), crate::DType::F32) => {
                 self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
             }
             (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
-            (Tensor::F64(_), crate::DType::C32) => self.convert_via_host(input, to),
-            (Tensor::F64(_), crate::DType::C64) => self.convert_via_host(input, to),
+            (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
+            (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
             (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
             (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
             (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
