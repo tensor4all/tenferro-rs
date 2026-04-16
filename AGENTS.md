@@ -225,24 +225,18 @@ Override with environment variables:
 
 Colon-separated paths are supported (like `LD_LIBRARY_PATH`).
 
-**cuSOLVER version requirements:**
+**cuSOLVER feature coverage:**
 
-| Feature | Minimum cuSOLVER | CUDA toolkit |
-|---------|-----------------|--------------|
-| SVD, QR, Cholesky, LU, Eigh | 11.4+ | CUDA 12.0+ |
-| General eigendecomposition (eig) | 11.6+ | CUDA 12.4+ |
+| Feature | cuSOLVER support | GPU status |
+|---------|-----------------|------------|
+| SVD, QR, Cholesky, LU, Eigh | All versions (11.4+) | GPU |
+| Triangular solve | Via cuBLAS (all versions) | GPU |
+| General eigendecomposition (eig) | **Not in cuSOLVER** | Host fallback (CPU) |
 
-On cuSOLVER < 11.6, `eig` falls back to CPU. Upgrade to CUDA 12.4+
-for full GPU eigendecomposition:
-
-```bash
-# Ubuntu: install CUDA 12.4+ toolkit
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-sudo apt-get install cuda-toolkit-12-4
-export TENFERRO_CUSOLVER_PATH=/usr/local/cuda-12.4/lib64/libcusolver.so.12
-```
+`eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
+provided by any version of cuSOLVER. The `eig` op always falls back to
+CPU via download → CpuBackend → re-upload. This is a permanent
+cuSOLVER limitation, not a version issue.
 
 ## CPU Kernel Implementation Rules
 

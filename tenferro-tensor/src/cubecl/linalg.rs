@@ -184,9 +184,9 @@ pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result
 }
 
 pub(super) fn eig(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-    // cuSOLVER >= 11.6 (CUDA 12.4+) has geev for general eigendecomposition.
-    // Older versions fall back to CPU.
-    // TODO: implement GPU eig when cuSOLVER >= 11600 is available.
+    // cuSOLVER does not provide general eigendecomposition (geev/dgeev).
+    // Only symmetric/Hermitian (syevd/heevd = eigh) is supported.
+    // This permanently falls back to CPU.
     host_fallback_eig(backend, input)
 }
 
