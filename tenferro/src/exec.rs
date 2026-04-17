@@ -301,8 +301,8 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
         } else if is_ffi_instruction(inst) {
             execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented)?;
         } else {
-            let result = backend
-                .with_exec_session(|exec| execute_fusible_instruction(exec, &slots, inst))?;
+            let result =
+                backend.with_exec_session(|exec| execute_backend_op(exec, &slots, inst))?;
             slots[inst.output_slots[0]] = Some(result);
         }
         reclaim_last_use_inputs_backend(&mut slots, inst, backend);
@@ -311,7 +311,7 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
     collect_outputs(program, slots)
 }
 
-pub(crate) fn execute_fusible_instruction(
+pub(crate) fn execute_backend_op(
     exec: &mut dyn TensorExec,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
@@ -416,7 +416,7 @@ pub(crate) fn execute_fusible_instruction(
         ExecOp::ReduceMin { axes } => exec.reduce_min(get(slots, &inst.input_slots, 0)?, axes)?,
         other => {
             return Err(Error::Internal(format!(
-                "non-fusible op reached fused executor: {other:?}"
+                "host or FFI op reached backend executor: {other:?}"
             )))
         }
     };

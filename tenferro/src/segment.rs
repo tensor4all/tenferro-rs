@@ -4,10 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::exec::{
-    collect_outputs, execute_ffi_instruction, execute_fusible_instruction,
-    execute_host_instruction, initialize_slots, is_ffi_instruction, is_host_instruction,
-    reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction,
-    ExecOp, ExecProgram,
+    collect_outputs, execute_backend_op, execute_ffi_instruction, execute_host_instruction,
+    initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
+    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
@@ -179,7 +178,7 @@ pub fn eval_exec_segmented<B: TensorBackend>(
                     }
 
                     for inst in instructions {
-                        let result = execute_fusible_instruction(exec, &slots, inst)?;
+                        let result = execute_backend_op(exec, &slots, inst)?;
                         slots[inst.output_slots[0]] = Some(result);
                         reclaim_last_use_inputs_exec(&mut slots, inst, exec);
                     }
