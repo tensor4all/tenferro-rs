@@ -17,6 +17,31 @@ fn test_add_broadcasts_trivially() {
 }
 
 #[test]
+fn test_add_and_mul_preserve_tensor_shape_under_scalar_broadcast() {
+    let scalar = vec![];
+    let vector = vec![cst(3)];
+    let matrix = vec![cst(2), cst(4)];
+
+    for (op, tensor_shape) in [
+        (StdTensorOp::Add, vector.clone()),
+        (StdTensorOp::Mul, vector.clone()),
+        (StdTensorOp::Add, matrix.clone()),
+        (StdTensorOp::Mul, matrix.clone()),
+    ] {
+        assert_eq!(
+            infer_output_shapes(&op, &[&scalar, &tensor_shape]),
+            vec![tensor_shape.clone()],
+            "unexpected shape for left-scalar {op:?}"
+        );
+        assert_eq!(
+            infer_output_shapes(&op, &[&tensor_shape, &scalar]),
+            vec![tensor_shape.clone()],
+            "unexpected shape for right-scalar {op:?}"
+        );
+    }
+}
+
+#[test]
 fn test_transpose_applies_perm() {
     let op = StdTensorOp::Transpose { perm: vec![1, 0] };
     let input = vec![cst(3), cst(4)];

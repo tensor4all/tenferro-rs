@@ -6,11 +6,12 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, ValRef};
-use tenferro::compiler::{compile_to_exec, lower_semiring_to_stablehlo};
+use tenferro::compiler::compile_semiring_to_exec;
 use tenferro::exec::eval_semiring_ir;
 use tenferro_algebra::{Algebra, Semiring};
 use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionTree, Subscripts};
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::semiring_op::{SemiringInputKey, SemiringOp};
 use tenferro_tensor::backend::SemiringBackend;
 use tenferro_tensor::cpu::CpuBackend;
@@ -50,8 +51,6 @@ fn eval_fragment(
     let view = resolve(vec![fragment]);
     let graph = materialize_merge(&view, &[output_key]);
     let compiled = compile(&graph);
-    let stablehlo = lower_semiring_to_stablehlo(&compiled);
-    let exec = compile_to_exec(&stablehlo);
     let inputs = graph
         .inputs
         .iter()
@@ -59,7 +58,12 @@ fn eval_fragment(
             GlobalValKey::Input(k) => inputs_map.get(k).expect("missing semiring input").clone(),
             _ => panic!("expected input key"),
         })
+        .collect::<Vec<_>>();
+    let input_shapes: Vec<Vec<DimExpr>> = inputs
+        .iter()
+        .map(|tensor| DimExpr::from_concrete(&tensor.shape))
         .collect();
+    let exec = compile_semiring_to_exec(&compiled, &input_shapes);
     eval_semiring_ir::<_, TropicalAlgebra>(backend, &exec, inputs)
         .unwrap()
         .into_iter()

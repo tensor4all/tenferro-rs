@@ -84,9 +84,15 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
 /// entry per output.
 pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec<Vec<DimExpr>> {
     match op {
-        StdTensorOp::Add
-        | StdTensorOp::Mul
-        | StdTensorOp::Neg
+        StdTensorOp::Add => vec![same_or_scalar_broadcast_shape(
+            require_input(op, input_shapes, 0),
+            require_input(op, input_shapes, 1),
+        )],
+        StdTensorOp::Mul => vec![same_or_scalar_broadcast_shape(
+            require_input(op, input_shapes, 0),
+            require_input(op, input_shapes, 1),
+        )],
+        StdTensorOp::Neg
         | StdTensorOp::Conj
         | StdTensorOp::Div
         | StdTensorOp::Abs
@@ -217,6 +223,19 @@ fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Vec<DimExpr> {
         .enumerate()
         .filter_map(|(axis, dim)| (!axes.contains(&axis)).then_some(dim.clone()))
         .collect()
+}
+
+fn same_or_scalar_broadcast_shape(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr]) -> Vec<DimExpr> {
+    if lhs_shape.is_empty() {
+        rhs_shape.to_vec()
+    } else if rhs_shape.is_empty() {
+        lhs_shape.to_vec()
+    } else {
+        // Dynamic shape ops such as DynamicTruncate can only be inferred
+        // approximately here, so for non-scalar inputs we preserve the
+        // historical "follow lhs" behavior.
+        lhs_shape.to_vec()
+    }
 }
 
 fn extract_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Vec<DimExpr> {

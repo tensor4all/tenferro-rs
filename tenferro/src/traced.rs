@@ -16,7 +16,7 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
 use tidu::{differentiate, transpose};
 
-use super::compiler::{compile_to_exec, lower_to_stablehlo};
+use super::compiler::compile_std_to_exec;
 use super::engine::Engine;
 use super::error::{Error, Result};
 use super::exec::eval_exec_ir;
@@ -290,10 +290,9 @@ impl TracedTensor {
         let graph = materialize_merge(&view, &[output_key]);
         let compiled = compile(&graph);
 
-        let stablehlo = lower_to_stablehlo(&compiled);
-        let exec = compile_to_exec(&stablehlo);
-
         let mut input_tensors = Vec::with_capacity(graph.inputs.len());
+        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
         for key in &graph.inputs {
             match key {
                 GlobalValKey::Input(k) => {
@@ -301,6 +300,8 @@ impl TracedTensor {
                         Error::MissingInput(format!("missing input data for key {:?}", k))
                     })?;
                     input_tensors.push(tensor.as_ref().clone());
+                    input_dtypes.push(tensor.dtype());
+                    input_shapes.push(DimExpr::from_concrete(tensor.shape()));
                 }
                 _ => {
                     return Err(Error::Internal(
@@ -309,6 +310,7 @@ impl TracedTensor {
                 }
             }
         }
+        let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
         // Use compile cache: store or retrieve the ExecProgram.
         let cached_exec = engine.get_or_compile(exec);
@@ -1420,10 +1422,10 @@ pub fn eval_all<B: TensorBackend>(
     let view = resolve(all_fragments);
     let graph = materialize_merge(&view, &output_keys);
     let compiled = compile(&graph);
-    let stablehlo = lower_to_stablehlo(&compiled);
-    let exec = compile_to_exec(&stablehlo);
 
     let mut input_tensors = Vec::with_capacity(graph.inputs.len());
+    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     for key in &graph.inputs {
         match key {
             GlobalValKey::Input(k) => {
@@ -1431,6 +1433,8 @@ pub fn eval_all<B: TensorBackend>(
                     Error::MissingInput(format!("missing input data for key {:?}", k))
                 })?;
                 input_tensors.push(tensor.as_ref().clone());
+                input_dtypes.push(tensor.dtype());
+                input_shapes.push(DimExpr::from_concrete(tensor.shape()));
             }
             _ => {
                 return Err(Error::Internal(
@@ -1439,6 +1443,7 @@ pub fn eval_all<B: TensorBackend>(
             }
         }
     }
+    let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
     let cached_exec = engine.get_or_compile(exec);
     let results: Vec<Tensor> = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;

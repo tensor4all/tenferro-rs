@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::compiler::{compile_to_exec, lower_to_stablehlo};
+use crate::compiler::compile_std_to_exec;
 use crate::error::{Error, Result};
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
@@ -117,6 +117,16 @@ pub enum ExecOp {
         axes: Vec<usize>,
     },
     Cholesky,
+    Svd {
+        eps: f64,
+    },
+    Qr,
+    Lu,
+    Eigh {
+        eps: f64,
+    },
+    Eig,
+    ValidateNonsingular,
     TriangularSolve {
         left_side: bool,
         lower: bool,
@@ -191,7 +201,8 @@ pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
         ExecOp::ShapeOf { .. }
         | ExecOp::DynamicTruncate { .. }
         | ExecOp::PadToMatch { .. }
-        | ExecOp::Constant { .. } => true,
+        | ExecOp::Constant { .. }
+        | ExecOp::ValidateNonsingular => true,
         ExecOp::CustomCall { target } => target == "validate_nonsingular",
         _ => false,
     }
@@ -203,6 +214,11 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
         ExecOp::DotGeneral(_)
             | ExecOp::NaryEinsum { .. }
             | ExecOp::Cholesky
+            | ExecOp::Svd { .. }
+            | ExecOp::Qr
+            | ExecOp::Lu
+            | ExecOp::Eigh { .. }
+            | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
             | ExecOp::CustomCall { .. }
     ) && !is_host_instruction(inst)
@@ -491,6 +507,12 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
             let host = constant_tensor(*dtype, bytes);
             slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
         }
+        ExecOp::ValidateNonsingular => {
+            let input = get(slots, &inst.input_slots, 0)?;
+            let host_input = backend.download_to_host(input)?;
+            validate_nonsingular_u(&host_input)?;
+            slots[inst.output_slots[0]] = Some(input.clone());
+        }
         ExecOp::CustomCall { target } if target == "validate_nonsingular" => {
             let input = get(slots, &inst.input_slots, 0)?;
             let host_input = backend.download_to_host(input)?;
@@ -529,6 +551,36 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         ExecOp::Cholesky => {
             let result = backend.cholesky(get(slots, &inst.input_slots, 0)?)?;
             slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Svd { .. } => {
+            let results = backend.svd(get(slots, &inst.input_slots, 0)?)?;
+            for (slot, result) in inst.output_slots.iter().zip(results) {
+                slots[*slot] = Some(result);
+            }
+        }
+        ExecOp::Qr => {
+            let results = backend.qr(get(slots, &inst.input_slots, 0)?)?;
+            for (slot, result) in inst.output_slots.iter().zip(results) {
+                slots[*slot] = Some(result);
+            }
+        }
+        ExecOp::Lu => {
+            let results = backend.lu(get(slots, &inst.input_slots, 0)?)?;
+            for (slot, result) in inst.output_slots.iter().zip(results) {
+                slots[*slot] = Some(result);
+            }
+        }
+        ExecOp::Eigh { .. } => {
+            let results = backend.eigh(get(slots, &inst.input_slots, 0)?)?;
+            for (slot, result) in inst.output_slots.iter().zip(results) {
+                slots[*slot] = Some(result);
+            }
+        }
+        ExecOp::Eig => {
+            let results = backend.eig(get(slots, &inst.input_slots, 0)?)?;
+            for (slot, result) in inst.output_slots.iter().zip(results) {
+                slots[*slot] = Some(result);
+            }
         }
         ExecOp::TriangularSolve {
             left_side,
@@ -650,10 +702,10 @@ fn execute_nary_einsum<B: TensorBackend>(
     let view = resolve(vec![fragment]);
     let graph = materialize_merge(&view, &[output_key]);
     let compiled = compile(&graph);
-    let stablehlo = lower_to_stablehlo(&compiled);
-    let program = compile_to_exec(&stablehlo);
 
     let mut program_inputs = Vec::with_capacity(graph.inputs.len());
+    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     for key in &graph.inputs {
         match key {
             GlobalValKey::Input(TensorInputKey::User { id }) => {
@@ -664,6 +716,8 @@ fn execute_nary_einsum<B: TensorBackend>(
                     ))
                 })?;
                 program_inputs.push((*tensor).clone());
+                input_dtypes.push(tensor.dtype());
+                input_shapes.push(DimExpr::from_concrete(tensor.shape()));
             }
             other => {
                 return Err(Error::Internal(format!(
@@ -672,6 +726,7 @@ fn execute_nary_einsum<B: TensorBackend>(
             }
         }
     }
+    let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
     let mut outputs = match mode {
         DispatchMode::Unsegmented => eval_exec_ir_unsegmented(backend, &program, program_inputs)?,
