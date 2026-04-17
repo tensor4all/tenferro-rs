@@ -66,9 +66,7 @@ fn cpu_parity_program() -> ExecProgram {
                 last_use: vec![false],
             },
             ExecInstruction {
-                op: ExecOp::CustomCall {
-                    target: "validate_nonsingular".into(),
-                },
+                op: ExecOp::ValidateNonsingular,
                 input_slots: vec![9],
                 output_slots: vec![10],
                 dtype: DType::F64,
@@ -95,9 +93,7 @@ fn cpu_parity_program() -> ExecProgram {
                 last_use: vec![],
             },
             ExecInstruction {
-                op: ExecOp::CustomCall {
-                    target: "qr".into(),
-                },
+                op: ExecOp::Qr,
                 input_slots: vec![0],
                 output_slots: vec![13, 14],
                 dtype: DType::F64,
@@ -140,9 +136,7 @@ fn segment_classification_program() -> ExecProgram {
                 last_use: vec![false],
             },
             ExecInstruction {
-                op: ExecOp::CustomCall {
-                    target: "validate_nonsingular".into(),
-                },
+                op: ExecOp::ValidateNonsingular,
                 input_slots: vec![3],
                 output_slots: vec![4],
                 dtype: DType::F64,
@@ -150,9 +144,7 @@ fn segment_classification_program() -> ExecProgram {
                 last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::CustomCall {
-                    target: "qr".into(),
-                },
+                op: ExecOp::Qr,
                 input_slots: vec![0],
                 output_slots: vec![5, 6],
                 dtype: DType::F64,
@@ -207,17 +199,17 @@ fn segment_exec_program_groups_fusible_and_boundary_ops() {
     assert!(matches!(
         &segments[1],
         Segment::Host(ExecInstruction {
-            op: ExecOp::CustomCall { target },
+            op: ExecOp::ValidateNonsingular,
             ..
-        }) if target == "validate_nonsingular"
+        })
     ));
     assert!(matches!(
         &segments[2],
         Segment::Ffi(ExecInstruction {
-            op: ExecOp::CustomCall { target },
+            op: ExecOp::Qr,
             output_slots,
             ..
-        }) if target == "qr" && output_slots.len() == 2
+        }) if output_slots.len() == 2
     ));
 }
 
@@ -253,9 +245,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::CustomCall {
-                    target: "validate_nonsingular".into(),
-                },
+                op: ExecOp::ValidateNonsingular,
                 input_slots: vec![3],
                 output_slots: vec![4],
                 dtype: DType::F64,

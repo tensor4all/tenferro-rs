@@ -133,9 +133,6 @@ pub enum ExecOp {
         transpose_a: bool,
         unit_diagonal: bool,
     },
-    CustomCall {
-        target: String,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -197,15 +194,14 @@ pub(crate) fn collect_outputs(
 }
 
 pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
-    match &inst.op {
+    matches!(
+        &inst.op,
         ExecOp::ShapeOf { .. }
-        | ExecOp::DynamicTruncate { .. }
-        | ExecOp::PadToMatch { .. }
-        | ExecOp::Constant { .. }
-        | ExecOp::ValidateNonsingular => true,
-        ExecOp::CustomCall { target } => target == "validate_nonsingular",
-        _ => false,
-    }
+            | ExecOp::DynamicTruncate { .. }
+            | ExecOp::PadToMatch { .. }
+            | ExecOp::Constant { .. }
+            | ExecOp::ValidateNonsingular
+    )
 }
 
 pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
@@ -220,8 +216,7 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
             | ExecOp::Eigh { .. }
             | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
-            | ExecOp::CustomCall { .. }
-    ) && !is_host_instruction(inst)
+    )
 }
 
 pub(crate) fn resolve_tensor_shape_exprs(
@@ -513,12 +508,6 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
             validate_nonsingular_u(&host_input)?;
             slots[inst.output_slots[0]] = Some(input.clone());
         }
-        ExecOp::CustomCall { target } if target == "validate_nonsingular" => {
-            let input = get(slots, &inst.input_slots, 0)?;
-            let host_input = backend.download_to_host(input)?;
-            validate_nonsingular_u(&host_input)?;
-            slots[inst.output_slots[0]] = Some(input.clone());
-        }
         other => {
             return Err(Error::Internal(format!(
                 "non-host op reached host executor: {other:?}"
@@ -554,33 +543,23 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         }
         ExecOp::Svd { .. } => {
             let results = backend.svd(get(slots, &inst.input_slots, 0)?)?;
-            for (slot, result) in inst.output_slots.iter().zip(results) {
-                slots[*slot] = Some(result);
-            }
+            assign_multi_output(slots, inst, results, "svd")?;
         }
         ExecOp::Qr => {
             let results = backend.qr(get(slots, &inst.input_slots, 0)?)?;
-            for (slot, result) in inst.output_slots.iter().zip(results) {
-                slots[*slot] = Some(result);
-            }
+            assign_multi_output(slots, inst, results, "qr")?;
         }
         ExecOp::Lu => {
             let results = backend.lu(get(slots, &inst.input_slots, 0)?)?;
-            for (slot, result) in inst.output_slots.iter().zip(results) {
-                slots[*slot] = Some(result);
-            }
+            assign_multi_output(slots, inst, results, "lu")?;
         }
         ExecOp::Eigh { .. } => {
             let results = backend.eigh(get(slots, &inst.input_slots, 0)?)?;
-            for (slot, result) in inst.output_slots.iter().zip(results) {
-                slots[*slot] = Some(result);
-            }
+            assign_multi_output(slots, inst, results, "eigh")?;
         }
         ExecOp::Eig => {
             let results = backend.eig(get(slots, &inst.input_slots, 0)?)?;
-            for (slot, result) in inst.output_slots.iter().zip(results) {
-                slots[*slot] = Some(result);
-            }
+            assign_multi_output(slots, inst, results, "eig")?;
         }
         ExecOp::TriangularSolve {
             left_side,
@@ -598,36 +577,30 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             )?;
             slots[inst.output_slots[0]] = Some(result);
         }
-        ExecOp::CustomCall { target } => {
-            let results: Vec<Tensor> = match target.as_str() {
-                "lu" => backend.lu(get(slots, &inst.input_slots, 0)?),
-                "svd" => backend.svd(get(slots, &inst.input_slots, 0)?),
-                "qr" => backend.qr(get(slots, &inst.input_slots, 0)?),
-                "eigh" => backend.eigh(get(slots, &inst.input_slots, 0)?),
-                "eig" => backend.eig(get(slots, &inst.input_slots, 0)?),
-                "validate_nonsingular" => {
-                    return Err(Error::Internal(
-                        "validate_nonsingular must execute in the host segment".into(),
-                    ))
-                }
-                _ => todo!("custom call target {target}"),
-            }?;
-            if results.len() != inst.output_slots.len() {
-                return Err(Error::Internal(format!(
-                    "custom call {target} produced {} outputs for {} slots",
-                    results.len(),
-                    inst.output_slots.len()
-                )));
-            }
-            for (slot, tensor) in inst.output_slots.iter().copied().zip(results.into_iter()) {
-                slots[slot] = Some(tensor);
-            }
-        }
         other => {
             return Err(Error::Internal(format!(
                 "non-ffi op reached ffi executor: {other:?}"
             )))
         }
+    }
+    Ok(())
+}
+
+fn assign_multi_output(
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    results: Vec<Tensor>,
+    op_name: &str,
+) -> Result<()> {
+    if results.len() != inst.output_slots.len() {
+        return Err(Error::Internal(format!(
+            "{op_name} produced {} outputs for {} slots",
+            results.len(),
+            inst.output_slots.len()
+        )));
+    }
+    for (slot, tensor) in inst.output_slots.iter().copied().zip(results.into_iter()) {
+        slots[slot] = Some(tensor);
     }
     Ok(())
 }
