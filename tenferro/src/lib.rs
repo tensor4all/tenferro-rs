@@ -32,6 +32,7 @@ pub mod error;
 pub mod exec;
 mod linalg_api;
 pub mod segment;
+pub mod shape_infer;
 pub mod stablehlo;
 pub mod sym_dim;
 pub mod traced;
