@@ -258,12 +258,12 @@ download single scalars.
 |---------|-----------------|------------|
 | SVD, QR, Cholesky, LU, Eigh | All versions (11.4+) | GPU |
 | Triangular solve | Via cuBLAS (all versions) | GPU |
-| General eigendecomposition (eig) | **Not in cuSOLVER** | Host fallback (CPU) |
+| General eigendecomposition (eig) | **Not in cuSOLVER** | Returns `BackendFailure` — user must download to CPU explicitly |
 
 `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-provided by any version of cuSOLVER. The `eig` op always falls back to
-CPU via download → CpuBackend → re-upload. This is a permanent
-cuSOLVER limitation, not a version issue.
+provided by any version of cuSOLVER. `CubeclBackend::eig` returns
+`BackendFailure`. Users must explicitly download the tensor to CPU and
+compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
 
 ## CPU Kernel Implementation Rules
 
