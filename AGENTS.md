@@ -38,7 +38,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 - Graph-based traced execution via `TracedTensor` + `Engine`
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
-- StableHLO-style lowering plus an execution IR for backend dispatch
+- Single execution IR (`ExecOp`) plus a pass pipeline for backend dispatch
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits
