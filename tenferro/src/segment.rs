@@ -352,6 +352,7 @@ fn map_exec_op_to_elementwise_fusion(op: &ExecOp) -> Option<ElementwiseFusionOp>
         ExecOp::Sqrt => Some(ElementwiseFusionOp::Sqrt),
         ExecOp::Rsqrt => Some(ElementwiseFusionOp::Rsqrt),
         ExecOp::Pow => Some(ElementwiseFusionOp::Pow),
+        ExecOp::Expm1 => Some(ElementwiseFusionOp::Expm1),
         ExecOp::Log1p => Some(ElementwiseFusionOp::Log1p),
         _ => None,
     }

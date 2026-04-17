@@ -31,6 +31,30 @@ fn test_log1p_small_x_f32_precision() {
 }
 
 #[test]
+fn test_expm1_small_x_f32_precision() {
+    let mut backend = super::gpu_backend();
+    let x_values = vec![1e-7_f32, 1e-6, 1e-5, 1e-4, 1e-3];
+    let cpu_input = super::tensor_f32(vec![x_values.len()], x_values.clone());
+    let gpu_input = super::upload(&backend, &cpu_input);
+
+    let gpu_out = backend.expm1(&gpu_input).unwrap();
+    let result = super::download(&backend, &gpu_out);
+    let result_slice = match result {
+        Tensor::F32(t) => t.as_slice().to_vec(),
+        _ => panic!("expected F32"),
+    };
+
+    for (x, got) in x_values.iter().zip(result_slice.iter()) {
+        let expected = (*x).exp_m1();
+        let rel_err = (got - expected).abs() / expected.abs().max(f32::MIN_POSITIVE);
+        assert!(
+            rel_err < 1e-6,
+            "expm1({x}): expected {expected}, got {got}, rel_err {rel_err}",
+        );
+    }
+}
+
+#[test]
 #[ignore]
 fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let lhs = tensor_f64(vec![4], vec![1.5, -2.0, 3.0, 4.5]);

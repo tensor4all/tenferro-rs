@@ -153,6 +153,7 @@ where
         ElementwiseFusionOp::Pow => {
             emit_binary_arithmetic(scope, &inputs[0], &inputs[1], Arithmetic::Powf)
         }
+        ElementwiseFusionOp::Expm1 => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Expm1),
         ElementwiseFusionOp::Log1p => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Log1p),
     }
 }
