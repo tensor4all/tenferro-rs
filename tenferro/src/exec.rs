@@ -25,7 +25,7 @@ use tenferro_tensor::{
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
-    Permute {
+    Transpose {
         perm: Vec<usize>,
     },
     Reshape {
@@ -42,7 +42,7 @@ pub enum ExecOp {
         dtype: DType,
         bytes: Vec<u8>,
     },
-    BatchedGemm(DotGeneralConfig),
+    DotGeneral(DotGeneralConfig),
     NaryEinsum {
         subscripts: String,
     },
@@ -134,6 +134,7 @@ pub struct ExecInstruction {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub dtype: tenferro_tensor::DType,
+    pub output_shapes: Vec<Vec<tenferro_ops::dim_expr::DimExpr>>,
     pub last_use: Vec<bool>,
 }
 
@@ -199,7 +200,7 @@ pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
 pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
     matches!(
         &inst.op,
-        ExecOp::BatchedGemm(_)
+        ExecOp::DotGeneral(_)
             | ExecOp::NaryEinsum { .. }
             | ExecOp::Cholesky
             | ExecOp::TriangularSolve { .. }
@@ -305,7 +306,7 @@ pub(crate) fn execute_fusible_instruction(
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let result = match &inst.op {
-        ExecOp::Permute { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
+        ExecOp::Transpose { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
         ExecOp::Reshape { shape } => {
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
             exec.reshape(get(slots, &inst.input_slots, 0)?, &shape)?
@@ -512,7 +513,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
     mode: DispatchMode,
 ) -> Result<()> {
     match &inst.op {
-        ExecOp::BatchedGemm(config) => {
+        ExecOp::DotGeneral(config) => {
             let result = backend.dot_general(
                 get(slots, &inst.input_slots, 0)?,
                 get(slots, &inst.input_slots, 1)?,
@@ -788,7 +789,7 @@ where
 
     for inst in &program.instructions {
         let result = match &inst.op {
-            ExecOp::Permute { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
+            ExecOp::Transpose { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
             ExecOp::Reshape { shape } => {
                 let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
                 typed_reshape(get(&slots, &inst.input_slots, 0)?, &shape)
@@ -797,7 +798,7 @@ where
                 let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
                 typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0)?, &shape, dims)
             }
-            ExecOp::BatchedGemm(config) => backend.batched_gemm(
+            ExecOp::DotGeneral(config) => backend.batched_gemm(
                 get(&slots, &inst.input_slots, 0)?,
                 get(&slots, &inst.input_slots, 1)?,
                 config,

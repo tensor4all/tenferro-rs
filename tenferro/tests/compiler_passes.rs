@@ -599,14 +599,14 @@ fn test_full_pipeline_matmul() {
 
     let exec = compile_to_exec(&program);
 
-    // Should produce exactly 1 ExecOp::BatchedGemm.
+    // Should produce exactly 1 ExecOp::DotGeneral.
     assert_eq!(exec.instructions.len(), 1);
     match &exec.instructions[0].op {
-        ExecOp::BatchedGemm(c) => {
+        ExecOp::DotGeneral(c) => {
             assert_eq!(c.lhs_contracting_dims, vec![1]);
             assert_eq!(c.rhs_contracting_dims, vec![0]);
         }
-        _ => panic!("expected BatchedGemm, got {:?}", exec.instructions[0].op),
+        _ => panic!("expected DotGeneral, got {:?}", exec.instructions[0].op),
     }
     assert_eq!(exec.input_slots, vec![0, 1]);
     assert_eq!(exec.output_slots, vec![2]);
@@ -639,23 +639,23 @@ fn test_full_pipeline_transpose_matmul() {
 
     let exec = compile_to_exec(&program);
 
-    // The BatchedGemm should now read slot 0 directly (transpose folded).
+    // The DotGeneral should now read slot 0 directly (transpose folded).
     let gemm_instr = exec
         .instructions
         .iter()
-        .find(|i| matches!(i.op, ExecOp::BatchedGemm(_)));
-    assert!(gemm_instr.is_some(), "should have BatchedGemm");
+        .find(|i| matches!(i.op, ExecOp::DotGeneral(_)));
+    assert!(gemm_instr.is_some(), "should have DotGeneral");
 
     let gemm = gemm_instr.unwrap();
     assert_eq!(gemm.input_slots[0], 0); // reads A directly
     assert_eq!(gemm.input_slots[1], 1);
     match &gemm.op {
-        ExecOp::BatchedGemm(c) => {
+        ExecOp::DotGeneral(c) => {
             // perm[1] = 0, so lhs_contracting becomes {0}
             assert_eq!(c.lhs_contracting_dims, vec![0]);
             assert_eq!(c.rhs_contracting_dims, vec![0]);
         }
-        _ => panic!("expected BatchedGemm"),
+        _ => panic!("expected DotGeneral"),
     }
 }
 
@@ -680,8 +680,8 @@ fn test_full_pipeline_reduce_then_matmul() {
 
     let exec = compile_to_exec(&program);
 
-    // Should have ReduceSum followed by BatchedGemm.
+    // Should have ReduceSum followed by DotGeneral.
     assert_eq!(exec.instructions.len(), 2);
     assert!(matches!(exec.instructions[0].op, ExecOp::ReduceSum { .. }));
-    assert!(matches!(exec.instructions[1].op, ExecOp::BatchedGemm(_)));
+    assert!(matches!(exec.instructions[1].op, ExecOp::DotGeneral(_)));
 }

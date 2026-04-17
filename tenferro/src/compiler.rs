@@ -202,7 +202,7 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
     // dot_decomposer is disabled: the CPU GEMM backend handles non-canonical
     // layouts via canonical_gemm_layout fallback in gemm/mod.rs, which
     // transposes only the unfusable operand(s). The decomposer has a known
-    // bug where it doesn't update downstream Permute instructions after
+    // bug where it doesn't update downstream Transpose instructions after
     // rewriting DotGeneral dimension numbers.
     // dot_decomposer(&mut program);
     transpose_folding(&mut program);
@@ -217,11 +217,11 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 StableHloOp::Multiply => ExecOp::Multiply,
                 StableHloOp::Negate => ExecOp::Negate,
                 StableHloOp::Conj => ExecOp::Conj,
-                StableHloOp::DotGeneral(c) => ExecOp::BatchedGemm(c.clone()),
+                StableHloOp::DotGeneral(c) => ExecOp::DotGeneral(c.clone()),
                 StableHloOp::NaryEinsum { subscripts } => ExecOp::NaryEinsum {
                     subscripts: subscripts.clone(),
                 },
-                StableHloOp::Transpose { perm } => ExecOp::Permute { perm: perm.clone() },
+                StableHloOp::Transpose { perm } => ExecOp::Transpose { perm: perm.clone() },
                 StableHloOp::Reshape { shape } => ExecOp::Reshape {
                     shape: shape.clone(),
                 },
@@ -304,12 +304,14 @@ pub fn compile_to_exec(stablehlo: &StableHloProgram) -> ExecProgram {
                 &program.instructions,
                 &program.output_slots,
             );
+            let output_shapes: Vec<Vec<DimExpr>> = vec![Vec::new(); instr.output_slots.len()];
 
             ExecInstruction {
                 op,
                 input_slots: instr.input_slots.clone(),
                 output_slots: instr.output_slots.clone(),
                 dtype: instr.dtype,
+                output_shapes,
                 last_use,
             }
         })

@@ -80,6 +80,7 @@ fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
             input_slots: (0..n_inputs).collect(),
             output_slots: vec![n_inputs],
             dtype: DType::F64,
+            output_shapes: vec![Vec::new()],
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -350,7 +351,7 @@ impl TensorBackend for FakeTensorBackend {
 #[test]
 fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
     let cases = vec![
-        (ExecOp::Permute { perm: vec![0] }, 1, "transpose", 23.0),
+        (ExecOp::Transpose { perm: vec![0] }, 1, "transpose", 23.0),
         (
             ExecOp::Reshape {
                 shape: dim_shape(&[1]),
@@ -370,7 +371,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         ),
         (ExecOp::Convert { to: DType::C64 }, 1, "convert", 25.5),
         (
-            ExecOp::BatchedGemm(DotGeneralConfig {
+            ExecOp::DotGeneral(DotGeneralConfig {
                 lhs_contracting_dims: vec![0],
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
@@ -512,6 +513,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
             input_slots: vec![],
             output_slots: vec![0],
             dtype: DType::F64,
+            output_shapes: vec![Vec::new()],
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -542,6 +544,7 @@ fn eval_exec_ir_materializes_complex_constants() {
             input_slots: vec![],
             output_slots: vec![0],
             dtype: DType::C64,
+            output_shapes: vec![Vec::new()],
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -586,6 +589,7 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
             input_slots: vec![0, 1],
             output_slots: vec![2],
             dtype: DType::F64,
+            output_shapes: vec![Vec::new()],
             last_use: vec![false, false],
         }],
         input_slots: vec![0],
@@ -610,6 +614,7 @@ fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecPr
             input_slots: (0..n_inputs).collect(),
             output_slots: output_slots.clone(),
             dtype: DType::F64,
+            output_shapes: vec![Vec::new(); n_outputs],
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -712,6 +717,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 input_slots: vec![0, 1],
                 output_slots: vec![2],
                 dtype: DType::F64,
+                output_shapes: vec![Vec::new()],
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -719,6 +725,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 input_slots: vec![2],
                 output_slots: vec![3],
                 dtype: DType::F64,
+                output_shapes: vec![Vec::new()],
                 last_use: vec![true],
             },
         ],
@@ -772,7 +779,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
 
     let permute_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
-        &single_instruction_program(ExecOp::Permute { perm: vec![1, 0] }, 1),
+        &single_instruction_program(ExecOp::Transpose { perm: vec![1, 0] }, 1),
         vec![TypedTensor::from_vec(
             vec![2, 3],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -856,7 +863,7 @@ fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
     let gemm_out = eval_semiring_ir::<_, Standard<f64>>(
         &mut backend,
         &single_instruction_program(
-            ExecOp::BatchedGemm(DotGeneralConfig {
+            ExecOp::DotGeneral(DotGeneralConfig {
                 lhs_contracting_dims: vec![1],
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
