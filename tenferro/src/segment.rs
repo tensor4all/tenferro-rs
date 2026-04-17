@@ -4,10 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
 use crate::exec::{
-    collect_outputs, execute_ffi_instruction, execute_fusible_instruction,
-    execute_host_instruction, initialize_slots, is_ffi_instruction, is_host_instruction,
-    reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction,
-    ExecOp, ExecProgram,
+    collect_outputs, execute_backend_op, execute_ffi_instruction, execute_host_instruction,
+    initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
+    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
@@ -33,6 +32,7 @@ use tenferro_tensor::{
 ///             input_slots: vec![0, 1],
 ///             output_slots: vec![2],
 ///             dtype: DType::F64,
+///             output_shapes: vec![vec![]],
 ///             last_use: vec![false, true],
 ///         },
 ///         ExecInstruction {
@@ -40,6 +40,7 @@ use tenferro_tensor::{
 ///             input_slots: vec![2],
 ///             output_slots: vec![3],
 ///             dtype: DType::F64,
+///             output_shapes: vec![vec![]],
 ///             last_use: vec![true],
 ///         },
 ///     ],
@@ -79,6 +80,7 @@ pub enum Segment {
 ///             input_slots: vec![0, 1],
 ///             output_slots: vec![2],
 ///             dtype: DType::F64,
+///             output_shapes: vec![vec![]],
 ///             last_use: vec![false, true],
 ///         },
 ///         ExecInstruction {
@@ -86,6 +88,7 @@ pub enum Segment {
 ///             input_slots: vec![2],
 ///             output_slots: vec![3],
 ///             dtype: DType::F64,
+///             output_shapes: vec![vec![]],
 ///             last_use: vec![true],
 ///         },
 ///     ],
@@ -175,7 +178,7 @@ pub fn eval_exec_segmented<B: TensorBackend>(
                     }
 
                     for inst in instructions {
-                        let result = execute_fusible_instruction(exec, &slots, inst)?;
+                        let result = execute_backend_op(exec, &slots, inst)?;
                         slots[inst.output_slots[0]] = Some(result);
                         reclaim_last_use_inputs_exec(&mut slots, inst, exec);
                     }
@@ -352,6 +355,7 @@ fn map_exec_op_to_elementwise_fusion(op: &ExecOp) -> Option<ElementwiseFusionOp>
         ExecOp::Sqrt => Some(ElementwiseFusionOp::Sqrt),
         ExecOp::Rsqrt => Some(ElementwiseFusionOp::Rsqrt),
         ExecOp::Pow => Some(ElementwiseFusionOp::Pow),
+        ExecOp::Expm1 => Some(ElementwiseFusionOp::Expm1),
         ExecOp::Log1p => Some(ElementwiseFusionOp::Log1p),
         _ => None,
     }

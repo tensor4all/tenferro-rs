@@ -12,7 +12,7 @@ use super::ffi::cusolver::{
     CublasDiagType, CublasFillMode, CublasOperation, CublasSideMode, CudaDataType, CudaStream,
     CusolverEigMode,
 };
-use super::{download_tensor, upload_tensor, CubeclBackend, CubeclRuntime};
+use super::{CubeclBackend, CubeclRuntime};
 use crate::config::{DotGeneralConfig, SliceConfig};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
@@ -184,11 +184,14 @@ pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result
     }
 }
 
-pub(super) fn eig(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-    // cuSOLVER does not provide general eigendecomposition (geev/dgeev).
-    // Only symmetric/Hermitian (syevd/heevd = eigh) is supported.
-    // This permanently falls back to CPU.
-    host_fallback_eig(backend, input)
+pub(super) fn eig(_backend: &mut CubeclBackend, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
+    Err(crate::Error::BackendFailure {
+        op: "eig",
+        message: "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
+                  because cuSOLVER does not provide it. Download to CPU explicitly via \
+                  `backend.download_to_host(&gpu_tensor)?` and then call `CpuBackend::eig`."
+            .to_string(),
+    })
 }
 
 pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
@@ -735,72 +738,6 @@ where
     }
 
     Ok((values, work))
-}
-
-fn host_fallback_eig(backend: &CubeclBackend, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-    let host_input = download_tensor(backend.runtime(), input)?;
-    let mut cpu = crate::cpu::CpuBackend::new();
-    match host_input {
-        Tensor::F64(_) | Tensor::C64(_) => {
-            let host_outputs = cpu.eig(&host_input)?;
-            host_outputs
-                .into_iter()
-                .map(|tensor| upload_tensor(backend.runtime(), &tensor))
-                .collect()
-        }
-        Tensor::F32(t) => {
-            let widened = Tensor::F64(TypedTensor::from_vec(
-                t.shape.clone(),
-                t.host_data().iter().map(|&value| value as f64).collect(),
-            ));
-            let host_outputs = cpu.eig(&widened)?;
-            let narrowed = host_outputs
-                .into_iter()
-                .map(narrow_c64_tensor_to_c32)
-                .collect::<crate::Result<Vec<_>>>()?;
-            narrowed
-                .into_iter()
-                .map(|tensor| upload_tensor(backend.runtime(), &tensor))
-                .collect()
-        }
-        Tensor::C32(t) => {
-            let widened = Tensor::C64(TypedTensor::from_vec(
-                t.shape.clone(),
-                t.host_data()
-                    .iter()
-                    .map(|value| Complex64::new(value.re as f64, value.im as f64))
-                    .collect(),
-            ));
-            let host_outputs = cpu.eig(&widened)?;
-            let narrowed = host_outputs
-                .into_iter()
-                .map(narrow_c64_tensor_to_c32)
-                .collect::<crate::Result<Vec<_>>>()?;
-            narrowed
-                .into_iter()
-                .map(|tensor| upload_tensor(backend.runtime(), &tensor))
-                .collect()
-        }
-    }
-}
-
-fn narrow_c64_tensor_to_c32(tensor: Tensor) -> crate::Result<Tensor> {
-    match tensor {
-        Tensor::C64(t) => Ok(Tensor::C32(TypedTensor::from_vec(
-            t.shape.clone(),
-            t.host_data()
-                .iter()
-                .map(|value| Complex32::new(value.re as f32, value.im as f32))
-                .collect(),
-        ))),
-        other => Err(crate::Error::BackendFailure {
-            op: "eig",
-            message: format!(
-                "expected complex64 fallback output, got {:?}",
-                other.dtype()
-            ),
-        }),
-    }
 }
 
 fn build_lu_outputs_host<T>(

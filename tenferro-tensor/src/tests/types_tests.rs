@@ -59,10 +59,10 @@ fn typed_tensor_panics_cover_length_and_indexing_errors() {
     assert!(mismatched.is_err());
 
     let tensor = TypedTensor::<f64>::zeros(vec![2, 3]);
-    let rank_mismatch = catch_unwind(|| tensor.linear_offset(&[0]));
+    let rank_mismatch = catch_unwind(AssertUnwindSafe(|| tensor.linear_offset(&[0])));
     assert!(rank_mismatch.is_err());
 
-    let oob = catch_unwind(|| tensor.linear_offset(&[2, 0]));
+    let oob = catch_unwind(AssertUnwindSafe(|| tensor.linear_offset(&[2, 0])));
     assert!(oob.is_err());
 }
 
@@ -85,7 +85,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         0
     );
 
-    let host_data = catch_unwind(|| tensor.host_data());
+    let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
     assert!(host_data.is_err());
 
     let mut mutable_tensor = TypedTensor {

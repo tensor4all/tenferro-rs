@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::compiler::{compile_to_exec, lower_to_stablehlo};
+use crate::compiler::compile_std_to_exec;
 use crate::error::{Error, Result};
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
@@ -25,7 +25,7 @@ use tenferro_tensor::{
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
-    Permute {
+    Transpose {
         perm: Vec<usize>,
     },
     Reshape {
@@ -42,7 +42,7 @@ pub enum ExecOp {
         dtype: DType,
         bytes: Vec<u8>,
     },
-    BatchedGemm(DotGeneralConfig),
+    DotGeneral(DotGeneralConfig),
     NaryEinsum {
         subscripts: String,
     },
@@ -117,14 +117,21 @@ pub enum ExecOp {
         axes: Vec<usize>,
     },
     Cholesky,
+    Svd {
+        eps: f64,
+    },
+    Qr,
+    Lu,
+    Eigh {
+        eps: f64,
+    },
+    Eig,
+    ValidateNonsingular,
     TriangularSolve {
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    },
-    CustomCall {
-        target: String,
     },
 }
 
@@ -134,6 +141,7 @@ pub struct ExecInstruction {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub dtype: tenferro_tensor::DType,
+    pub output_shapes: Vec<Vec<tenferro_ops::dim_expr::DimExpr>>,
     pub last_use: Vec<bool>,
 }
 
@@ -186,25 +194,29 @@ pub(crate) fn collect_outputs(
 }
 
 pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
-    match &inst.op {
+    matches!(
+        &inst.op,
         ExecOp::ShapeOf { .. }
-        | ExecOp::DynamicTruncate { .. }
-        | ExecOp::PadToMatch { .. }
-        | ExecOp::Constant { .. } => true,
-        ExecOp::CustomCall { target } => target == "validate_nonsingular",
-        _ => false,
-    }
+            | ExecOp::DynamicTruncate { .. }
+            | ExecOp::PadToMatch { .. }
+            | ExecOp::Constant { .. }
+            | ExecOp::ValidateNonsingular
+    )
 }
 
 pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
     matches!(
         &inst.op,
-        ExecOp::BatchedGemm(_)
+        ExecOp::DotGeneral(_)
             | ExecOp::NaryEinsum { .. }
             | ExecOp::Cholesky
+            | ExecOp::Svd { .. }
+            | ExecOp::Qr
+            | ExecOp::Lu
+            | ExecOp::Eigh { .. }
+            | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
-            | ExecOp::CustomCall { .. }
-    ) && !is_host_instruction(inst)
+    )
 }
 
 pub(crate) fn resolve_tensor_shape_exprs(
@@ -289,8 +301,8 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
         } else if is_ffi_instruction(inst) {
             execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented)?;
         } else {
-            let result = backend
-                .with_exec_session(|exec| execute_fusible_instruction(exec, &slots, inst))?;
+            let result =
+                backend.with_exec_session(|exec| execute_backend_op(exec, &slots, inst))?;
             slots[inst.output_slots[0]] = Some(result);
         }
         reclaim_last_use_inputs_backend(&mut slots, inst, backend);
@@ -299,13 +311,13 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
     collect_outputs(program, slots)
 }
 
-pub(crate) fn execute_fusible_instruction(
+pub(crate) fn execute_backend_op(
     exec: &mut dyn TensorExec,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     let result = match &inst.op {
-        ExecOp::Permute { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
+        ExecOp::Transpose { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
         ExecOp::Reshape { shape } => {
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
             exec.reshape(get(slots, &inst.input_slots, 0)?, &shape)?
@@ -404,7 +416,7 @@ pub(crate) fn execute_fusible_instruction(
         ExecOp::ReduceMin { axes } => exec.reduce_min(get(slots, &inst.input_slots, 0)?, axes)?,
         other => {
             return Err(Error::Internal(format!(
-                "non-fusible op reached fused executor: {other:?}"
+                "host or FFI op reached backend executor: {other:?}"
             )))
         }
     };
@@ -490,7 +502,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
             let host = constant_tensor(*dtype, bytes);
             slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
         }
-        ExecOp::CustomCall { target } if target == "validate_nonsingular" => {
+        ExecOp::ValidateNonsingular => {
             let input = get(slots, &inst.input_slots, 0)?;
             let host_input = backend.download_to_host(input)?;
             validate_nonsingular_u(&host_input)?;
@@ -512,7 +524,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
     mode: DispatchMode,
 ) -> Result<()> {
     match &inst.op {
-        ExecOp::BatchedGemm(config) => {
+        ExecOp::DotGeneral(config) => {
             let result = backend.dot_general(
                 get(slots, &inst.input_slots, 0)?,
                 get(slots, &inst.input_slots, 1)?,
@@ -528,6 +540,26 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         ExecOp::Cholesky => {
             let result = backend.cholesky(get(slots, &inst.input_slots, 0)?)?;
             slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Svd { .. } => {
+            let results = backend.svd(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "svd")?;
+        }
+        ExecOp::Qr => {
+            let results = backend.qr(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "qr")?;
+        }
+        ExecOp::Lu => {
+            let results = backend.lu(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "lu")?;
+        }
+        ExecOp::Eigh { .. } => {
+            let results = backend.eigh(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "eigh")?;
+        }
+        ExecOp::Eig => {
+            let results = backend.eig(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "eig")?;
         }
         ExecOp::TriangularSolve {
             left_side,
@@ -545,36 +577,30 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             )?;
             slots[inst.output_slots[0]] = Some(result);
         }
-        ExecOp::CustomCall { target } => {
-            let results: Vec<Tensor> = match target.as_str() {
-                "lu" => backend.lu(get(slots, &inst.input_slots, 0)?),
-                "svd" => backend.svd(get(slots, &inst.input_slots, 0)?),
-                "qr" => backend.qr(get(slots, &inst.input_slots, 0)?),
-                "eigh" => backend.eigh(get(slots, &inst.input_slots, 0)?),
-                "eig" => backend.eig(get(slots, &inst.input_slots, 0)?),
-                "validate_nonsingular" => {
-                    return Err(Error::Internal(
-                        "validate_nonsingular must execute in the host segment".into(),
-                    ))
-                }
-                _ => todo!("custom call target {target}"),
-            }?;
-            if results.len() != inst.output_slots.len() {
-                return Err(Error::Internal(format!(
-                    "custom call {target} produced {} outputs for {} slots",
-                    results.len(),
-                    inst.output_slots.len()
-                )));
-            }
-            for (slot, tensor) in inst.output_slots.iter().copied().zip(results.into_iter()) {
-                slots[slot] = Some(tensor);
-            }
-        }
         other => {
             return Err(Error::Internal(format!(
                 "non-ffi op reached ffi executor: {other:?}"
             )))
         }
+    }
+    Ok(())
+}
+
+fn assign_multi_output(
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    results: Vec<Tensor>,
+    op_name: &str,
+) -> Result<()> {
+    if results.len() != inst.output_slots.len() {
+        return Err(Error::Internal(format!(
+            "{op_name} produced {} outputs for {} slots",
+            results.len(),
+            inst.output_slots.len()
+        )));
+    }
+    for (slot, tensor) in inst.output_slots.iter().copied().zip(results.into_iter()) {
+        slots[slot] = Some(tensor);
     }
     Ok(())
 }
@@ -649,10 +675,10 @@ fn execute_nary_einsum<B: TensorBackend>(
     let view = resolve(vec![fragment]);
     let graph = materialize_merge(&view, &[output_key]);
     let compiled = compile(&graph);
-    let stablehlo = lower_to_stablehlo(&compiled);
-    let program = compile_to_exec(&stablehlo);
 
     let mut program_inputs = Vec::with_capacity(graph.inputs.len());
+    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     for key in &graph.inputs {
         match key {
             GlobalValKey::Input(TensorInputKey::User { id }) => {
@@ -663,6 +689,8 @@ fn execute_nary_einsum<B: TensorBackend>(
                     ))
                 })?;
                 program_inputs.push((*tensor).clone());
+                input_dtypes.push(tensor.dtype());
+                input_shapes.push(DimExpr::from_concrete(tensor.shape()));
             }
             other => {
                 return Err(Error::Internal(format!(
@@ -671,6 +699,7 @@ fn execute_nary_einsum<B: TensorBackend>(
             }
         }
     }
+    let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
     let mut outputs = match mode {
         DispatchMode::Unsegmented => eval_exec_ir_unsegmented(backend, &program, program_inputs)?,
@@ -788,7 +817,7 @@ where
 
     for inst in &program.instructions {
         let result = match &inst.op {
-            ExecOp::Permute { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
+            ExecOp::Transpose { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
             ExecOp::Reshape { shape } => {
                 let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
                 typed_reshape(get(&slots, &inst.input_slots, 0)?, &shape)
@@ -797,7 +826,7 @@ where
                 let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
                 typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0)?, &shape, dims)
             }
-            ExecOp::BatchedGemm(config) => backend.batched_gemm(
+            ExecOp::DotGeneral(config) => backend.batched_gemm(
                 get(&slots, &inst.input_slots, 0)?,
                 get(&slots, &inst.input_slots, 1)?,
                 config,

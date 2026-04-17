@@ -47,6 +47,7 @@ pub enum ElementwiseFusionOp {
     Sqrt,
     Rsqrt,
     Pow,
+    Expm1,
     Log1p,
 }
 

@@ -80,16 +80,14 @@ pub(crate) fn rsqrt_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 #[cube(launch_unchecked)]
 pub(crate) fn expm1_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
-        let value = input[ABSOLUTE_POS];
-        out[ABSOLUTE_POS] = value.exp() - F::new(1.0);
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].exp_m1();
     }
 }
 
 #[cube(launch_unchecked)]
 pub(crate) fn log1p_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
-        let value = input[ABSOLUTE_POS];
-        out[ABSOLUTE_POS] = (value + F::new(1.0)).ln();
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].log1p();
     }
 }
 

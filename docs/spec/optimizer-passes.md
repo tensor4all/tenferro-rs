@@ -8,43 +8,56 @@
 
 ## I. Purpose
 
-This document specifies the optimization passes in tenferro's optimizing
-compiler. The compiler transforms StableHLO IR into Execution IR for non-XLA
-backends.
+This document specifies the optimization passes that run while lowering
+computegraph `CompiledProgram` values into tenferro's execution IR.
 
-The pass design is based on two sources:
+The current compiler entry points are:
 
-1. **XLA's HLO optimization pipeline** (`xla/service/gpu/gpu_compiler.cc`)
-2. **the previous einsum execution optimizations** (`tenferro-einsum/src/`)
+- `compile_std_to_exec()`
+- `compile_semiring_to_exec()`
 
-The goal is to adopt the minimum set of XLA-style passes that covers the
-performance characteristics of the previous hand-tuned execution engine.
+Both lower directly to `ExecProgram`. Passes run on `ExecProgram` in place;
+there is no intermediate `StableHloProgram` / `StableHloOp` layer anymore.
+
+Before any pass runs, lowering also computes:
+
+- `ExecInstruction::dtype`
+- `ExecInstruction::output_shapes`
+- `ExecInstruction::last_use`
+
+The new `output_shapes` field is the key enabler for future `DotDecomposer`
+work: the compiler can now reason about reshapes and contraction outputs
+without reconstructing shapes from scratch downstream.
 
 ---
 
-## II. Previous Optimizations and Required Passes
+## II. Current Status
 
-### Mapping table
+### Active passes
 
-| Previous optimization | Previous location | What it does | Pass needed |
-|----------------|-------------|--------------|---------------|
-| Lazy permutation | `dispatch.rs:446-454` | Return non-contiguous view instead of physical copy after GEMM | TransposeFolding |
-| Fusability check | `layout.rs:1-33` | Check if dim groups can collapse into one GEMM dimension without copy | DotDecomposer |
-| Partial materialization | `prepare.rs:97-140` | Copy only unfusable dimension group, not both | DotDecomposer + engine |
-| Direct output writing | `dispatch.rs:331-401` | GEMM writes directly to output buffer via fused strides | DotDimensionSorter |
-| Lazy output propagation | `execute.rs:205-228` | Intermediates in N-ary chain stay non-contiguous | TransposeFolding (cascaded) |
-| Pre-reduction | `dispatch.rs:121-139` | Reduce unique-only axes before GEMM to shrink tensor | ReductionSimplification |
-| Diagonal extraction | `dispatch.rs:105-119` | Zero-copy diagonal view | Not needed (diagonal lowered to Gather/ReduceSum at graph level) |
-| Buffer pooling | `execute.rs:232-247` | Reuse buffers via Arc refcount + pool | Execution engine (liveness + pool) |
-| Backend fast-path | `dispatch.rs:195-218` | Delegate to cuTENSOR etc. | SemiringFastPath trait |
+| Pass | Status | Purpose |
+|---|---|---|
+| `DotDimensionSorter` | active | Sort contracting dimensions on `ExecOp::DotGeneral` to stabilize canonical order |
+| `TransposeFolding` | active | Fold producer `ExecOp::Transpose` into downstream `ExecOp::DotGeneral` dimension numbers |
 
-### Minimum passes
+### Deferred pass
 
-1. **DotDimensionSorter** — sort contracting dims to minimize transposes
-2. **TransposeFolding** — absorb Transpose into DotGeneral dimension_numbers
-3. **DotDecomposer** — canonicalize DotGeneral to `[batch, M, K] × [batch, K, N]`
-4. **ReductionSimplification** — hoist independent reductions before contractions
-5. **LinalgPassthrough** — pass CustomCall (linalg) through unchanged
+| Pass | Status | Notes |
+|---|---|---|
+| `DotDecomposer` | deferred | Shape tracking is now available on `ExecInstruction`, but the canonicalization pass itself is still tracked in `tensor4all/tenferro-rs#729` |
+
+### Removed pass
+
+| Pass | Status | Reason |
+|---|---|---|
+| `ReductionSimplification` | removed | The pass was deleted during the 1-layer IR refactor; it is not part of the current compiler pipeline |
+
+### No-op category removed by IR cleanup
+
+Structured linalg operations no longer travel through string `CustomCall`
+targets, so there is no separate "linalg passthrough" pass in the current
+pipeline. `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`, `TriangularSolve`, and
+`ValidateNonsingular` are first-class `ExecOp` variants.
 
 ---
 
@@ -52,395 +65,180 @@ performance characteristics of the previous hand-tuned execution engine.
 
 ### III.1 DotDimensionSorter
 
-**Source:** XLA `xla/backends/gpu/transforms/dot_dimension_sorter.cc`
+**Scope:** `ExecProgram`
 
-**Purpose:** Sort contracting dimensions so that DotDecomposer can canonicalize
-without inserting unnecessary transposes.
+**Purpose:** Normalize `DotGeneral` contracting dimensions into a stable
+sorted order when they are already consecutive up to permutation.
 
-**When to fire:** contracting dimensions are consecutive (no gaps) but not
-sorted.
+**Why it still matters:** `TransposeFolding` and future `DotDecomposer`
+logic both behave more predictably when contracting dimensions already have a
+canonical ordering.
+
+**When to fire:**
+
+- `ExecInstruction.op` is `ExecOp::DotGeneral(config)`
+- one side's contracting dimensions are consecutive if sorted
+- that side's contracting dimensions are currently unsorted
 
 **Algorithm:**
 
-```
-PROCEDURE SortDotDimensions(dot):
-  lhs_con = dot.dimension_numbers.lhs_contracting_dims
-  rhs_con = dot.dimension_numbers.rhs_contracting_dims
+```text
+PROCEDURE SortDotDimensions(program):
+  FOR each instruction IN program.instructions:
+    IF instruction.op is not DotGeneral:
+      CONTINUE
 
-  IF consecutive_if_sorted(lhs_con) AND NOT sorted(lhs_con):
-    sort_key = lhs_con
-  ELIF consecutive_if_sorted(rhs_con) AND NOT sorted(rhs_con):
-    sort_key = rhs_con
-  ELSE:
-    RETURN  // nothing to do
+    lhs = instruction.op.lhs_contracting_dims
+    rhs = instruction.op.rhs_contracting_dims
 
-  perm = argsort(sort_key)
-  new_lhs_con = apply_perm(lhs_con, perm)
-  new_rhs_con = apply_perm(rhs_con, perm)
-
-  REPLACE dot with dot(lhs, rhs, new_dimension_numbers)
-```
-
-**Helper:**
-
-```
-FUNCTION consecutive_if_sorted(dims):
-  RETURN max(dims) - min(dims) == len(dims) - 1
+    IF lhs is consecutive_if_sorted AND lhs is not sorted:
+      perm = argsort(lhs)
+      lhs = apply_perm(lhs, perm)
+      rhs = apply_perm(rhs, perm)
+    ELSE IF rhs is consecutive_if_sorted AND rhs is not sorted:
+      perm = argsort(rhs)
+      lhs = apply_perm(lhs, perm)
+      rhs = apply_perm(rhs, perm)
 ```
 
 **Example:**
 
-```
-Before: dot(A, B), lhs_contracting={3,2}, rhs_contracting={2,1}
-After:  dot(A, B), lhs_contracting={2,3}, rhs_contracting={1,2}
-```
+```text
+Before:
+  lhs_contracting = [3, 2]
+  rhs_contracting = [2, 1]
 
-Now DotDecomposer can canonicalize without inserting a Transpose for the
-contracting group, because {2,3} is already in increasing order.
-
----
+After:
+  lhs_contracting = [2, 3]
+  rhs_contracting = [1, 2]
+```
 
 ### III.2 TransposeFolding
 
-**Source:** XLA `xla/service/transpose_folding.cc`
+**Scope:** `ExecProgram`
 
-**Purpose:** Eliminate Transpose instructions that feed directly into
-DotGeneral by absorbing the permutation into dimension_numbers.
+**Purpose:** Remove producer `Transpose` instructions that feed directly into
+`DotGeneral` by rewriting the dot dimension numbers and bypassing the
+transpose output slot.
 
-**When to fire:** a DotGeneral input is a Transpose instruction, and the
-permutation is foldable (batch dimensions are unchanged by the transpose).
+**When to fire:**
+
+- the consumer instruction is `ExecOp::DotGeneral`
+- the selected operand is produced by `ExecOp::Transpose`
+- the permutation is valid for the operand rank
+- the foldability checks pass
+
+**Current foldability rule:** batch dimensions must remain fixed, and the
+operand must expose exactly one contracting dimension after the rewrite.
 
 **Algorithm:**
 
-```
-PROCEDURE FoldTransposeIntoDot(dot):
-  FOR operand_idx IN {0 (lhs), 1 (rhs)}:
-    IF dot.operand(operand_idx) is NOT Transpose:
-      CONTINUE
+```text
+PROCEDURE FoldTransposeIntoDot(program):
+  REPEAT until fixed point:
+    changed = false
 
-    perm = dot.operand(operand_idx).permutation
-    original_input = dot.operand(operand_idx).operand(0)
+    FOR each DotGeneral instruction IN program.instructions:
+      FOR operand_idx IN {0, 1}:
+        producer = instruction producer for operand_idx
+        IF producer is not Transpose:
+          CONTINUE
 
-    IF NOT is_foldable(dot, operand_idx, perm):
-      CONTINUE
+        perm = producer.permutation
+        IF transpose is foldable for this operand:
+          rewrite DotGeneral dimension numbers with perm
+          replace operand slot with the transpose input slot
+          changed = true
 
-    // Apply inverse permutation to dimension_numbers
-    IF operand_idx == 0:
-      new_lhs_contracting = [perm[d] for d in dot.lhs_contracting]
-      new_lhs_batch       = [perm[d] for d in dot.lhs_batch]
-    ELSE:
-      new_rhs_contracting = [perm[d] for d in dot.rhs_contracting]
-      new_rhs_batch       = [perm[d] for d in dot.rhs_batch]
-
-    // Unwrap: replace transpose(x) with x
-    dot.set_operand(operand_idx, original_input)
-    dot.set_dimension_numbers(new_dimension_numbers)
-
-  RETURN modified dot (transposes removed)
-```
-
-**Foldability check:**
-
-```
-FUNCTION is_foldable(dot, operand_idx, perm):
-  batch_dims = dot.lhs_batch if operand_idx == 0 else dot.rhs_batch
-  contracting_dims = dot.lhs_contracting if operand_idx == 0
-                     else dot.rhs_contracting
-
-  // Batch dims must be unchanged by the permutation
-  FOR d IN batch_dims:
-    IF perm[d] != d:
-      RETURN false
-
-  // Must have exactly 1 contracting dimension
-  IF len(contracting_dims) != 1:
-    RETURN false
-
-  RETURN true
+    IF changed is false:
+      BREAK
 ```
 
 **Example:**
 
+```text
+Before:
+  t0 = Transpose(A, [1, 0])
+  t1 = DotGeneral(t0, B)
+
+After:
+  t1 = DotGeneral(A, B) with rewritten dimension numbers
 ```
-Before: dot(transpose(A, {1,0}), B)
-        lhs_contracting={1}, rhs_contracting={0}
 
-After:  dot(A, B)
-        lhs_contracting={0}, rhs_contracting={0}
-        // perm={1,0} applied: dim 1 → perm[1] = 0
-```
-
-**Why this covers the previous lazy permutation:** Previously, the einsum engine defers
-permutations as stride rewrites and only materializes at GEMM time. Now,
-TransposeFolding achieves the same effect at the IR level — the Transpose
-instruction is eliminated and the GEMM (DotGeneral) directly reads the
-original layout through adjusted dimension_numbers.
-
----
+The pass runs to a fixed point so later `DotGeneral` instructions can absorb
+transposes exposed by earlier folds.
 
 ### III.3 DotDecomposer
 
-**Source:** XLA `xla/hlo/transforms/expanders/dot_decomposer.cc`
+**Scope:** planned for `ExecProgram`
 
-**Purpose:** Canonicalize DotGeneral with arbitrary dimension_numbers into a
-form that maps directly to BatchedGemm:
+**Status:** deferred to `tensor4all/tenferro-rs#729`
 
-```
-Canonical form:
-  LHS: [batch..., M, K]
-  RHS: [batch..., K, N]
-  Out: [batch..., M, N]
+**Goal:** Canonicalize arbitrary `ExecOp::DotGeneral` contractions into a
+shape more directly consumable by backend GEMM paths.
 
-  lhs_batch = [0, 1, ..., nb-1]
-  rhs_batch = [0, 1, ..., nb-1]
-  lhs_contracting = [nb + 1]    (K is the last dim of LHS)
-  rhs_contracting = [nb]        (K is the first non-batch dim of RHS)
-```
+The 1-layer IR refactor intentionally landed the prerequisites first:
 
-**When to fire:** DotGeneral is not already in canonical form. Specifically:
-- batch dims are not leading, OR
-- there are multiple contracting dims, OR
-- contracting dim is not in canonical position.
+- direct `StdTensorOp -> ExecProgram` lowering
+- per-instruction dtype inference
+- per-instruction `output_shapes`
 
-**Canonicality check:**
-
-```
-FUNCTION is_canonical(operand_shape, batch_dims, contracting_dims):
-  RETURN len(contracting_dims) == 1
-     AND batch_dims == [0, 1, ..., len(batch_dims)-1]
-     AND operand_rank <= len(batch_dims) + 2
-```
-
-**Algorithm:**
-
-```
-PROCEDURE CanonicalizeDot(dot):
-  FOR each operand (lhs, rhs):
-    batch_dims = operand's batch dims
-    contracting_dims = operand's contracting dims
-    non_contracting_dims = all other dims
-
-    // Step 1: Build target axis order
-    IF operand is LHS:
-      target_order = batch_dims + non_contracting_dims + contracting_dims
-    ELSE (RHS):
-      target_order = batch_dims + contracting_dims + non_contracting_dims
-
-    // Step 2: Insert Transpose if order differs
-    IF target_order != [0, 1, ..., rank-1]:
-      operand = Transpose(operand, target_order)
-
-    // Step 3: Reshape to fuse dimension groups
-    batch_size = product of batch dim sizes
-    IF operand is LHS:
-      M = product of non_contracting dim sizes  (may be 1)
-      K = product of contracting dim sizes
-      new_shape = [batch_sizes..., M, K]
-    ELSE:
-      K = product of contracting dim sizes
-      N = product of non_contracting dim sizes  (may be 1)
-      new_shape = [batch_sizes..., K, N]
-
-    operand = Reshape(operand, new_shape)
-
-  // Step 4: Create canonical DotGeneral
-  canonical_dot = DotGeneral(reshaped_lhs, reshaped_rhs, canonical_dim_numbers)
-
-  // Step 5: Reshape output back to original shape
-  output = Reshape(canonical_dot, original_output_shape)
-
-  REPLACE original dot with output
-```
-
-**Example (multi-contracting-dim):**
-
-```
-Before: dot(A[512,32,32], B[1024,512])
-        lhs_contracting={0}, rhs_contracting={1}
-
-Step 1 (LHS): target = [1,2,0] (non-contracting=[1,2], contracting=[0])
-              → Transpose(A, {1,2,0}) → [32,32,512]
-Step 2 (LHS): Reshape → [1024, 512]  (M=32*32=1024, K=512)
-Step 1 (RHS): target = [1,0] (contracting=[1], non-contracting=[0])
-              → Transpose(B, {1,0}) → [512, 1024]
-Step 2 (RHS): already [K=512, N=1024]
-Step 3: canonical dot([1024,512], [512,1024]) → [1024, 1024]
-Step 4: Reshape → [32, 32, 1024]
-```
-
-**Why this covers the previous fusability check:** Previously, `try_fuse_group_in_target_order`
-checks if dimension groups can collapse into single GEMM dimensions. DotDecomposer
-does the same via Reshape — multiple non-contracting dims are fused into M, multiple
-contracting dims are fused into K. If the underlying strides happen to be
-contiguous, Reshape is a no-op in the Execution IR.
-
-**Why this covers the previous partial materialization:** Previously,
-`prepare_one_operand` copies only the unfusable dimension group. In the current design,
-DotDecomposer inserts a Transpose only for the axis group that needs
-reordering. TransposeFolding may absorb it; otherwise the Execution IR
-emits a Permute (physical copy) only for that operand.
-
----
+That metadata is now available to support decomposition, reshape insertion,
+and downstream validation. The transformation itself is still out of scope for
+the current branch and is not part of the live compiler pipeline.
 
 ### III.4 ReductionSimplification
 
-**Source:** XLA `AlgebraicSimplifier` (reduction hoisting patterns)
-
-**Purpose:** When the einsum builder emits `ReduceSum + DotGeneral` as
-separate nodes (because an axis appears in only one operand and not in
-the output), this pass ensures the ReduceSum runs before the DotGeneral,
-shrinking the tensor before contraction.
-
-Note: `einsum("ijk,jl->il")` cannot be a single `DotGeneral` — k is in
-LHS only and not in the output. The einsum builder decomposes this into
-`ReduceSum(A, axis=k)` followed by `DotGeneral`. This pass is about
-ensuring that decomposition is optimal (reduction before contraction, not
-after).
-
-**When to fire:** a `ReduceSum` feeds into a `DotGeneral`, and the reduced
-axes are independent of the contraction (not batch dims, not contracting
-dims).
-
-**Algorithm:**
-
-```
-PROCEDURE HoistIndependentReductions(program):
-  FOR each ReduceSum → DotGeneral sequence:
-    reduced_axes = axes being reduced
-    dot_used_dims = batch_dims ∪ contracting_dims
-
-    IF reduced_axes ∩ dot_used_dims is empty:
-      // Reduction is independent of contraction — can run first
-      // (einsum builder already emits this order, but this pass
-      //  verifies and enforces it after other transforms)
-      ENSURE ReduceSum precedes DotGeneral in topological order
-```
-
-**Example:**
-
-```
-einsum("ijk,jl->il", A[2,3,4], B[3,5])
-
-Einsum builder emits:
-  t0 = ReduceSum(A, axes=[2])          → t0[2,3]  (reduce k)
-  t1 = DotGeneral(t0[2,3], B[3,5])     → t1[2,5]  (contract j)
-
-ReductionSimplification verifies this order is preserved after
-other transforms (e.g., if a prior pass reordered instructions).
-```
-
-**Why this covers the previous pre-reduction:** Previously, `execute_reduce_with_plan` was called
-for unique-only axes before GEMM (`dispatch.rs:121-139`). This pass does the
-same at the IR level.
+`ReductionSimplification` no longer exists in the compiler. Historical notes
+about hoisting independent reductions remain useful background, but there is no
+implementation, no tests, and no pass-order slot for it in the current code.
 
 ---
 
-### III.5 LinalgPassthrough
+## IV. Pass Order
 
-**Purpose:** Pass CustomCall instructions (linalg ops like SVD, QR, etc.)
-through the compiler unchanged. They are not involved in transpose optimization
-and are dispatched to the kernel registry at execution time.
+The current lowering pipeline is:
 
-**Algorithm:** Identity — no transformation.
-
----
-
-## IV. Pass Execution Order
-
-```
-StableHLO IR (input)
+```text
+CompiledProgram<StdTensorOp or SemiringOp<_>>
     │
-    │  1. DotDimensionSorter
-    │     Sort contracting dims → reduces transposes from DotDecomposer
+    │ lower directly to ExecProgram
+    │ infer dtype + output_shapes per instruction
+    ▼
+ExecProgram
     │
-    │  2. ReductionSimplification
-    │     Hoist independent reductions before DotGeneral
-    │
-    │  3. DotDecomposer
-    │     Canonicalize DotGeneral → [batch, M, K] × [batch, K, N]
-    │     May insert Transpose + Reshape instructions
-    │
-    │  4. TransposeFolding
-    │     Absorb remaining Transpose into DotGeneral dimension_numbers
-    │     May run multiple iterations until fixed point
-    │
-    │  5. LinalgPassthrough
-    │     CustomCall instructions pass through unchanged
-    │
-    │  6. Lower to Execution IR
-    │     DotGeneral (canonical) → BatchedGemm
-    │     All other ops → pass through unchanged (same op, same parameters)
-    │     (Transpose → Permute is a rename; everything else is identity)
-    ↓
-Execution IR (output, stride-aware engine dispatch)
+    │ 1. DotDimensionSorter
+    │ 2. TransposeFolding (fixed point)
+    │ 3. populate_last_use
+    ▼
+Ready for execution
 ```
 
-**Why this order matters:**
-
-- **DotDimensionSorter before DotDecomposer:** sorting contracting dims means
-  DotDecomposer can often avoid inserting Transpose for the contracting group.
-- **ReductionSimplification before DotDecomposer:** reduces tensor rank/size
-  before canonicalization, leading to simpler canonical form.
-- **DotDecomposer before TransposeFolding:** DotDecomposer may insert new
-  Transpose instructions that TransposeFolding can then absorb.
-- **TransposeFolding last (among structural passes):** absorbs all accumulated
-  Transpose instructions, including those inserted by DotDecomposer.
+`DotDecomposer` is intentionally absent from this list until issue `#729`
+lands. `ReductionSimplification` is intentionally absent because the pass was
+deleted.
 
 ---
 
-## V. Comparison: Previous Execution vs Compiled
+## V. Comparison to the Previous Execution Engine
 
-| Step | Previous (runtime, per-contraction) | Current (compile-time, on IR) |
-|------|-------------------------------|--------------------------|
-| Axis classification | `classify.rs:12-54` at plan time | DotDecomposer identifies batch/contracting/non-contracting |
-| Dim sorting | implicit (modes already ordered) | DotDimensionSorter |
-| Lazy permute | `tensor.permute()` returns strided view | TransposeFolding eliminates Transpose from IR |
-| Fusability check | `try_fuse_group_in_target_order` | DotDecomposer's Reshape (fuses dim groups) |
-| Partial materialization | `prepare_one_operand` copies unfusable side | DotDecomposer inserts Transpose only where needed |
-| Pre-reduction | `execute_reduce_with_plan` before GEMM | ReductionSimplification hoists ReduceSum |
-| Direct output write | c_direct path checks output fusability | TransposeFolding on output Transpose |
-| Buffer reuse | `TensorBufferPool` + `try_into_data_vec` | Liveness analysis + buffer pool (execution engine) |
-
-**Key difference:** The previous design made these decisions at runtime per contraction step.
-The current design makes them at compile time on the full IR graph, which enables cross-step
-optimization (e.g., a Transpose inserted by one DotDecomposer step may be
-absorbed by a subsequent DotGeneral via TransposeFolding).
+| Previous behavior | Current status |
+|---|---|
+| Contracting-dimension normalization during execution planning | Moved into `DotDimensionSorter` on `ExecProgram` |
+| Lazy transpose absorption around GEMM | Moved into `TransposeFolding` on `ExecProgram` |
+| Multi-step `DotGeneral` canonicalization | Deferred to `DotDecomposer` in `#729` |
+| Reduction hoisting before contraction | No dedicated pass today |
+| Linalg passthrough via string `CustomCall` | Removed; linalg ops are structured `ExecOp` variants |
 
 ---
 
-## VI. What We Do NOT Adopt from XLA
+## VI. Testing Expectations
 
-| XLA pass | Reason for exclusion |
-|----------|---------------------|
-| DotMerger | Merges dots sharing an operand. Useful for XLA's JIT but not needed for step-by-step interpreter. |
-| TransposeFolding for Convolution | No convolution support in initial scope. |
-| AlgebraicSimplifier (full) | Most patterns are XLA-specific. We adopt only ReductionSimplification. |
-| LayoutAssignment | XLA-specific. Engine-produced data is column-major; inputs are stride-aware. |
-| Kernel fusion | No kernel fusion in the step-by-step interpreter. |
+The pass test suite should focus on:
 
-These can be added later if needed (e.g., DotMerger when implementing
-checkpoint scheduling or operator fusion).
+- direct `ExecProgram` fixtures
+- exact rewrites of `ExecOp::DotGeneral` dimension metadata
+- fixed-point behavior for `TransposeFolding`
+- preservation of output slots and `output_shapes`
 
----
-
-## VII. Implementation Notes
-
-### Iteration
-
-TransposeFolding should run in a loop until no more folds are possible (fixed
-point). In practice 2-3 iterations suffice for einsum-derived graphs.
-
-### Correctness testing
-
-Each pass should preserve program semantics. Test strategy:
-- Generate random StableHLO programs from einsum patterns
-- Run with and without each pass
-- Compare output numerically (or exactly for integer types)
-
-### Profiling
-
-The previous profiling counters (`PREPARE_ZEROCOPY`, `PREPARE_FALLBACK`,
-`PREPARE_FALLBACK_ELEMS`, `GEMM_NS`, `PERMUTE_NS`) should have equivalents:
-- Count of Transpose instructions before/after TransposeFolding
-- Count of Permute instructions in final Execution IR
-- Total elements physically copied by Permute instructions
+Regression tests live in `tenferro/tests/compiler_passes.rs`.

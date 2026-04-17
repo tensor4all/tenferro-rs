@@ -3,12 +3,13 @@
   "allow_auto_merge": true,
   "delete_branch_on_merge": true,
   "required_status_checks": {
-    "strict": true,
+    "strict": false,
     "contexts": [
       "rustfmt",
       "cargo test (blas inject)",
       "coverage",
-      "docs-site"
+      "docs-site",
+      "CI gate (PR workspace tests)"
     ]
   },
   "pages": {

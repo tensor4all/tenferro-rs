@@ -188,64 +188,51 @@ eval`.
 
 ---
 
-## VIII. Backend Architecture — 2-Level IR
+## VIII. Backend Architecture — Single Execution IR
 
 ### Design principle
 
-All execution flows through a 2-level IR with StableHLO as the cut point:
+All execution flows through a single in-process execution IR:
 
 ```text
 CompiledProgram<StdTensorOp>
     │
-    │ lower_to_stablehlo() — flat 1:1 mapping (+ some 1:N for Conj, linalg)
+    │ compile_std_to_exec()
+    │   - infer per-instruction dtype + output_shapes
+    │   - run DotDimensionSorter + TransposeFolding
     ↓
-StableHloProgram (Rust struct, in-process)    ← CUT POINT
+ExecProgram / ExecOp / ExecInstruction
     │
-    ├── (planned) XLA backend: StableHLO → XLA directly
-    │
-    └── CpuBackend: StableHLO → optimizing compiler → ExecProgram
-                         → generic execution engine → TensorBackend trait
+    ├── eval_exec_ir() / segmented dispatch → TensorBackend
+    └── eval_semiring_ir()                  → SemiringBackend + shared structural helpers
 ```
 
-The architecture supports pluggable backends at the StableHLO cut point.
-Currently, `CpuBackend` goes through the optimizing compiler to produce an
-`ExecProgram`, which a generic engine interprets by dispatching to backend
-traits. An XLA backend path is planned but not yet implemented.
+`compile_std_to_exec()` and `compile_semiring_to_exec()` lower directly from
+computegraph's `CompiledProgram` into `ExecProgram`. There is no in-process
+`StableHloProgram` / `StableHloOp` layer anymore. StableHLO remains a useful
+semantic reference for naming and op design, but it is not part of the current
+runtime pipeline.
 
-For custom algebras (`SemiringOp<T>`), the same 2-level structure applies:
-`SemiringOp<T>` lowers to the same `StableHloOp` types, then to `ExecProgram`.
-**Note:** for custom algebra, the ops have semiring-specific semantics (Add=⊕,
-Mul=⊗). This IR is **not** serializable to StableHLO MLIR. Custom algebra
-always goes through the optimizing compiler → Execution IR → stride-aware
-engine path.
+For custom algebras (`SemiringOp<T>`), the same direct lowering applies:
+`compile_semiring_to_exec()` produces `ExecProgram`, and
+`eval_semiring_ir()` dispatches algebra-dependent ops through
+`SemiringBackend<Alg>` while reusing the same structural helpers and pass
+pipeline.
 
-### StableHLO IR representation
+### Execution IR
 
-tenferro defines its own Rust data structures that mirror StableHLO semantics.
-This is neither binary nor text — it is an in-process Rust struct passed
-directly to backends. No serialization for faer/GPU backends.
+`ExecInstruction` carries the `ExecOp`, slot wiring, inferred `dtype`,
+inferred `output_shapes`, and liveness metadata (`last_use`). The compiler
+lowers `StdTensorOp` and `SemiringOpKind` almost 1:1 into `ExecOp`, with
+structured linalg variants (`Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
+`TriangularSolve`, `ValidateNonsingular`) represented directly instead of via
+stringly-typed custom calls.
 
-The `StableHloProgram`, `StableHloOp`, and `StableHloInstruction` types
-mirror StableHLO semantics as in-process Rust structs.
+### Pass pipeline
 
-Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
-
-### StableHLO lowering
-
-`StdTensorOp` lowering is mostly 1:1 (flat variants map directly to
-`StableHloOp`), with documented 1:N exceptions (`Conj`, linalg).
-`SemiringOp<T>` lowers to the same `StableHloOp` types but with semiring
-semantics (not MLIR-serializable).
-
-Canonical lowering rules and custom_call targets:
-[`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section VI -- StableHLO Alignment)
-and [`spec/backend-contract.md`](../spec/backend-contract.md).
-
-### Optimizing compiler and Execution IR
-
-The optimizing compiler transforms `StableHloProgram` into `ExecProgram`
-(algebra-agnostic). `ExecOp` uses the same op vocabulary as StableHLO with
-one substitution: `DotGeneral` is replaced by `BatchedGemm`.
+The optimizing compiler now runs directly on `ExecProgram`. The active passes
+are `DotDimensionSorter` and `TransposeFolding`; `DotDecomposer` is deferred
+to issue `#729` now that per-instruction shape tracking is available.
 
 Canonical `ExecOp` definition and pass list:
 [`spec/backend-contract.md`](../spec/backend-contract.md).
@@ -262,20 +249,19 @@ depending on the dispatch category.
 ### Backend trait
 
 `TensorBackend` (defined in tenferro-tensor) is the single backend trait
-that encapsulates kernel dispatch. It provides required methods
-(`batched_gemm`, `reduce_sum`) and optional fast-path methods (`contract`,
-`elementwise_mul`, `elementwise_add`). `CpuBackend` lives in tenferro-tensor and implements `TensorBackend`.
-`CudaBackend` exists as a partial stub (feature-gated, not yet fully
-implemented).
+that encapsulates standard tensor kernel dispatch. `TensorExec` is the
+session-scoped companion trait used for batches of backend ops inside one
+execution context. `CpuBackend` lives in tenferro-tensor and implements
+`TensorBackend`; the CubeCL GPU backend is partial and feature-gated.
 
 Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
 ### Standard and custom algebra backends
 
-The standard backend is `CpuBackend` (StableHLO -> optimizing compiler ->
-ExecProgram -> generic engine -> faer/BLAS/LAPACK). An XLA backend path
-(StableHLO -> XLA directly) is planned but not yet implemented. Custom
-algebra backends implement `SemiringBackend<Alg>` with a minimum of `gemm()`.
+The standard backend path is `CompiledProgram<StdTensorOp> ->
+compile_std_to_exec() -> ExecProgram -> eval_exec_ir()`. Custom algebra
+backends implement `SemiringBackend<Alg>` and follow the analogous
+`compile_semiring_to_exec() -> eval_semiring_ir()` path.
 
 `Engine<B: TensorBackend>` is the top-level entry point that orchestrates
 lowering + compilation + execution. `TensorBackend` (in tenferro-tensor)
@@ -368,7 +354,7 @@ without `TracedTensor`.
 |---|---|
 | New scalar algebra for einsum (CPU) | `Semiring` (4 methods) + `SemiringBackend<Alg>::gemm` (1 method) |
 | Custom GPU backend for custom algebra | `impl SemiringBackend<Alg> for MyGpuBackend` (gemm + overrides) |
-| Custom linalg kernel (standard algebra) | `engine.register_custom_call("name", kernel)` |
+| Custom standard backend | `impl TensorBackend for MyBackend` |
 | AD for custom algebra | Define own Op enum, impl `PrimitiveOp` (advanced) |
 
 The minimal extension path (CPU, e.g., tropical semiring):
@@ -496,22 +482,23 @@ Top-level facade:
 
 - `TracedTensor` (lazy graph-aware wrapper)
 - `Engine` (compilation cache, backend dispatch via `TensorBackend` from
-  tenferro-tensor, einsum cache, custom_call registry)
+  tenferro-tensor, einsum cache)
 - Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
-- `StableHloProgram`, `StableHloOp`, `StableHloInstruction` (Rust IR)
-- `lower_to_stablehlo()` (`CompiledProgram<StdTensorOp>` → `StableHloProgram`,
-  flat 1:1 mapping, some 1:N expansion for `Conj`, multi-output linalg, `Solve`)
-- `lower_semiring_to_stablehlo()` (`CompiledProgram<SemiringOp<T>>` →
-  `StableHloProgram`)
-- Optimizing compiler: `compile_to_exec()` (StableHLO → `ExecProgram`)
-  - TransposeFolding, DotDecomposer, LinalgCustomCallPassthrough passes
-  - Algebra-agnostic — same passes for standard and custom algebras
+- `compile_std_to_exec()` (`CompiledProgram<StdTensorOp>` → `ExecProgram`)
+- `compile_semiring_to_exec()` (`CompiledProgram<SemiringOp<T>>` → `ExecProgram`)
+- Optimizing compiler passes on `ExecProgram`
+  - `DotDimensionSorter`
+  - `TransposeFolding`
+  - `DotDecomposer` deferred to issue `#729`
 - `ExecProgram`, `ExecOp`, `ExecInstruction`
 - Generic execution engine: `eval_exec_ir()` — interprets `ExecProgram`,
   dispatches to `TensorBackend` methods (from tenferro-tensor)
+- Generic semiring execution engine: `eval_semiring_ir()` — interprets
+  `ExecProgram`, dispatches to `SemiringBackend<Alg>` plus shared structural
+  helpers
 - Standard backend:
-  - `CpuBackend` (in tenferro-tensor) — StableHLO → optimizing compiler →
-    ExecProgram → generic engine → faer/BLAS/LAPACK
+  - `CpuBackend` (in tenferro-tensor) — `ExecProgram` → generic engine →
+    faer/BLAS/LAPACK
 
 Depends on: all of the above + tidu-rs.
 

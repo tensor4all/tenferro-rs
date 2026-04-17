@@ -9,7 +9,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::Complex64;
-use tenferro::compiler::{compile_to_exec, lower_to_stablehlo};
+use tenferro::compiler::compile_std_to_exec;
 use tenferro::einsum::einsum;
 use tenferro::exec::eval_exec_ir;
 use tenferro::{matmul, Engine, TracedTensor};
@@ -316,16 +316,22 @@ fn eval_fragment_outputs(
     let view = resolve(roots);
     let graph = materialize_merge(&view, outputs);
     let compiled = compile(&graph);
-    let stablehlo = lower_to_stablehlo(&compiled);
-    let exec = compile_to_exec(&stablehlo);
+    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
     let inputs = graph
         .inputs
         .iter()
         .map(|key| match key {
-            GlobalValKey::Input(k) => inputs_map.get(k).expect("missing tensor input").clone(),
+            GlobalValKey::Input(k) => {
+                let tensor = inputs_map.get(k).expect("missing tensor input");
+                input_dtypes.push(tensor.dtype());
+                input_shapes.push(DimExpr::from_concrete(tensor.shape()));
+                tensor.clone()
+            }
             _ => panic!("expected input key"),
         })
         .collect();
+    let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
     let mut backend = CpuBackend::new();
     eval_exec_ir(&mut backend, &exec, inputs).unwrap()
 }

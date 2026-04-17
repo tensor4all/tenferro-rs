@@ -102,6 +102,7 @@ impl FusionElement for f32 {
                 | ElementwiseFusionOp::Sqrt
                 | ElementwiseFusionOp::Rsqrt
                 | ElementwiseFusionOp::Pow
+                | ElementwiseFusionOp::Expm1
                 | ElementwiseFusionOp::Log1p
         )
     }

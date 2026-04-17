@@ -1,7 +1,7 @@
 // Run with: cargo test --features cubecl -- --ignored
 use num_complex::{Complex32, Complex64};
 
-use crate::{Tensor, TensorBackend};
+use crate::TensorBackend;
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
@@ -312,35 +312,34 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
 }
 
 #[test]
-#[ignore]
-fn test_cubecl_eig_f32_host_fallback_returns_complex32_outputs() {
-    let input = tensor_f32(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]);
-    let mut gpu = gpu_backend();
-    let outputs = gpu.eig(&upload(&gpu, &input)).unwrap();
-    let values = download(&gpu, &outputs[0]);
-    let vectors = download(&gpu, &outputs[1]);
+fn test_gpu_eig_returns_unsupported_error() {
+    let mut backend = super::gpu_backend();
+    let cpu = super::tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let gpu = super::upload(&backend, &cpu);
 
-    assert!(matches!(values, Tensor::C32(_)));
-    assert!(matches!(vectors, Tensor::C32(_)));
-    assert_eq!(values.shape(), &[2]);
-    assert_eq!(vectors.shape(), &[2, 2]);
-
-    let mut actual = values.as_slice::<Complex32>().unwrap().to_vec();
-    actual.sort_by(|lhs, rhs| {
-        lhs.re
-            .partial_cmp(&rhs.re)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    assert_slice_close_c32(
-        &actual,
-        &[Complex32::new(1.0, 0.0), Complex32::new(3.0, 0.0)],
-        1e-4,
+    let result = backend.eig(&gpu);
+    assert!(
+        matches!(&result, Err(err) if err.to_string().to_lowercase().contains("unsupported")
+            || err.to_string().to_lowercase().contains("not supported")),
+        "expected UnsupportedOp for GPU eig, got {result:?}",
     );
 }
 
 #[test]
 #[ignore]
-fn test_cubecl_eig_c32_host_fallback_returns_complex32_outputs() {
+fn test_cubecl_eig_f32_returns_backend_failure() {
+    let input = tensor_f32(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]);
+    let mut gpu = gpu_backend();
+    let err = gpu.eig(&upload(&gpu, &input)).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "eig", .. }
+    ));
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_eig_c32_returns_backend_failure() {
     let input = tensor_c32(
         vec![2, 2],
         vec![
@@ -351,19 +350,11 @@ fn test_cubecl_eig_c32_host_fallback_returns_complex32_outputs() {
         ],
     );
     let mut gpu = gpu_backend();
-    let outputs = gpu.eig(&upload(&gpu, &input)).unwrap();
-    let values = download(&gpu, &outputs[0]);
-    let mut actual = values.as_slice::<Complex32>().unwrap().to_vec();
-    actual.sort_by(|lhs, rhs| {
-        lhs.re
-            .partial_cmp(&rhs.re)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    assert_slice_close_c32(
-        &actual,
-        &[Complex32::new(1.0, 0.5), Complex32::new(3.0, -0.25)],
-        1e-3,
-    );
+    let err = gpu.eig(&upload(&gpu, &input)).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "eig", .. }
+    ));
 }
 
 #[test]

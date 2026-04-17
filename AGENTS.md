@@ -38,7 +38,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 - Graph-based traced execution via `TracedTensor` + `Engine`
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
-- StableHLO-style lowering plus an execution IR for backend dispatch
+- Single execution IR (`ExecOp`) plus a pass pipeline for backend dispatch
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits
@@ -258,12 +258,12 @@ download single scalars.
 |---------|-----------------|------------|
 | SVD, QR, Cholesky, LU, Eigh | All versions (11.4+) | GPU |
 | Triangular solve | Via cuBLAS (all versions) | GPU |
-| General eigendecomposition (eig) | **Not in cuSOLVER** | Host fallback (CPU) |
+| General eigendecomposition (eig) | **Not in cuSOLVER** | Returns `BackendFailure` — user must download to CPU explicitly |
 
 `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-provided by any version of cuSOLVER. The `eig` op always falls back to
-CPU via download → CpuBackend → re-upload. This is a permanent
-cuSOLVER limitation, not a version issue.
+provided by any version of cuSOLVER. `CubeclBackend::eig` returns
+`BackendFailure`. Users must explicitly download the tensor to CPU and
+compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
 
 ## CPU Kernel Implementation Rules
 
