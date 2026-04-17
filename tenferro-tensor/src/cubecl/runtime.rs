@@ -6,6 +6,17 @@ use cubecl::Runtime;
 use cubecl_cuda::{CudaDevice, CudaRuntime};
 use cudarc::driver::sys::{CUcontext, CUdevice};
 
+/// Returns `true` if a CUDA device is available for CubeCL.
+///
+/// Use this in test helpers to skip GPU tests on machines without hardware.
+pub fn gpu_available() -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let device = CudaDevice::new(0);
+        let _ = CudaRuntime::client(&device);
+    }))
+    .is_ok()
+}
+
 /// CubeCL CUDA runtime wrapper.
 ///
 /// # Examples

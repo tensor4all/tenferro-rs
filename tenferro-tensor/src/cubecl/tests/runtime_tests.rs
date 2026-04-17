@@ -1,9 +1,9 @@
-// Run with: cargo test --features cubecl -- --ignored
+// Run with: cargo test -p tenferro-tensor --features cubecl -- --ignored
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
-use crate::cubecl::{CubeclBackend, CubeclRuntime};
+use crate::cubecl::{gpu_available, CubeclBackend, CubeclRuntime};
 use crate::Tensor;
 use crate::TensorBackend;
 
@@ -14,24 +14,32 @@ fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
     }
 }
 
-#[test]
-#[ignore]
-fn test_runtime_init() {
-    let rt = CubeclRuntime::new(0);
-    assert!(rt.is_ok(), "CubeCL runtime should init on device 0");
+macro_rules! gpu_test {
+    ($name:ident, $body:expr) => {
+        #[test]
+        #[ignore = "requires CUDA 12+ GPU"]
+        fn $name() {
+            if !gpu_available() {
+                eprintln!("skipping {} — no CUDA device found", stringify!($name));
+                return;
+            }
+            $body
+        }
+    };
 }
 
-#[test]
-#[ignore]
-fn test_raw_stream_extraction() {
+gpu_test!(test_runtime_init, {
+    let rt = CubeclRuntime::new(0);
+    assert!(rt.is_ok(), "CubeCL runtime should init on device 0");
+});
+
+gpu_test!(test_raw_stream_extraction, {
     let rt = CubeclRuntime::new(0).unwrap();
     let stream_ptr = rt.raw_cuda_stream().unwrap();
     assert!(stream_ptr != 0, "Raw CUstream should be non-null");
-}
+});
 
-#[test]
-#[ignore]
-fn test_upload_download_f64() {
+gpu_test!(test_upload_download_f64, {
     let rt = CubeclRuntime::new(0).unwrap();
     let host = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let gpu = upload_tensor(&rt, &host).unwrap();
@@ -44,11 +52,9 @@ fn test_upload_download_f64() {
         back.as_slice::<f64>().unwrap(),
         host.as_slice::<f64>().unwrap()
     );
-}
+});
 
-#[test]
-#[ignore]
-fn test_upload_download_c64() {
+gpu_test!(test_upload_download_c64, {
     use num_complex::Complex64;
 
     let rt = CubeclRuntime::new(0).unwrap();
@@ -59,11 +65,9 @@ fn test_upload_download_c64() {
     let back = download_tensor(&rt, &gpu).unwrap();
 
     assert_eq!(back.as_slice::<Complex64>().unwrap(), &data);
-}
+});
 
-#[test]
-#[ignore]
-fn test_pointer_bridge() {
+gpu_test!(test_pointer_bridge, {
     let rt = CubeclRuntime::new(0).unwrap();
     let host = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
 
@@ -71,11 +75,9 @@ fn test_pointer_bridge() {
     let ptr = device_ptr(&rt, &gpu).unwrap();
 
     assert!(ptr != 0, "Device pointer should be non-null");
-}
+});
 
-#[test]
-#[ignore]
-fn test_backend_add_matches_cpu_reference() {
+gpu_test!(test_backend_add_matches_cpu_reference, {
     let mut backend = CubeclBackend::new(0).unwrap();
     let mut cpu = crate::cpu::CpuBackend::new();
     let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -90,11 +92,9 @@ fn test_backend_add_matches_cpu_reference() {
         actual.as_slice::<f64>().unwrap(),
         expected.as_slice::<f64>().unwrap()
     );
-}
+});
 
-#[test]
-#[ignore]
-fn test_trivial_cube_kernel() {
+gpu_test!(test_trivial_cube_kernel, {
     let rt = CubeclRuntime::new(0).unwrap();
     let client = rt.client();
 
@@ -121,11 +121,9 @@ fn test_trivial_cube_kernel() {
     let result_bytes = client.read_one_unchecked(handle_out);
     let result = f64::from_bytes(&result_bytes);
     assert_eq!(result, &expected);
-}
+});
 
-#[test]
-#[ignore]
-fn test_full_round_trip_all_dtypes() {
+gpu_test!(test_full_round_trip_all_dtypes, {
     use num_complex::{Complex32, Complex64};
 
     let rt = CubeclRuntime::new(0).unwrap();
@@ -167,11 +165,9 @@ fn test_full_round_trip_all_dtypes() {
         back.as_slice::<Complex32>().unwrap(),
         t.as_slice::<Complex32>().unwrap()
     );
-}
+});
 
-#[test]
-#[ignore]
-fn test_pointer_and_stream_bridge() {
+gpu_test!(test_pointer_and_stream_bridge, {
     let rt = CubeclRuntime::new(0).unwrap();
     let t = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let gpu = upload_tensor(&rt, &t).unwrap();
@@ -184,4 +180,4 @@ fn test_pointer_and_stream_bridge() {
 
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(back.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
-}
+});
