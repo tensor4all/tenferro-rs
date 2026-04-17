@@ -1,4 +1,74 @@
 //! CubeCL-based GPU backend for tenferro tensors.
+//!
+//! This module provides GPU acceleration via [CubeCL](https://github.com/tracel-ai/cubecl)
+//! running on NVIDIA CUDA devices. It is gated behind the `cubecl` feature flag and
+//! requires **CUDA 12+** with a compatible NVIDIA GPU.
+//!
+//! # Enabling the feature
+//!
+//! Add to your `Cargo.toml`:
+//!
+//! ```toml
+//! tenferro-tensor = { version = "...", features = ["cubecl"] }
+//! ```
+//!
+//! You must also enable a CPU backend (`cpu-faer` or `cpu-blas`); the CubeCL backend
+//! complements the CPU path but does not replace it.
+//!
+//! # Prerequisites
+//!
+//! - NVIDIA GPU with CUDA compute capability ≥ 7.0
+//! - CUDA Toolkit 12.x installed (provides NVRTC for JIT kernel compilation)
+//! - cuTENSOR, cuSOLVER, cuBLAS shared libraries available on `LD_LIBRARY_PATH`
+//!
+//! ## Environment variables
+//!
+//! | Variable | Purpose |
+//! |----------|---------|
+//! | `CUDA_PATH` | CUDA toolkit root (e.g. `/usr/local/cuda-12.0`) |
+//! | `CUBECL_DEBUG_LOG` | Set to `0` to suppress verbose JIT logs |
+//! | `TENFERRO_CUTENSOR_PATH` | Override cuTENSOR library search path |
+//! | `TENFERRO_CUSOLVER_PATH` | Override cuSOLVER library search path |
+//! | `TENFERRO_CUBLAS_PATH` | Override cuBLAS library search path |
+//!
+//! # Basic usage
+//!
+//! GPU tensors must be explicitly uploaded before use on the device and downloaded
+//! back to the host afterwards (no implicit CPU↔GPU transfer, following the PyTorch
+//! convention).
+//!
+//! ```ignore
+//! use tenferro_tensor::cubecl::{CubeclBackend, upload_tensor, download_tensor};
+//! use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
+//!
+//! // 1. Create the GPU backend (device ordinal 0)
+//! let mut backend = CubeclBackend::new(0)?;
+//!
+//! // 2. Create tensors on the CPU
+//! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+//! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+//!
+//! // 3. Upload to GPU
+//! let gpu_a = upload_tensor(backend.runtime(), &a)?;
+//! let gpu_b = upload_tensor(backend.runtime(), &b)?;
+//!
+//! // 4. Compute on GPU
+//! let gpu_c = backend.add(&gpu_a, &gpu_b)?;
+//!
+//! // 5. Download result back to CPU
+//! let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
+//! ```
+//!
+//! # Running GPU tests
+//!
+//! All GPU tests are marked `#[ignore]` so that `cargo test --features cubecl`
+//! passes on machines without a GPU. To actually run them:
+//!
+//! ```sh
+//! CUBECL_DEBUG_LOG=0 \
+//! CUDA_PATH=/usr/local/cuda-12.0 \
+//! cargo test -p tenferro-tensor --features cubecl -- --ignored
+//! ```
 
 use std::cell::OnceCell;
 
