@@ -101,7 +101,7 @@ use dispatch::{
 use kernels::{diagonal, elementwise, indexing, reduction, structural};
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
-pub use runtime::CubeclRuntime;
+pub use runtime::{gpu_available, CubeclRuntime};
 
 /// CubeCL-based GPU backend.
 ///
