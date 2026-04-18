@@ -98,6 +98,40 @@ let result = out.eval(&mut engine).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
 
+## Static vs symbolic shapes
+
+A `TracedTensor` carries its shape in one of two modes, chosen at construction time:
+
+| Mode | Constructor | When to use |
+| --- | --- | --- |
+| **Concrete (static)** | `from_vec`, `from_tensor_concrete_shape`, `input_concrete_shape(dtype, shape)` | Shape fixed at graph-build time. Enables build-time contraction path optimization, per-shape specialization |
+| **Symbolic** | `from_tensor_symbolic_shape`, `input_symbolic_shape(dtype, rank)` | Shape only known at eval time. Use for dynamic batch sizes, polymorphic graphs, or to defer path optimization |
+
+For N-ary einsum the mode propagates:
+
+- **All inputs have concrete shapes** → the contraction path is optimized at graph-build time and the einsum is decomposed into binary `DotGeneral` ops.
+- **Any input is symbolic** → the einsum is kept as a single `NaryEinsum` op; the contraction path is resolved at eval time from the actual input shapes.
+
+The engine caches optimized contraction trees keyed by `(subscripts, input shapes)`, so the eval-time cost is amortized across repeated calls with the same shapes.
+
+```rust
+use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor};
+use tenferro_tensor::DType;
+
+// One symbolic-shape input + one concrete-shape input.
+let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+let b = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+let mut engine = Engine::new(CpuBackend::new());
+let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
+
+// Bind a concrete tensor to the symbolic leg at eval time.
+let a_concrete = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let result = c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)]).unwrap();
+
+assert_eq!(result.shape(), &[2, 2]);
+```
+
 ## Batched matrix multiply
 
 PyTorch and JAX users often put the batch axis first. In tenferro, trailing batch axes line up naturally with column-major storage, so this example keeps the batch dimension on the right.
