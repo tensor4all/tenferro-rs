@@ -144,6 +144,19 @@ pub fn eval_exec_segmented<B: TensorBackend>(
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
+    let mut cache = NaryEinsumCache::new(
+        std::num::NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
+            .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+    );
+    eval_exec_segmented_with_cache(backend, program, inputs, &mut cache)
+}
+
+pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    cache: &mut crate::engine::NaryEinsumCache,
+) -> Result<Vec<Tensor>> {
     let segments = segment_exec_program(program);
     let mut slots = initialize_slots(program, inputs);
 
@@ -187,17 +200,12 @@ pub fn eval_exec_segmented<B: TensorBackend>(
                 })?;
             }
             Segment::Ffi(inst) => {
-                // TODO(Task 6): thread the cache through eval_exec_segmented_with_cache
-                let mut ephemeral_cache = NaryEinsumCache::new(
-                    std::num::NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
-                        .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
-                );
                 execute_ffi_instruction(
                     backend,
                     &mut slots,
                     inst,
                     DispatchMode::Segmented,
-                    &mut ephemeral_cache,
+                    cache,
                 )?;
                 reclaim_last_use_inputs_backend(&mut slots, inst, backend);
             }

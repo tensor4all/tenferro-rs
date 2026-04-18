@@ -732,8 +732,7 @@ fn execute_nary_einsum<B: TensorBackend>(
             eval_exec_ir_unsegmented_with_cache(backend, &program, program_inputs, cache)?
         }
         DispatchMode::Segmented => {
-            // TODO(Task 6): thread the cache through eval_exec_segmented_with_cache
-            crate::segment::eval_exec_segmented(backend, &program, program_inputs)?
+            crate::segment::eval_exec_segmented_with_cache(backend, &program, program_inputs, cache)?
         }
     };
     if outputs.len() != 1 {
