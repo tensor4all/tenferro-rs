@@ -41,8 +41,8 @@ fn test_faer_gemm_basic_f64() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -65,8 +65,8 @@ fn test_faer_gemm_basic_f32() {
     let a = f32_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f32_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -97,8 +97,8 @@ fn test_faer_gemm_identity() {
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
     );
 
-    let ta = TracedTensor::from_tensor(a.clone());
-    let ti = TracedTensor::from_tensor(i);
+    let ta = TracedTensor::from_tensor_concrete_shape(a.clone());
+    let ti = TracedTensor::from_tensor_concrete_shape(i);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -140,8 +140,8 @@ fn test_batched_gemm() {
         vec![5.0, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
     );
 
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1], // contract over dim 1 (K)
         rhs_contracting_dims: vec![0], // contract over dim 0 (K)
@@ -184,8 +184,8 @@ fn test_batched_gemm_via_einsum() {
     );
 
     let mut engine = Engine::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk").unwrap();
 
     let result = tc.eval(&mut engine).unwrap();
@@ -216,8 +216,8 @@ fn test_strided_input_via_einsum() {
 
     // A^T * B via einsum: "ji,jk->ik"
     let mut engine = Engine::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik").unwrap();
 
     let result = tc.eval(&mut engine).unwrap();
@@ -236,8 +236,8 @@ fn test_vector_dot_product() {
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let w = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
-    let tv = TracedTensor::from_tensor(v);
-    let tw = TracedTensor::from_tensor(w);
+    let tv = TracedTensor::from_tensor_concrete_shape(v);
+    let tw = TracedTensor::from_tensor_concrete_shape(w);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0],
         rhs_contracting_dims: vec![0],
@@ -264,9 +264,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
     let mut engine = Engine::new(CpuBackend::new());
-    let ta1 = TracedTensor::from_tensor(a.clone());
-    let tb1 = TracedTensor::from_tensor(b.clone());
-    let tc1 = TracedTensor::from_tensor(c.clone());
+    let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone());
+    let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone());
+    let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone());
     let mut out1 = einsum(&mut engine, &[&ta1, &tb1, &tc1], "ij,jk,kl->il").unwrap();
 
     let result1 = out1.eval(&mut engine).unwrap();
@@ -275,9 +275,9 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let pooled_after_first = engine.buffer_pool_len();
     assert!(pooled_after_first > 0);
 
-    let ta2 = TracedTensor::from_tensor(a);
-    let tb2 = TracedTensor::from_tensor(b);
-    let tc2 = TracedTensor::from_tensor(c);
+    let ta2 = TracedTensor::from_tensor_concrete_shape(a);
+    let tb2 = TracedTensor::from_tensor_concrete_shape(b);
+    let tc2 = TracedTensor::from_tensor_concrete_shape(c);
     let mut out2 = einsum(&mut engine, &[&ta2, &tb2, &tc2], "ij,jk,kl->il").unwrap();
 
     let result2 = out2.eval(&mut engine).unwrap();

@@ -7,11 +7,11 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 
 #[test]
 fn eager_einsum_ad_matmul_primal_matches_expected_values() {
-    let a = EagerTensor::from_tensor(Tensor::new(
+    let a = EagerTensor::from_tensor(Tensor::from_vec(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let b = EagerTensor::from_tensor(Tensor::new(
+    let b = EagerTensor::from_tensor(Tensor::from_vec(
         vec![3, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -24,11 +24,11 @@ fn eager_einsum_ad_matmul_primal_matches_expected_values() {
 
 #[test]
 fn eager_einsum_ad_backward_populates_input_grads() {
-    let a = EagerTensor::requires_grad(Tensor::new(
+    let a = EagerTensor::requires_grad(Tensor::from_vec(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let b = EagerTensor::requires_grad(Tensor::new(
+    let b = EagerTensor::requires_grad(Tensor::from_vec(
         vec![3, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -48,11 +48,11 @@ fn eager_einsum_ad_backward_populates_input_grads() {
 
 #[test]
 fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
-    let a = EagerTensor::requires_grad(Tensor::new(
+    let a = EagerTensor::requires_grad(Tensor::from_vec(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let b = EagerTensor::requires_grad(Tensor::new(
+    let b = EagerTensor::requires_grad(Tensor::from_vec(
         vec![3, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -86,11 +86,11 @@ fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
 fn eager_einsum_ad_context_clear_grads_resets_all_live_leaves() {
     let ctx = EagerContext::with_backend(CpuBackend::new());
     let a = EagerTensor::requires_grad_in(
-        Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
 

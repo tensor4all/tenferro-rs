@@ -24,8 +24,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let y = EagerTensor::from_tensor(Tensor::new(vec![2], vec![3.0_f64, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let y = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]));
     /// let z = x.add(&y).unwrap();
     ///
     /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -41,8 +41,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let y = EagerTensor::from_tensor(Tensor::new(vec![2], vec![3.0_f64, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let y = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]));
     /// let z = x.mul(&y).unwrap();
     ///
     /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
@@ -58,7 +58,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, -2.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, -2.0]));
     /// let y = x.neg().unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
@@ -74,7 +74,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![1], vec![0.0_f64]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![1], vec![0.0_f64]));
     /// let y = x.exp().unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0]);
@@ -90,7 +90,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.reduce_sum(&[0, 1]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[10.0]);
@@ -109,8 +109,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{DotGeneralConfig, EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
-    /// let b = EagerTensor::from_tensor(Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    /// let b = EagerTensor::from_tensor(Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]));
     /// let c = a.dot_general(&b, DotGeneralConfig {
     ///     lhs_contracting_dims: vec![1],
     ///     rhs_contracting_dims: vec![0],
@@ -133,7 +133,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(
     ///     vec![2, 3],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     /// ));
@@ -155,7 +155,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(
     ///     vec![2, 3],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     /// ));
@@ -178,7 +178,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, SliceConfig, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x
     ///     .slice(SliceConfig {
     ///         starts: vec![1],
@@ -200,7 +200,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
     /// let y = x.broadcast_in_dim(&[3, 2], &[0]).unwrap();
     ///
     /// assert_eq!(y.data().shape(), &[3, 2]);
@@ -219,7 +219,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{DType, EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, -2.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, -2.0]));
     /// let y = x.convert(DType::C64).unwrap();
     ///
     /// assert_eq!(y.data().dtype(), DType::C64);
@@ -239,7 +239,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, PadConfig, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
     /// let y = x
     ///     .pad(PadConfig {
     ///         edge_padding_low: vec![1],
@@ -261,7 +261,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.reverse(&[0]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[4.0, 3.0, 2.0, 1.0]);
@@ -279,11 +279,11 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, GatherConfig, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(
     ///     vec![5],
     ///     vec![10.0_f64, 20.0, 30.0, 40.0, 50.0],
     /// ));
-    /// let indices = EagerTensor::from_tensor(Tensor::new(vec![3], vec![4.0_f64, 1.0, 0.0]));
+    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4.0_f64, 1.0, 0.0]));
     /// let y = x
     ///     .gather(
     ///         &indices,
@@ -310,9 +310,9 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, ScatterConfig, Tensor};
     ///
-    /// let operand = EagerTensor::from_tensor(Tensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
-    /// let indices = EagerTensor::from_tensor(Tensor::new(vec![2, 1], vec![1.0_f64, 3.0]));
-    /// let updates = EagerTensor::from_tensor(Tensor::new(vec![2], vec![5.0_f64, 7.0]));
+    /// let operand = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
+    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1.0_f64, 3.0]));
+    /// let updates = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![5.0_f64, 7.0]));
     /// let result = operand
     ///     .scatter(
     ///         &indices,
@@ -339,8 +339,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]));
-    /// let starts = EagerTensor::from_tensor(Tensor::new(vec![1], vec![2.0_f64]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]));
+    /// let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![1], vec![2.0_f64]));
     /// let y = x.dynamic_slice(&starts, &[2]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -361,8 +361,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
-    /// let y = EagerTensor::from_tensor(Tensor::new(vec![2], vec![3.0_f64, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let y = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]));
     /// let z = EagerTensor::concatenate(&[&x, &y], 0).unwrap();
     ///
     /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
@@ -378,7 +378,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(
     ///     vec![3, 3],
     ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     /// ));
@@ -397,7 +397,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
     /// let y = x.embed_diag(0, 1).unwrap();
     ///
     /// assert_eq!(y.data().shape(), &[3, 3]);
@@ -414,7 +414,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.tril(0).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 0.0, 4.0]);
@@ -430,7 +430,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.triu(0).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 0.0, 3.0, 4.0]);
@@ -446,7 +446,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.reduce_prod(&[0, 1]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[24.0]);
@@ -465,7 +465,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.reduce_max(&[0, 1]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[4.0]);
@@ -484,7 +484,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
     /// let y = x.reduce_min(&[0, 1]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0]);

@@ -21,8 +21,11 @@ fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
 #[test]
 fn dynamic_truncate_basic() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]));
-    let size = TracedTensor::from_tensor(f64_scalar(3.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![5],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+    ));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
 
     let mut result = x.dynamic_truncate(&size, 0);
     let data = get_f64_data(result.eval(&mut engine).unwrap());
@@ -32,11 +35,11 @@ fn dynamic_truncate_basic() {
 #[test]
 fn dynamic_truncate_2d_axis1() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 4],
         vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0],
     ));
-    let size = TracedTensor::from_tensor(f64_scalar(2.0));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
 
     let mut result = x.dynamic_truncate(&size, 1);
     let out = result.eval(&mut engine).unwrap();
@@ -47,8 +50,8 @@ fn dynamic_truncate_2d_axis1() {
 #[test]
 fn dynamic_truncate_clamps_oversize() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let size = TracedTensor::from_tensor(f64_scalar(10.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(10.0));
 
     let mut result = x.dynamic_truncate(&size, 0);
     let data = get_f64_data(result.eval(&mut engine).unwrap());
@@ -58,8 +61,8 @@ fn dynamic_truncate_clamps_oversize() {
 #[test]
 fn pad_to_match_basic() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let reference = TracedTensor::from_tensor(f64_tensor(vec![5], vec![0.0; 5]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5]));
 
     let mut result = x.pad_to_match(&reference, 0);
     let data = get_f64_data(result.eval(&mut engine).unwrap());
@@ -69,8 +72,8 @@ fn pad_to_match_basic() {
 #[test]
 fn pad_to_match_no_op_when_same_size() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
-    let reference = TracedTensor::from_tensor(f64_tensor(vec![4], vec![0.0; 4]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+    let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.0; 4]));
 
     let mut result = x.pad_to_match(&reference, 0);
     let data = get_f64_data(result.eval(&mut engine).unwrap());
@@ -80,8 +83,11 @@ fn pad_to_match_no_op_when_same_size() {
 #[test]
 fn dynamic_truncate_vjp_correct() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]));
-    let size = TracedTensor::from_tensor(f64_scalar(3.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![5],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+    ));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
 
     let truncated = x.dynamic_truncate(&size, 0);
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
@@ -94,13 +100,16 @@ fn dynamic_truncate_vjp_correct() {
 #[test]
 fn dynamic_truncate_jvp_correct() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]));
-    let size = TracedTensor::from_tensor(f64_scalar(3.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![5],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+    ));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
 
     let truncated = x.dynamic_truncate(&size, 0);
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
 
-    let v = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0; 5]));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
     let mut jvp_result = loss.jvp(&x, &v);
     let jvp_value = get_f64_data(jvp_result.eval(&mut engine).unwrap())[0];
     assert!(
@@ -113,13 +122,16 @@ fn dynamic_truncate_jvp_correct() {
 fn dynamic_truncate_hvp_correct() {
     let mut engine = Engine::new(CpuBackend::new());
 
-    let x = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]));
-    let size = TracedTensor::from_tensor(f64_scalar(3.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![5],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+    ));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
     let truncated = x.dynamic_truncate(&size, 0);
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
 
     let grad = loss.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor(f64_tensor(vec![5], vec![1.0; 5]));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
     let mut hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(hv.eval(&mut engine).unwrap());
 
@@ -142,8 +154,8 @@ fn dynamic_truncate_hvp_finite_diff() {
 
     let compute_grad = |values: &[f64]| {
         let mut engine = Engine::new(CpuBackend::new());
-        let x = TracedTensor::from_tensor(f64_tensor(vec![5], values.to_vec()));
-        let size = TracedTensor::from_tensor(f64_scalar(3.0));
+        let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], values.to_vec()));
+        let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
         let truncated = x.dynamic_truncate(&size, 0);
         let loss = (&truncated * &truncated).reduce_sum(&[0]);
         let mut grad = loss.grad(&x).unwrap();
@@ -165,12 +177,12 @@ fn dynamic_truncate_hvp_finite_diff() {
         .collect();
 
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![5], x_data));
-    let size = TracedTensor::from_tensor(f64_scalar(3.0));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], x_data));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
     let truncated = x.dynamic_truncate(&size, 0);
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
     let grad = loss.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor(f64_tensor(vec![5], v_data));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], v_data));
     let mut hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(hv.eval(&mut engine).unwrap());
 
@@ -192,8 +204,8 @@ fn pad_to_match_vjp_correct() {
     // x = [1,2,3], ref has size 5 → padded = [1,2,3,0,0]
     // loss = 1+4+9 = 14, grad = [2,4,6] (truncated back from [2,4,6,0,0])
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let reference = TracedTensor::from_tensor(f64_tensor(vec![5], vec![0.0; 5]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5]));
 
     let padded = x.pad_to_match(&reference, 0);
     let loss = (&padded * &padded).reduce_sum(&[0]);
@@ -206,13 +218,13 @@ fn pad_to_match_vjp_correct() {
 #[test]
 fn pad_to_match_jvp_correct() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let reference = TracedTensor::from_tensor(f64_tensor(vec![5], vec![0.0; 5]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5]));
 
     let padded = x.pad_to_match(&reference, 0);
     let loss = (&padded * &padded).reduce_sum(&[0]);
 
-    let v = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
     let mut jvp_result = loss.jvp(&x, &v);
     let jvp_val = get_f64_data(jvp_result.eval(&mut engine).unwrap())[0];
     // dot(grad, v) = 2+4+6 = 12
@@ -224,14 +236,14 @@ fn pad_to_match_hvp_correct() {
     // f(x) = sum(pad(x,ref,0)^2) → Hessian = diag(2,2,2)
     // HVP with v=[1,1,1] → [2,2,2]
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
-    let reference = TracedTensor::from_tensor(f64_tensor(vec![5], vec![0.0; 5]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5]));
 
     let padded = x.pad_to_match(&reference, 0);
     let loss = (&padded * &padded).reduce_sum(&[0]);
 
     let grad = loss.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
     let mut hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(hv.eval(&mut engine).unwrap());
 

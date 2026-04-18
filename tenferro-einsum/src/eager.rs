@@ -461,8 +461,8 @@ fn eager_einsum_exec(
 /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
 ///
 /// let mut ctx = CpuBackend::new();
-/// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 /// let c = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// assert_eq!(c.shape(), &[2, 2]);

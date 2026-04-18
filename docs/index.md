@@ -17,8 +17,8 @@ CPU execution is fully supported; GPU support is planned.
 
 | Topic | PyTorch | JAX | tenferro |
 |---|---|---|---|
-| Eager tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::new(shape, data)` |
-| Traced tensor | — | staged via `jit` | `TracedTensor::new(shape, data)` |
+| Eager tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec(shape, data)` |
+| Traced tensor | — | staged via `jit` | `TracedTensor::from_vec(shape, data)` |
 | Execution | Eager by default | Eager; `jit` stages when asked | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `.eval()`) |
 | Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |

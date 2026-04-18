@@ -449,7 +449,7 @@ than as distinct graph primitives.
 
 Constants (scalar or tensor literals) are **not** Tenferro IR primitives.
 They enter the graph as `Fragment` input nodes with attached data
-(`TracedTensor::from(Tensor::new(...))`). At StableHLO lowering, these
+(`TracedTensor::from(Tensor::from_vec(...))`). At StableHLO lowering, these
 become `stablehlo.constant` ops. Canonical lowerings that reference literal
 values (e.g., `1 / n` in `mean`, `1` in `reciprocal`) construct these as
 `Fragment` inputs.

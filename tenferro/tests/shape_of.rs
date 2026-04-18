@@ -17,7 +17,7 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 #[test]
 fn shape_of_returns_axis_size() {
     let mut engine = Engine::new(CpuBackend::new());
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3, 5, 7], vec![0.0; 105]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 5, 7], vec![0.0; 105]));
     let mut s0 = x.shape_of(0);
     let mut s1 = x.shape_of(1);
     let mut s2 = x.shape_of(2);
@@ -29,7 +29,7 @@ fn shape_of_returns_axis_size() {
 
 #[test]
 fn shape_of_grad_is_zero() {
-    let x = TracedTensor::from_tensor(f64_tensor(vec![4, 3], vec![0.0; 12]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 3], vec![0.0; 12]));
     let s = x.shape_of(0);
     assert!(s.try_grad(&x).unwrap().is_none());
 }

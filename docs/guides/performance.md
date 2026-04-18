@@ -9,7 +9,7 @@ tenferro stores dense tensors in column-major order. That is the biggest differe
 ```rust
 use tenferro::TracedTensor;
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 
 This means the logical matrix is:
