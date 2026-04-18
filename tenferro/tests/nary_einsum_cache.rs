@@ -75,3 +75,41 @@ fn lru_eviction_preserves_recently_used() {
     assert!(!engine.einsum_cache_contains(&key_b), "B should be evicted");
     assert!(engine.einsum_cache_contains(&key_c), "C should be present (just inserted)");
 }
+
+/// When an ExecProgram containing a NaryEinsum instruction is evaluated twice
+/// through Engine::eval_exec_ir with identical inputs, the second call must hit
+/// the cache — `einsum_cache_len()` stays at 1 after both runs.
+#[test]
+fn nary_einsum_on_exec_path_hits_cache() {
+    use tenferro::{Tensor, TracedTensor};
+    use tenferro_tensor::DType;
+
+    let mut engine = Engine::new(CpuBackend::new());
+
+    // Build an einsum with at least one symbolic-shape input so the graph keeps
+    // a NaryEinsum op (not decomposed at build time).
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum");
+
+    // Concrete input for the symbolic leg.
+    let a_concrete = Tensor::from_vec(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+
+    // First eval: miss -> inserts one entry.
+    c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])
+        .expect("eval 1");
+    let len_after_first = engine.einsum_cache_len();
+    assert_eq!(len_after_first, 1, "expected one cache entry after first eval");
+
+    // Second eval with the same concrete input: must hit the cache.
+    c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])
+        .expect("eval 2");
+    let len_after_second = engine.einsum_cache_len();
+    assert_eq!(
+        len_after_second, 1,
+        "cache len must stay at 1 on repeated identical (subscripts, shapes)"
+    );
+}
