@@ -79,7 +79,10 @@ fn eval_real_c64_scalar(traced: TracedTensor) -> f64 {
 }
 
 fn real_scalar(input: &TracedTensor) -> TracedTensor {
-    let half = TracedTensor::from_tensor(c64_tensor(vec![], vec![Complex64::new(0.5, 0.0)]));
+    let half = TracedTensor::from_tensor_concrete_shape(c64_tensor(
+        vec![],
+        vec![Complex64::new(0.5, 0.0)],
+    ));
     let real_part = &input.conj() + input;
     &real_part * &half
 }
@@ -161,8 +164,8 @@ fn grad_einsum_matmul_real() {
     let a_data = vec![1.0, -2.0, 0.5, 3.0, 1.25, -0.75];
     let b_data = vec![2.0, 0.25, -1.5, 4.0, 0.75, -0.5];
 
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], a_data.clone()));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
@@ -171,8 +174,8 @@ fn grad_einsum_matmul_real() {
     let grad_a_data = get_f64_data(&grad_a_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], xs.to_vec()));
-        let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec()));
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
         eval_scalar(y.reduce_sum(&[0, 1]))
@@ -182,7 +185,8 @@ fn grad_einsum_matmul_real() {
 
 #[test]
 fn grad_einsum_trace_real() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut engine = Engine::new(CpuBackend::new());
     let loss = einsum(&mut engine, &[&a], "ii->").unwrap();
     let grad = loss.grad(&a).unwrap();
@@ -206,8 +210,8 @@ fn grad_einsum_matmul_complex() {
         Complex64::new(0.25, -1.5),
     ];
 
-    let a = TracedTensor::from_tensor(c64_tensor(vec![2, 2], a_data.clone()));
-    let b = TracedTensor::from_tensor(c64_tensor(vec![2, 2], b_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], a_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], b_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
@@ -218,8 +222,8 @@ fn grad_einsum_matmul_complex() {
     let grad_a_data = get_c64_data(&grad_a_tensor);
 
     let f = |xs: &[Complex64]| {
-        let a = TracedTensor::from_tensor(c64_tensor(vec![2, 2], xs.to_vec()));
-        let b = TracedTensor::from_tensor(c64_tensor(vec![2, 2], b_data.clone()));
+        let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], xs.to_vec()));
+        let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], b_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
         let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
@@ -230,11 +234,14 @@ fn grad_einsum_matmul_complex() {
 
 #[test]
 fn jvp_einsum_matmul() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
     let b_data = vec![0.5, -1.0, 2.0, 1.5, -0.25, 3.0];
-    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
     let da_data = vec![1.0, -0.5, 0.25, 0.0, 2.0, -1.0];
-    let da = TracedTensor::from_tensor(f64_tensor(vec![2, 3], da_data.clone()));
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], da_data.clone()));
 
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -247,11 +254,14 @@ fn jvp_einsum_matmul() {
 
 #[test]
 fn jvp_symbolic_einsum_matmul() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
     let b_data = vec![0.5, -1.0, 2.0, 1.5, -0.25, 3.0];
-    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
     let da_data = vec![1.0, -0.5, 0.25, 0.0, 2.0, -1.0];
-    let da = TracedTensor::from_tensor(f64_tensor(vec![2, 3], da_data.clone()));
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], da_data.clone()));
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
 
@@ -266,11 +276,15 @@ fn jvp_symbolic_einsum_matmul() {
 
 #[test]
 fn vjp_einsum_matmul() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 3],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
     let b_data = vec![0.5, -1.0, 2.0, 1.5, -0.25, 3.0];
-    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 2], b_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
     let ct_data = vec![1.0, -0.5, 0.25, 2.0];
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![2, 2], ct_data.clone()));
+    let cotangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], ct_data.clone()));
 
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -287,9 +301,9 @@ fn grad_einsum_three_way() {
     let b_data = vec![0.5, 1.5, -1.0, 0.25];
     let c_data = vec![2.0, -1.5, 0.75, 1.25];
 
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], a_data.clone()));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
-    let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
+    let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
@@ -298,9 +312,9 @@ fn grad_einsum_three_way() {
     let grad_a_data = get_f64_data(&grad_a_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], xs.to_vec()));
-        let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
-        let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
+        let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
         let mut engine = Engine::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
         eval_scalar(y.reduce_sum(&[0, 1]))
@@ -314,9 +328,9 @@ fn grad_symbolic_einsum_three_way() {
     let b_data = vec![0.5, 1.5, -1.0, 0.25];
     let c_data = vec![2.0, -1.5, 0.75, 1.25];
 
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], a_data.clone()));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
-    let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
+    let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
     let c_symbolic = symbolic_identity_2d(&c);
@@ -333,9 +347,9 @@ fn grad_symbolic_einsum_three_way() {
     let grad_a_data = get_f64_data(&grad_a_tensor);
 
     let f = |xs: &[f64]| {
-        let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], xs.to_vec()));
-        let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], b_data.clone()));
-        let c = TracedTensor::from_tensor(f64_tensor(vec![2, 2], c_data.clone()));
+        let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
+        let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
+        let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
         let a_symbolic = symbolic_identity_2d(&a);
         let b_symbolic = symbolic_identity_2d(&b);
         let c_symbolic = symbolic_identity_2d(&c);

@@ -13,8 +13,8 @@ tenferro keeps the same subscript language, but evaluation stays lazy until you 
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -31,7 +31,7 @@ These match the usual einsum idioms from NumPy, PyTorch, and JAX.
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let matrix = TracedTensor::new(
+let matrix = TracedTensor::from_vec(
     vec![3, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
 );
@@ -52,8 +52,8 @@ assert_eq!(diagonal_result.as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let u = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);
-let v = TracedTensor::new(vec![3], vec![3.0_f64, 4.0, 5.0]);
+let u = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+let v = TracedTensor::from_vec(vec![3], vec![3.0_f64, 4.0, 5.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let mut outer = einsum(&mut engine, &[&u, &v], "i,j->ij").unwrap();
@@ -70,7 +70,7 @@ The same compact syntax can build a diagonal matrix from a vector.
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let v = TracedTensor::new(vec![3], vec![2.0_f64, 3.0, 5.0]);
+let v = TracedTensor::from_vec(vec![3], vec![2.0_f64, 3.0, 5.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let mut diag = einsum(&mut engine, &[&v], "i->ii").unwrap();
@@ -87,9 +87,9 @@ Like `torch.einsum` and `jnp.einsum`, tenferro accepts more than two inputs. ten
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-let b = TracedTensor::new(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
-let c = TracedTensor::new(vec![2, 2], vec![9.0_f64, 10.0, 11.0, 12.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+let b = TracedTensor::from_vec(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+let c = TracedTensor::from_vec(vec![2, 2], vec![9.0_f64, 10.0, 11.0, 12.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let mut out = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
@@ -105,11 +105,11 @@ PyTorch and JAX users often put the batch axis first. In tenferro, trailing batc
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(
+let a = TracedTensor::from_vec(
     vec![2, 2, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 9.0, 10.0, 11.0, 12.0],
 );
-let b = TracedTensor::new(
+let b = TracedTensor::from_vec(
     vec![2, 2, 2],
     vec![5.0_f64, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
 );

@@ -30,7 +30,7 @@ access.
 use tenferro::{Tensor, TypedTensor};
 
 // Dynamic dtype (`Tensor`)
-let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Static dtype (`TypedTensor`)
 let b = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -49,8 +49,8 @@ its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
-let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
 let sum = a.add(&b, &mut ctx).unwrap();
 let product = a.mul(&b, &mut ctx).unwrap();
@@ -67,7 +67,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
-let a = Tensor::new(vec![3, 3], vec![
+let a = Tensor::from_vec(vec![3, 3], vec![
     2.0_f64, 1.0, 0.0,
     1.0, 3.0, 1.0,
     0.0, 1.0, 2.0,
@@ -86,7 +86,7 @@ let chol = a.cholesky(&mut ctx).unwrap();
 let (eigenvalues, eigenvectors) = a.eigh(&mut ctx).unwrap();
 
 // Solve Ax = b
-let b = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let b = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let x = a.solve(&b, &mut ctx).unwrap();
 
 assert_eq!(s.shape(), &[3]);
@@ -102,7 +102,7 @@ assert_eq!(x.shape(), &[3]);
 use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
-let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Transpose
 let at = a.transpose(&[1, 0], &mut ctx).unwrap();
@@ -126,8 +126,8 @@ use tenferro::{CpuBackend, Tensor};
 let mut ctx = CpuBackend::new();
 
 // Column-major buffers: `a` has columns [1, 2], [3, 4], [5, 6].
-let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::new(vec![3, 4], vec![
+let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = Tensor::from_vec(vec![3, 4], vec![
     1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0,
     7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
 ]);
@@ -141,7 +141,7 @@ assert_eq!(c.shape(), &[2, 4]);
 ```rust
 use tenferro::Tensor;
 
-let t = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let t = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let data: &[f64] = t.as_slice::<f64>().unwrap();
 assert_eq!(data, &[1.0, 2.0, 3.0]);
 ```
@@ -170,8 +170,8 @@ explicitly when you want a fresh pass.
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 
 let ctx = EagerContext::with_backend(CpuBackend::new());
-let x = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
-let y = EagerTensor::requires_grad_in(Tensor::new(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
+let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
+let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
 
 let loss = (&x * &y).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();

@@ -46,8 +46,8 @@ use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
 let mut ctx = CpuBackend::new();
 
 // Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
-let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 let c = a.matmul(&b, &mut ctx).unwrap();
 assert_eq!(c.shape(), &[2, 2]);
@@ -94,8 +94,8 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
 
 let mut ctx = CpuBackend::new();
-let a = Tensor::new(vec![2], vec![1.0_f64, 2.0]);
-let b = Tensor::new(vec![2], vec![3.0_f64, 4.0]);
+let a = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+let b = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
 let sum = a.add(&b, &mut ctx).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -106,8 +106,8 @@ assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);
-let b = TracedTensor::new(vec![2], vec![3.0_f64, 4.0]);
+let a = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+let b = TracedTensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
 let mut sum = &a + &b;
 
 let mut engine = Engine::new(CpuBackend::new());

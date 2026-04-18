@@ -196,38 +196,40 @@ fn oracle_replay_norm_case_048() {
     let input = execution.inputs.get("a").expect("input a");
     let maybe_grad = scalar.try_grad(input).expect("try_grad");
     assert!(maybe_grad.is_some(), "try_grad returned None");
-    let manual_input = TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![5, 5],
-        vec![
-            -4.826984902407649,
-            -4.146041530864057,
-            5.576059452216908,
-            -3.063683029231029,
-            -3.8432258180800494,
-            -7.582430495695129,
-            -5.4215280659972755,
-            -8.315684908389088,
-            -3.342174545322517,
-            -3.0355148286483775,
-            -0.6046891126565539,
-            -4.784169829877467,
-            4.177597026003685,
-            -5.439777184204883,
-            -2.146076312776824,
-            -1.5411692216498662,
-            -4.150805063878843,
-            2.047386382824099,
-            4.480518929058965,
-            -2.6718482427688133,
-            -1.9719097652168658,
-            7.380839390984031,
-            -4.076012721760325,
-            2.685009210157367,
-            -7.7232222137058715,
-        ],
-    )));
-    let manual_cotangent =
-        TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0])));
+    let manual_input =
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+            vec![5, 5],
+            vec![
+                -4.826984902407649,
+                -4.146041530864057,
+                5.576059452216908,
+                -3.063683029231029,
+                -3.8432258180800494,
+                -7.582430495695129,
+                -5.4215280659972755,
+                -8.315684908389088,
+                -3.342174545322517,
+                -3.0355148286483775,
+                -0.6046891126565539,
+                -4.784169829877467,
+                4.177597026003685,
+                -5.439777184204883,
+                -2.146076312776824,
+                -1.5411692216498662,
+                -4.150805063878843,
+                2.047386382824099,
+                4.480518929058965,
+                -2.6718482427688133,
+                -1.9719097652168658,
+                7.380839390984031,
+                -4.076012721760325,
+                2.685009210157367,
+                -7.7232222137058715,
+            ],
+        )));
+    let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+        TypedTensor::from_vec(vec![], vec![1.0]),
+    ));
     let manual_output = tenferro::norm(
         &manual_input.clone(),
         Some(f64::NEG_INFINITY),
@@ -318,38 +320,40 @@ fn oracle_manual_norm_case_048() {
         .as_ref()
         .expect("first order tolerance");
 
-    let manual_input = TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![5, 5],
-        vec![
-            -4.826984902407649,
-            -4.146041530864057,
-            5.576059452216908,
-            -3.063683029231029,
-            -3.8432258180800494,
-            -7.582430495695129,
-            -5.4215280659972755,
-            -8.315684908389088,
-            -3.342174545322517,
-            -3.0355148286483775,
-            -0.6046891126565539,
-            -4.784169829877467,
-            4.177597026003685,
-            -5.439777184204883,
-            -2.146076312776824,
-            -1.5411692216498662,
-            -4.150805063878843,
-            2.047386382824099,
-            4.480518929058965,
-            -2.6718482427688133,
-            -1.9719097652168658,
-            7.380839390984031,
-            -4.076012721760325,
-            2.685009210157367,
-            -7.7232222137058715,
-        ],
-    )));
-    let manual_cotangent =
-        TracedTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0])));
+    let manual_input =
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+            vec![5, 5],
+            vec![
+                -4.826984902407649,
+                -4.146041530864057,
+                5.576059452216908,
+                -3.063683029231029,
+                -3.8432258180800494,
+                -7.582430495695129,
+                -5.4215280659972755,
+                -8.315684908389088,
+                -3.342174545322517,
+                -3.0355148286483775,
+                -0.6046891126565539,
+                -4.784169829877467,
+                4.177597026003685,
+                -5.439777184204883,
+                -2.146076312776824,
+                -1.5411692216498662,
+                -4.150805063878843,
+                2.047386382824099,
+                4.480518929058965,
+                -2.6718482427688133,
+                -1.9719097652168658,
+                7.380839390984031,
+                -4.076012721760325,
+                2.685009210157367,
+                -7.7232222137058715,
+            ],
+        )));
+    let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
+        TypedTensor::from_vec(vec![], vec![1.0]),
+    ));
     let manual_output = tenferro::norm(
         &manual_input.clone(),
         Some(f64::NEG_INFINITY),
@@ -790,7 +794,10 @@ fn decode_named_tensors(
     for (name, tensor_data) in tensors {
         let tensor = try_decode_tensor(tensor_data)?
             .ok_or_else(|| format!("tensor {name} has unsupported dtype {}", tensor_data.dtype))?;
-        decoded.insert(name.clone(), TracedTensor::from_tensor(tensor));
+        decoded.insert(
+            name.clone(),
+            TracedTensor::from_tensor_concrete_shape(tensor),
+        );
     }
     Ok(decoded)
 }
@@ -1051,7 +1058,7 @@ fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> TracedTensor {
         DType::C32 => Tensor::C32(TypedTensor::<Complex32>::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::<Complex64>::zeros(shape)),
     };
-    TracedTensor::from_tensor(tensor)
+    TracedTensor::from_tensor_concrete_shape(tensor)
 }
 
 fn align_cotangent_dtype(

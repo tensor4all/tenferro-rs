@@ -21,7 +21,7 @@ guide and use `EagerTensor::backward()`.
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let x = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let x = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
 let mut grad = loss.grad(&x).unwrap();
 
@@ -39,8 +39,8 @@ Like PyTorch and JAX, tenferro differentiates through tensor contractions.
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, -2.0, 0.5, 3.0, 1.25, -0.75]);
-let b = TracedTensor::new(vec![3, 2], vec![2.0_f64, 0.25, -1.5, 4.0, 0.75, -0.5]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, -2.0, 0.5, 3.0, 1.25, -0.75]);
+let b = TracedTensor::from_vec(vec![3, 2], vec![2.0_f64, 0.25, -1.5, 4.0, 0.75, -0.5]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -59,9 +59,9 @@ JAX equivalent: `jax.vjp`
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::new(vec![3, 2], vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0]);
-let cotangent = TracedTensor::new(vec![2, 2], vec![1.0_f64, -0.5, 0.25, 2.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = TracedTensor::from_vec(vec![3, 2], vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0]);
+let cotangent = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, -0.5, 0.25, 2.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -79,9 +79,9 @@ JAX equivalent: `jax.jvp`
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::new(vec![3, 2], vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0]);
-let tangent = TracedTensor::new(vec![2, 3], vec![1.0_f64, -0.5, 0.25, 0.0, 2.0, -1.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = TracedTensor::from_vec(vec![3, 2], vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0]);
+let tangent = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, -0.5, 0.25, 0.0, 2.0, -1.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();

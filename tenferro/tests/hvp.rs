@@ -57,11 +57,11 @@ fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {
 fn hvp_for_scalar_cubic() {
     let x_val = 2.5_f64;
 
-    let x = TracedTensor::from_tensor(f64_scalar(x_val));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val));
     let y = &(&x * &x) * &x;
 
     let g = y.grad(&x).unwrap(); // reverse: f'(x) = 3x^2
-    let v = TracedTensor::from_tensor(f64_scalar(1.0));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
     let hv = g.jvp(&x, &v); // forward-of-reverse: f''(x)
 
     let hv_tensor = eval_tensor(hv);
@@ -82,11 +82,11 @@ fn hvp_for_scalar_cubic() {
 fn hvp_for_scalar_exp_sin() {
     let x_val = 1.3_f64;
 
-    let x = TracedTensor::from_tensor(f64_scalar(x_val));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val));
     let y = x.sin().exp();
 
     let g = y.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor(f64_scalar(1.0));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
     let hv = g.jvp(&x, &v);
 
     let hv_tensor = eval_tensor(hv);
@@ -109,11 +109,11 @@ fn hvp_for_vector_exp_sum() {
     let v_data = vec![1.0, 2.0, 3.0];
     let n = x_data.len();
 
-    let x = TracedTensor::from_tensor(f64_tensor(vec![n], x_data.clone()));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data.clone()));
     let y = x.exp().reduce_sum(&[0]);
 
     let g = y.grad(&x).unwrap(); // shape [n]
-    let v = TracedTensor::from_tensor(f64_tensor(vec![n], v_data.clone()));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone()));
     let hv = g.jvp(&x, &v); // FoR: shape [n]
 
     let hv_tensor = eval_tensor(hv);
@@ -141,9 +141,9 @@ fn hvp_for_quadratic_form() {
     let v_data = vec![0.5, 2.0];
     let n = 2;
 
-    let a = TracedTensor::from_tensor(f64_tensor(vec![n, n], a_data));
-    let x = TracedTensor::from_tensor(f64_tensor(vec![n], x_data));
-    let v = TracedTensor::from_tensor(f64_tensor(vec![n], v_data));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
@@ -173,9 +173,9 @@ fn hvp_ror_quadratic_form() {
     let v_data = vec![0.5, 2.0];
     let n = 2;
 
-    let a = TracedTensor::from_tensor(f64_tensor(vec![n, n], a_data));
-    let x = TracedTensor::from_tensor(f64_tensor(vec![n], x_data));
-    let v = TracedTensor::from_tensor(f64_tensor(vec![n], v_data));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
+    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
     let mut engine = Engine::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
@@ -248,8 +248,8 @@ fn hvp_for_svd_sum_sigma_sq() {
     ]; // col-major [3,2]
     let v_data: Vec<f64> = (0..m * n).map(|i| 0.1 * (i as f64 + 1.0)).collect();
 
-    let a_tt = TracedTensor::from_tensor(f64_tensor(vec![m, n], a_data.clone()));
-    let v_tt = TracedTensor::from_tensor(f64_tensor(vec![m, n], v_data.clone()));
+    let a_tt = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![m, n], a_data.clone()));
+    let v_tt = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![m, n], v_data.clone()));
 
     let (_u, s, _vt) = svd(&a_tt);
     let y = (&s * &s).reduce_sum(&[0]);
@@ -261,7 +261,8 @@ fn hvp_for_svd_sum_sigma_sq() {
     let hv_val = get_f64_data(&hv_tensor);
 
     let f_ref = |data: &[f64], rows: usize, cols: usize| -> f64 {
-        let a_ref = TracedTensor::from_tensor(f64_tensor(vec![rows, cols], data.to_vec()));
+        let a_ref =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![rows, cols], data.to_vec()));
         let (_u, s, _vt) = svd(&a_ref);
         let y_ref = (&s * &s).reduce_sum(&[0]);
         let t = eval_tensor(y_ref);
@@ -287,8 +288,8 @@ fn hvp_for_qr_diag_r_sq() {
     ]; // col-major [3,3]
     let v_data: Vec<f64> = (0..n * n).map(|i| 0.1 * (i as f64 + 1.0)).collect();
 
-    let a_tt = TracedTensor::from_tensor(f64_tensor(vec![n, n], a_data.clone()));
-    let v_tt = TracedTensor::from_tensor(f64_tensor(vec![n, n], v_data.clone()));
+    let a_tt = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data.clone()));
+    let v_tt = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], v_data.clone()));
 
     let (_q, r) = qr(&a_tt);
     let diag_r = r.extract_diag(0, 1);
@@ -307,7 +308,7 @@ fn hvp_for_qr_diag_r_sq() {
     let am: Vec<f64> = a_data.iter().zip(&v_data).map(|(a, v)| a - h * v).collect();
 
     let grad_at = |data: Vec<f64>| -> Vec<f64> {
-        let a_ref = TracedTensor::from_tensor(f64_tensor(vec![n, n], data));
+        let a_ref = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], data));
         let (_q, r) = qr(&a_ref);
         let diag_r = r.extract_diag(0, 1);
         let y_ref = (&diag_r * &diag_r).reduce_sum(&[0]);

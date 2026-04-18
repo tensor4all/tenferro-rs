@@ -10,7 +10,7 @@ JAX: `jnp.linalg.svd(a)`
 ```rust
 use tenferro::{svd, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
 let (mut u, mut s, mut vt) = svd(&a);
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -34,7 +34,7 @@ JAX: `jnp.linalg.qr(a)`
 ```rust
 use tenferro::{qr, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 let (mut q, mut r) = qr(&a);
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -55,7 +55,7 @@ JAX: `jnp.linalg.eigh(a)`
 ```rust
 use tenferro::{eigh, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
 let (mut values, mut vectors) = eigh(&a);
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -78,7 +78,7 @@ JAX: `jnp.linalg.cholesky(a)`
 ```rust
 use tenferro::{cholesky, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
 let mut factor = cholesky(&a);
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -96,8 +96,8 @@ JAX: `jnp.linalg.solve(a, b)`
 ```rust
 use tenferro::{solve, CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let b = TracedTensor::new(vec![2, 1], vec![8.0_f64, 27.0]);
+let a = TracedTensor::from_vec(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
+let b = TracedTensor::from_vec(vec![2, 1], vec![8.0_f64, 27.0]);
 let mut x = solve(&a, &b);
 
 let mut engine = Engine::new(CpuBackend::new());

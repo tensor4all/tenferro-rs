@@ -19,7 +19,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 | Task | PyTorch | JAX | tenferro (eager) | tenferro (lazy/AD) |
 |---|---|---|---|---|
-| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::new(shape, data)` | `TracedTensor::new(shape, data)` |
+| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec(shape, data)` | `TracedTensor::from_vec(shape, data)` |
 | Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut ctx)` | `tenferro::matmul(&a, &b)` |
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
@@ -43,7 +43,7 @@ tenferro stores dense tensors in column-major order. If you write:
 
 ```rust
 use tenferro::TracedTensor;
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 
 then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.

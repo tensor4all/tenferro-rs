@@ -9,7 +9,7 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
 }
 
 fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
-    TracedTensor::from_tensor(upload_tensor(backend.runtime(), tensor).unwrap())
+    TracedTensor::from_tensor_concrete_shape(upload_tensor(backend.runtime(), tensor).unwrap())
 }
 
 #[test]

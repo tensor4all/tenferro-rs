@@ -9,8 +9,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn assert_panic_contains(config: DotGeneralConfig, expected_substring: &str) {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
     let result = catch_unwind(AssertUnwindSafe(|| {
         let _ = a.dot_general(&b, config);
     }));
@@ -91,8 +93,10 @@ fn traced_dot_general_rejects_contracting_batch_overlap() {
 
 #[test]
 fn traced_dot_general_accepts_valid_config() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -335,11 +339,11 @@ fn eager_dot_general_rejects_stale_lhs_rank() {
 
 #[test]
 fn traced_dot_general_accepts_batched_valid_config() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
     ));
-    let b = TracedTensor::from_tensor(f64_tensor(
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
     ));

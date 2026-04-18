@@ -2,8 +2,8 @@ use tenferro::{CpuBackend, Engine, TensorScalar, TracedTensor};
 
 #[test]
 fn traced_tensor_new_and_tensor_as_slice_cover_common_f64_flow() {
-    let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TracedTensor::new(vec![2, 3], vec![6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]);
+    let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = TracedTensor::from_vec(vec![2, 3], vec![6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]);
 
     let mut sum = &a + &b;
     let mut engine = Engine::new(CpuBackend::new());

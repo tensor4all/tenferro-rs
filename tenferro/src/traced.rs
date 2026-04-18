@@ -236,7 +236,26 @@ impl std::ops::Div for &TracedTensor {
 }
 
 impl TracedTensor {
-    pub fn from_tensor(tensor: Tensor) -> Self {
+    /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`], keeping its
+    /// shape as a concrete `shape_hint`.
+    ///
+    /// This is the common constructor when you have concrete tensor data that
+    /// you want to use both for graph building and for evaluation. The
+    /// resulting tensor is treated as a concrete-shape leaf by downstream
+    /// passes (binary einsum decomposition, build-time reshape folding, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{Tensor, TracedTensor};
+    ///
+    /// let a = TracedTensor::from_tensor_concrete_shape(
+    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    /// );
+    /// assert_eq!(a.rank, 2);
+    /// assert!(a.is_concrete_shape());
+    /// ```
+    pub fn from_tensor_concrete_shape(tensor: Tensor) -> Self {
         let shape = tensor.shape().to_vec();
         let rank = shape.len();
         let dtype = tensor.dtype();
@@ -265,21 +284,281 @@ impl TracedTensor {
         }
     }
 
-    /// Create a traced tensor from shape and data.
+    /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`] but advertise
+    /// a symbolic shape during graph construction.
+    ///
+    /// The tensor data is still attached (so plain `eval` works without
+    /// bindings), but graph passes see the leaf as shape-symbolic. This is
+    /// useful for building a single traced program that should not bake in
+    /// shape-specific optimizations — e.g. mixing a known-shape tensor into
+    /// an einsum with other `input_symbolic_shape` placeholders forces the
+    /// einsum to be kept as a single `NaryEinsum` op rather than
+    /// decomposing at build time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{Tensor, TracedTensor};
+    ///
+    /// let t = TracedTensor::from_tensor_symbolic_shape(
+    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    /// );
+    /// assert_eq!(t.rank, 2);
+    /// assert!(!t.is_concrete_shape());
+    /// ```
+    pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Self {
+        let rank = tensor.shape().len();
+        let dtype = tensor.dtype();
+        let key = next_input_key();
+        let data = Arc::new(tensor);
+
+        let mut builder = FragmentBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let fragment = Arc::new(builder.build());
+
+        let mut map = HashMap::new();
+        map.insert(key, Arc::clone(&data));
+
+        Self {
+            id: next_traced_id(),
+            rank,
+            dtype,
+            fragment,
+            val,
+            data: Some(data),
+            shape_hint: None,
+            inputs_map: Arc::new(map),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+        }
+    }
+
+    /// Build a data-less placeholder leaf with a fixed (concrete) shape.
+    ///
+    /// Must be bound via [`TracedTensor::eval_with_inputs`] before evaluation.
+    /// Use this when you know the exact shape of the input but want to build
+    /// the graph once and feed different concrete tensors at eval time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
+    /// assert_eq!(x.rank, 2);
+    /// assert!(x.is_concrete_shape());
+    /// ```
+    pub fn input_concrete_shape(dtype: DType, shape: &[usize]) -> Self {
+        let shape = shape.to_vec();
+        let rank = shape.len();
+        let key = next_input_key();
+
+        let mut builder = FragmentBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let fragment = Arc::new(builder.build());
+
+        Self {
+            id: next_traced_id(),
+            rank,
+            dtype,
+            fragment,
+            val,
+            data: None,
+            shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
+            inputs_map: Arc::new(HashMap::new()),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+        }
+    }
+
+    /// Build a data-less placeholder leaf with the given rank but fully
+    /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
+    ///
+    /// Must be bound via [`TracedTensor::eval_with_inputs`] before
+    /// evaluation. Use this to build shape-agnostic graphs — in particular,
+    /// einsum calls containing at least one `input_symbolic_shape` input are
+    /// kept as a single `NaryEinsum` op so the contraction path can be
+    /// optimized at eval time against the actual bound shapes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert_eq!(x.rank, 2);
+    /// assert!(!x.is_concrete_shape());
+    /// ```
+    pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Self {
+        let key = next_input_key();
+
+        let mut builder = FragmentBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let fragment = Arc::new(builder.build());
+
+        Self {
+            id: next_traced_id(),
+            rank,
+            dtype,
+            fragment,
+            val,
+            data: None,
+            shape_hint: None,
+            inputs_map: Arc::new(HashMap::new()),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+        }
+    }
+
+    /// Build a concrete-shape [`TracedTensor`] leaf from typed `Vec<T>`
+    /// data. Equivalent to
+    /// [`TracedTensor::from_tensor_concrete_shape`]`(Tensor::from_vec(shape, data))`.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// assert_eq!(a.rank, 2);
     /// ```
-    pub fn new<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_tensor(T::into_tensor(shape, data))
+    pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor_concrete_shape(T::into_tensor(shape, data))
+    }
+
+    /// Returns `true` iff every dim of this tensor's `shape_hint` is a
+    /// constant `SymDim` (i.e. the shape is fully known at graph-build time).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert!(a.is_concrete_shape());
+    /// assert!(!b.is_concrete_shape());
+    /// ```
+    pub fn is_concrete_shape(&self) -> bool {
+        try_concrete_shape(self).is_some()
+    }
+
+    /// If this `TracedTensor` is a leaf (single-node input fragment),
+    /// return its input key. Computed tensors return `None`.
+    pub fn input_key(&self) -> Option<TensorInputKey> {
+        match &self.fragment.vals()[self.val].key {
+            GlobalValKey::Input(key) => Some(key.clone()),
+            _ => None,
+        }
     }
 
     pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
+        self.eval_with_inputs(engine, &[])
+    }
+
+    /// Evaluate this traced tensor, binding external tensors to any
+    /// placeholder leaves present in the graph.
+    ///
+    /// Each `(placeholder, tensor)` pair maps a placeholder
+    /// [`TracedTensor`] (built via
+    /// [`TracedTensor::input_concrete_shape`] or
+    /// [`TracedTensor::input_symbolic_shape`]) to the concrete
+    /// [`Tensor`] that should take its place during execution. Leaves that
+    /// carry their own data (from [`TracedTensor::from_vec`],
+    /// [`TracedTensor::from_tensor_concrete_shape`], or
+    /// [`TracedTensor::from_tensor_symbolic_shape`]) must not appear in
+    /// `bindings`.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnexpectedBinding`] if a binding's left side is not a
+    ///   data-less placeholder leaf.
+    /// - [`Error::DuplicateBinding`] if the same placeholder key appears
+    ///   more than once in `bindings`.
+    /// - [`Error::PlaceholderDtypeMismatch`] if a binding tensor's dtype
+    ///   differs from the placeholder's declared dtype.
+    /// - [`Error::PlaceholderShapeMismatch`] if a binding tensor's shape
+    ///   differs from an `input_concrete_shape` placeholder's fixed shape.
+    /// - [`Error::PlaceholderRankMismatch`] if a binding tensor's rank
+    ///   differs from an `input_symbolic_shape` placeholder's rank.
+    /// - [`Error::UnboundPlaceholder`] if the compiled graph contains a
+    ///   placeholder that has no entry in `bindings`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    /// let mut y = &x + &x;
+    /// let concrete = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let out = y.eval_with_inputs(&mut engine, &[(&x, &concrete)]).unwrap();
+    /// assert_eq!(out.shape(), &[3]);
+    /// ```
+    pub fn eval_with_inputs<B: TensorBackend>(
+        &mut self,
+        engine: &mut Engine<B>,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<&Tensor> {
+        // Build the binding map keyed on `TensorInputKey`, validating each
+        // binding as we go. We validate *before* the already-evaluated
+        // shortcut so that user mistakes (e.g. binding a data-carrying leaf)
+        // surface as errors rather than getting silently ignored when the
+        // output tensor happens to be cached.
+        let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
+        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
+            if placeholder.data.is_some() {
+                return Err(Error::UnexpectedBinding {
+                    binding_index: index,
+                });
+            }
+            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
+                binding_index: index,
+            })?;
+
+            if placeholder.dtype != tensor.dtype() {
+                return Err(Error::PlaceholderDtypeMismatch {
+                    expected: placeholder.dtype,
+                    actual: tensor.dtype(),
+                });
+            }
+
+            match try_concrete_shape(placeholder) {
+                Some(expected_shape) => {
+                    if expected_shape.as_slice() != tensor.shape() {
+                        return Err(Error::PlaceholderShapeMismatch {
+                            expected: expected_shape,
+                            actual: tensor.shape().to_vec(),
+                        });
+                    }
+                }
+                None => {
+                    if placeholder.rank != tensor.shape().len() {
+                        return Err(Error::PlaceholderRankMismatch {
+                            expected: placeholder.rank,
+                            actual: tensor.shape().len(),
+                        });
+                    }
+                }
+            }
+
+            if binding_map.insert(key.clone(), *tensor).is_some() {
+                return Err(Error::DuplicateBinding {
+                    input_key: format!("{:?}", key),
+                });
+            }
+        }
+
+        // Already-evaluated shortcut — safe to take now that bindings passed
+        // validation.
         if self.data.is_some() {
             return Ok(self.data.as_ref().unwrap().as_ref());
         }
@@ -296,12 +575,19 @@ impl TracedTensor {
         for key in &graph.inputs {
             match key {
                 GlobalValKey::Input(k) => {
-                    let tensor = self.inputs_map.get(k).ok_or_else(|| {
-                        Error::MissingInput(format!("missing input data for key {:?}", k))
-                    })?;
-                    input_tensors.push(tensor.as_ref().clone());
-                    input_dtypes.push(tensor.dtype());
-                    input_shapes.push(DimExpr::from_concrete(tensor.shape()));
+                    if let Some(tensor) = self.inputs_map.get(k) {
+                        input_tensors.push(tensor.as_ref().clone());
+                        input_dtypes.push(tensor.dtype());
+                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
+                    } else if let Some(bound) = binding_map.remove(k) {
+                        input_tensors.push((*bound).clone());
+                        input_dtypes.push(bound.dtype());
+                        input_shapes.push(DimExpr::from_concrete(bound.shape()));
+                    } else {
+                        return Err(Error::UnboundPlaceholder {
+                            input_key: format!("{:?}", k),
+                        });
+                    }
                 }
                 _ => {
                     return Err(Error::Internal(
@@ -312,7 +598,6 @@ impl TracedTensor {
         }
         let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
-        // Use compile cache: store or retrieve the ExecProgram.
         let cached_exec = engine.get_or_compile(exec);
         let mut results = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
         if results.len() != 1 {
@@ -334,7 +619,7 @@ impl TracedTensor {
         }
 
         let ones = ones_tensor(self.dtype, vec![]);
-        let seed = TracedTensor::from_tensor(ones);
+        let seed = TracedTensor::from_tensor_concrete_shape(ones);
         Ok(self.vjp(wrt, &seed))
     }
 
@@ -354,7 +639,7 @@ impl TracedTensor {
         }
 
         let ones = ones_tensor(self.dtype, vec![]);
-        let seed = TracedTensor::from_tensor(ones);
+        let seed = TracedTensor::from_tensor_concrete_shape(ones);
         Ok(self.try_vjp(wrt, &seed))
     }
 
@@ -369,7 +654,7 @@ impl TracedTensor {
     /// use tenferro::{CpuBackend, Engine, TracedTensor};
     ///
     /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::new(vec![], vec![3.0_f64]);
+    /// let x = TracedTensor::from_vec(vec![], vec![3.0_f64]);
     /// let mut y = &x * &x;
     /// y.checkpoint(&mut engine).unwrap();
     /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
@@ -1137,7 +1422,7 @@ impl TracedTensor {
     /// use tenferro::{CpuBackend, Engine, TracedTensor};
     ///
     /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let x = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let mut cols = x.shape_of(1);
     /// assert_eq!(cols.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
     /// ```
@@ -1168,8 +1453,8 @@ impl TracedTensor {
     /// use tenferro::{CpuBackend, Engine, TracedTensor};
     ///
     /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let size = TracedTensor::new(vec![], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let size = TracedTensor::from_vec(vec![], vec![2.0_f64]);
     /// let mut y = x.dynamic_truncate(&size, 0);
     /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[2]);
     /// ```
@@ -1203,8 +1488,8 @@ impl TracedTensor {
     /// use tenferro::{CpuBackend, Engine, TracedTensor};
     ///
     /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::new(vec![2], vec![1.0_f64, 2.0]);
-    /// let reference = TracedTensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    /// let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let reference = TracedTensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
     /// let mut y = x.pad_to_match(&reference, 0);
     /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[4]);
     /// ```

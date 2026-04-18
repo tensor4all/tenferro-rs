@@ -12,8 +12,8 @@
 //! use tenferro::traced::TracedTensor;
 //!
 //! let mut engine = Engine::new(CpuBackend::new());
-//! let a = TracedTensor::from_tensor(tensor_a);
-//! let b = TracedTensor::from_tensor(tensor_b);
+//! let a = TracedTensor::from_tensor_concrete_shape(tensor_a);
+//! let b = TracedTensor::from_tensor_concrete_shape(tensor_b);
 //!
 //! // Matrix multiply
 //! let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik");

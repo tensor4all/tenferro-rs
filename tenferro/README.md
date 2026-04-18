@@ -30,7 +30,7 @@ einsum helpers, and public multi-output linalg helpers.
 ```rust
 use tenferro::{EagerTensor, Tensor};
 
-let x = EagerTensor::requires_grad(Tensor::new(vec![2], vec![1.0_f64, 2.0]));
+let x = EagerTensor::requires_grad(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 
@@ -47,11 +47,11 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn main() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let b = TracedTensor::from_tensor(f64_tensor(
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));

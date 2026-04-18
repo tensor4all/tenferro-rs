@@ -25,9 +25,9 @@ fn checkpoint_truncate_loop_grad() {
     let x0_data = vec![1.0, 2.0, 3.0];
     let mut engine = Engine::new(CpuBackend::new());
 
-    let a = TracedTensor::from_tensor(f64_scalar(a_value));
-    let size = TracedTensor::from_tensor(f64_scalar(2.0));
-    let mut x = TracedTensor::from_tensor(f64_tensor(vec![3], x0_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value));
+    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
+    let mut x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone()));
 
     for _ in 0..steps {
         x = &a * &x;

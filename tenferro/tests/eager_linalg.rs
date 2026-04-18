@@ -11,7 +11,7 @@ fn c64_data(tensor: &Tensor) -> &[Complex64] {
 
 #[test]
 fn svd_returns_correct_shapes() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
     let (u, s, vt) = a.svd().unwrap();
 
     assert_eq!(u.data().shape(), &[2, 2]);
@@ -21,7 +21,7 @@ fn svd_returns_correct_shapes() {
 
 #[test]
 fn qr_returns_correct_shapes() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
     let (q, r) = a.qr().unwrap();
 
     assert_eq!(q.data().shape(), &[2, 2]);
@@ -30,7 +30,7 @@ fn qr_returns_correct_shapes() {
 
 #[test]
 fn cholesky_of_identity() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
     let l = a.cholesky().unwrap();
 
     assert_eq!(l.data().shape(), &[2, 2]);
@@ -39,7 +39,7 @@ fn cholesky_of_identity() {
 
 #[test]
 fn svd_gradient_smoke() {
-    let a = EagerTensor::requires_grad(Tensor::new(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0]));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0]));
     let (_, s, _) = a.svd().unwrap();
     let loss = s.reduce_sum(&[0]).unwrap();
 
@@ -52,7 +52,7 @@ fn svd_gradient_smoke() {
 
 #[test]
 fn lu_returns_expected_factors_for_swap_matrix() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]));
     let (p, l, u, parity) = a.lu().unwrap();
 
     assert_eq!(p.data().shape(), &[2, 2]);
@@ -68,7 +68,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
 
 #[test]
 fn eigh_returns_expected_values_for_diagonal_matrix() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
     let (values, vectors) = a.eigh().unwrap();
 
     assert_eq!(values.data().shape(), &[2]);
@@ -81,7 +81,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
 
 #[test]
 fn eig_returns_expected_complex_values_for_diagonal_matrix() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
     let (values, vectors) = a.eig().unwrap();
 
     assert_eq!(values.data().shape(), &[2]);
@@ -101,8 +101,8 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
 
 #[test]
 fn triangular_solve_returns_expected_solution() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]));
-    let b = EagerTensor::from_tensor(Tensor::new(vec![2, 1], vec![4.0_f64, 8.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]));
+    let b = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]));
     let x = a.triangular_solve(&b, true, true, false, false).unwrap();
 
     assert_eq!(x.data().shape(), &[2, 1]);

@@ -9,7 +9,7 @@ This is the tenferro equivalent of `torch.tensor(...)` or `jnp.array(...)`.
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let mut a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let mut a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let result = a.eval(&mut engine).unwrap();
@@ -25,8 +25,8 @@ Like PyTorch and JAX, tenferro supports familiar elementwise operators on tensor
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let b = TracedTensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let b = TracedTensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
 let mut sum = &a + &b;
 let mut product = &a * &b;
 
@@ -45,7 +45,7 @@ The common unary math ops are methods on `TracedTensor`, similar to `torch.exp(x
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let x = TracedTensor::new(vec![3], vec![0.0_f64, 1.0, 2.0]);
+let x = TracedTensor::from_vec(vec![3], vec![0.0_f64, 1.0, 2.0]);
 let mut y = x.exp();
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -64,7 +64,7 @@ These match the ideas behind `reshape` and `transpose` in PyTorch and JAX.
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let mut reshaped = a.reshape(&[6]);
 let mut transposed = a.transpose(&[1, 0]);
 
@@ -88,7 +88,7 @@ PyTorch and JAX often hide broadcasting behind arithmetic. tenferro also support
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let v = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let v = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let mut repeated = v.broadcast(&[3, 2], &[0]);
 
 let mut engine = Engine::new(CpuBackend::new());
@@ -105,7 +105,7 @@ Reduction looks closest to `torch.sum(x, dim=...)` or `jnp.sum(x, axis=...)`.
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let mut row_sums = a.reduce_sum(&[1]);
 let mut total = a.reduce_sum(&[0, 1]);
 

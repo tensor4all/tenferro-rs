@@ -41,7 +41,7 @@ gpu_test!(test_raw_stream_extraction, {
 
 gpu_test!(test_upload_download_f64, {
     let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let host = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let gpu = upload_tensor(&rt, &host).unwrap();
 
     assert_eq!(gpu.dtype(), crate::DType::F64);
@@ -59,7 +59,7 @@ gpu_test!(test_upload_download_c64, {
 
     let rt = CubeclRuntime::new(0).unwrap();
     let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)];
-    let host = Tensor::new(vec![2], data.clone());
+    let host = Tensor::from_vec(vec![2], data.clone());
 
     let gpu = upload_tensor(&rt, &host).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
@@ -69,7 +69,7 @@ gpu_test!(test_upload_download_c64, {
 
 gpu_test!(test_pointer_bridge, {
     let rt = CubeclRuntime::new(0).unwrap();
-    let host = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let host = Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
 
     let gpu = upload_tensor(&rt, &host).unwrap();
     let ptr = device_ptr(&rt, &gpu).unwrap();
@@ -80,8 +80,8 @@ gpu_test!(test_pointer_bridge, {
 gpu_test!(test_backend_add_matches_cpu_reference, {
     let mut backend = CubeclBackend::new(0).unwrap();
     let mut cpu = crate::cpu::CpuBackend::new();
-    let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
     let expected = cpu.add(&a, &b).unwrap();
@@ -128,7 +128,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
 
     let rt = CubeclRuntime::new(0).unwrap();
 
-    let t = Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let t = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -136,7 +136,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<f64>().unwrap()
     );
 
-    let t = Tensor::new(vec![3], vec![1.0_f32, 2.0, 3.0]);
+    let t = Tensor::from_vec(vec![3], vec![1.0_f32, 2.0, 3.0]);
     let gpu = upload_tensor(&rt, &t).unwrap();
     let back = download_tensor(&rt, &gpu).unwrap();
     assert_eq!(
@@ -144,7 +144,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<f32>().unwrap()
     );
 
-    let t = Tensor::new(
+    let t = Tensor::from_vec(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
     );
@@ -155,7 +155,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
         t.as_slice::<Complex64>().unwrap()
     );
 
-    let t = Tensor::new(
+    let t = Tensor::from_vec(
         vec![2],
         vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
     );
@@ -169,7 +169,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
 
 gpu_test!(test_pointer_and_stream_bridge, {
     let rt = CubeclRuntime::new(0).unwrap();
-    let t = Tensor::new(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let t = Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let gpu = upload_tensor(&rt, &t).unwrap();
 
     let ptr = device_ptr(&rt, &gpu).unwrap();

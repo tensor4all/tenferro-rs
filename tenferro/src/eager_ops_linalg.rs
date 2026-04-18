@@ -13,7 +13,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
     /// let (u, s, vh) = a.svd().unwrap();
     ///
     /// assert_eq!(u.data().shape(), &[2, 2]);
@@ -50,7 +50,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
     /// let (q, r) = a.qr().unwrap();
     ///
     /// assert_eq!(q.data().shape(), &[2, 2]);
@@ -80,7 +80,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]));
     /// let (p, l, u, parity) = a.lu().unwrap();
     ///
     /// assert_eq!(p.data().shape(), &[2, 2]);
@@ -118,7 +118,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
     /// let l = a.cholesky().unwrap();
     ///
     /// assert_eq!(l.data().shape(), &[2, 2]);
@@ -137,7 +137,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
     /// let (values, vectors) = a.eigh().unwrap();
     ///
     /// assert_eq!(values.data().shape(), &[2]);
@@ -168,7 +168,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
     /// let (values, vectors) = a.eig().unwrap();
     ///
     /// assert_eq!(values.data().shape(), &[2]);
@@ -200,8 +200,8 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{EagerTensor, Tensor};
     ///
-    /// let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]));
-    /// let b = EagerTensor::from_tensor(Tensor::new(vec![2, 1], vec![4.0_f64, 8.0]));
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]));
+    /// let b = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]));
     /// let x = a
     ///     .triangular_solve(&b, true, true, false, false)
     ///     .unwrap();

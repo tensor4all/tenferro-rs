@@ -37,14 +37,14 @@ let mut ctx = CpuBackend::new();
 // tenferro uses column-major (Fortran) storage, not row-major like NumPy.
 // For shape [2, 3] with data [1,2,3,4,5,6]:
 //   column 0 = [1, 2], column 1 = [3, 4], column 2 = [5, 6]
-let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // SVD
 let (_u, s, _vt) = a.svd(&mut ctx).unwrap();
 assert_eq!(s.shape(), &[2]);
 
 // Matrix multiply
-let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let c = a.matmul(&b, &mut ctx).unwrap();
 assert_eq!(c.shape(), &[2, 2]);
 ```
@@ -57,8 +57,8 @@ This is the tenferro equivalent of `torch.einsum("ij,jk->ik", a, b)` or `jnp.ein
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
 
 // Column-major buffers: `a` has columns [1, 2], [3, 4], [5, 6].
-let a = TracedTensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 let mut engine = Engine::new(CpuBackend::new());
 let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
@@ -75,7 +75,7 @@ This is the tenferro equivalent of differentiating `sum(x * x)` in PyTorch or JA
 ```rust
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
-let x = TracedTensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
+let x = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
 let mut grad = loss.grad(&x).unwrap();
 

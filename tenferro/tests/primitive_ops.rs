@@ -19,8 +19,8 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 fn test_add() {
     let a = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = &ta + &tb;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -31,8 +31,8 @@ fn test_add() {
 fn test_add_broadcast_scalar_plus_vector() {
     let scalar = f64_tensor(vec![], vec![1.0]);
     let vector = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
-    let ta = TracedTensor::from_tensor(scalar);
-    let tb = TracedTensor::from_tensor(vector);
+    let ta = TracedTensor::from_tensor_concrete_shape(scalar);
+    let tb = TracedTensor::from_tensor_concrete_shape(vector);
     let mut tc = &ta + &tb;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -44,8 +44,8 @@ fn test_add_broadcast_scalar_plus_vector() {
 fn test_mul() {
     let a = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = &ta * &tb;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -56,8 +56,8 @@ fn test_mul() {
 fn test_mul_broadcast_column_times_row() {
     let column = f64_tensor(vec![3, 1], vec![1.0, 2.0, 3.0]);
     let row = f64_tensor(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]);
-    let ta = TracedTensor::from_tensor(column);
-    let tb = TracedTensor::from_tensor(row);
+    let ta = TracedTensor::from_tensor_concrete_shape(column);
+    let tb = TracedTensor::from_tensor_concrete_shape(row);
     let mut tc = &ta * &tb;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -72,8 +72,8 @@ fn test_mul_broadcast_column_times_row() {
 fn test_div_broadcast_vector_by_scalar() {
     let vector = f64_tensor(vec![3], vec![2.0, 4.0, 8.0]);
     let scalar = f64_tensor(vec![], vec![2.0]);
-    let ta = TracedTensor::from_tensor(vector);
-    let tb = TracedTensor::from_tensor(scalar);
+    let ta = TracedTensor::from_tensor_concrete_shape(vector);
+    let tb = TracedTensor::from_tensor_concrete_shape(scalar);
     let mut tc = &ta / &tb;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tc.eval(&mut engine).unwrap();
@@ -82,7 +82,7 @@ fn test_div_broadcast_vector_by_scalar() {
 
 #[test]
 fn test_scale_real() {
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let mut y = x.scale_real(2.0);
     let mut engine = Engine::new(CpuBackend::new());
     let result = y.eval(&mut engine).unwrap();
@@ -91,7 +91,7 @@ fn test_scale_real() {
 
 #[test]
 fn test_scale_real_operator_overload() {
-    let x = TracedTensor::from_tensor(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let mut y = &x * 3.0;
     let mut engine = Engine::new(CpuBackend::new());
     let result = y.eval(&mut engine).unwrap();
@@ -100,8 +100,8 @@ fn test_scale_real_operator_overload() {
 
 #[test]
 fn test_pow_broadcast_vector_with_scalar_exponent() {
-    let base = TracedTensor::from_tensor(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
-    let exp = TracedTensor::from_tensor(f64_tensor(vec![], vec![2.0]));
+    let base = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
+    let exp = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![2.0]));
     let mut out = pow(&base, &exp);
     let mut engine = Engine::new(CpuBackend::new());
     let result = out.eval(&mut engine).unwrap();
@@ -112,7 +112,7 @@ fn test_pow_broadcast_vector_with_scalar_exponent() {
 #[test]
 fn test_neg() {
     let a = f64_tensor(vec![3], vec![1.0, -2.0, 3.0]);
-    let ta = TracedTensor::from_tensor(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = -&ta;
     let mut engine = Engine::new(CpuBackend::new());
     let result = tb.eval(&mut engine).unwrap();
@@ -123,8 +123,8 @@ fn test_neg() {
 fn test_dot_general() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -143,7 +143,7 @@ fn test_dot_general() {
 #[test]
 fn test_broadcast_reduce() {
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
-    let tv = TracedTensor::from_tensor(v);
+    let tv = TracedTensor::from_tensor_concrete_shape(v);
     let tb = tv.broadcast_in_dim(&[3, 2], &[0]);
     let mut tr = tb.reduce_sum(&[1]);
     let mut engine = Engine::new(CpuBackend::new());
@@ -154,7 +154,7 @@ fn test_broadcast_reduce() {
 #[test]
 fn test_transpose() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let ta = TracedTensor::from_tensor(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = ta.transpose(&[1, 0]);
     let mut engine = Engine::new(CpuBackend::new());
     let result = tb.eval(&mut engine).unwrap();
@@ -164,7 +164,7 @@ fn test_transpose() {
 #[test]
 fn test_reshape() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let ta = TracedTensor::from_tensor(a);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = ta.reshape(&[6]);
     let mut engine = Engine::new(CpuBackend::new());
     let result = tb.eval(&mut engine).unwrap();
@@ -175,8 +175,8 @@ fn test_reshape() {
 fn test_eval_all() {
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut sum = &ta + &tb;
     let mut prod = &ta * &tb;
     let mut engine = Engine::new(CpuBackend::new());
@@ -190,9 +190,9 @@ fn test_chained_ops() {
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
     let c = f64_tensor(vec![2], vec![10.0, 20.0]);
-    let ta = TracedTensor::from_tensor(a);
-    let tb = TracedTensor::from_tensor(b);
-    let tc = TracedTensor::from_tensor(c);
+    let ta = TracedTensor::from_tensor_concrete_shape(a);
+    let tb = TracedTensor::from_tensor_concrete_shape(b);
+    let tc = TracedTensor::from_tensor_concrete_shape(c);
     let sum = &ta + &tb;
     let mut result = &sum * &tc;
     let mut engine = Engine::new(CpuBackend::new());

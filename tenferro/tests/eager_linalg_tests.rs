@@ -54,7 +54,7 @@ fn reduce_all(tensor: &EagerTensor) -> EagerTensor {
 
 #[test]
 fn eager_linalg_svd_reconstructs_input() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![3.0_f64, 0.5, 1.0, 2.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![3.0_f64, 0.5, 1.0, 2.0]));
     let (u, s, vh) = a.svd().unwrap();
 
     let sigma = s.embed_diag(0, 1).unwrap();
@@ -69,7 +69,7 @@ fn eager_linalg_svd_reconstructs_input() {
 
 #[test]
 fn eager_linalg_svd_backward_is_finite() {
-    let a = EagerTensor::requires_grad(Tensor::new(vec![2, 2], vec![3.0_f64, 0.5, 1.0, 2.0]));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![3.0_f64, 0.5, 1.0, 2.0]));
     let (_, s, _) = a.svd().unwrap();
     let loss = reduce_all(&s);
 
@@ -82,7 +82,7 @@ fn eager_linalg_svd_backward_is_finite() {
 
 #[test]
 fn eager_linalg_qr_reconstructs_input() {
-    let a = EagerTensor::from_tensor(Tensor::new(
+    let a = EagerTensor::from_tensor(Tensor::from_vec(
         vec![3, 2],
         vec![3.0_f64, 1.0, 2.0, 2.0, 0.0, 1.0],
     ));
@@ -99,7 +99,7 @@ fn eager_linalg_qr_reconstructs_input() {
 
 #[test]
 fn eager_linalg_qr_backward_is_finite() {
-    let a = EagerTensor::requires_grad(Tensor::new(
+    let a = EagerTensor::requires_grad(Tensor::from_vec(
         vec![3, 2],
         vec![3.0_f64, 1.0, 2.0, 2.0, 0.0, 1.0],
     ));
@@ -115,7 +115,7 @@ fn eager_linalg_qr_backward_is_finite() {
 
 #[test]
 fn eager_linalg_lu_reconstructs_permuted_input() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
     let (p, l, u, _) = a.lu().unwrap();
 
     let pa = matmul(&p, &a);
@@ -126,7 +126,7 @@ fn eager_linalg_lu_reconstructs_permuted_input() {
 
 #[test]
 fn eager_linalg_lu_backward_is_finite() {
-    let a = EagerTensor::requires_grad(Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
     let (_, l, u, _) = a.lu().unwrap();
     let l_sum = reduce_all(&l);
     let u_sum = reduce_all(&u);
@@ -141,7 +141,7 @@ fn eager_linalg_lu_backward_is_finite() {
 
 #[test]
 fn eager_linalg_cholesky_reconstructs_input() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
     let l = a.cholesky().unwrap();
 
     let reconstruction = matmul(&l, &transpose(&l));
@@ -155,7 +155,7 @@ fn eager_linalg_cholesky_reconstructs_input() {
 
 #[test]
 fn eager_linalg_cholesky_backward_is_finite() {
-    let a = EagerTensor::requires_grad(Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
     let l = a.cholesky().unwrap();
     let loss = reduce_all(&l);
 
@@ -168,7 +168,7 @@ fn eager_linalg_cholesky_backward_is_finite() {
 
 #[test]
 fn eager_linalg_eigh_reconstructs_input() {
-    let a = EagerTensor::from_tensor(Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
     let (values, vectors) = a.eigh().unwrap();
 
     let diagonal = values.embed_diag(0, 1).unwrap();
@@ -183,7 +183,7 @@ fn eager_linalg_eigh_reconstructs_input() {
 
 #[test]
 fn eager_linalg_eigh_backward_is_finite() {
-    let a = EagerTensor::requires_grad(Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]));
     let (values, _) = a.eigh().unwrap();
     let loss = reduce_all(&values);
 
@@ -196,8 +196,8 @@ fn eager_linalg_eigh_backward_is_finite() {
 
 #[test]
 fn eager_elementwise_forward_surface_smoke() {
-    let x = EagerTensor::from_tensor(Tensor::new(vec![3], vec![8.0_f64, -6.0, 9.0]));
-    let y = EagerTensor::from_tensor(Tensor::new(vec![3], vec![2.0_f64, 3.0, 3.0]));
+    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![8.0_f64, -6.0, 9.0]));
+    let y = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![2.0_f64, 3.0, 3.0]));
     assert_close_slice(
         f64_data(x.div(&y).unwrap().data()),
         &[4.0, -2.0, 3.0],
@@ -224,8 +224,10 @@ fn eager_elementwise_forward_surface_smoke() {
         ELEMENTWISE_TOL,
     );
 
-    let positive =
-        EagerTensor::from_tensor(Tensor::new(vec![2], vec![1.0_f64, std::f64::consts::E]));
+    let positive = EagerTensor::from_tensor(Tensor::from_vec(
+        vec![2],
+        vec![1.0_f64, std::f64::consts::E],
+    ));
     assert_close_slice(
         f64_data(positive.log().unwrap().data()),
         &[0.0, 1.0],
@@ -247,7 +249,7 @@ fn eager_elementwise_forward_surface_smoke() {
         ELEMENTWISE_TOL,
     );
 
-    let angles = EagerTensor::from_tensor(Tensor::new(
+    let angles = EagerTensor::from_tensor(Tensor::from_vec(
         vec![2],
         vec![0.0_f64, std::f64::consts::FRAC_PI_2],
     ));
@@ -262,7 +264,7 @@ fn eager_elementwise_forward_surface_smoke() {
         ELEMENTWISE_TOL,
     );
 
-    let tanh_input = EagerTensor::from_tensor(Tensor::new(vec![2], vec![0.0_f64, 1.0]));
+    let tanh_input = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![0.0_f64, 1.0]));
     assert_close_slice(
         f64_data(tanh_input.tanh().unwrap().data()),
         &[0.0, 1.0_f64.tanh()],
@@ -274,17 +276,17 @@ fn eager_elementwise_forward_surface_smoke() {
         ELEMENTWISE_TOL,
     );
 
-    let pow_base = EagerTensor::from_tensor(Tensor::new(vec![3], vec![8.0_f64, 9.0, 4.0]));
-    let exponents = EagerTensor::from_tensor(Tensor::new(vec![3], vec![3.0_f64, 0.5, 2.0]));
+    let pow_base = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![8.0_f64, 9.0, 4.0]));
+    let exponents = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![3.0_f64, 0.5, 2.0]));
     assert_close_slice(
         f64_data(pow_base.pow(&exponents).unwrap().data()),
         &[512.0, 3.0, 16.0],
         ELEMENTWISE_TOL,
     );
 
-    let condition = EagerTensor::from_tensor(Tensor::new(vec![3], vec![0.0_f64, -1.0, 2.0]));
-    let on_true = EagerTensor::from_tensor(Tensor::new(vec![3], vec![10.0_f64, 20.0, 30.0]));
-    let on_false = EagerTensor::from_tensor(Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let condition = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![0.0_f64, -1.0, 2.0]));
+    let on_true = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]));
+    let on_false = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
     assert_close_slice(
         f64_data(
             EagerTensor::select(&condition, &on_true, &on_false)
@@ -295,7 +297,7 @@ fn eager_elementwise_forward_surface_smoke() {
         ELEMENTWISE_TOL,
     );
 
-    let complex = EagerTensor::from_tensor(Tensor::new(
+    let complex = EagerTensor::from_tensor(Tensor::from_vec(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
@@ -317,9 +319,9 @@ fn eager_elementwise_forward_surface_smoke() {
 
 #[test]
 fn eager_elementwise_scatter_forward_updates_operand() {
-    let operand = EagerTensor::from_tensor(Tensor::new(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
-    let indices = EagerTensor::from_tensor(Tensor::new(vec![2, 1], vec![1.0_f64, 3.0]));
-    let updates = EagerTensor::from_tensor(Tensor::new(vec![2], vec![5.0_f64, 4.0]));
+    let operand = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
+    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1.0_f64, 3.0]));
+    let updates = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![5.0_f64, 4.0]));
     let result = operand
         .scatter(
             &indices,

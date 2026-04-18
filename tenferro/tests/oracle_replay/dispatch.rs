@@ -271,7 +271,10 @@ fn decode_inputs(case: &CaseRecord) -> Result<BTreeMap<String, TracedTensor>, St
                 case.case_id, tensor_data.dtype
             )
         })?;
-        inputs.insert(name.clone(), TracedTensor::from_tensor(tensor));
+        inputs.insert(
+            name.clone(),
+            TracedTensor::from_tensor_concrete_shape(tensor),
+        );
     }
     Ok(inputs)
 }

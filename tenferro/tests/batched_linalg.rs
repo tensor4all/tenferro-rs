@@ -73,14 +73,15 @@ fn wide_qr_r_sum(data: &[f64]) -> f64 {
 
 #[test]
 fn solve_supports_batched_vector_rhs() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             2.0, 0.0, 0.0, 3.0, //
             4.0, 0.0, 0.0, 5.0,
         ],
     ));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![4.0, 9.0, 8.0, 20.0]));
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 9.0, 8.0, 20.0]));
 
     let out = eval(solve(&a, &b));
 
@@ -90,14 +91,15 @@ fn solve_supports_batched_vector_rhs() {
 
 #[test]
 fn triangular_solve_supports_batched_vector_rhs() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             2.0, 0.0, 0.0, 3.0, //
             4.0, 0.0, 0.0, 5.0,
         ],
     ));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![4.0, 9.0, 8.0, 20.0]));
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 9.0, 8.0, 20.0]));
 
     let out = eval(triangular_solve(&a, &b, true, true, false, false));
 
@@ -107,14 +109,14 @@ fn triangular_solve_supports_batched_vector_rhs() {
 
 #[test]
 fn batched_cholesky_jvp_on_diagonal_matrices() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             4.0, 0.0, 0.0, 9.0, //
             1.0, 0.0, 0.0, 16.0,
         ],
     ));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             2.0, 0.0, 0.0, 8.0, //
@@ -134,14 +136,14 @@ fn batched_cholesky_jvp_on_diagonal_matrices() {
 
 #[test]
 fn batched_qr_diag_r_sum_jvp_on_diagonal_matrices() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             4.0, 0.0, 0.0, 9.0, //
             1.0, 0.0, 0.0, 16.0,
         ],
     ));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
         vec![
             2.0, 0.0, 0.0, 8.0, //
@@ -160,14 +162,14 @@ fn batched_qr_diag_r_sum_jvp_on_diagonal_matrices() {
 
 #[test]
 fn batched_rectangular_svd_singular_value_sum_jvp() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2, 2],
         vec![
             9.0, 0.0, 0.0, 0.0, 4.0, 0.0, //
             16.0, 0.0, 0.0, 0.0, 25.0, 0.0,
         ],
     ));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2, 2],
         vec![
             1.0, 0.0, 0.0, 0.0, 2.0, 0.0, //
@@ -186,7 +188,7 @@ fn batched_rectangular_svd_singular_value_sum_jvp() {
 
 #[test]
 fn unit_diagonal_triangular_solve_jvp_ignores_diagonal_tangent() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![
             1.0, 0.0, 0.0, //
@@ -194,8 +196,8 @@ fn unit_diagonal_triangular_solve_jvp_ignores_diagonal_tangent() {
             3.0, 4.0, 1.0,
         ],
     ));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![3, 1], vec![1.0, 2.0, 3.0]));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 1], vec![1.0, 2.0, 3.0]));
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![
             7.0, 0.0, 0.0, //
@@ -214,7 +216,7 @@ fn unit_diagonal_triangular_solve_jvp_ignores_diagonal_tangent() {
 
 #[test]
 fn transpose_triangular_solve_jvp_uses_transpose_not_adjoint_for_complex_inputs() {
-    let a = TracedTensor::from_tensor(c64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2, 2],
         vec![
             Complex64::new(1.0, 0.0),
@@ -223,11 +225,11 @@ fn transpose_triangular_solve_jvp_uses_transpose_not_adjoint_for_complex_inputs(
             Complex64::new(1.0, 0.0),
         ],
     ));
-    let b = TracedTensor::from_tensor(c64_tensor(
+    let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2, 1],
         vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
     ));
-    let da = TracedTensor::from_tensor(c64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(c64_tensor(
         vec![2, 2],
         vec![
             Complex64::new(0.0, 0.0),
@@ -250,14 +252,14 @@ fn transpose_triangular_solve_jvp_uses_transpose_not_adjoint_for_complex_inputs(
 
 #[test]
 fn rectangular_qr_diag_r_sum_jvp_matches_diagonal_input() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![5, 2],
         vec![
             4.0, 0.0, 0.0, 0.0, 0.0, //
             0.0, 3.0, 0.0, 0.0, 0.0,
         ],
     ));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![5, 2],
         vec![
             1.0, 0.0, 0.0, 0.0, 0.0, //
@@ -276,7 +278,7 @@ fn rectangular_qr_diag_r_sum_jvp_matches_diagonal_input() {
 
 #[test]
 fn wide_qr_r_sum_jvp_matches_diagonal_and_tail_input() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 5],
         vec![
             4.0, 0.0, //
@@ -286,7 +288,7 @@ fn wide_qr_r_sum_jvp_matches_diagonal_and_tail_input() {
             0.0, 0.0,
         ],
     ));
-    let da = TracedTensor::from_tensor(f64_tensor(
+    let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 5],
         vec![
             1.5, 0.0, //
@@ -320,7 +322,7 @@ fn wide_qr_r_sum_grad_matches_finite_difference() {
         -0.45892809719604577,
         0.7718872740654947,
     ];
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 5], a_data.clone()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 5], a_data.clone()));
     let (_q, r) = qr(&a);
     let loss = r.reduce_sum(&[0, 1]);
     let grad = eval(loss.grad(&a).unwrap());
@@ -338,7 +340,7 @@ fn wide_qr_r_sum_grad_matches_finite_difference() {
 
 #[test]
 fn zero_sized_qr_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![0, 5], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 5], Vec::new()));
     let (q, r) = qr(&a);
     let q_out = eval(q);
     let r_out = eval(r);
@@ -351,7 +353,7 @@ fn zero_sized_qr_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_svd_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![5, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5, 0], Vec::new()));
     let (u, s, vh) = svd(&a);
     let u_out = eval(u);
     let s_out = eval(s);
@@ -367,7 +369,7 @@ fn zero_sized_svd_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_batched_qr_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 5, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 5, 0], Vec::new()));
     let (q, r) = qr(&a);
     let q_out = eval(q);
     let r_out = eval(r);
@@ -380,7 +382,7 @@ fn zero_sized_batched_qr_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_batched_svd_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![5, 2, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5, 2, 0], Vec::new()));
     let (u, s, vh) = svd(&a);
     let u_out = eval(u);
     let s_out = eval(s);
@@ -396,12 +398,12 @@ fn zero_sized_batched_svd_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_cholesky_and_solve_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![0, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 0], Vec::new()));
     let l_out = eval(cholesky(&a));
     assert_eq!(l_out.shape(), &[0, 0]);
     assert!(get_f64_data(&l_out).is_empty());
 
-    let b = TracedTensor::from_tensor(f64_tensor(vec![0, 3], Vec::new()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 3], Vec::new()));
     let x_out = eval(solve(&a, &b));
     assert_eq!(x_out.shape(), &[0, 3]);
     assert!(get_f64_data(&x_out).is_empty());
@@ -413,8 +415,8 @@ fn zero_sized_cholesky_and_solve_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_batched_vector_rhs_solve_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2, 0], Vec::new()));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2, 0], Vec::new()));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 0], Vec::new()));
 
     let x_out = eval(solve(&a, &b));
     assert_eq!(x_out.shape(), &[2, 0]);
@@ -427,9 +429,9 @@ fn zero_sized_batched_vector_rhs_solve_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_upper_cholesky_ad_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![0, 0], Vec::new()));
-    let direction = TracedTensor::from_tensor(f64_tensor(vec![0, 0], Vec::new()));
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![0, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 0], Vec::new()));
+    let direction = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 0], Vec::new()));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![0, 0], Vec::new()));
 
     let factor = cholesky(&a).transpose(&[1, 0]);
 
@@ -456,9 +458,9 @@ fn zero_sized_upper_cholesky_ad_outputs_expected_shapes() {
 
 #[test]
 fn zero_sized_batched_upper_cholesky_ad_outputs_expected_shapes() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2, 0], Vec::new()));
-    let direction = TracedTensor::from_tensor(f64_tensor(vec![2, 2, 0], Vec::new()));
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![2, 2, 0], Vec::new()));
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2, 0], Vec::new()));
+    let direction = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2, 0], Vec::new()));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2, 0], Vec::new()));
 
     let factor = cholesky(&a).transpose(&[1, 0, 2]);
 
@@ -485,8 +487,8 @@ fn zero_sized_batched_upper_cholesky_ad_outputs_expected_shapes() {
 
 #[test]
 fn try_grad_returns_none_for_inactive_scalar_output() {
-    let x = TracedTensor::from_tensor(f64_tensor(vec![1], vec![3.0]));
-    let y = TracedTensor::from_tensor(f64_tensor(vec![1], vec![4.0]));
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![1], vec![3.0]));
+    let y = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![1], vec![4.0]));
     let loss = x.reduce_sum(&[0]);
 
     assert!(loss.try_grad(&y).unwrap().is_none());

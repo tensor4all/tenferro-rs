@@ -27,7 +27,8 @@ fn get_c64_data(t: &Tensor) -> &[Complex64] {
 
 #[test]
 fn svd_free_function_returns_three_outputs() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
     let (mut u, mut s, mut vt) = svd(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let results = eval_all(&mut engine, &mut [&mut u, &mut s, &mut vt]).unwrap();
@@ -43,7 +44,8 @@ fn svd_free_function_returns_three_outputs() {
 
 #[test]
 fn qr_free_function_returns_q_and_r() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
     let (mut q, mut r) = qr(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let results = eval_all(&mut engine, &mut [&mut q, &mut r]).unwrap();
@@ -56,7 +58,8 @@ fn qr_free_function_returns_q_and_r() {
 
 #[test]
 fn eigh_free_function_returns_values_and_vectors() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
     let (mut values, mut vectors) = eigh(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let results = eval_all(&mut engine, &mut [&mut values, &mut vectors]).unwrap();
@@ -71,8 +74,9 @@ fn eigh_free_function_returns_values_and_vectors() {
 
 #[test]
 fn linalg_single_output_free_functions_eval() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
 
     let mut chol = cholesky(&a);
     let mut solved = solve(&a, &b);
@@ -88,7 +92,8 @@ fn linalg_single_output_free_functions_eval() {
 
 #[test]
 fn lu_free_function_returns_four_outputs() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
     let (mut p, mut l, mut u, mut parity) = lu(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let results = eval_all(&mut engine, &mut [&mut p, &mut l, &mut u, &mut parity]).unwrap();
@@ -102,7 +107,8 @@ fn lu_free_function_returns_four_outputs() {
 
 #[test]
 fn eig_free_function_returns_complex_outputs() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
     let (mut values, mut vectors) = eig(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let results = eval_all(&mut engine, &mut [&mut values, &mut vectors]).unwrap();
@@ -122,7 +128,8 @@ fn eig_free_function_returns_complex_outputs() {
 
 #[test]
 fn determinant_inverse_pseudoinverse_and_norm_eval() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
 
     let (mut sign, mut logabsdet) = slogdet(&a);
     let mut determinant = det(&a);
@@ -154,7 +161,8 @@ fn determinant_inverse_pseudoinverse_and_norm_eval() {
 
 #[test]
 fn pinv_with_large_rtol_discards_all_singular_values() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
     let mut pseudo_inverse = pinv_with_rtol(&a, 1.0);
 
     let mut engine = Engine::new(CpuBackend::new());
@@ -165,8 +173,10 @@ fn pinv_with_large_rtol_discards_all_singular_values() {
 
 #[test]
 fn norm_supports_vector_zero_and_matrix_induced_orders() {
-    let vector = TracedTensor::from_tensor(f64_tensor(vec![4], vec![1.0, 0.0, 2.0, -3.0]));
-    let matrix = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
+    let vector =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 0.0, 2.0, -3.0]));
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
 
     let mut zero_norm = norm(&vector, Some(0.0), Some(&[0]), false);
     let mut matrix_one = norm(&matrix, Some(1.0), Some(&[0, 1]), false);
@@ -196,7 +206,7 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
 
 #[test]
 fn matrix_neg_inf_norm_grad_flows_to_unique_min_row() {
-    let a = TracedTensor::from_tensor(f64_tensor(
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 3],
         vec![1.0, 4.0, 2.0, -2.0, 1.0, 3.0, 1.0, -1.0, -4.0],
     ));
@@ -218,7 +228,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_without_keepdim() {
     let a = norm_neg_inf_oracle_input();
     let mut y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let axes: Vec<usize> = (0..y.rank).collect();
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();
 
@@ -238,7 +248,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_without_keepdim() {
 #[test]
 fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
     let a = norm_neg_inf_oracle_input();
-    let direction = TracedTensor::from_tensor(f64_tensor(
+    let direction = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![5, 5],
         vec![
             0.17548577202687607,
@@ -268,7 +278,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
             0.29217435382015194,
         ],
     ));
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![1.0]));
 
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let mut jvp = y.jvp(&a, &direction);
@@ -292,7 +302,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
 #[test]
 fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() {
     let a = norm_neg_inf_oracle_input();
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![], vec![1.0]));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![1.0]));
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let axes: Vec<usize> = (0..y.rank).collect();
     let scalar = (&y * &cotangent).reduce_sum(&axes);
@@ -315,7 +325,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_with_keepdim() {
     let a = norm_neg_inf_oracle_input();
     let mut y = norm(&a, Some(f64::NEG_INFINITY), None, true);
     let axes: Vec<usize> = (0..y.rank).collect();
-    let cotangent = TracedTensor::from_tensor(f64_tensor(vec![1, 1], vec![-1.0]));
+    let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![1, 1], vec![-1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
     let mut grad = scalar.grad(&a).unwrap();
 
@@ -333,7 +343,7 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_with_keepdim() {
 }
 
 fn norm_neg_inf_oracle_input() -> TracedTensor {
-    TracedTensor::from_tensor(f64_tensor(
+    TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![5, 5],
         vec![
             -4.826984902407649,
@@ -381,8 +391,9 @@ fn assert_tensor_f64_eq(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn traced_solve_rejects_singular_matrix() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
     let mut x = solve(&a, &b);
     let mut engine = Engine::new(CpuBackend::new());
     let err = x.eval(&mut engine).unwrap_err();
@@ -394,8 +405,9 @@ fn traced_solve_rejects_singular_matrix() {
 
 #[test]
 fn traced_solve_rejects_singular_matrix_with_vector_rhs() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2], vec![1.0, 2.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 2.0]));
     let mut x = solve(&a, &b);
     let mut engine = Engine::new(CpuBackend::new());
     let err = x.eval(&mut engine).unwrap_err();
@@ -407,7 +419,8 @@ fn traced_solve_rejects_singular_matrix_with_vector_rhs() {
 
 #[test]
 fn traced_inv_rejects_singular_matrix() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
     let mut result = inv(&a);
     let mut engine = Engine::new(CpuBackend::new());
     let err = result.eval(&mut engine).unwrap_err();
@@ -419,8 +432,9 @@ fn traced_inv_rejects_singular_matrix() {
 
 #[test]
 fn traced_solve_accepts_nonsingular_matrix() {
-    let a = TracedTensor::from_tensor(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
-    let b = TracedTensor::from_tensor(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
     let mut x = solve(&a, &b);
     let mut engine = Engine::new(CpuBackend::new());
     let result = x.eval(&mut engine).unwrap();
