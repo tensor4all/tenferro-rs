@@ -64,6 +64,15 @@ If you have used NumPy or PyTorch in eager mode, this is the familiar pattern.
 
 In PyTorch terms, a `TracedTensor` feels like a tensor object you can keep composing. In JAX terms, it is closer to building up a staged computation, except tenferro keeps the staging model explicit instead of hiding it behind `jit`.
 
+### Concrete vs symbolic shapes
+
+Each `TracedTensor` carries its shape in one of two modes:
+
+- **Concrete**: shape is known at graph-build time. Use `from_vec(shape, data)`, `from_tensor_concrete_shape(tensor)`, or `input_concrete_shape(dtype, shape)` for a placeholder with a fixed shape.
+- **Symbolic**: shape is only known at eval time. Use `from_tensor_symbolic_shape(tensor)` or `input_symbolic_shape(dtype, rank)` when the shape varies across calls (dynamic batch sizes, polymorphic graphs).
+
+The choice affects how N-ary einsum is lowered. All-concrete inputs let tenferro optimize the contraction path at build time and decompose into binary `DotGeneral` ops. Any symbolic input keeps a single `NaryEinsum` op in the graph and defers path optimization to eval time (cached per shape). See the [einsum guide](../guides/einsum.md#static-vs-symbolic-shapes) for examples.
+
 ## Engine: the executor
 
 `Engine` owns the backend that actually runs your computation. It also keeps reusable execution state, so the normal pattern is to build one engine and reuse it across many evaluations.
