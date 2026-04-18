@@ -1,9 +1,23 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+use lru::LruCache;
 
 use super::exec::ExecProgram;
 use tenferro_einsum::ContractionTree;
 use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
+
+/// Key used for the N-ary einsum cache: `(subscripts, shapes)`.
+pub(crate) type EinsumCacheKey = (String, Vec<Vec<usize>>);
+
+/// LRU cache of optimized contraction trees keyed by einsum subscripts + input shapes.
+pub(crate) type NaryEinsumCache = LruCache<EinsumCacheKey, Arc<ContractionTree>>;
+
+/// Default capacity for `Engine::einsum_cache`.
+///
+/// Each `ContractionTree` is typically a few KB; 256 entries ≈ under 1 MB.
+pub const DEFAULT_EINSUM_CACHE_CAPACITY: usize = 256;
 
 /// Cache key derived from the compiled graph topology.
 ///
@@ -52,7 +66,7 @@ fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 pub struct Engine<B: TensorBackend> {
     pub(crate) backend: B,
     pub(crate) compile_cache: HashMap<CacheKey, ExecProgram>,
-    pub(crate) einsum_cache: HashMap<(String, Vec<Vec<usize>>), Arc<ContractionTree>>,
+    pub(crate) einsum_cache: NaryEinsumCache,
 }
 
 impl<B: TensorBackend> Engine<B> {
@@ -70,7 +84,10 @@ impl<B: TensorBackend> Engine<B> {
         Self {
             backend,
             compile_cache: HashMap::new(),
-            einsum_cache: HashMap::new(),
+            einsum_cache: LruCache::new(
+                NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
+                    .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+            ),
         }
     }
 
