@@ -508,12 +508,11 @@ impl TracedTensor {
         engine: &mut Engine<B>,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<&Tensor> {
-        if self.data.is_some() {
-            return Ok(self.data.as_ref().unwrap().as_ref());
-        }
-
         // Build the binding map keyed on `TensorInputKey`, validating each
-        // binding as we go.
+        // binding as we go. We validate *before* the already-evaluated
+        // shortcut so that user mistakes (e.g. binding a data-carrying leaf)
+        // surface as errors rather than getting silently ignored when the
+        // output tensor happens to be cached.
         let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
         for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
             if placeholder.data.is_some() {
@@ -556,6 +555,12 @@ impl TracedTensor {
                     input_key: format!("{:?}", key),
                 });
             }
+        }
+
+        // Already-evaluated shortcut — safe to take now that bindings passed
+        // validation.
+        if self.data.is_some() {
+            return Ok(self.data.as_ref().unwrap().as_ref());
         }
 
         let output_key = self.fragment.vals()[self.val].key.clone();
