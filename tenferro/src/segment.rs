@@ -8,6 +8,7 @@ use crate::exec::{
     initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
+use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
 };
@@ -186,7 +187,18 @@ pub fn eval_exec_segmented<B: TensorBackend>(
                 })?;
             }
             Segment::Ffi(inst) => {
-                execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Segmented)?;
+                // TODO(Task 6): thread the cache through eval_exec_segmented_with_cache
+                let mut ephemeral_cache = NaryEinsumCache::new(
+                    std::num::NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
+                        .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+                );
+                execute_ffi_instruction(
+                    backend,
+                    &mut slots,
+                    inst,
+                    DispatchMode::Segmented,
+                    &mut ephemeral_cache,
+                )?;
                 reclaim_last_use_inputs_backend(&mut slots, inst, backend);
             }
             Segment::Host(inst) => {
