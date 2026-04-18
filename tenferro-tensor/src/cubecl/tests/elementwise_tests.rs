@@ -1,5 +1,6 @@
 // Run with: cargo test --features cubecl -- --ignored
 use crate::config::CompareDir;
+use crate::cubecl::gpu_available;
 use crate::{DType, Tensor, TensorBackend};
 
 use super::{
@@ -7,7 +8,12 @@ use super::{
 };
 
 #[test]
+#[ignore = "requires CUDA 12+ GPU"]
 fn test_log1p_small_x_f32_precision() {
+    if !gpu_available() {
+        eprintln!("skipping test_log1p_small_x_f32_precision — no CUDA device found");
+        return;
+    }
     let mut backend = super::gpu_backend();
     let x_values = vec![1e-7_f32, 1e-6, 1e-5, 1e-4, 1e-3];
     let cpu_input = super::tensor_f32(vec![x_values.len()], x_values.clone());
@@ -31,7 +37,12 @@ fn test_log1p_small_x_f32_precision() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12+ GPU"]
 fn test_expm1_small_x_f32_precision() {
+    if !gpu_available() {
+        eprintln!("skipping test_expm1_small_x_f32_precision — no CUDA device found");
+        return;
+    }
     let mut backend = super::gpu_backend();
     let x_values = vec![1e-7_f32, 1e-6, 1e-5, 1e-4, 1e-3];
     let cpu_input = super::tensor_f32(vec![x_values.len()], x_values.clone());

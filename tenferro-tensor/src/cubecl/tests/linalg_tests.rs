@@ -312,7 +312,12 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12+ GPU"]
 fn test_gpu_eig_returns_unsupported_error() {
+    if !crate::cubecl::gpu_available() {
+        eprintln!("skipping test_gpu_eig_returns_unsupported_error — no CUDA device found");
+        return;
+    }
     let mut backend = super::gpu_backend();
     let cpu = super::tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let gpu = super::upload(&backend, &cpu);
