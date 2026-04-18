@@ -32,6 +32,7 @@ tidu.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
+lru = { workspace = true }
 tenferro-algebra = { path = "../tenferro-algebra" }
 
 [dev-dependencies]
