@@ -119,6 +119,58 @@ impl<B: TensorBackend> Engine<B> {
         self.einsum_cache.len()
     }
 
+    /// Construct a new engine with an explicit `einsum_cache` capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::num::NonZeroUsize;
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::with_einsum_cache_capacity(
+    ///     CpuBackend::new(),
+    ///     NonZeroUsize::new(64).unwrap(),
+    /// );
+    /// ```
+    pub fn with_einsum_cache_capacity(backend: B, capacity: NonZeroUsize) -> Self {
+        Self {
+            backend,
+            compile_cache: HashMap::new(),
+            einsum_cache: LruCache::new(capacity),
+        }
+    }
+
+    /// Current capacity of the einsum contraction-tree cache.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// assert_eq!(engine.einsum_cache_capacity().get(), tenferro::engine::DEFAULT_EINSUM_CACHE_CAPACITY);
+    /// ```
+    pub fn einsum_cache_capacity(&self) -> NonZeroUsize {
+        self.einsum_cache.cap()
+    }
+
+    /// Resize the einsum contraction-tree cache.
+    ///
+    /// Shrinking below the current length evicts least-recently-used entries.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::num::NonZeroUsize;
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// engine.set_einsum_cache_capacity(NonZeroUsize::new(32).unwrap());
+    /// ```
+    pub fn set_einsum_cache_capacity(&mut self, capacity: NonZeroUsize) {
+        self.einsum_cache.resize(capacity);
+    }
+
     /// Look up a cached ExecProgram, or cache and return the given one.
     ///
     /// Returns a clone of the cached program to avoid borrow conflicts
