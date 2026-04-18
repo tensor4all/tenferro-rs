@@ -196,6 +196,31 @@ impl<B: TensorBackend> Engine<B> {
         let key = compute_cache_key(&exec);
         self.compile_cache.entry(key).or_insert(exec).clone()
     }
+
+    /// Evaluate an `ExecProgram` through this engine, reusing the persistent
+    /// `einsum_cache` for any `NaryEinsum` ops encountered in the program.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    /// use tenferro::exec::ExecProgram;
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// // let outputs = engine.eval_exec_ir(&program, inputs)?;
+    /// ```
+    pub fn eval_exec_ir(
+        &mut self,
+        program: &ExecProgram,
+        inputs: Vec<tenferro_tensor::Tensor>,
+    ) -> crate::error::Result<Vec<tenferro_tensor::Tensor>> {
+        crate::segment::eval_exec_segmented_with_cache(
+            &mut self.backend,
+            program,
+            inputs,
+            &mut self.einsum_cache,
+        )
+    }
 }
 
 impl Engine<CpuBackend> {

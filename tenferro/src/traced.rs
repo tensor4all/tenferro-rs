@@ -19,7 +19,6 @@ use tidu::{differentiate, transpose};
 use super::compiler::compile_std_to_exec;
 use super::engine::Engine;
 use super::error::{Error, Result};
-use super::exec::eval_exec_ir;
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 
@@ -599,7 +598,7 @@ impl TracedTensor {
         let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
         let cached_exec = engine.get_or_compile(exec);
-        let mut results = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
+        let mut results = engine.eval_exec_ir(&cached_exec, input_tensors)?;
         if results.len() != 1 {
             return Err(Error::Internal(format!(
                 "expected 1 output, got {}",
@@ -1731,7 +1730,7 @@ pub fn eval_all<B: TensorBackend>(
     let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
     let cached_exec = engine.get_or_compile(exec);
-    let results: Vec<Tensor> = eval_exec_ir(&mut engine.backend, &cached_exec, input_tensors)?;
+    let results: Vec<Tensor> = engine.eval_exec_ir(&cached_exec, input_tensors)?;
 
     for (tt, result) in outputs.iter_mut().zip(results.iter()) {
         tt.data = Some(Arc::new(result.clone()));
