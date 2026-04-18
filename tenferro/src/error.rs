@@ -9,6 +9,8 @@
 //! assert!(err.to_string().contains("bad label"));
 //! ```
 
+use tenferro_tensor::DType;
+
 /// Errors produced by einsum, eval, and other tenferro operations.
 ///
 /// # Examples
@@ -39,6 +41,46 @@ pub enum Error {
     /// Runtime tensor execution failed in the backend layer.
     #[error(transparent)]
     TensorRuntime(#[from] tenferro_tensor::Error),
+
+    /// A `TracedTensor` passed to `eval_with_inputs` bindings is not a
+    /// placeholder (has attached data).
+    #[error(
+        "binding #{binding_index} is not a placeholder; \
+         only tensors built via input_concrete_shape / input_symbolic_shape \
+         can be bound"
+    )]
+    UnexpectedBinding { binding_index: usize },
+
+    /// A placeholder appearing in the graph has no binding supplied.
+    #[error("placeholder {input_key} has no binding in eval_with_inputs")]
+    UnboundPlaceholder { input_key: String },
+
+    /// The same placeholder was bound more than once in the `bindings` slice.
+    #[error("placeholder {input_key} was bound more than once")]
+    DuplicateBinding { input_key: String },
+
+    /// A binding tensor's dtype does not match the placeholder's dtype.
+    #[error("binding dtype mismatch for placeholder: expected {expected:?}, got {actual:?}")]
+    PlaceholderDtypeMismatch { expected: DType, actual: DType },
+
+    /// A binding tensor's shape does not match an `input_concrete_shape`
+    /// placeholder's fixed shape.
+    #[error(
+        "binding shape mismatch for concrete-shape placeholder: \
+         expected {expected:?}, got {actual:?}"
+    )]
+    PlaceholderShapeMismatch {
+        expected: Vec<usize>,
+        actual: Vec<usize>,
+    },
+
+    /// A binding tensor's rank does not match an `input_symbolic_shape`
+    /// placeholder's declared rank.
+    #[error(
+        "binding rank mismatch for symbolic-shape placeholder: \
+         expected rank {expected}, got rank {actual}"
+    )]
+    PlaceholderRankMismatch { expected: usize, actual: usize },
 
     /// An unexpected internal error.
     #[error("internal error: {0}")]

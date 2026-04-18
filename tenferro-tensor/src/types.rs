@@ -221,7 +221,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
-    /// let tensor = Tensor::new(vec![2], vec![1.0_f64, 2.0]);
+    /// let tensor = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
     /// let typed = <f64 as TensorScalar>::try_into_typed(tensor).unwrap();
     ///
     /// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
@@ -358,6 +358,84 @@ pub enum Tensor {
     F64(TypedTensor<f64>),
     C32(TypedTensor<Complex<f32>>),
     C64(TypedTensor<Complex<f64>>),
+}
+
+/// Wrap an `f64` [`TypedTensor`] into the corresponding [`Tensor`] variant.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.shape(), &[2]);
+/// ```
+impl From<TypedTensor<f64>> for Tensor {
+    fn from(t: TypedTensor<f64>) -> Self {
+        Tensor::F64(t)
+    }
+}
+
+/// Wrap an `f32` [`TypedTensor`] into the corresponding [`Tensor`] variant.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec(vec![2], vec![1.0_f32, 2.0]);
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.shape(), &[2]);
+/// ```
+impl From<TypedTensor<f32>> for Tensor {
+    fn from(t: TypedTensor<f32>) -> Self {
+        Tensor::F32(t)
+    }
+}
+
+/// Wrap a [`Complex64`] [`TypedTensor`] into the corresponding [`Tensor`]
+/// variant.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tenferro_tensor::{Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec(
+///     vec![1],
+///     vec![Complex64::new(1.0, 2.0)],
+/// );
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.shape(), &[1]);
+/// ```
+impl From<TypedTensor<Complex<f64>>> for Tensor {
+    fn from(t: TypedTensor<Complex<f64>>) -> Self {
+        Tensor::C64(t)
+    }
+}
+
+/// Wrap a [`Complex32`] [`TypedTensor`] into the corresponding [`Tensor`]
+/// variant.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex32;
+/// use tenferro_tensor::{Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec(
+///     vec![1],
+///     vec![Complex32::new(1.0, 2.0)],
+/// );
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.shape(), &[1]);
+/// ```
+impl From<TypedTensor<Complex<f32>>> for Tensor {
+    fn from(t: TypedTensor<Complex<f32>>) -> Self {
+        Tensor::C32(t)
+    }
 }
 
 /// Column-major strides derived from a shape.
@@ -655,11 +733,11 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let t = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// assert_eq!(t.shape(), &[2, 3]);
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// ```
-    pub fn new<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+    pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
         T::into_tensor(shape, data)
     }
 
@@ -728,7 +806,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let (u, s, vt) = a.svd(&mut ctx).unwrap();
     ///
     /// assert_eq!(u.shape(), &[3, 2]);
@@ -749,7 +827,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let (q, r) = a.qr(&mut ctx).unwrap();
     ///
     /// assert_eq!(q.shape(), &[3, 2]);
@@ -769,7 +847,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
     /// let (p, l, u, parity) = a.lu(&mut ctx).unwrap();
     ///
     /// assert_eq!(p.shape(), &[2, 2]);
@@ -791,7 +869,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
     /// let l = a.cholesky(&mut ctx).unwrap();
     ///
     /// assert_eq!(l.shape(), &[2, 2]);
@@ -810,7 +888,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
     /// let (w, v) = a.eigh(&mut ctx).unwrap();
     ///
     /// assert_eq!(w.shape(), &[2]);
@@ -830,7 +908,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
     /// let (w, v) = a.eig(&mut ctx).unwrap();
     ///
     /// assert_eq!(w.shape(), &[2]);
@@ -848,8 +926,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-    /// let b = Tensor::new(vec![2, 1], vec![1.0_f64, 0.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    /// let b = Tensor::from_vec(vec![2, 1], vec![1.0_f64, 0.0]);
     /// let x = a.solve(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(x.shape(), &[2, 1]);
@@ -866,8 +944,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
-    /// let b = Tensor::new(vec![2, 1], vec![2.0_f64, 7.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    /// let b = Tensor::from_vec(vec![2, 1], vec![2.0_f64, 7.0]);
     /// let x = a
     ///     .triangular_solve(&b, true, true, false, false, &mut ctx)
     ///     .unwrap();
@@ -896,8 +974,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    /// let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
     /// let c = a.add(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
@@ -914,8 +992,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    /// let b = Tensor::new(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
     /// let c = a.mul(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -932,7 +1010,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![3], vec![1.0_f64, -2.0, 3.0]);
+    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, -2.0, 3.0]);
     /// let b = a.neg(&mut ctx).unwrap();
     ///
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[-1.0, 2.0, -3.0]);
@@ -949,7 +1027,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     /// let b = a.transpose(&[1, 0], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[2, 2]);
@@ -967,7 +1045,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let b = a.reshape(&[3, 2], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[3, 2]);
@@ -985,7 +1063,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let b = a.reduce_sum(&[1], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[2]);
@@ -1005,8 +1083,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::new(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    /// let b = Tensor::new(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let c = a.matmul(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.shape(), &[2, 2]);
