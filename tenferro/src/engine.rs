@@ -171,6 +171,23 @@ impl<B: TensorBackend> Engine<B> {
         self.einsum_cache.resize(capacity);
     }
 
+    /// Returns `true` if the einsum cache contains a tree for `key`.
+    ///
+    /// Does not modify LRU recency.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// let key = ("ij,jk->ik".to_string(), vec![vec![2, 3], vec![3, 4]]);
+    /// assert!(!engine.einsum_cache_contains(&key));
+    /// ```
+    pub fn einsum_cache_contains(&self, key: &(String, Vec<Vec<usize>>)) -> bool {
+        self.einsum_cache.contains(key)
+    }
+
     /// Look up a cached ExecProgram, or cache and return the given one.
     ///
     /// Returns a clone of the cached program to avoid borrow conflicts

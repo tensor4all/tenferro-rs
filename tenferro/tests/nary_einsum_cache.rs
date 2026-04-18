@@ -49,3 +49,29 @@ fn set_einsum_cache_capacity_shrinks_len() {
     assert_eq!(engine.einsum_cache_len(), 3);
     assert_eq!(engine.einsum_cache_capacity(), NonZeroUsize::new(3).unwrap());
 }
+
+#[test]
+fn lru_eviction_preserves_recently_used() {
+    let mut engine = Engine::with_einsum_cache_capacity(
+        CpuBackend::new(),
+        NonZeroUsize::new(2).unwrap(),
+    );
+
+    // Three distinct cache keys via shapes A, B, C.
+    // Sequence: A (miss), B (miss), A (hit — now MRU), C (miss — evicts B).
+    // Expected final state: A and C present, B evicted.
+
+    let key_a = ("ij,jk->ik".to_string(), vec![vec![2, 3], vec![3, 2]]);
+    let key_b = ("ij,jk->ik".to_string(), vec![vec![2, 4], vec![4, 2]]);
+    let key_c = ("ij,jk->ik".to_string(), vec![vec![2, 5], vec![5, 2]]);
+
+    run_matmul(&mut engine, 2, 2, 3); // A
+    run_matmul(&mut engine, 2, 2, 4); // B
+    run_matmul(&mut engine, 2, 2, 3); // A again — should be a hit, moves A to MRU
+    run_matmul(&mut engine, 2, 2, 5); // C — cache full, evicts LRU (which is B)
+
+    assert_eq!(engine.einsum_cache_len(), 2);
+    assert!(engine.einsum_cache_contains(&key_a), "A should be retained (MRU)");
+    assert!(!engine.einsum_cache_contains(&key_b), "B should be evicted");
+    assert!(engine.einsum_cache_contains(&key_c), "C should be present (just inserted)");
+}
