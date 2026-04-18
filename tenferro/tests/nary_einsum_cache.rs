@@ -36,10 +36,8 @@ fn with_einsum_cache_capacity_sets_capacity() {
 
 #[test]
 fn set_einsum_cache_capacity_shrinks_len() {
-    let mut engine = Engine::with_einsum_cache_capacity(
-        CpuBackend::new(),
-        NonZeroUsize::new(10).unwrap(),
-    );
+    let mut engine =
+        Engine::with_einsum_cache_capacity(CpuBackend::new(), NonZeroUsize::new(10).unwrap());
     // Populate with 5 distinct einsum shapes (same subscripts, different shapes).
     for k in 1..=5 {
         run_matmul(&mut engine, 2, 2, k);
@@ -47,15 +45,16 @@ fn set_einsum_cache_capacity_shrinks_len() {
     assert_eq!(engine.einsum_cache_len(), 5);
     engine.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
     assert_eq!(engine.einsum_cache_len(), 3);
-    assert_eq!(engine.einsum_cache_capacity(), NonZeroUsize::new(3).unwrap());
+    assert_eq!(
+        engine.einsum_cache_capacity(),
+        NonZeroUsize::new(3).unwrap()
+    );
 }
 
 #[test]
 fn lru_eviction_preserves_recently_used() {
-    let mut engine = Engine::with_einsum_cache_capacity(
-        CpuBackend::new(),
-        NonZeroUsize::new(2).unwrap(),
-    );
+    let mut engine =
+        Engine::with_einsum_cache_capacity(CpuBackend::new(), NonZeroUsize::new(2).unwrap());
 
     // Three distinct cache keys via shapes A, B, C.
     // Sequence: A (miss), B (miss), A (hit — now MRU), C (miss — evicts B).
@@ -71,9 +70,15 @@ fn lru_eviction_preserves_recently_used() {
     run_matmul(&mut engine, 2, 2, 5); // C — cache full, evicts LRU (which is B)
 
     assert_eq!(engine.einsum_cache_len(), 2);
-    assert!(engine.einsum_cache_contains(&key_a), "A should be retained (MRU)");
+    assert!(
+        engine.einsum_cache_contains(&key_a),
+        "A should be retained (MRU)"
+    );
     assert!(!engine.einsum_cache_contains(&key_b), "B should be evicted");
-    assert!(engine.einsum_cache_contains(&key_c), "C should be present (just inserted)");
+    assert!(
+        engine.einsum_cache_contains(&key_c),
+        "C should be present (just inserted)"
+    );
 }
 
 /// When an ExecProgram containing a NaryEinsum instruction is evaluated twice
@@ -93,16 +98,16 @@ fn nary_einsum_on_exec_path_hits_cache() {
     let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum");
 
     // Concrete input for the symbolic leg.
-    let a_concrete = Tensor::from_vec(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    let a_concrete = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     // First eval: miss -> inserts one entry.
     c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])
         .expect("eval 1");
     let len_after_first = engine.einsum_cache_len();
-    assert_eq!(len_after_first, 1, "expected one cache entry after first eval");
+    assert_eq!(
+        len_after_first, 1,
+        "expected one cache entry after first eval"
+    );
 
     // Second eval with the same concrete input: must hit the cache.
     c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])

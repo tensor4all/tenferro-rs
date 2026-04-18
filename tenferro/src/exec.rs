@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::engine::NaryEinsumCache;
 use crate::compiler::compile_std_to_exec;
+use crate::engine::NaryEinsumCache;
 use crate::error::{Error, Result};
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
@@ -731,9 +731,12 @@ fn execute_nary_einsum<B: TensorBackend>(
         DispatchMode::Unsegmented => {
             eval_exec_ir_unsegmented_with_cache(backend, &program, program_inputs, cache)?
         }
-        DispatchMode::Segmented => {
-            crate::segment::eval_exec_segmented_with_cache(backend, &program, program_inputs, cache)?
-        }
+        DispatchMode::Segmented => crate::segment::eval_exec_segmented_with_cache(
+            backend,
+            &program,
+            program_inputs,
+            cache,
+        )?,
     };
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(

@@ -2,13 +2,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use crate::error::Result;
 use crate::exec::{
     collect_outputs, execute_backend_op, execute_ffi_instruction, execute_host_instruction,
     initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
-use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
 };
@@ -200,13 +200,7 @@ pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
                 })?;
             }
             Segment::Ffi(inst) => {
-                execute_ffi_instruction(
-                    backend,
-                    &mut slots,
-                    inst,
-                    DispatchMode::Segmented,
-                    cache,
-                )?;
+                execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Segmented, cache)?;
                 reclaim_last_use_inputs_backend(&mut slots, inst, backend);
             }
             Segment::Host(inst) => {
