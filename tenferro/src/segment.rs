@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use crate::error::Result;
 use crate::exec::{
     collect_outputs, execute_backend_op, execute_ffi_instruction, execute_host_instruction,
@@ -143,6 +144,19 @@ pub fn eval_exec_segmented<B: TensorBackend>(
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
+    let mut cache = NaryEinsumCache::new(
+        std::num::NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
+            .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+    );
+    eval_exec_segmented_with_cache(backend, program, inputs, &mut cache)
+}
+
+pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    cache: &mut crate::engine::NaryEinsumCache,
+) -> Result<Vec<Tensor>> {
     let segments = segment_exec_program(program);
     let mut slots = initialize_slots(program, inputs);
 
@@ -186,7 +200,7 @@ pub fn eval_exec_segmented<B: TensorBackend>(
                 })?;
             }
             Segment::Ffi(inst) => {
-                execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Segmented)?;
+                execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Segmented, cache)?;
                 reclaim_last_use_inputs_backend(&mut slots, inst, backend);
             }
             Segment::Host(inst) => {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::compiler::compile_std_to_exec;
+use crate::engine::NaryEinsumCache;
 use crate::error::{Error, Result};
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
@@ -293,13 +294,26 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
+    let mut cache = NaryEinsumCache::new(
+        std::num::NonZeroUsize::new(crate::engine::DEFAULT_EINSUM_CACHE_CAPACITY)
+            .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+    );
+    eval_exec_ir_unsegmented_with_cache(backend, program, inputs, &mut cache)
+}
+
+pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    cache: &mut NaryEinsumCache,
+) -> Result<Vec<Tensor>> {
     let mut slots = initialize_slots(program, inputs);
 
     for inst in &program.instructions {
         if is_host_instruction(inst) {
             execute_host_instruction(backend, &mut slots, inst)?;
         } else if is_ffi_instruction(inst) {
-            execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented)?;
+            execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented, cache)?;
         } else {
             let result =
                 backend.with_exec_session(|exec| execute_backend_op(exec, &slots, inst))?;
@@ -522,6 +536,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
     mode: DispatchMode,
+    cache: &mut NaryEinsumCache,
 ) -> Result<()> {
     match &inst.op {
         ExecOp::DotGeneral(config) => {
@@ -534,7 +549,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         }
         ExecOp::NaryEinsum { subscripts } => {
             let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
-            let result = execute_nary_einsum(backend, &inputs, subscripts, mode)?;
+            let result = execute_nary_einsum(backend, &inputs, subscripts, mode, cache)?;
             slots[inst.output_slots[0]] = Some(result);
         }
         ExecOp::Cholesky => {
@@ -625,6 +640,7 @@ fn execute_nary_einsum<B: TensorBackend>(
     inputs: &[&Tensor],
     subscripts: &str,
     mode: DispatchMode,
+    cache: &mut NaryEinsumCache,
 ) -> Result<Tensor> {
     use tenferro_einsum::{
         build_einsum_fragment, ContractionOptimizerOptions, ContractionTree, Subscripts,
@@ -643,12 +659,22 @@ fn execute_nary_einsum<B: TensorBackend>(
         .map(|tensor| tensor.shape().to_vec())
         .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-    let tree = ContractionTree::optimize_with_options(
-        &subs,
-        &shape_refs,
-        &ContractionOptimizerOptions::default(),
-    )
-    .map_err(|e| Error::ContractionError(format!("{e}")))?;
+    let cache_key = (subscripts.to_string(), shapes.clone());
+    let tree_arc = if let Some(cached) = cache.get(&cache_key) {
+        cached.clone()
+    } else {
+        let tree = Arc::new(
+            ContractionTree::optimize_with_options(
+                &subs,
+                &shape_refs,
+                &ContractionOptimizerOptions::default(),
+            )
+            .map_err(|e| Error::ContractionError(format!("{e}")))?,
+        );
+        cache.put(cache_key, tree.clone());
+        tree
+    };
+    let tree = tree_arc.as_ref();
 
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut input_vals = Vec::with_capacity(inputs.len());
@@ -702,10 +728,15 @@ fn execute_nary_einsum<B: TensorBackend>(
     let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
 
     let mut outputs = match mode {
-        DispatchMode::Unsegmented => eval_exec_ir_unsegmented(backend, &program, program_inputs)?,
-        DispatchMode::Segmented => {
-            crate::segment::eval_exec_segmented(backend, &program, program_inputs)?
+        DispatchMode::Unsegmented => {
+            eval_exec_ir_unsegmented_with_cache(backend, &program, program_inputs, cache)?
         }
+        DispatchMode::Segmented => crate::segment::eval_exec_segmented_with_cache(
+            backend,
+            &program,
+            program_inputs,
+            cache,
+        )?,
     };
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(

@@ -281,7 +281,7 @@ pub fn einsum_with<B: TensorBackend>(
                     &subs,
                     &shape_refs,
                 )?);
-                engine.einsum_cache.insert(cache_key, tree.clone());
+                engine.einsum_cache.put(cache_key, tree.clone());
                 tree
             };
             Ok(build_traced_from_tree(
