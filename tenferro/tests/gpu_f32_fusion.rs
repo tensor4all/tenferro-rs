@@ -1,7 +1,8 @@
+// Run with: cargo test --features cubecl -- --ignored
 #![cfg(feature = "cubecl")]
 
 use tenferro::{Engine, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_tensor::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec(shape, data))
@@ -12,7 +13,12 @@ fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
 }
 
 #[test]
+#[ignore = "requires CUDA 12+ GPU"]
 fn test_f32_gpu_fusion_chain_e2e() {
+    if !gpu_available() {
+        eprintln!("skipping test_f32_gpu_fusion_chain_e2e — no CUDA device found");
+        return;
+    }
     let a_host = f32_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
