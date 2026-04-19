@@ -553,13 +553,16 @@ pub trait TensorBackend {
 
 /// Algebra-generic backend over typed tensors.
 ///
-/// **Non-mainline.** This trait backs the legacy `SemiringOp` graph substrate
-/// (defined in `tenferro-ops`) and is retained only for Stage 2-6
-/// compatibility with that pipeline. The mainline traced AD substrate is
-/// [`TensorBackend`] acting on `StdTensorOp`; new backend code must not grow
-/// additional coupling to `SemiringBackend`. This trait is scheduled for
-/// removal together with the rest of the semiring pipeline in Stage 6; see
-/// `docs/design/design_v3/30-algebra-and-tropical.md` and
+/// **Non-mainline / deprecated.** This trait backs the legacy `SemiringOp`
+/// graph substrate (defined in `tenferro-ops`) and is retained only for
+/// Stage 2-6 compatibility with that pipeline. The mainline traced AD
+/// substrate is [`TensorBackend`] acting on `StdTensorOp`; new backend code
+/// must not grow additional coupling to `SemiringBackend`. Scheduled for
+/// removal in Stage 6 of the `design_v3` migration plan; eager tropical
+/// support will move to scalar newtypes (`MaxPlus<T>` / `MinPlus<T>` / ...)
+/// over the existing `TypedTensor<T>` T-generic kernels and does not
+/// require this trait. See `docs/design/design_v3/30-algebra-and-tropical.md`
+/// ("Recommended Fate Of `SemiringOp`") and
 /// `docs/design/design_v3/90-migration-plan.md` Stage 6 for the retirement
 /// plan.
 ///
@@ -573,6 +576,10 @@ pub trait TensorBackend {
 /// let mut backend = CpuBackend::new();
 /// needs_semiring_backend(&mut backend);
 /// ```
+#[deprecated(
+    since = "design_v3-stage-2",
+    note = "non-mainline per docs/design/design_v3/30-algebra-and-tropical.md; scheduled for removal in Stage 6"
+)]
 pub trait SemiringBackend<Alg: Semiring> {
     fn batched_gemm(
         &mut self,

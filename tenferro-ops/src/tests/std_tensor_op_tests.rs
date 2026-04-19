@@ -1,3 +1,9 @@
+// Test suite exercises the legacy semiring op path alongside `StdTensorOp`.
+// Both the `SemiringOp`/`SemiringOps` surface are deprecated per design_v3
+// Stage 2 and scheduled for removal in Stage 6, so suppress deprecation
+// warnings in the module scope rather than annotating every test.
+#![allow(deprecated)]
+
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::semiring_op::{SemiringInputKey, SemiringOp};

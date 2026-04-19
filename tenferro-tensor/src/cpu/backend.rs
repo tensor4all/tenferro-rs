@@ -4,7 +4,13 @@ use std::sync::Arc;
 
 use tenferro_algebra::Semiring;
 
-use crate::backend::{SemiringBackend, TensorBackend, TensorExec};
+use crate::backend::{TensorBackend, TensorExec};
+// `SemiringBackend` is the legacy algebra-generic backend trait, deprecated in
+// design_v3 Stage 2 and scheduled for removal in Stage 6. The impl below is
+// retained so existing callers continue to work; suppress the deprecation
+// warning at the narrow scope of the import and impl.
+#[allow(deprecated)]
+use crate::backend::SemiringBackend;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -881,6 +887,7 @@ fn validate_semiring_batched_gemm_config<T>(
     Ok(())
 }
 
+#[allow(deprecated)]
 impl<Alg: Semiring> SemiringBackend<Alg> for CpuBackend {
     fn batched_gemm(
         &mut self,

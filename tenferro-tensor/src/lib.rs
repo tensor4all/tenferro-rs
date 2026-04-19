@@ -32,9 +32,15 @@ pub mod rocm;
 #[cfg(feature = "cubecl")]
 pub mod cubecl;
 
+// `SemiringBackend` is re-exported for legacy users (integration tests,
+// downstream crates that still thread the semiring path through this
+// facade) and is deprecated — see `docs/design/design_v3/30-algebra-and-tropical.md`.
+// Scheduled for removal in Stage 6 of the `design_v3` migration plan.
+#[allow(deprecated)]
+pub use backend::SemiringBackend;
 pub use backend::{
     default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
-    SemiringBackend, TensorBackend, TensorExec,
+    TensorBackend, TensorExec,
 };
 pub use config::*;
 pub use error::*;

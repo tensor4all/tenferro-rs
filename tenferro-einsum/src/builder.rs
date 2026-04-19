@@ -1,3 +1,11 @@
+// `SemiringOps` is deprecated (design_v3 Stage 2) and scheduled for removal
+// in Stage 6, but the einsum fragment builder is generic over it so the
+// mainline `StdTensorOp` path and the legacy `SemiringOp` path can share the
+// same lowering code. Suppress deprecation warnings within this module; the
+// trait parameter will be replaced with a direct `StdTensorOp`-targeted
+// builder in Stage 6.
+#![allow(deprecated)]
+
 // TODO: Remaining einsum optimizations
 //
 // The current v2 einsum lowering is correct and already removes some

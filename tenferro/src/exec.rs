@@ -20,9 +20,16 @@ use tenferro_tensor::cpu::structural::{
 use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SemiringBackend,
-    SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Tensor, TensorBackend, TensorExec, TypedTensor,
 };
+// `SemiringBackend` is the legacy algebra-generic backend trait, deprecated in
+// design_v3 Stage 2 (see `docs/design/design_v3/30-algebra-and-tropical.md`)
+// and scheduled for removal in Stage 6. It is only used by `eval_semiring_ir`
+// below, which is itself deprecated; suppress the import-level warning at the
+// narrow scope of the import.
+#[allow(deprecated)]
+use tenferro_tensor::SemiringBackend;
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
@@ -832,6 +839,16 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
     }
 }
 
+/// Execute a semiring-lowered [`ExecProgram`] (legacy path).
+///
+/// **Deprecated**: non-mainline per
+/// `docs/design/design_v3/30-algebra-and-tropical.md`; scheduled for removal
+/// in Stage 6 of the `design_v3` migration plan.
+#[deprecated(
+    since = "design_v3-stage-2",
+    note = "non-mainline per docs/design/design_v3/30-algebra-and-tropical.md; scheduled for removal in Stage 6"
+)]
+#[allow(deprecated)]
 pub fn eval_semiring_ir<B, Alg>(
     backend: &mut B,
     program: &ExecProgram,
