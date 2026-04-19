@@ -8,6 +8,7 @@ use tenferro_tensor::{DotGeneralConfig, TypedTensor};
 
 use crate::dim_expr::DimExpr;
 use crate::semiring_op_kind::SemiringOpKind;
+#[allow(deprecated)]
 use crate::semiring_ops::SemiringOps;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -15,11 +16,23 @@ pub struct SemiringInputKey {
     pub id: u64,
 }
 
+/// Legacy algebra-generic traced op (non-mainline).
+///
+/// **Deprecated**: non-mainline per
+/// `docs/design/design_v3/30-algebra-and-tropical.md`
+/// ("Recommended Fate Of `SemiringOp`"). Scheduled for removal in Stage 6 of
+/// the `design_v3` migration plan. Use [`crate::std_tensor_op::StdTensorOp`]
+/// and compose tropical-style operations from core primitives instead.
+#[deprecated(
+    since = "design_v3-stage-2",
+    note = "non-mainline per docs/design/design_v3/30-algebra-and-tropical.md; scheduled for removal in Stage 6"
+)]
 pub struct SemiringOp<Alg: Algebra> {
     pub kind: SemiringOpKind,
     _marker: PhantomData<Alg>,
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> SemiringOp<Alg> {
     pub fn new(kind: SemiringOpKind) -> Self {
         Self {
@@ -29,6 +42,7 @@ impl<Alg: Algebra> SemiringOp<Alg> {
     }
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> Clone for SemiringOp<Alg> {
     fn clone(&self) -> Self {
         Self {
@@ -38,6 +52,7 @@ impl<Alg: Algebra> Clone for SemiringOp<Alg> {
     }
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> fmt::Debug for SemiringOp<Alg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SemiringOp")
@@ -46,20 +61,24 @@ impl<Alg: Algebra> fmt::Debug for SemiringOp<Alg> {
     }
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> Hash for SemiringOp<Alg> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.kind.hash(state);
     }
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> PartialEq for SemiringOp<Alg> {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
     }
 }
 
+#[allow(deprecated)]
 impl<Alg: Algebra> Eq for SemiringOp<Alg> {}
 
+#[allow(deprecated)]
 impl<Alg> GraphOp for SemiringOp<Alg>
 where
     Alg: Algebra + Send + Sync + 'static,
@@ -77,6 +96,7 @@ where
     }
 }
 
+#[allow(deprecated)]
 impl<Alg> SemiringOps for SemiringOp<Alg>
 where
     Alg: Algebra + Send + Sync + 'static,

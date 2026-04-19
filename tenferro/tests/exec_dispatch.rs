@@ -1,3 +1,8 @@
+// Test file exercises the deprecated legacy `eval_semiring_ir` alongside the
+// mainline `eval_exec_ir`; suppress the deprecation warnings at module scope
+// rather than annotating each test.
+#![allow(deprecated)]
+
 use num_complex::Complex64;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};

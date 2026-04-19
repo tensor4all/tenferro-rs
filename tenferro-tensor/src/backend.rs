@@ -553,6 +553,14 @@ pub trait TensorBackend {
 
 /// Algebra-generic backend over typed tensors.
 ///
+/// **Deprecated**: non-mainline per
+/// `docs/design/design_v3/30-algebra-and-tropical.md` ("Recommended Fate Of
+/// `SemiringOp`"). The traced graph will not be algebra-parameterized going
+/// forward. Scheduled for removal in Stage 6 of the `design_v3` migration
+/// plan; eager tropical support will move to scalar newtypes
+/// (`MaxPlus<T>` / `MinPlus<T>` / ...) over the existing `TypedTensor<T>`
+/// T-generic kernels and does not require this trait.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -563,6 +571,10 @@ pub trait TensorBackend {
 /// let mut backend = CpuBackend::new();
 /// needs_semiring_backend(&mut backend);
 /// ```
+#[deprecated(
+    since = "design_v3-stage-2",
+    note = "non-mainline per docs/design/design_v3/30-algebra-and-tropical.md; scheduled for removal in Stage 6"
+)]
 pub trait SemiringBackend<Alg: Semiring> {
     fn batched_gemm(
         &mut self,

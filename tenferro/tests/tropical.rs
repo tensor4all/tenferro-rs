@@ -1,3 +1,11 @@
+// Legacy tropical integration test. The `SemiringOp` / `SemiringBackend` /
+// `compile_semiring_to_exec` / `eval_semiring_ir` APIs exercised here are all
+// deprecated per design_v3 Stage 2 and scheduled for removal in Stage 6 of
+// the `design_v3` migration plan (see
+// `docs/design/design_v3/30-algebra-and-tropical.md`). The in-tree coverage
+// stays in place until Stage 4a ships the external tropical crate.
+#![allow(deprecated)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

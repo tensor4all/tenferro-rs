@@ -1,3 +1,8 @@
+// Test file exercises the deprecated legacy `SemiringBackend` trait; suppress
+// the deprecation warnings at module scope rather than annotating each
+// assertion.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::{ffi::OsString, sync::MutexGuard};

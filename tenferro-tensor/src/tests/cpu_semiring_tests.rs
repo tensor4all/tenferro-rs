@@ -1,3 +1,7 @@
+// Test file exercises the deprecated legacy `SemiringBackend` trait; suppress
+// the deprecation warnings at module scope rather than annotating each test.
+#![allow(deprecated)]
+
 use crate::backend::SemiringBackend;
 use crate::config::DotGeneralConfig;
 use crate::cpu::CpuBackend;

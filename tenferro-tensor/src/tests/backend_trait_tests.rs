@@ -1,3 +1,8 @@
+// Test file exercises the deprecated legacy `SemiringBackend` trait; suppress
+// the deprecation warnings at module scope rather than annotating each
+// assertion.
+#![allow(deprecated)]
+
 use crate::backend::{SemiringBackend, TensorBackend};
 use crate::cpu::CpuBackend;
 use tenferro_algebra::Standard;

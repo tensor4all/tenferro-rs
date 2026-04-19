@@ -8,6 +8,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
+#[allow(deprecated)]
 use crate::semiring_ops::SemiringOps;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -493,6 +494,7 @@ impl PrimitiveOp for StdTensorOp {
     }
 }
 
+#[allow(deprecated)]
 impl SemiringOps for StdTensorOp {
     fn add_op() -> Self {
         StdTensorOp::Add
