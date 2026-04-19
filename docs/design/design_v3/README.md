@@ -60,10 +60,81 @@ These documents do not:
 
 The recommended interpretation of `v3` is:
 
-- keep the existing `TypedTensor<T>` plus runtime `Tensor` split
+- keep the full v2 tensor API surface (`EagerTensor<B>`, `TracedTensor`,
+  `Tensor`, `TypedTensor<T>`) unchanged
 - simplify the traced graph around one core op vocabulary
 - move shape snapshots off most op variants and onto value-side metadata
-- treat tropical primarily as a composition and extension story, not as a
-  second graph substrate
-- defer any generic extension mechanism until op identity and hashing are fully
-  specified
+- ship tropical as an external crate: composition first (Stage 4), fused
+  `ExtensionOp` second (Stage 7)
+- commit to a staged generic extension mechanism — contract (Stage 5),
+  implementation (Stage 6), tropical self-test (Stage 7) — rather than
+  leaving it as an open-ended deferred question
+
+## Roadmap
+
+```text
+         USER-FACING API  (unchanged)
+         EagerTensor<B>  TracedTensor  Tensor  TypedTensor<T>
+                             │
+═════════════════════════════╪═══════════════════════════════
+                             │
+  Stage 0  ┌──────────────────▼──────────────────┐
+  approve  │ close #738/#740/#741                │
+           │ design_v3 = source of truth         │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 1  ┌──────────────────▼──────────────────┐
+  shape    │ value-side shape/dtype metadata     │
+  cleanup  │ Cat C fields off ops                │
+           │ ★ prereq: serialized-graph policy   │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 2  ┌──────────────────▼──────────────────┐
+  story    │ SemiringOp demoted (docs + tests)   │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 3  ┌──────────────────▼──────────────────┐
+  AD       │ AD rules read value metadata        │
+  consol.  │ ★ exit gate: algebra A(delete) / B  │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 4  ┌──────────────────▼──────────────────┐
+  tropical │ external tenferro-ext-tropical      │
+  Phase 1  │ MaxPlus/MinPlus scalar newtypes     │
+           │ traced = composition to core ops    │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 5  ┌──────────────────▼──────────────────┐
+  ext.     │ spec doc: ExtensionOp contract      │
+  spec     │   identity · hash · Eq · Clone      │
+           │   AD closure · serialization ver.   │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 6  ┌──────────────────▼──────────────────┐
+  ext.     │ TensorOp::Extension(Arc<dyn Ext>)   │
+  impl     │ engine integration + registry API   │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 7  ┌──────────────────▼──────────────────┐
+  tropical │ FusedTropicalDotGeneral             │
+  Phase 2  │ = first canonical ExtensionOp       │
+           │ = contract self-test                │
+           │ AD via argmax + Gather/Scatter      │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 8  ┌──────────────────▼──────────────────┐
+  (opt)    │ core-owned fused ops                │
+           │ only if composition too slow        │
+           └─────────────────────────────────────┘
+```
+
+### Invariants Held Across All Stages
+
+- `EagerTensor<B>`, `TracedTensor`, `Tensor`, and `TypedTensor<T>` are not
+  renamed, merged, or removed
+- for Standard-scalar users of the `tenferro` facade, the public API stays
+  source-compatible
+- oracle-replay baselines stay green
+- cotangent space is always Standard — never algebra-generic
+- AD rules emit only core op vocabulary (via `ExtensionOp` decomposition
+  from Stage 6 onwards)

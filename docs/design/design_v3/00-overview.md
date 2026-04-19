@@ -179,5 +179,9 @@ The proposal set recommends:
 2. Treat `SemiringOp` as non-mainline and plan to phase it out from the traced
    architecture.
 3. Land value-side shape metadata cleanup before larger AD refactors.
-4. Support tropical via composition first.
-5. Defer a general extension mechanism until op identity is fully specified.
+4. Support tropical via composition first (Stage 4), then via a fused
+   `ExtensionOp` example (Stage 7).
+5. Commit to the generic extension mechanism as a staged deliverable
+   (Stages 5–7): contract first, implementation second, tropical self-test
+   third. Optional core-owned fused primitives remain evidence-gated
+   (Stage 8).
