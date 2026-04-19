@@ -1158,17 +1158,14 @@ impl TracedTensor {
     /// ```
     pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
         config
-            .validate_ranks(self.rank, other.rank)
-            .expect("DotGeneral config rank validation failed");
-        config
-            .validate_dims()
+            .validate_dims_with_ranks(self.rank, other.rank)
             .expect("DotGeneral config dimension validation failed");
-        let lhs_free: Vec<usize> = (0..config.lhs_rank)
+        let lhs_free: Vec<usize> = (0..self.rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
             })
             .collect();
-        let rhs_free: Vec<usize> = (0..config.rhs_rank)
+        let rhs_free: Vec<usize> = (0..other.rank)
             .filter(|d| {
                 !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d)
             })
@@ -1191,8 +1188,14 @@ impl TracedTensor {
             _ => None,
         };
 
+        let lhs_rank = self.rank;
+        let rhs_rank = other.rank;
         apply_binary(
-            StdTensorOp::DotGeneral(config),
+            StdTensorOp::DotGeneral {
+                config,
+                lhs_rank,
+                rhs_rank,
+            },
             self,
             other,
             out_rank,
