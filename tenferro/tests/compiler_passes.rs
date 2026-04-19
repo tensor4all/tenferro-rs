@@ -57,8 +57,6 @@ fn test_dot_dimension_sorter_sorts_contracting() {
         rhs_contracting_dims: vec![2, 1],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![0],
-        lhs_rank: 4,
-        rhs_rank: 3,
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -81,8 +79,6 @@ fn test_dot_dimension_sorter_already_sorted() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config.clone()), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -102,8 +98,6 @@ fn test_dot_dimension_sorter_rhs_consecutive_unsorted() {
         rhs_contracting_dims: vec![3, 2],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 3,
-        rhs_rank: 4,
     };
     let instr = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![2]);
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
@@ -127,8 +121,6 @@ fn test_transpose_folding_absorbs_transpose_on_lhs() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![2, 1], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -154,8 +146,6 @@ fn test_transpose_folding_absorbs_transpose_on_rhs() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 2], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -187,8 +177,6 @@ fn test_transpose_folding_rejects_free_dim_reorder() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![3],
         rhs_batch_dims: vec![1],
-        lhs_rank: 4,
-        rhs_rank: 2,
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config.clone()), vec![2, 1], vec![3]);
     let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
@@ -212,8 +200,6 @@ fn test_transpose_folding_fixed_point() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![2, 3], vec![4]);
     let mut program =
@@ -239,15 +225,13 @@ fn test_full_pipeline_matmul() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
             },
             vec![0, 1],
             vec![2],
@@ -286,14 +270,12 @@ fn test_full_pipeline_transpose_matmul() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let dot = make_std_instr(
         StdTensorOp::DotGeneral {
             config: config.clone(),
-            lhs_rank: config.lhs_rank,
-            rhs_rank: config.rhs_rank,
+            lhs_rank: 2,
+            rhs_rank: 2,
         },
         vec![2, 1],
         vec![3],

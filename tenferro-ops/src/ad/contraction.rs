@@ -11,10 +11,10 @@ pub fn linearize_dot_general(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
 ) -> Vec<Option<LocalValId>> {
     let mut terms = Vec::with_capacity(2);
-    let lhs_rank = config.lhs_rank;
-    let rhs_rank = config.rhs_rank;
 
     if let Some(dx) = tangent_in[0] {
         let term = builder.add_op(
@@ -731,9 +731,6 @@ fn transpose_plan_for_lhs(
         rhs_contracting_dims: rhs_free.to_vec(),
         lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
         rhs_batch_dims: config.rhs_batch_dims.clone(),
-        // These two fields are still required by the struct until Task 10.
-        lhs_rank: output_rank,
-        rhs_rank,
     };
     (
         new_config,
@@ -777,8 +774,6 @@ fn transpose_plan_for_rhs(
         rhs_contracting_dims: ct_lhs_free_positions,
         lhs_batch_dims: config.lhs_batch_dims.clone(),
         rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
-        lhs_rank,
-        rhs_rank: output_rank,
     };
     (
         new_config,

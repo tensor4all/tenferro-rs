@@ -48,8 +48,6 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
         rhs_contracting_dims: vec![1],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut buffers = BufferPool::new();
     let out = dot_general(&mut buffers, &lhs, &rhs, &config).expect("dot_general should succeed");

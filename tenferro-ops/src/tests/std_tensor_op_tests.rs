@@ -119,8 +119,6 @@ fn test_std_tensor_op_input_output_counts() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
             lhs_rank: 2,
             rhs_rank: 2,
@@ -501,8 +499,6 @@ fn test_semiring_op_kind_counts() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         })
         .n_inputs(),
         2
@@ -536,8 +532,6 @@ fn test_semiring_op_uses_algebra_marker_type() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         2,
         2,
@@ -637,8 +631,6 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     assert_eq!(
         SemiringOp::<Standard<f64>>::dot_general(config.clone(), 2, 2).kind,
@@ -1300,8 +1292,6 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         lhs_rank: 2,
         rhs_rank: 2,
@@ -1361,8 +1351,6 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
             rhs_contracting_dims: vec![0, 1],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         lhs_rank: 2,
         rhs_rank: 2,

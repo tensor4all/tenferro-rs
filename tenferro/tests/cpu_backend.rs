@@ -48,8 +48,6 @@ fn test_faer_gemm_basic_f64() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut tc = ta.dot_general(&tb, config);
 
@@ -72,8 +70,6 @@ fn test_faer_gemm_basic_f32() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut tc = ta.dot_general(&tb, config);
 
@@ -104,8 +100,6 @@ fn test_faer_gemm_identity() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut tc = ta.dot_general(&ti, config);
 
@@ -147,8 +141,6 @@ fn test_batched_gemm() {
         rhs_contracting_dims: vec![0], // contract over dim 0 (K)
         lhs_batch_dims: vec![2],       // batch over dim 2
         rhs_batch_dims: vec![2],       // batch over dim 2
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let mut tc = ta.dot_general(&tb, config);
 
@@ -243,8 +235,6 @@ fn test_vector_dot_product() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 1,
-        rhs_rank: 1,
     };
     let mut tc = tv.dot_general(&tw, config);
 

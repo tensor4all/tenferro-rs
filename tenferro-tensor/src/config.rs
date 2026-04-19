@@ -1,5 +1,11 @@
 /// DotGeneral dimension configuration.
 ///
+/// Records only the dim-numbering roles (contracting / batch; free is derived).
+/// Rank info travels with the enclosing `StdTensorOp::DotGeneral` variant at
+/// the trace/StdTensorOp layer, and with `ExecInstruction::output_shapes` at
+/// the exec layer. This separation makes it structurally impossible for
+/// stored ranks to drift from actual tensor ranks (issue #664).
+///
 /// The output shape is `[lhs_free..., rhs_free..., batch...]` (col-major
 /// batch-trailing convention). Batch dims have the largest stride so that
 /// each batch slice occupies a contiguous block of memory.
@@ -14,8 +20,6 @@
 ///     rhs_contracting_dims: vec![0],
 ///     lhs_batch_dims: vec![],
 ///     rhs_batch_dims: vec![],
-///     lhs_rank: 2,
-///     rhs_rank: 2,
 /// };
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -24,29 +28,9 @@ pub struct DotGeneralConfig {
     pub rhs_contracting_dims: Vec<usize>,
     pub lhs_batch_dims: Vec<usize>,
     pub rhs_batch_dims: Vec<usize>,
-    pub lhs_rank: usize,
-    pub rhs_rank: usize,
 }
 
 impl DotGeneralConfig {
-    /// Validate that all dimension indices are within range for the stored ranks
-    /// and that no axis appears in multiple roles.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::DotGeneralConfig;
-    ///
-    /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: vec![1],
-    ///     rhs_contracting_dims: vec![0],
-    ///     lhs_batch_dims: vec![],
-    ///     rhs_batch_dims: vec![],
-    ///     lhs_rank: 2,
-    ///     rhs_rank: 2,
-    /// };
-    /// config.validate_dims().unwrap();
-    /// ```
     fn check_no_duplicates(dims: &[usize], label: &str) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
         for &d in dims {
@@ -57,17 +41,11 @@ impl DotGeneralConfig {
         Ok(())
     }
 
-    pub fn validate_dims(&self) -> Result<(), String> {
-        self.validate_dims_with_ranks(self.lhs_rank, self.rhs_rank)
-    }
-
     /// Validate that all dimension indices are within range for the given
     /// explicit ranks and that no axis appears in multiple roles.
     ///
-    /// This variant accepts the lhs/rhs ranks as parameters instead of reading
-    /// them from `self.lhs_rank`/`self.rhs_rank`, so call sites with the
-    /// tensor shapes in hand can validate without having to populate the
-    /// redundant rank fields on the config.
+    /// Call sites supply the actual operand ranks (from the tensor shapes they
+    /// have in hand). The config itself carries only the dim-numbering roles.
     ///
     /// # Examples
     ///
@@ -79,8 +57,6 @@ impl DotGeneralConfig {
     ///     rhs_contracting_dims: vec![0],
     ///     lhs_batch_dims: vec![],
     ///     rhs_batch_dims: vec![],
-    ///     lhs_rank: 2,
-    ///     rhs_rank: 2,
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```

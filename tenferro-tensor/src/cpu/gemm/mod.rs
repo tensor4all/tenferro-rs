@@ -225,8 +225,6 @@ fn canonical_gemm_layout(
         rhs_contracting_dims: (0..nc).collect(),
         lhs_batch_dims: (nf_lhs + nc..nf_lhs + nc + nb).collect(),
         rhs_batch_dims: (nc + nf_rhs..nc + nf_rhs + nb).collect(),
-        lhs_rank,
-        rhs_rank,
     };
 
     (lhs_perm, rhs_perm, new_config)

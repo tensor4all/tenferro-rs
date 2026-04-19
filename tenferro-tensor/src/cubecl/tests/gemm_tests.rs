@@ -30,8 +30,6 @@ fn matmul_config() -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     }
 }
 
@@ -92,8 +90,6 @@ fn test_dot_general_batched_matmul_f32() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![2],
             rhs_batch_dims: vec![2],
-            lhs_rank: 3,
-            rhs_rank: 3,
         },
         1e-4,
     );

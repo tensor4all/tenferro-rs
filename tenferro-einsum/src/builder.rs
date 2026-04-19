@@ -279,8 +279,6 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
             rhs_contracting_dims,
             lhs_batch_dims,
             rhs_batch_dims,
-            lhs_rank: lhs.shape.len(),
-            rhs_rank: rhs.shape.len(),
         };
 
         // DotGeneral output order: lhs_free + rhs_free + batch (col-major batch trailing)

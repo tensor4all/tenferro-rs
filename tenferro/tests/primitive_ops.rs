@@ -130,8 +130,6 @@ fn test_dot_general() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut tc = ta.dot_general(&tb, config);
     let mut engine = Engine::new(CpuBackend::new());

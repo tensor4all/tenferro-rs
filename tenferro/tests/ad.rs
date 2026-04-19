@@ -204,8 +204,6 @@ fn matmul_config() -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     }
 }
 
@@ -253,8 +251,6 @@ fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: batch_dims.clone(),
         rhs_batch_dims: batch_dims,
-        lhs_rank: rank,
-        rhs_rank: rank,
     }
 }
 
@@ -277,8 +273,8 @@ fn add_solve_composition(
         {
             let config = solve_dot_general_config(rank);
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: rank,
+                rhs_rank: rank,
                 config,
             }
         },
@@ -466,8 +462,8 @@ fn build_svd_uv_product_fragment(
         {
             let config = matmul_config();
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
                 config,
             }
         },
@@ -537,8 +533,8 @@ fn build_svd_reconstruction_sum_fragment(
         {
             let config = matmul_config();
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
                 config,
             }
         },
@@ -549,8 +545,8 @@ fn build_svd_reconstruction_sum_fragment(
         {
             let config = matmul_config();
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
                 config,
             }
         },
@@ -649,8 +645,8 @@ fn build_eigh_projector_fragment(
         {
             let config = matmul_config();
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
                 config,
             }
         },
@@ -679,8 +675,8 @@ fn build_eigh_projector_fragment(
         {
             let config = matmul_config();
             StdTensorOp::DotGeneral {
-                lhs_rank: config.lhs_rank,
-                rhs_rank: config.rhs_rank,
+                lhs_rank: 2,
+                rhs_rank: 2,
                 config,
             }
         },

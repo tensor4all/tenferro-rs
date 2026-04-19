@@ -1199,8 +1199,6 @@ fn matmul_preserve_trailing_batch(
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: batch_dims.clone(),
             rhs_batch_dims: batch_dims,
-            lhs_rank: rank,
-            rhs_rank: rank,
         },
     )
 }

@@ -7,8 +7,6 @@ fn validate_dims_with_explicit_ranks_rejects_out_of_range_contract() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = config
         .validate_dims_with_ranks(2, 2)
@@ -23,8 +21,6 @@ fn validate_dims_with_explicit_ranks_accepts_valid_config() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     config.validate_dims_with_ranks(2, 2).unwrap();
 }

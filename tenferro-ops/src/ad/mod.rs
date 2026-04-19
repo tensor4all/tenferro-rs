@@ -41,9 +41,13 @@ fn linearize_non_semiring(
         StdTensorOp::Pow => analytic::linearize_pow(builder, primal_in, primal_out, tangent_in),
         StdTensorOp::Expm1 => analytic::linearize_expm1(builder, primal_out, tangent_in),
         StdTensorOp::Log1p => analytic::linearize_log1p(builder, primal_in, tangent_in),
-        StdTensorOp::DotGeneral { config, .. } => {
-            contraction::linearize_dot_general(builder, primal_in, tangent_in, config)
-        }
+        StdTensorOp::DotGeneral {
+            config,
+            lhs_rank,
+            rhs_rank,
+        } => contraction::linearize_dot_general(
+            builder, primal_in, tangent_in, config, *lhs_rank, *rhs_rank,
+        ),
         StdTensorOp::NaryEinsum { subscripts, .. } => {
             contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }

@@ -725,8 +725,6 @@ fn test_dot_general_matmul() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
         )
         .unwrap();
@@ -753,8 +751,6 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 1,
-                rhs_rank: 1,
             },
         )
         .unwrap();
@@ -776,8 +772,6 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
         )
         .unwrap();
@@ -803,8 +797,6 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
         )
         .unwrap();
@@ -840,8 +832,6 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![0, 2],
                 rhs_batch_dims: vec![2, 3],
-                lhs_rank: 4,
-                rhs_rank: 4,
             },
         )
         .unwrap();
@@ -2681,8 +2671,6 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
 
     let a_f32 = Tensor::F32(TypedTensor::from_vec(vec![1, 2], vec![1.0f32, 2.0]));
@@ -2877,8 +2865,6 @@ fn test_batched_gemm_rejects_contracting_dim_count_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -2906,8 +2892,6 @@ fn test_batched_gemm_rejects_batch_dim_count_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![1],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -2935,8 +2919,6 @@ fn test_batched_gemm_rejects_axis_role_conflict() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![0],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -2964,8 +2946,6 @@ fn test_batched_gemm_rejects_duplicate_axis() {
         rhs_contracting_dims: vec![0, 0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -2993,8 +2973,6 @@ fn test_batched_gemm_rejects_contracting_shape_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3022,8 +3000,6 @@ fn test_batched_gemm_rejects_batch_shape_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![2],
         rhs_batch_dims: vec![2],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3096,8 +3072,6 @@ fn test_batched_gemm_rejects_out_of_bounds_rhs_contracting_axis() {
         rhs_contracting_dims: vec![5],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3125,8 +3099,6 @@ fn test_batched_gemm_rejects_out_of_bounds_rhs_batch_axis() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![2],
         rhs_batch_dims: vec![5],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3154,8 +3126,6 @@ fn test_batched_gemm_rejects_rhs_contracting_duplicate_axis() {
         rhs_contracting_dims: vec![0, 0],
         lhs_batch_dims: vec![2],
         rhs_batch_dims: vec![2],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3183,8 +3153,6 @@ fn test_batched_gemm_rejects_rhs_batch_duplicate_axis() {
         rhs_contracting_dims: vec![1],
         lhs_batch_dims: vec![0, 2],
         rhs_batch_dims: vec![0, 0],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3212,8 +3180,6 @@ fn test_batched_gemm_rejects_rhs_axis_role_conflict() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![2],
         rhs_batch_dims: vec![0],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3241,8 +3207,6 @@ fn test_batched_gemm_no_free_dims_inner_product() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 1,
-        rhs_rank: 1,
     };
     let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3265,8 +3229,6 @@ fn test_batched_gemm_with_batched_inner_product() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![1],
         rhs_batch_dims: vec![1],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3290,8 +3252,6 @@ fn test_batched_gemm_matrix_multiply_no_batch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3349,8 +3309,6 @@ fn test_batched_gemm_rejects_out_of_bounds_lhs_batch_axis() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![5],
         rhs_batch_dims: vec![1],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let err = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3418,8 +3376,6 @@ fn test_batched_gemm_with_multiple_batch_dims() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![2, 3],
         rhs_batch_dims: vec![2, 3],
-        lhs_rank: 4,
-        rhs_rank: 4,
     };
     let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,
@@ -3441,8 +3397,6 @@ fn test_batched_gemm_rank1_vectors_with_batch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![1],
         rhs_batch_dims: vec![1],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let out = <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
         &mut backend,

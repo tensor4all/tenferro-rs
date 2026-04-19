@@ -74,8 +74,6 @@ fn test_dot_general_preserves_lhs_dtype() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         lhs_rank: 2,
         rhs_rank: 2,
