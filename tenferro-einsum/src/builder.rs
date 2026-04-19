@@ -293,7 +293,7 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
         let result_shape: Vec<usize> = result_labels.iter().map(|&l| label_to_size(l)).collect();
 
         let outputs = builder.add_op(
-            Op::dot_general(config),
+            Op::dot_general(config, lhs.shape.len(), rhs.shape.len()),
             vec![lhs.val.clone(), rhs.val.clone()],
             OpMode::Primal,
         );

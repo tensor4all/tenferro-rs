@@ -530,14 +530,18 @@ fn test_semiring_op_kind_counts() {
 #[test]
 fn test_semiring_op_uses_algebra_marker_type() {
     let add = SemiringOp::<Standard<f64>>::add_op();
-    let gemm = SemiringOp::<Standard<f64>>::dot_general(DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
-    });
+    let gemm = SemiringOp::<Standard<f64>>::dot_general(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+            lhs_rank: 2,
+            rhs_rank: 2,
+        },
+        2,
+        2,
+    );
 
     assert_eq!(add.n_inputs(), 2);
     assert_eq!(add.n_outputs(), 1);
@@ -637,7 +641,7 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
         rhs_rank: 2,
     };
     assert_eq!(
-        SemiringOp::<Standard<f64>>::dot_general(config.clone()).kind,
+        SemiringOp::<Standard<f64>>::dot_general(config.clone(), 2, 2).kind,
         SemiringOpKind::DotGeneral(config)
     );
 }

@@ -557,9 +557,7 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::Mul
     }
 
-    fn dot_general(config: DotGeneralConfig) -> Self {
-        let lhs_rank = config.lhs_rank;
-        let rhs_rank = config.rhs_rank;
+    fn dot_general(config: DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> Self {
         StdTensorOp::DotGeneral {
             config,
             lhs_rank,
