@@ -333,8 +333,6 @@ pub fn triangular_solve(
         lower,
         transpose_a,
         unit_diagonal,
-        lhs_shape: input_shape_expr(a),
-        rhs_shape: input_shape_expr(b),
     };
     if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         let b2d = b.reshape(&matrix_rhs_shape);
@@ -344,8 +342,6 @@ pub fn triangular_solve(
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: input_shape_expr(a),
-                rhs_shape: DimExpr::from_concrete(&matrix_rhs_shape),
             },
             a,
             &b2d,

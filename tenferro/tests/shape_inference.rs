@@ -334,8 +334,6 @@ fn test_multi_output_linalg_shape_rules() {
         lower: true,
         transpose_a: false,
         unit_diagonal: false,
-        lhs_shape: vec![cst(3), cst(3)],
-        rhs_shape: vec![cst(3), cst(2)],
     };
     let rhs = vec![cst(3), cst(2)];
     assert_eq!(

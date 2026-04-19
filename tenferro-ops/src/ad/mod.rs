@@ -103,8 +103,6 @@ fn linearize_non_semiring(
             lower,
             transpose_a,
             unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         } => linalg::linearize_triangular_solve(
             builder,
             primal_in,
@@ -114,8 +112,7 @@ fn linearize_non_semiring(
             *lower,
             *transpose_a,
             *unit_diagonal,
-            lhs_shape,
-            rhs_shape,
+            ctx,
         ),
         StdTensorOp::Cholesky { input_shape } => {
             linalg::linearize_cholesky(builder, primal_out, tangent_in, input_shape)
@@ -233,8 +230,6 @@ fn transpose_non_semiring(
             lower,
             transpose_a,
             unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         } => linalg::transpose_triangular_solve(
             emitter,
             cotangent_out,
@@ -244,8 +239,6 @@ fn transpose_non_semiring(
             *lower,
             *transpose_a,
             *unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         ),
         StdTensorOp::ValidateNonsingular { .. } => vec![cotangent_out[0]],
         _ => return None,
