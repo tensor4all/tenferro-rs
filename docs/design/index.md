@@ -27,6 +27,12 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |
 
+## Proposal Sets
+
+| Document | Description |
+|----------|-------------|
+| [design_v3/README.md](./design_v3/README.md) | Non-canonical proposal set for traced graph, AD, shape metadata, and tropical externalization |
+
 ## Reference
 
 See [Reference](../reference/) for external system surveys and comparison notes.
