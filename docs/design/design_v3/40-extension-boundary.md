@@ -108,7 +108,7 @@ The Stage 5 spec must satisfy all of these:
   miss, version-mismatch behavior)
 - AD closure: `linearize` and `transpose_rule` emit only core ops and
   respect the `ShapeGuardContext` surface from
-  `tenferro-ops/src/std_tensor_op.rs:521-548`
+  `tenferro-ops/src/ad/context.rs:49-109`
 - serialization versioning (family identifier format, cross-process and
   cross-version policy)
 - explicit failure mode when a backend lacks a forward implementation

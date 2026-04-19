@@ -52,9 +52,10 @@ stage lands.
   `StdTensorOp::DotGeneral` itself
   (`tenferro-ops/src/std_tensor_op.rs:23-27`) and continues with the order
   in `20-shape-metadata.md`
-- `TensorMeta` queries (`shape_of`, `dtype_of`) at the builder / emitter /
-  `ShapeGuardContext` boundary are total for every traced value: the
-  query returns without panic for both concrete and symbolic inputs, and
+- `TensorMeta` queries (`shape_of`, `dtype_of`) on `ShapeGuardContext`
+  (the normative AD metadata surface) and on any builder / emitter
+  convenience wrappers are total for every traced value: the query
+  returns without panic for both concrete and symbolic inputs, and
   symbolic placeholders are represented explicitly as `DimExpr` values
   rather than silently collapsed. Fixing the AD-side zero-tangent
   collapse at `tenferro/src/traced.rs:820-833` is a **Stage 3** goal and
@@ -202,7 +203,7 @@ Goals — the spec must cover all of the following:
   reported
 - **AD API surface**: `linearize` and `transpose_rule` must emit only
   core op values and respect the `ShapeGuardContext` surface from
-  `tenferro-ops/src/std_tensor_op.rs:521-548`
+  `tenferro-ops/src/ad/context.rs:49-109`
 - **Serialization compatibility**: family identifier versioning,
   cross-process and cross-version guarantees, behavior when a consumer
   lacks a producer's extension family

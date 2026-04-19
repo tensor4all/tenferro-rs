@@ -99,37 +99,43 @@ The first two are sufficient for the initial migration. A richer
 
 ### Where metadata lives in the graph
 
-The per-value metadata must be reachable from the builder, the emitter,
-and from AD-rule code without requiring each rule to re-derive it.
+The per-value metadata must be reachable from AD rules and from lowering
+code without requiring each consumer to re-derive it. `v3` makes one
+explicit choice to avoid drift between call sites:
 
-Proposed placement:
-
-- **Fragment-side storage**: metadata is attached to each `LocalValId`
-  inside the fragment. Whether this is an extension of
-  `Fragment<StdTensorOp>` itself or a parallel side table is a Stage 1
-  implementation choice; either works as long as lookups are O(1) on the
-  hot path.
-- **Builder accessors**: `builder.shape_of(val)` and
-  `builder.dtype_of(val)` read from the fragment-side storage.
-- **Emitter accessors**: the eager `OpEmitter` gains the same accessors
-  with the same semantics, so that eager AD paths consume the same API
-  as traced AD paths.
-- **AD-rule surface**: `ShapeGuardContext`
-  (`tenferro-ops/src/std_tensor_op.rs:521-548`) is extended to expose
-  shape/dtype queries so that `linearize` and `transpose_rule` never
-  need to read op-embedded snapshots.
+- **`ShapeGuardContext` is the normative AD metadata surface.** It is
+  already threaded through `linearize` and `transpose_rule` via the
+  `PrimitiveOp` contract
+  (`tenferro-ops/src/ad/context.rs:49-109`). Stage 1 extends it so every
+  call site can call `ctx.shape_of(key)` / `ctx.dtype_of(key)` /
+  `ctx.metadata_of(key)`. The key type is `GlobalValKey<StdTensorOp>`
+  (or `ValRef<StdTensorOp>` where the AD rule receives that form) —
+  the same global-identity keys that AD rules already receive.
+  `LocalValId` is fragment-local and insufficient; the metadata map
+  must be keyed by global identity so that multi-fragment AD passes
+  resolve consistently.
+- **Underlying storage is an implementation detail.** The simplest
+  realization is a `HashMap<GlobalValKey<StdTensorOp>, TensorMeta>`
+  owned by the AD pass that is populated as graph nodes are added.
+  Stage 1 may choose any storage that yields O(1) hot-path lookup; it
+  must not require caller-side re-derivation.
+- **Builder and emitter helpers are convenience wrappers**, not the
+  fundamental seam. If `builder.shape_of(val)` / `emitter.shape_of(val)`
+  are added for ergonomics, they must be backed by the same
+  `GlobalValKey`-keyed metadata map so they cannot drift from the
+  `ShapeGuardContext` view.
 - **Symbolic inputs**: when a value's shape is symbolic, `shape_of`
   returns a `Vec<DimExpr>` that may contain variables; when concrete,
   all entries resolve to constants via `DimExpr::constant_value`. The
-  metadata layer itself never invents a zero-length or
-  placeholder-only shape — this is what Stage 1's totality acceptance
-  criterion asserts.
+  metadata layer itself never invents a zero-length or placeholder-only
+  shape — this is what Stage 1's totality acceptance criterion asserts.
 
-Stage 1 must wire these accessors consistently across all three
-surfaces (builder, emitter, `ShapeGuardContext`). The existing
-`TracedTensor.shape_hint` (`tenferro/src/traced.rs:53`) is an internal
-precursor and continues to exist during the migration as a shim; it
-becomes derivable from the metadata accessors once Stage 1 is complete.
+Stage 1 wires `ShapeGuardContext` metadata queries first, and only then
+adds builder / emitter convenience wrappers against the same underlying
+map. The existing `TracedTensor.shape_hint`
+(`tenferro/src/traced.rs:53`) is an internal precursor at the facade
+level and continues to exist during the migration as a shim; it becomes
+derivable from the metadata accessors once Stage 1 is complete.
 
 ## Interaction With Existing Runtime Types
 
