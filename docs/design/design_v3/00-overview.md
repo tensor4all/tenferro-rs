@@ -159,10 +159,10 @@ The guarantees:
   `eig`, `lu`, ...) keep their current signatures.
 - `std::ops::{Add, Mul, Neg}` impls for `&EagerTensor<B>` are preserved.
 
-The `tenferro-algebra` crate decision (Option A delete / Option B reduce, see
-`30-algebra-and-tropical.md`) therefore does **not** affect any user who only
-imports from the `tenferro` facade. It affects only code that directly
-imports `tenferro-algebra`, `SemiringBackend`, or `SemiringOp`.
+The `tenferro-algebra` crate was deleted in Stage 3 (Option A, see
+`30-algebra-and-tropical.md`). This does **not** affect any user who only
+imports from the `tenferro` facade. Only code that directly imported
+`tenferro-algebra`, `SemiringBackend`, or `SemiringOp` is affected.
 
 The one residual breakage surface is config structs that carry Category C
 fields today. Category C removal is a deliberate migration step (see

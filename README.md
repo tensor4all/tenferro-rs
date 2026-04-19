@@ -14,7 +14,6 @@ AD (VJP/JVP/HVP) on CPU and CUDA GPU (via CubeCL + cuTENSOR + cuSOLVER).
 | `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend, CubeCL GPU backend |
 | `tenferro-einsum` | Subscripts, contraction trees, and fragment-building utilities |
 | `tenferro-ops` | Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rule implementations |
-| `tenferro-algebra` | Semiring/algebra traits |
 | `tenferro-device` | Shared device and error infrastructure |
 
 ## Documentation

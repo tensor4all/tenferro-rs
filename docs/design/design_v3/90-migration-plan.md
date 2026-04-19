@@ -113,6 +113,11 @@ the binary choice described in `30-algebra-and-tropical.md`:
 This gate must be closed before Stage 4 begins so that the external tropical
 crate is built against a stable boundary.
 
+**Gate closed — Option A executed**: after Stage 2's semiring-pipeline cleanup
+(commit `925c1de`), `tenferro-algebra` had zero callers across all workspace
+crates. The crate was deleted in commit `refactor: delete tenferro-algebra
+crate (design_v3 Stage 3 Option A)` on branch `refactor_ad_v3`.
+
 **Acceptance criteria**:
 
 - oracle-replay baselines stay green

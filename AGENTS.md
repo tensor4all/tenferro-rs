@@ -379,7 +379,6 @@ Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
          tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
-         tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
          tenferro-device       — Device enum, Error/Result types
 
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
@@ -419,10 +418,6 @@ tidu (← chainrules-core)
     │  Tape<V>, TrackedValue<V>, DualValue<V>
     │
 tenferro-device (← strided-view for StridedError, ← thiserror)
-    │
-    ↓
-tenferro-algebra (← strided-traits)
-    │  HasAlgebra trait (UX sugar), Semiring trait, Standard<T> typed algebra
     │
     ↓
 tenferro-tensor

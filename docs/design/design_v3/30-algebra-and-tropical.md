@@ -51,6 +51,13 @@ Open binary choice for the crate itself:
 the migration plan (see `90-migration-plan.md`, Stage 3 exit criterion). What
 matters now is that the ambiguity is closed before Stage 4 begins.
 
+**Stage 3 exit-gate decision (executed)**: Option A was chosen and executed.
+After Stage 2's semiring-pipeline cleanup (commit `925c1de`) the crate had zero
+callers across `tenferro-ops`, `tenferro-tensor`, `tenferro-einsum`, and
+`tenferro`. `tenferro-algebra/` was deleted from the workspace; see the commit
+`refactor: delete tenferro-algebra crate (design_v3 Stage 3 Option A)` on
+branch `refactor_ad_v3`.
+
 ## Recommended Fate Of `SemiringOp`
 
 `SemiringOp<Alg>` should be treated as non-mainline and eventually retired from
