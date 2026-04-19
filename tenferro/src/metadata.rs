@@ -1,0 +1,109 @@
+use computegraph::fragment::Fragment;
+use computegraph::types::{GlobalValKey, ValRef};
+use tenferro_ops::ad::context::{
+    register_global_metadata, register_global_metadata_batch, snapshot_global_metadata, TensorMeta,
+};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::sym_dim::SymDim;
+use tenferro_tensor::{DType, Tensor};
+
+use crate::shape_infer::{infer_output_dtype, infer_output_shapes};
+
+pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
+    TensorMeta { dtype, shape }
+}
+
+pub(crate) fn concrete_tensor_meta(dtype: DType, shape: &[usize]) -> TensorMeta {
+    tensor_meta(dtype, shape.iter().copied().map(SymDim::from).collect())
+}
+
+pub(crate) fn symbolic_input_meta(dtype: DType, tensor_id: u64, rank: usize) -> TensorMeta {
+    tensor_meta(
+        dtype,
+        (0..rank)
+            .map(|axis| SymDim::tensor_axis(tensor_id, axis))
+            .collect(),
+    )
+}
+
+pub(crate) fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
+    concrete_tensor_meta(tensor.dtype(), tensor.shape())
+}
+
+pub(crate) fn register_value_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
+    register_global_metadata(key, meta);
+}
+
+pub(crate) fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
+    snapshot_global_metadata()
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
+}
+
+pub(crate) fn register_fragment_metadata(
+    fragment: &Fragment<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) {
+    let seeded: Vec<_> = seeded.into_iter().collect();
+    let mut known = (*snapshot_global_metadata()).clone();
+    known.extend(seeded.iter().cloned());
+
+    let mut registrations = seeded;
+    for op_node in fragment.ops() {
+        let input_metas: Vec<_> = op_node
+            .inputs
+            .iter()
+            .map(|input| {
+                let key = match input {
+                    ValRef::Local(local_id) => &fragment.vals()[*local_id].key,
+                    ValRef::External(key) => key,
+                };
+                known.get(key).cloned().unwrap_or_else(|| {
+                    panic!(
+                        "metadata registration: missing input metadata for {:?}",
+                        key
+                    )
+                })
+            })
+            .collect();
+
+        let output_metas = infer_output_metas(&op_node.op, &input_metas);
+        for (&output_id, meta) in op_node.outputs.iter().zip(output_metas) {
+            let key = fragment.vals()[output_id].key.clone();
+            known.insert(key.clone(), meta.clone());
+            registrations.push((key, meta));
+        }
+    }
+
+    register_global_metadata_batch(registrations);
+}
+
+fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<TensorMeta> {
+    let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
+        .iter()
+        .enumerate()
+        .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.shape.len()))
+        .collect();
+    let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
+    let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
+
+    let output_dtype = infer_output_dtype(op, &input_dtypes);
+    infer_output_shapes(op, &input_shape_refs)
+        .into_iter()
+        .map(|shape| {
+            let resolved_inputs: Vec<&[SymDim]> = input_metas
+                .iter()
+                .map(|meta| meta.shape.as_slice())
+                .collect();
+            tensor_meta(
+                output_dtype,
+                shape
+                    .iter()
+                    .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
+                    .collect(),
+            )
+        })
+        .collect()
+}

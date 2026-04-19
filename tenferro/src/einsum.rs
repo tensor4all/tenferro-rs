@@ -34,6 +34,7 @@ use tenferro_tensor::TensorBackend;
 use super::checkpoint::CheckpointNode;
 use super::engine::Engine;
 use super::error::{Error, Result};
+use super::metadata::register_fragment_metadata;
 use super::sym_dim::SymDim;
 use super::traced::{concrete_shape, next_traced_id, try_concrete_shape, TracedTensor};
 
@@ -331,12 +332,14 @@ fn build_symbolic_nary_einsum(
         computegraph::types::OpMode::Primal,
     );
     builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
         rank: parsed.output.len(),
         dtype: inputs[0].dtype,
-        fragment: Arc::new(builder.build()),
+        fragment,
         val: outputs[0],
         data: None,
         shape_hint: None,
@@ -482,6 +485,7 @@ fn build_traced_from_tree(
         ValRef::Local(result_local) => {
             builder.set_outputs(vec![result_local]);
             let fragment = Arc::new(builder.build());
+            register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
             let mut merged = HashMap::new();
             let mut extra_roots = Vec::new();

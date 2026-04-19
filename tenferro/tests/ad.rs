@@ -12,11 +12,15 @@ use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
 use tenferro::einsum::einsum;
 use tenferro::exec::eval_exec_ir;
+use tenferro::shape_infer::{infer_output_dtype, infer_output_shapes};
 use tenferro::{matmul, Engine, TracedTensor};
+use tenferro_ops::ad::context::{
+    register_global_metadata_batch, snapshot_global_metadata, TensorMeta,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 use tidu::{differentiate, transpose, LinearFragment};
@@ -189,6 +193,72 @@ fn concrete_dim_shape(shape: &[DimExpr]) -> Vec<usize> {
         .collect()
 }
 
+fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
+    TensorMeta {
+        dtype: tensor.dtype(),
+        shape: tensor.shape().iter().copied().map(SymDim::from).collect(),
+    }
+}
+
+fn register_fragment_metadata_for_test(
+    fragment: &Fragment<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) {
+    let seeded: Vec<_> = seeded.into_iter().collect();
+    let mut known = (*snapshot_global_metadata()).clone();
+    known.extend(seeded.iter().cloned());
+
+    let mut registrations = seeded;
+    for op_node in fragment.ops() {
+        let input_metas: Vec<_> = op_node
+            .inputs
+            .iter()
+            .map(|input| {
+                let key = match input {
+                    ValRef::Local(local_id) => &fragment.vals()[*local_id].key,
+                    ValRef::External(key) => key,
+                };
+                known
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("test metadata registration missing input {:?}", key))
+            })
+            .collect();
+        let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
+            .iter()
+            .enumerate()
+            .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.shape.len()))
+            .collect();
+        let input_shape_refs: Vec<&[DimExpr]> =
+            input_shape_exprs.iter().map(Vec::as_slice).collect();
+        let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
+        let output_dtype = infer_output_dtype(&op_node.op, &input_dtypes);
+        let resolved_inputs: Vec<&[SymDim]> = input_metas
+            .iter()
+            .map(|meta| meta.shape.as_slice())
+            .collect();
+
+        for (&output_id, shape) in op_node
+            .outputs
+            .iter()
+            .zip(infer_output_shapes(&op_node.op, &input_shape_refs))
+        {
+            let meta = TensorMeta {
+                dtype: output_dtype,
+                shape: shape
+                    .iter()
+                    .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
+                    .collect(),
+            };
+            let key = fragment.vals()[output_id].key.clone();
+            known.insert(key.clone(), meta.clone());
+            registrations.push((key, meta));
+        }
+    }
+
+    register_global_metadata_batch(registrations);
+}
+
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
     let mut engine = Engine::new(CpuBackend::new());
     traced.eval(&mut engine).unwrap().clone()
@@ -272,11 +342,7 @@ fn add_solve_composition(
     let pb = builder.add_op(
         {
             let config = solve_dot_general_config(rank);
-            StdTensorOp::DotGeneral {
-                lhs_rank: rank,
-                rhs_rank: rank,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(lu[0]), ValRef::Local(b)],
         OpMode::Primal,
@@ -461,11 +527,7 @@ fn build_svd_uv_product_fragment(
     let uv_product = builder.add_op(
         {
             let config = matmul_config();
-            StdTensorOp::DotGeneral {
-                lhs_rank: 2,
-                rhs_rank: 2,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(svd[0]), ValRef::Local(svd[2])],
         OpMode::Primal,
@@ -532,11 +594,7 @@ fn build_svd_reconstruction_sum_fragment(
     let us = builder.add_op(
         {
             let config = matmul_config();
-            StdTensorOp::DotGeneral {
-                lhs_rank: 2,
-                rhs_rank: 2,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(svd[0]), ValRef::Local(diag_s[0])],
         OpMode::Primal,
@@ -544,11 +602,7 @@ fn build_svd_reconstruction_sum_fragment(
     let reconstructed = builder.add_op(
         {
             let config = matmul_config();
-            StdTensorOp::DotGeneral {
-                lhs_rank: 2,
-                rhs_rank: 2,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(us[0]), ValRef::Local(svd[2])],
         OpMode::Primal,
@@ -644,11 +698,7 @@ fn build_eigh_projector_fragment(
     let weighted_vectors = builder.add_op(
         {
             let config = matmul_config();
-            StdTensorOp::DotGeneral {
-                lhs_rank: 2,
-                rhs_rank: 2,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(eigh[1]), ValRef::Local(diag[0])],
         OpMode::Primal,
@@ -674,11 +724,7 @@ fn build_eigh_projector_fragment(
     let projector = builder.add_op(
         {
             let config = matmul_config();
-            StdTensorOp::DotGeneral {
-                lhs_rank: 2,
-                rhs_rank: 2,
-                config,
-            }
+            StdTensorOp::DotGeneral { config }
         },
         vec![ValRef::Local(weighted_vectors[0]), ValRef::Local(vt[0])],
         OpMode::Primal,
@@ -933,8 +979,17 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     mut inputs_map: HashMap<TensorInputKey, Tensor>,
     cotangent: Tensor,
 ) -> Tensor {
+    register_fragment_metadata_for_test(
+        fragment.as_ref(),
+        inputs_map.iter().map(|(key, tensor)| {
+            (
+                GlobalValKey::Input(key.clone()),
+                tensor_meta_from_tensor(tensor),
+            )
+        }),
+    );
     let view = resolve(vec![fragment.clone()]);
-    let mut ad_ctx = ShapeGuardContext::default();
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
     let linear = differentiate(
         &view,
         std::slice::from_ref(&loss_key),
@@ -943,6 +998,14 @@ fn grad_from_fragment_with_inputs_and_cotangent(
         &mut ad_ctx,
         &HashMap::new(),
     );
+    register_fragment_metadata_for_test(
+        &linear.fragment,
+        vec![(
+            GlobalValKey::Input(input_key.tangent_of(0)),
+            tensor_meta_from_tensor(inputs_map.get(&input_key).expect("missing input tensor")),
+        )],
+    );
+    ad_ctx.refresh_global_metadata();
     let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
     let grad_key = transposed.tangent_outputs[0]
@@ -1000,8 +1063,17 @@ fn jvp_from_fragment_with_inputs(
     mut inputs_map: HashMap<TensorInputKey, Tensor>,
     tangent: Tensor,
 ) -> Tensor {
+    register_fragment_metadata_for_test(
+        fragment.as_ref(),
+        inputs_map.iter().map(|(key, tensor)| {
+            (
+                GlobalValKey::Input(key.clone()),
+                tensor_meta_from_tensor(tensor),
+            )
+        }),
+    );
     let view = resolve(vec![fragment.clone()]);
-    let mut ad_ctx = ShapeGuardContext::default();
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
     let linear = differentiate(
         &view,
         std::slice::from_ref(&output_key),
@@ -1009,6 +1081,13 @@ fn jvp_from_fragment_with_inputs(
         0,
         &mut ad_ctx,
         &HashMap::new(),
+    );
+    register_fragment_metadata_for_test(
+        &linear.fragment,
+        vec![(
+            GlobalValKey::Input(input_key.tangent_of(0)),
+            tensor_meta_from_tensor(&tangent),
+        )],
     );
     let tangent_key = linear.tangent_outputs[0]
         .map(|id| linear.fragment.vals()[id].key.clone())
@@ -1080,7 +1159,14 @@ fn transpose_primal_unary_op_with_inputs(
         tangent_inputs: vec![(input_key, tangent_input)],
         tangent_outputs: vec![Some(output)],
     };
-    let mut ad_ctx = ShapeGuardContext::default();
+    register_fragment_metadata_for_test(
+        &linear.fragment,
+        vec![(
+            GlobalValKey::Input(tangent_input_key.clone()),
+            tensor_meta_from_tensor(&input),
+        )],
+    );
+    let mut ad_ctx = ShapeGuardContext::with_global_metadata();
     let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
     let cotangent_input_key = match &transposed.fragment.vals()[transposed.tangent_inputs[0].1].key

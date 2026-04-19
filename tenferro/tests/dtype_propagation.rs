@@ -75,8 +75,6 @@ fn test_dot_general_preserves_lhs_dtype() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     assert_eq!(
         infer_output_dtype(&op, &[DType::F32, DType::F32]),

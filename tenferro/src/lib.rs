@@ -31,6 +31,7 @@ pub mod engine;
 pub mod error;
 pub mod exec;
 mod linalg_api;
+mod metadata;
 pub mod segment;
 pub mod shape_infer;
 pub mod sym_dim;

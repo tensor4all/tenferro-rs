@@ -41,13 +41,9 @@ fn linearize_non_semiring(
         StdTensorOp::Pow => analytic::linearize_pow(builder, primal_in, primal_out, tangent_in),
         StdTensorOp::Expm1 => analytic::linearize_expm1(builder, primal_out, tangent_in),
         StdTensorOp::Log1p => analytic::linearize_log1p(builder, primal_in, tangent_in),
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        } => contraction::linearize_dot_general(
-            builder, primal_in, tangent_in, config, *lhs_rank, *rhs_rank,
-        ),
+        StdTensorOp::DotGeneral { config } => {
+            contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
+        }
         StdTensorOp::NaryEinsum { subscripts, .. } => {
             contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }
@@ -166,7 +162,6 @@ fn transpose_non_semiring(
     mode: &OpMode,
     ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
-    let _ = ctx;
     Some(match op {
         StdTensorOp::Div => elementwise_tier2::transpose_div(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise_tier2::transpose_abs(emitter, cotangent_out, inputs, mode),
@@ -183,19 +178,9 @@ fn transpose_non_semiring(
         StdTensorOp::Pow => analytic::transpose_pow(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Expm1 => analytic::transpose_expm1(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Log1p => analytic::transpose_log1p(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        } => contraction::transpose_dot_general(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            config,
-            *lhs_rank,
-            *rhs_rank,
-        ),
+        StdTensorOp::DotGeneral { config } => {
+            contraction::transpose_dot_general(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
         StdTensorOp::NaryEinsum {
             subscripts,
             n_inputs,
@@ -327,3 +312,6 @@ pub fn transpose_rule(
     }
     todo_transpose_rule(op)
 }
+
+#[cfg(test)]
+mod tests;

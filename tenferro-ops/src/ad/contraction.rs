@@ -3,6 +3,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
+use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -11,17 +12,23 @@ pub fn linearize_dot_general(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &DotGeneralConfig,
-    lhs_rank: usize,
-    rhs_rank: usize,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
+    let lhs_rank = ctx.shape_of(&ValRef::External(primal_in[0].clone())).len();
+    let rhs_rank = ctx.shape_of(&ValRef::External(primal_in[1].clone())).len();
+    config
+        .validate_dims_with_ranks(lhs_rank, rhs_rank)
+        .unwrap_or_else(|err| {
+            panic!(
+                "invalid DotGeneral config during linearize: {err} (lhs_rank={lhs_rank}, rhs_rank={rhs_rank})"
+            )
+        });
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
         let term = builder.add_op(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
-                lhs_rank,
-                rhs_rank,
             },
             vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
             OpMode::Linear {
@@ -35,8 +42,6 @@ pub fn linearize_dot_general(
         let term = builder.add_op(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
-                lhs_rank,
-                rhs_rank,
             },
             vec![ValRef::External(primal_in[0].clone()), ValRef::Local(dy)],
             OpMode::Linear {
@@ -246,13 +251,15 @@ pub fn transpose_dot_general(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &DotGeneralConfig,
-    lhs_rank: usize,
-    rhs_rank: usize,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None, None],
     };
+
+    let lhs_rank = ctx.shape_of(&inputs[0]).len();
+    let rhs_rank = ctx.shape_of(&inputs[1]).len();
 
     let active_mask = match mode {
         OpMode::Linear { active_mask } => active_mask,
@@ -282,14 +289,13 @@ pub fn transpose_dot_general(
         let out = emitter.add_op(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
-                lhs_rank: new_lhs_rank,
-                rhs_rank: new_rhs_rank,
             },
             vec![cotangent.clone(), ValRef::Local(rhs_conj)],
             OpMode::Linear {
                 active_mask: vec![true, false],
             },
         );
+        let _ = (new_lhs_rank, new_rhs_rank);
         result[0] = Some(add_transpose_if_needed(emitter, out[0], &perm));
     }
 
@@ -301,14 +307,13 @@ pub fn transpose_dot_general(
         let out = emitter.add_op(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
-                lhs_rank: new_lhs_rank,
-                rhs_rank: new_rhs_rank,
             },
             vec![ValRef::Local(lhs_conj), cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
         );
+        let _ = (new_lhs_rank, new_rhs_rank);
         result[1] = Some(add_transpose_if_needed(emitter, out[0], &perm));
     }
 

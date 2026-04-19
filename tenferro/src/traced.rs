@@ -21,6 +21,10 @@ use super::engine::Engine;
 use super::error::{Error, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
+use crate::metadata::{
+    concrete_tensor_meta, register_fragment_metadata, register_value_metadata, registered_meta,
+    symbolic_input_meta, tensor_meta_from_tensor,
+};
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -259,18 +263,23 @@ impl TracedTensor {
         let rank = shape.len();
         let dtype = tensor.dtype();
         let key = next_input_key();
+        let id = next_traced_id();
         let data = Arc::new(tensor);
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            concrete_tensor_meta(dtype, &shape),
+        );
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -309,18 +318,23 @@ impl TracedTensor {
         let rank = tensor.shape().len();
         let dtype = tensor.dtype();
         let key = next_input_key();
+        let id = next_traced_id();
         let data = Arc::new(tensor);
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            symbolic_input_meta(dtype, id, rank),
+        );
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -353,14 +367,19 @@ impl TracedTensor {
         let shape = shape.to_vec();
         let rank = shape.len();
         let key = next_input_key();
+        let id = next_traced_id();
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            concrete_tensor_meta(dtype, &shape),
+        );
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -394,14 +413,19 @@ impl TracedTensor {
     /// ```
     pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Self {
         let key = next_input_key();
+        let id = next_traced_id();
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            symbolic_input_meta(dtype, id, rank),
+        );
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -675,6 +699,10 @@ impl TracedTensor {
         let leaf_val = builder.add_input(new_key.clone());
         builder.set_outputs(vec![leaf_val]);
         let new_fragment = Arc::new(builder.build());
+        register_value_metadata(
+            new_fragment.vals()[leaf_val].key.clone(),
+            tensor_meta_from_tensor(data.as_ref()),
+        );
 
         let node = CheckpointNode {
             fragment: old_fragment,
@@ -723,7 +751,7 @@ impl TracedTensor {
         let mut roots = self.resolve_roots();
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::default();
+        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -734,6 +762,19 @@ impl TracedTensor {
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &linear.fragment,
+            vec![(
+                GlobalValKey::Input(tangent_input_key.clone()),
+                tensor_meta_from_tensor(
+                    tangent
+                        .data
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data"))
+                        .as_ref(),
+                ),
+            )],
+        );
 
         let mut inputs_map = (*self.inputs_map).clone();
         if let Some(chain) = &self.checkpoint_chain {
@@ -786,7 +827,7 @@ impl TracedTensor {
         let mut roots = self.resolve_roots();
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::default();
+        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -795,16 +836,39 @@ impl TracedTensor {
             &mut ad_ctx,
             &aliases,
         );
+        linear.tangent_outputs[0]?;
+        let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &linear.fragment,
+            vec![(
+                GlobalValKey::Input(linear_seed_key),
+                registered_meta(&wrt.fragment.vals()[wrt.val].key),
+            )],
+        );
+        ad_ctx.refresh_global_metadata();
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs
             .iter()
             .map(|(_, local_id)| *local_id)
             .collect();
         let transposed = transpose(&linear, &mut ad_ctx);
-        let linear_fragment = Arc::new(linear.fragment);
-        let cotangent_output = transposed.tangent_outputs[0]?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &transposed.fragment,
+            vec![(
+                GlobalValKey::Input(cotangent_input_key.clone()),
+                tensor_meta_from_tensor(
+                    cotangent
+                        .data
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data"))
+                        .as_ref(),
+                ),
+            )],
+        );
+        let linear_fragment = Arc::new(linear.fragment);
+        let cotangent_output = transposed.tangent_outputs[0]?;
 
         let mut inputs_map = (*self.inputs_map).clone();
         if let Some(chain) = &self.checkpoint_chain {
@@ -1188,14 +1252,8 @@ impl TracedTensor {
             _ => None,
         };
 
-        let lhs_rank = self.rank;
-        let rhs_rank = other.rank;
         apply_binary(
-            StdTensorOp::DotGeneral {
-                config,
-                lhs_rank,
-                rhs_rank,
-            },
+            StdTensorOp::DotGeneral { config },
             self,
             other,
             out_rank,
@@ -1538,6 +1596,7 @@ pub(crate) fn apply_unary_with_dtype(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -1563,6 +1622,7 @@ pub(crate) fn apply_nullary(
     let outputs = builder.add_op(op, vec![], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -1593,6 +1653,7 @@ pub(crate) fn apply_binary(
     let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1627,6 +1688,7 @@ pub(crate) fn apply_multi_output(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
     assert_eq!(
         outputs.len(),
         output_shapes.len(),

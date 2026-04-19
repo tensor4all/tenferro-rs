@@ -1240,8 +1240,6 @@ fn matmul_fixed(
     builder.add_op(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
-            lhs_rank: rank,
-            rhs_rank: rank,
         },
         vec![lhs, rhs],
         OpMode::Primal,
@@ -1258,8 +1256,6 @@ fn matmul_linear(
     builder.add_op(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
-            lhs_rank: rank,
-            rhs_rank: rank,
         },
         vec![lhs, rhs],
         OpMode::Linear { active_mask },

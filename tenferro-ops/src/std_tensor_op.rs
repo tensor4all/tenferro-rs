@@ -22,8 +22,6 @@ pub enum StdTensorOp {
     Conj,
     DotGeneral {
         config: DotGeneralConfig,
-        lhs_rank: usize,
-        rhs_rank: usize,
     },
     Transpose {
         perm: Vec<usize>,
@@ -287,14 +285,8 @@ impl Hash for StdTensorOp {
                 hash_f64(*eps, state);
                 input_shape.hash(state);
             }
-            Self::DotGeneral {
-                config,
-                lhs_rank,
-                rhs_rank,
-            } => {
+            Self::DotGeneral { config } => {
                 config.hash(state);
-                lhs_rank.hash(state);
-                rhs_rank.hash(state);
             }
             Self::Transpose { perm } => perm.hash(state),
             Self::Reshape {
@@ -557,12 +549,8 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::Mul
     }
 
-    fn dot_general(config: DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> Self {
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        }
+    fn dot_general(config: DotGeneralConfig, _lhs_rank: usize, _rhs_rank: usize) -> Self {
+        StdTensorOp::DotGeneral { config }
     }
 
     fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self {

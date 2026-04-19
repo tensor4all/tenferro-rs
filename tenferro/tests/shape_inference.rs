@@ -91,8 +91,6 @@ fn test_dot_general_canonical() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(5)];

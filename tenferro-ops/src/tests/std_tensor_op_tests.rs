@@ -4,6 +4,7 @@ use crate::semiring_op::{SemiringInputKey, SemiringOp};
 use crate::semiring_op_kind::SemiringOpKind;
 use crate::semiring_ops::SemiringOps;
 use crate::std_tensor_op::StdTensorOp;
+use crate::{SymDim, TensorMeta};
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
@@ -55,6 +56,38 @@ fn linear_mode(active_mask: &[bool]) -> OpMode {
     }
 }
 
+fn seed_dot_general_input_metadata(
+    ctx: &mut ShapeGuardContext,
+    keys: &[GlobalValKey<StdTensorOp>],
+) {
+    let shapes = [
+        vec![SymDim::from(2usize), SymDim::from(3usize)],
+        vec![SymDim::from(3usize), SymDim::from(4usize)],
+    ];
+    for (key, shape) in keys.iter().zip(shapes) {
+        ctx.insert_metadata(
+            key.clone(),
+            TensorMeta {
+                dtype: DType::F64,
+                shape,
+            },
+        );
+    }
+}
+
+fn seed_dot_general_ref_metadata(ctx: &mut ShapeGuardContext, inputs: &[ValRef<StdTensorOp>]) {
+    let keys: Vec<_> = inputs
+        .iter()
+        .map(|input| match input {
+            ValRef::External(key) => key.clone(),
+            ValRef::Local(local_id) => {
+                panic!("expected external input in test helper, got local {local_id}")
+            }
+        })
+        .collect();
+    seed_dot_general_input_metadata(ctx, &keys);
+}
+
 fn run_linearize_case(
     op: StdTensorOp,
     n_primal_in: usize,
@@ -65,6 +98,9 @@ fn run_linearize_case(
     let mut ad_ctx = ShapeGuardContext::default();
     let primal_in = add_input_keys(&mut builder, 100, n_primal_in);
     let primal_out = add_input_keys(&mut builder, 200, n_primal_out);
+    if matches!(&op, StdTensorOp::DotGeneral { .. }) {
+        seed_dot_general_input_metadata(&mut ad_ctx, &primal_in);
+    }
     let tangent_in: Vec<Option<LocalValId>> = tangent_mask
         .iter()
         .enumerate()
@@ -96,6 +132,9 @@ fn run_transpose_case(
     let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = cotangent_present.then(|| builder.add_input(tensor_input_key(400)));
     let inputs = external_inputs(500, n_inputs);
+    if matches!(&op, StdTensorOp::DotGeneral { .. }) {
+        seed_dot_general_ref_metadata(&mut ad_ctx, &inputs);
+    }
     let result = op.transpose_rule(
         &mut builder,
         &[cotangent],
@@ -120,8 +159,6 @@ fn test_std_tensor_op_input_output_counts() {
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
             },
-            lhs_rank: 2,
-            rhs_rank: 2,
         }
         .n_inputs(),
         2
@@ -1293,8 +1330,6 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let (linearize_none_result, linearize_none_fragment) =
         run_linearize_case(matmul.clone(), 2, 0, &[false, false]);
@@ -1309,6 +1344,7 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = builder.add_input(tensor_input_key(980));
+    seed_dot_general_ref_metadata(&mut ad_ctx, &external_inputs(981, 2));
     let primal_mode_result = matmul.transpose_rule(
         &mut builder,
         &[Some(cotangent)],
@@ -1352,8 +1388,6 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let (scalar_transpose_result, _, scalar_transpose_fragment) =
         run_transpose_case(scalar_contract, 2, &[true, false], true);

@@ -293,8 +293,6 @@ fn infer_semiring_output_shapes(
         SemiringOpKind::Mul => StdTensorOp::Mul,
         SemiringOpKind::DotGeneral(config) => StdTensorOp::DotGeneral {
             config: config.clone(),
-            lhs_rank: require_input_shape(kind, input_shapes, 0).len(),
-            rhs_rank: require_input_shape(kind, input_shapes, 1).len(),
         },
         SemiringOpKind::ReduceSum { axes } => StdTensorOp::ReduceSum {
             axes: axes.clone(),
