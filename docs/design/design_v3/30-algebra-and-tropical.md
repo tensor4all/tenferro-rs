@@ -133,12 +133,18 @@ mechanism.
 
 Recommended split:
 
-- eager: scalar newtypes and generic kernels where the backend can operate on
-  the scalar's arithmetic traits
-- traced: wrapper functions lowering to core primitives
+- **Eager path**: scalar newtypes `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`
+  whose Rust arithmetic trait impls (`Add`, `Mul`, `Zero`, ...) drive the
+  existing `TypedTensor<T>` T-generic kernels. This path does not need
+  `SemiringBackend<Alg>` and is unaffected by the Stage 6 removal of that
+  abstraction.
+- **Traced path**: wrapper functions lowering to core primitives.
 
 The traced path should not require the graph value itself to become
 `Tensor<MaxPlus<T>>`.
+
+The scalar-newtype eager story is independent of the rest of `v3` and can
+proceed at any time outside the staged plan; it needs no core change.
 
 ## Fused Tropical Support
 

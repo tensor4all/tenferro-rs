@@ -81,6 +81,11 @@ Goals:
   `tenferro/src/traced.rs:820-833`, re-enable the ignored tests in
   `tenferro/tests/symbolic_grad.rs`, and document the deferred
   zero-tangent policy
+- add `Gather` and `Scatter` to the core AD dispatch. Today these variants
+  are absent from `linearize_non_semiring` and `transpose_non_semiring`
+  (`tenferro-ops/src/ad/mod.rs:18,161`), which means Stage 7's
+  argmax-based tropical backward has no core op to emit. Closing this gap
+  is a prerequisite for Stage 7
 
 This stage is still an architectural consolidation, not a runtime rewrite.
 
@@ -103,6 +108,9 @@ crate is built against a stable boundary.
   remaining
 - the deferred zero-tangent semantics is captured as a design note
   (appended to `10-ad-model.md` or a new file under `docs/design/`)
+- `Gather` and `Scatter` have `linearize` / `transpose_rule`
+  implementations in the core AD dispatch, keeping the core op vocabulary
+  closed under AD
 
 ## Stage 4: Tropical Externalization — Phase 1 (Composition Only)
 
@@ -218,10 +226,13 @@ Deliverables:
 
 Goals:
 
-- add an `Extension(Arc<dyn ExtensionOp>)` variant (or an equivalently
-  specified carrier) to the core op enum. The core enum is `StdTensorOp`
-  today (`tenferro-ops/src/std_tensor_op.rs:16-17`); any rename is a
-  separate later consolidation and is out of scope for this stage
+- add an `Extension(Arc<dyn ExtensionOp>)` variant to the core op enum.
+  The core enum is `StdTensorOp` today
+  (`tenferro-ops/src/std_tensor_op.rs:16-17`); any rename is a separate
+  later consolidation and is out of scope for this stage. The
+  trait-object carrier is committed per `40-extension-boundary.md`;
+  Stage 5 specifies the contract the carrier must satisfy, not the
+  carrier shape
 - wire the variant through the engine, compile path, eager emitter, and
   backend dispatch so that a registered `ExtensionOp` can be executed
   and differentiated
@@ -230,8 +241,12 @@ Goals:
 - retire the legacy in-tree `SemiringOp` / `SemiringBackend` pipeline per
   the policy normatively specified in Stage 5: delete
   `tenferro-ops/src/semiring_op.rs`, the semiring compile path in
-  `tenferro/src/compiler.rs`, and the in-tree tropical tests whose
-  coverage moved to `tenferro-ext-tropical` in Stage 4a
+  `tenferro/src/compiler.rs`, `SemiringBackend<Alg>` at
+  `tenferro-tensor/src/backend.rs:566`, and the in-tree tropical tests
+  whose coverage moved to `tenferro-ext-tropical` in Stage 4a. Removing
+  `SemiringBackend` does *not* block eager tropical via scalar newtypes:
+  `TypedTensor<T>` T-generic kernels remain and operate on `MaxPlus<T>`
+  / `MinPlus<T>` through their standard Rust arithmetic trait impls
 
 This stage implements exactly what Stage 5 specified; it does not
 relitigate the contract.
@@ -251,6 +266,10 @@ relitigate the contract.
 
 Stage 7 delivers the first canonical external `ExtensionOp`, and doubles as
 the contract test for Stages 5 and 6.
+
+**Prerequisite**: `Gather` and `Scatter` AD rules must be in place in the
+core AD dispatch. This is delivered as a Stage 3 goal; without it the
+argmax-based backward cannot emit valid core-op cotangents.
 
 Goals:
 

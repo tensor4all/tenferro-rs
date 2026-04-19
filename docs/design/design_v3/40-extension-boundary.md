@@ -115,9 +115,11 @@ The Stage 5 spec must satisfy all of these:
 - explicit legacy-substrate policy: whether the existing `SemiringOp` /
   `SemiringBackend` pipeline is retired at Stage 6 or kept in parallel
 
-The contract is modality-agnostic: whether it is modeled as a trait object,
-a registered descriptor, or a small extension enum is secondary to these
-properties.
+The contract's identity / hashing / AD-closure properties apply regardless
+of carrier shape. `v3` commits to `Arc<dyn ExtensionOp>` as the concrete
+carrier, consistent with `#740` Principle 5 and the Stages 5–7
+implementation path. Alternative carriers (small extension enum,
+registered descriptor) were considered and are not on the `v3` plan.
 
 ## Relation To Tropical
 
