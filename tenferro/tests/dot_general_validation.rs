@@ -89,47 +89,6 @@ fn traced_dot_general_accepts_valid_config() {
 }
 
 #[test]
-fn dot_general_config_validate_ranks_ok() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
-    };
-    assert!(config.validate_ranks(2, 2).is_ok());
-}
-
-#[test]
-fn dot_general_config_validate_ranks_mismatch_lhs() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 4,
-        rhs_rank: 2,
-    };
-    let err = config.validate_ranks(2, 2).unwrap_err();
-    assert!(err.contains("lhs_rank") && err.contains("4") && err.contains("2"));
-}
-
-#[test]
-fn dot_general_config_validate_ranks_mismatch_rhs() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 3,
-    };
-    let err = config.validate_ranks(2, 2).unwrap_err();
-    assert!(err.contains("rhs_rank") && err.contains("3") && err.contains("2"));
-}
-
-#[test]
 fn dot_general_config_validate_dims_ok() {
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],

@@ -29,43 +29,6 @@ pub struct DotGeneralConfig {
 }
 
 impl DotGeneralConfig {
-    /// Validate that `lhs_rank` and `rhs_rank` match the actual tensor ranks.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::DotGeneralConfig;
-    ///
-    /// let config = DotGeneralConfig {
-    ///     lhs_contracting_dims: vec![1],
-    ///     rhs_contracting_dims: vec![0],
-    ///     lhs_batch_dims: vec![],
-    ///     rhs_batch_dims: vec![],
-    ///     lhs_rank: 2,
-    ///     rhs_rank: 2,
-    /// };
-    /// config.validate_ranks(2, 2).unwrap();
-    /// ```
-    pub fn validate_ranks(
-        &self,
-        actual_lhs_rank: usize,
-        actual_rhs_rank: usize,
-    ) -> Result<(), String> {
-        if self.lhs_rank != actual_lhs_rank {
-            return Err(format!(
-                "DotGeneralConfig.lhs_rank ({}) does not match actual lhs tensor rank ({})",
-                self.lhs_rank, actual_lhs_rank
-            ));
-        }
-        if self.rhs_rank != actual_rhs_rank {
-            return Err(format!(
-                "DotGeneralConfig.rhs_rank ({}) does not match actual rhs tensor rank ({})",
-                self.rhs_rank, actual_rhs_rank
-            ));
-        }
-        Ok(())
-    }
-
     /// Validate that all dimension indices are within range for the stored ranks
     /// and that no axis appears in multiple roles.
     ///
