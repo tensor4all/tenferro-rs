@@ -4,9 +4,9 @@ mod analytic;
 mod contraction;
 mod diagonal;
 mod dynamic;
+mod elementwise_tier1;
 mod elementwise_tier2;
 mod linalg;
-mod semiring;
 mod structural;
 
 use computegraph::fragment::FragmentBuilder;
@@ -134,10 +134,10 @@ fn linearize_semiring(
     _ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
     Some(match op {
-        StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
-        StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
-        StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
-        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+        StdTensorOp::Add => elementwise_tier1::linearize_add(builder, tangent_in),
+        StdTensorOp::Mul => elementwise_tier1::linearize_mul(builder, primal_in, tangent_in),
+        StdTensorOp::Neg => elementwise_tier1::linearize_neg(builder, tangent_in),
+        StdTensorOp::Conj => elementwise_tier1::linearize_conj(builder, tangent_in),
         _ => return None,
     })
 }
@@ -237,10 +237,10 @@ fn transpose_semiring(
     _ctx: &mut context::ShapeGuardContext,
 ) -> Option<Vec<Option<LocalValId>>> {
     Some(match op {
-        StdTensorOp::Add => semiring::transpose_add(cotangent_out),
-        StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::Neg => semiring::transpose_neg(emitter, cotangent_out),
-        StdTensorOp::Conj => semiring::transpose_conj(emitter, cotangent_out),
+        StdTensorOp::Add => elementwise_tier1::transpose_add(cotangent_out),
+        StdTensorOp::Mul => elementwise_tier1::transpose_mul(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Neg => elementwise_tier1::transpose_neg(emitter, cotangent_out),
+        StdTensorOp::Conj => elementwise_tier1::transpose_conj(emitter, cotangent_out),
         _ => return None,
     })
 }
