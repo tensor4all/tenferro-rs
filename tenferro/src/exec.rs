@@ -9,27 +9,15 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, ValRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Semiring;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::cpu::structural::{
-    typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
-    typed_transpose,
-};
 use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor, TensorBackend, TensorExec, TypedTensor,
 };
-// `SemiringBackend` is the legacy algebra-generic backend trait, deprecated in
-// design_v3 Stage 2 (see `docs/design/design_v3/30-algebra-and-tropical.md`)
-// and scheduled for removal in Stage 6. It is only used by `eval_semiring_ir`
-// below, which is itself deprecated; suppress the import-level warning at the
-// narrow scope of the import.
-#[allow(deprecated)]
-use tenferro_tensor::SemiringBackend;
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
@@ -239,24 +227,6 @@ pub(crate) fn resolve_tensor_shape_exprs(
                 .as_ref()
                 .ok_or(TensorError::MissingValue { slot })?
                 .shape(),
-        );
-    }
-    Ok(DimExpr::eval_all(exprs, &input_shapes))
-}
-
-fn resolve_semiring_shape_exprs<Alg: Semiring>(
-    slots: &[Option<TypedTensor<Alg::Scalar>>],
-    input_slots: &[usize],
-    exprs: &[DimExpr],
-) -> Result<Vec<usize>> {
-    let mut input_shapes = Vec::with_capacity(input_slots.len());
-    for &slot in input_slots {
-        input_shapes.push(
-            slots[slot]
-                .as_ref()
-                .ok_or(TensorError::MissingValue { slot })?
-                .shape
-                .as_slice(),
         );
     }
     Ok(DimExpr::eval_all(exprs, &input_shapes))
@@ -837,77 +807,4 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
             }
         }
     }
-}
-
-/// Execute a semiring-lowered [`ExecProgram`] (legacy path).
-///
-/// **Deprecated**: non-mainline per
-/// `docs/design/design_v3/30-algebra-and-tropical.md`; scheduled for removal
-/// in Stage 6 of the `design_v3` migration plan.
-#[deprecated(
-    since = "design_v3-stage-2",
-    note = "non-mainline per docs/design/design_v3/30-algebra-and-tropical.md; scheduled for removal in Stage 6"
-)]
-#[allow(deprecated)]
-pub fn eval_semiring_ir<B, Alg>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<TypedTensor<Alg::Scalar>>,
-) -> Result<Vec<TypedTensor<Alg::Scalar>>>
-where
-    Alg: Semiring,
-    B: SemiringBackend<Alg>,
-{
-    let mut slots: Vec<Option<TypedTensor<Alg::Scalar>>> = vec![None; program.n_slots];
-    for (i, tensor) in inputs.into_iter().enumerate() {
-        slots[program.input_slots[i]] = Some(tensor);
-    }
-
-    for inst in &program.instructions {
-        let result = match &inst.op {
-            ExecOp::Transpose { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
-            ExecOp::Reshape { shape } => {
-                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
-                typed_reshape(get(&slots, &inst.input_slots, 0)?, &shape)
-            }
-            ExecOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
-                typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0)?, &shape, dims)
-            }
-            ExecOp::DotGeneral(config) => backend.batched_gemm(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                config,
-            ),
-            ExecOp::ReduceSum { axes } => {
-                backend.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)
-            }
-            ExecOp::ExtractDiag { axis_a, axis_b } => {
-                typed_extract_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)
-            }
-            ExecOp::EmbedDiag { axis_a, axis_b } => {
-                typed_embed_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)
-            }
-            ExecOp::Add => backend.add(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            ),
-            ExecOp::Multiply => backend.mul(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            ),
-            _ => panic!("non-semiring op in semiring program: {:?}", inst.op),
-        };
-        slots[inst.output_slots[0]] = Some(result?);
-    }
-
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            slots[slot]
-                .take()
-                .ok_or(TensorError::MissingValue { slot }.into())
-        })
-        .collect()
 }

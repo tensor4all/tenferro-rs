@@ -1,14 +1,5 @@
-// Test suite exercises the legacy semiring op path alongside `StdTensorOp`.
-// Both the `SemiringOp`/`SemiringOps` surface are deprecated per design_v3
-// Stage 2 and scheduled for removal in Stage 6, so suppress deprecation
-// warnings in the module scope rather than annotating every test.
-#![allow(deprecated)]
-
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
-use crate::semiring_op::{SemiringInputKey, SemiringOp};
-use crate::semiring_op_kind::SemiringOpKind;
-use crate::semiring_ops::SemiringOps;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 use chainrules_core::PrimitiveOp;
@@ -16,7 +7,6 @@ use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::GraphOp;
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Standard;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
@@ -491,166 +481,6 @@ fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
     assert_eq!(StdTensorOp::ReduceMax { axes: vec![0] }.n_outputs(), 1);
     assert_eq!(StdTensorOp::ReduceMin { axes: vec![0, 1] }.n_inputs(), 1);
     assert_eq!(StdTensorOp::ReduceMin { axes: vec![0, 1] }.n_outputs(), 1);
-}
-
-#[test]
-fn test_semiring_op_kind_counts() {
-    assert_eq!(SemiringOpKind::Add.n_inputs(), 2);
-    assert_eq!(SemiringOpKind::Mul.n_inputs(), 2);
-    assert_eq!(
-        SemiringOpKind::DotGeneral(DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-        })
-        .n_inputs(),
-        2
-    );
-    assert_eq!(SemiringOpKind::ReduceSum { axes: vec![0] }.n_inputs(), 1);
-    assert_eq!(SemiringOpKind::Transpose { perm: vec![1, 0] }.n_inputs(), 1);
-    assert_eq!(
-        SemiringOpKind::ExtractDiag {
-            axis_a: 0,
-            axis_b: 1
-        }
-        .n_inputs(),
-        1
-    );
-    assert_eq!(
-        SemiringOpKind::EmbedDiag {
-            axis_a: 0,
-            axis_b: 1
-        }
-        .n_inputs(),
-        1
-    );
-}
-
-#[test]
-fn test_semiring_op_uses_algebra_marker_type() {
-    let add = SemiringOp::<Standard<f64>>::add_op();
-    let gemm = SemiringOp::<Standard<f64>>::dot_general(
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-        },
-        2,
-        2,
-    );
-
-    assert_eq!(add.n_inputs(), 2);
-    assert_eq!(add.n_outputs(), 1);
-    assert_eq!(gemm.n_inputs(), 2);
-    assert_eq!(gemm.n_outputs(), 1);
-}
-
-#[test]
-fn test_semiring_op_clone_eq_hash_depend_only_on_kind() {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let lhs = SemiringOp::<Standard<f64>>::transpose_op(vec![1, 0]);
-    let rhs = lhs.clone();
-
-    let mut lhs_hasher = DefaultHasher::new();
-    lhs.hash(&mut lhs_hasher);
-    let mut rhs_hasher = DefaultHasher::new();
-    rhs.hash(&mut rhs_hasher);
-
-    assert_eq!(lhs, rhs);
-    assert_eq!(lhs_hasher.finish(), rhs_hasher.finish());
-    assert_eq!(
-        format!("{lhs:?}"),
-        "SemiringOp { kind: Transpose { perm: [1, 0] } }"
-    );
-}
-
-#[test]
-fn test_semiring_input_key_clone_eq_and_hash_are_stable() {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let lhs = SemiringInputKey { id: 11 };
-    let rhs = lhs.clone();
-
-    let mut lhs_hasher = DefaultHasher::new();
-    lhs.hash(&mut lhs_hasher);
-    let mut rhs_hasher = DefaultHasher::new();
-    rhs.hash(&mut rhs_hasher);
-
-    assert_eq!(lhs, rhs);
-    assert_eq!(lhs_hasher.finish(), rhs_hasher.finish());
-    assert!(format!("{lhs:?}").contains("SemiringInputKey"));
-}
-
-#[test]
-fn test_semiring_op_constructors_cover_all_supported_kinds() {
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::add_op().kind,
-        SemiringOpKind::Add
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::mul_op().kind,
-        SemiringOpKind::Mul
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::transpose_op(vec![1, 0]).kind,
-        SemiringOpKind::Transpose { perm: vec![1, 0] }
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2]).kind,
-        SemiringOpKind::ReduceSum { axes: vec![0, 2] }
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::reshape(shape![3, 2], shape![2, 3]).kind,
-        SemiringOpKind::Reshape { shape: vec![2, 3] }
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::broadcast_in_dim(shape![2, 3], vec![0]).kind,
-        SemiringOpKind::BroadcastInDim {
-            shape: vec![2, 3],
-            dims: vec![0]
-        }
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::extract_diag(0, 1).kind,
-        SemiringOpKind::ExtractDiag {
-            axis_a: 0,
-            axis_b: 1
-        }
-    );
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::embed_diag(0, 1).kind,
-        SemiringOpKind::EmbedDiag {
-            axis_a: 0,
-            axis_b: 1
-        }
-    );
-
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-    assert_eq!(
-        SemiringOp::<Standard<f64>>::dot_general(config.clone(), 2, 2).kind,
-        SemiringOpKind::DotGeneral(config)
-    );
-}
-
-#[test]
-fn test_std_tensor_op_semiring_ops_impl_constructors_cover_remaining_variants() {
-    assert_eq!(<StdTensorOp as SemiringOps>::add_op(), StdTensorOp::Add);
-    assert_eq!(
-        <StdTensorOp as SemiringOps>::reshape(shape![6], shape![2, 3]),
-        StdTensorOp::Reshape {
-            to_shape: shape![2, 3],
-        }
-    );
 }
 
 #[test]

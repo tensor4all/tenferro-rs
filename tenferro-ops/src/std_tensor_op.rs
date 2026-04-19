@@ -8,8 +8,6 @@ use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
-#[allow(deprecated)]
-use crate::semiring_ops::SemiringOps;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -491,44 +489,5 @@ impl PrimitiveOp for StdTensorOp {
         ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
         crate::ad::transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
-    }
-}
-
-#[allow(deprecated)]
-impl SemiringOps for StdTensorOp {
-    fn add_op() -> Self {
-        StdTensorOp::Add
-    }
-
-    fn mul_op() -> Self {
-        StdTensorOp::Mul
-    }
-
-    fn dot_general(config: DotGeneralConfig, _lhs_rank: usize, _rhs_rank: usize) -> Self {
-        StdTensorOp::DotGeneral { config }
-    }
-
-    fn reduce_sum(axes: Vec<usize>) -> Self {
-        StdTensorOp::ReduceSum { axes }
-    }
-
-    fn transpose_op(perm: Vec<usize>) -> Self {
-        StdTensorOp::Transpose { perm }
-    }
-
-    fn reshape(_from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
-        StdTensorOp::Reshape { to_shape }
-    }
-
-    fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
-        StdTensorOp::BroadcastInDim { shape, dims }
-    }
-
-    fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
-        StdTensorOp::ExtractDiag { axis_a, axis_b }
-    }
-
-    fn embed_diag(axis_a: usize, axis_b: usize) -> Self {
-        StdTensorOp::EmbedDiag { axis_a, axis_b }
     }
 }

@@ -75,15 +75,8 @@ use std::cell::OnceCell;
 use cubecl::prelude::{Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Semiring;
 
 use crate::backend::TensorBackend;
-// `SemiringBackend` is the legacy algebra-generic backend trait, deprecated in
-// design_v3 Stage 2 and scheduled for removal in Stage 6. The impl below is
-// retained so cubecl builds continue to compile; suppress the import-level
-// warning at the narrow scope of the import.
-#[allow(deprecated)]
-use crate::backend::SemiringBackend;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -2521,18 +2514,6 @@ impl TensorBackend for CubeclBackend {
         plan: &crate::ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
         fusion::execute_elementwise_fusion(self, inputs, plan)
-    }
-}
-
-#[allow(deprecated)]
-impl<Alg: Semiring> SemiringBackend<Alg> for CubeclBackend {
-    fn batched_gemm(
-        &mut self,
-        _lhs: &TypedTensor<Alg::Scalar>,
-        _rhs: &TypedTensor<Alg::Scalar>,
-        _config: &DotGeneralConfig,
-    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        todo!("cubecl batched_gemm")
     }
 }
 

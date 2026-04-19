@@ -1,14 +1,8 @@
-// Test file exercises the deprecated legacy `SemiringBackend` trait; suppress
-// the deprecation warnings at module scope rather than annotating each
-// assertion.
-#![allow(deprecated)]
-
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use tenferro_algebra::Standard;
 use tenferro_tensor::{
-    cpu::CpuBackend, DotGeneralConfig, Error, PadConfig, SemiringBackend, SliceConfig, Tensor,
-    TensorBackend, TypedTensor,
+    cpu::CpuBackend, DotGeneralConfig, Error, PadConfig, SliceConfig, Tensor, TensorBackend,
+    TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -49,25 +43,6 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
 }
 
 #[test]
-fn semiring_add_rejects_shape_mismatch() {
-    let lhs = TypedTensor::from_vec(vec![2], vec![1.0, 2.0]);
-    let rhs = TypedTensor::from_vec(vec![3], vec![3.0, 4.0, 5.0]);
-    let mut backend = CpuBackend::new();
-
-    let err =
-        <CpuBackend as SemiringBackend<Standard<f64>>>::add(&mut backend, &lhs, &rhs).unwrap_err();
-
-    assert!(matches!(
-        err,
-        Error::ShapeMismatch {
-            op: "add",
-            lhs,
-            rhs,
-        } if lhs == vec![2] && rhs == vec![3]
-    ));
-}
-
-#[test]
 fn add_rejects_shape_mismatch() {
     let lhs = f64_tensor(vec![2], vec![1.0, 2.0]);
     let rhs = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
@@ -94,63 +69,6 @@ fn solve_rejects_singular_matrix() {
     let err = backend.solve(&a, &b).unwrap_err();
 
     assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
-}
-
-#[test]
-fn semiring_reduce_sum_rejects_out_of_bounds_axis() {
-    let input = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut backend = CpuBackend::new();
-
-    let err =
-        <CpuBackend as SemiringBackend<Standard<f64>>>::reduce_sum(&mut backend, &input, &[2])
-            .unwrap_err();
-
-    assert!(matches!(
-        err,
-        Error::AxisOutOfBounds {
-            op: "reduce_sum",
-            axis: 2,
-            rank: 2,
-        }
-    ));
-}
-
-#[test]
-fn semiring_batched_gemm_returns_error_instead_of_panicking() {
-    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
-    let mut backend = CpuBackend::new();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![0],
-        rhs_contracting_dims: vec![0, 1],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        <CpuBackend as SemiringBackend<Standard<f64>>>::batched_gemm(
-            &mut backend,
-            &lhs,
-            &rhs,
-            &config,
-        )
-    }));
-
-    assert!(
-        result.is_ok(),
-        "semiring batched_gemm should return Err, not panic"
-    );
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidConfig {
-            op: "batched_gemm",
-            ..
-        } | Error::BackendFailure {
-            op: "batched_gemm",
-            ..
-        }
-    ));
 }
 
 #[test]
