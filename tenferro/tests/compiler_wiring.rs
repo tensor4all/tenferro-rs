@@ -118,7 +118,6 @@ fn compile_std_to_exec_wires_nary_einsum_with_shape_and_dtype() {
         instructions: vec![make_instr(
             StdTensorOp::NaryEinsum {
                 subscripts: "ij,jk->ik".into(),
-                n_inputs: 2,
             },
             vec![0, 1],
             vec![2],

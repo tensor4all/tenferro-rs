@@ -94,7 +94,6 @@ pub fn linearize_nary_einsum(
         let out = builder.add_op(
             StdTensorOp::NaryEinsum {
                 subscripts: subscripts.to_string(),
-                n_inputs: primal_in.len(),
             },
             inputs,
             OpMode::Linear {
@@ -331,8 +330,13 @@ pub fn transpose_nary_einsum(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     subscripts: &str,
-    n_inputs: usize,
 ) -> Vec<Option<LocalValId>> {
+    let Some((input_part, output_labels)) = subscripts.split_once("->") else {
+        panic!("NaryEinsum subscripts must contain '->': {subscripts}");
+    };
+    let input_labels: Vec<&str> = input_part.split(',').collect();
+    let n_inputs = input_labels.len();
+
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
         None => return vec![None; n_inputs],
@@ -342,16 +346,6 @@ pub fn transpose_nary_einsum(
         OpMode::Linear { active_mask } => active_mask,
         OpMode::Primal => return vec![None; n_inputs],
     };
-
-    let Some((input_part, output_labels)) = subscripts.split_once("->") else {
-        panic!("NaryEinsum subscripts must contain '->': {subscripts}");
-    };
-    let input_labels: Vec<&str> = input_part.split(',').collect();
-    assert_eq!(
-        input_labels.len(),
-        n_inputs,
-        "NaryEinsum input count mismatch for subscripts {subscripts}"
-    );
 
     let mut result = Vec::with_capacity(n_inputs);
     for active_idx in 0..n_inputs {
@@ -387,7 +381,6 @@ pub fn transpose_nary_einsum(
                     vjp_input_parts.join(","),
                     input_labels[active_idx]
                 ),
-                n_inputs: vjp_inputs.len(),
             },
             vjp_inputs,
             OpMode::Linear {
@@ -421,10 +414,7 @@ pub fn transpose_reduce_sum(
                 .collect::<Vec<_>>();
             let cotangent = if kept_dims.is_empty() {
                 let scalar = emitter.add_op(
-                    StdTensorOp::Reshape {
-                        from_shape: DimExpr::from_concrete(&[1]),
-                        to_shape: vec![],
-                    },
+                    StdTensorOp::Reshape { to_shape: vec![] },
                     vec![ValRef::Local(ct)],
                     OpMode::Linear {
                         active_mask: vec![true],
@@ -643,10 +633,7 @@ fn normalize_reduction_cotangent(
 ) -> ValRef<StdTensorOp> {
     if kept_dims.is_empty() {
         let scalar = emitter.add_op(
-            StdTensorOp::Reshape {
-                from_shape: DimExpr::from_concrete(&[1]),
-                to_shape: vec![],
-            },
+            StdTensorOp::Reshape { to_shape: vec![] },
             vec![ValRef::Local(cotangent)],
             OpMode::Linear {
                 active_mask: vec![true],
@@ -714,10 +701,7 @@ fn normalize_scalar_cotangent(
 ) -> ValRef<StdTensorOp> {
     if output_rank == 0 {
         let scalar = emitter.add_op(
-            StdTensorOp::Reshape {
-                from_shape: DimExpr::from_concrete(&[1]),
-                to_shape: vec![],
-            },
+            StdTensorOp::Reshape { to_shape: vec![] },
             vec![ValRef::Local(cotangent)],
             OpMode::Linear {
                 active_mask: vec![true],

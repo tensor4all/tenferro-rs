@@ -44,7 +44,7 @@ fn linearize_non_semiring(
         StdTensorOp::DotGeneral { config } => {
             contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
         }
-        StdTensorOp::NaryEinsum { subscripts, .. } => {
+        StdTensorOp::NaryEinsum { subscripts } => {
             contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }
         StdTensorOp::ReduceSum { axes } => {
@@ -172,17 +172,9 @@ fn transpose_non_semiring(
         StdTensorOp::DotGeneral { config } => {
             contraction::transpose_dot_general(emitter, cotangent_out, inputs, mode, config, ctx)
         }
-        StdTensorOp::NaryEinsum {
-            subscripts,
-            n_inputs,
-        } => contraction::transpose_nary_einsum(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            subscripts,
-            *n_inputs,
-        ),
+        StdTensorOp::NaryEinsum { subscripts } => {
+            contraction::transpose_nary_einsum(emitter, cotangent_out, inputs, mode, subscripts)
+        }
         StdTensorOp::ReduceSum { .. } => {
             contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs, ctx)
         }
@@ -196,7 +188,7 @@ fn transpose_non_semiring(
             structural::transpose_transpose(emitter, cotangent_out, perm)
         }
         StdTensorOp::Reshape { .. } => {
-            structural::transpose_reshape(emitter, cotangent_out, op, inputs)
+            structural::transpose_reshape(emitter, cotangent_out, op, inputs, ctx)
         }
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::transpose_broadcast_in_dim(emitter, cotangent_out, shape, dims)

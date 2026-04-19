@@ -1296,7 +1296,6 @@ impl TracedTensor {
     pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
         apply_unary(
             StdTensorOp::Reshape {
-                from_shape: DimExpr::input_shape(0, self.rank),
                 to_shape: DimExpr::from_concrete(shape),
             },
             self,
@@ -1345,10 +1344,7 @@ impl TracedTensor {
             .collect::<Result<Vec<_>>>()?;
         let out_shape_hint = Some(shape.to_vec());
         Ok(apply_unary(
-            StdTensorOp::Reshape {
-                from_shape: DimExpr::input_shape(0, self.rank),
-                to_shape,
-            },
+            StdTensorOp::Reshape { to_shape },
             self,
             shape.len(),
             out_shape_hint,

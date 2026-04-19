@@ -88,6 +88,28 @@ fn seed_dot_general_ref_metadata(ctx: &mut ShapeGuardContext, inputs: &[ValRef<S
     seed_dot_general_input_metadata(ctx, &keys);
 }
 
+fn seed_uniform_ref_metadata(
+    ctx: &mut ShapeGuardContext,
+    inputs: &[ValRef<StdTensorOp>],
+    shape: Vec<SymDim>,
+) {
+    for input in inputs {
+        let key = match input {
+            ValRef::External(key) => key.clone(),
+            ValRef::Local(local_id) => {
+                panic!("expected external input in test helper, got local {local_id}")
+            }
+        };
+        ctx.insert_metadata(
+            key,
+            TensorMeta {
+                dtype: DType::F64,
+                shape: shape.clone(),
+            },
+        );
+    }
+}
+
 fn run_linearize_case(
     op: StdTensorOp,
     n_primal_in: usize,
@@ -128,12 +150,28 @@ fn run_transpose_case(
     Option<LocalValId>,
     Fragment<StdTensorOp>,
 ) {
+    run_transpose_case_with_input_shape(op, n_inputs, active_mask, cotangent_present, None)
+}
+
+fn run_transpose_case_with_input_shape(
+    op: StdTensorOp,
+    n_inputs: usize,
+    active_mask: &[bool],
+    cotangent_present: bool,
+    input_shape: Option<Vec<SymDim>>,
+) -> (
+    Vec<Option<LocalValId>>,
+    Option<LocalValId>,
+    Fragment<StdTensorOp>,
+) {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
     let cotangent = cotangent_present.then(|| builder.add_input(tensor_input_key(400)));
     let inputs = external_inputs(500, n_inputs);
     if matches!(&op, StdTensorOp::DotGeneral { .. }) {
         seed_dot_general_ref_metadata(&mut ad_ctx, &inputs);
+    } else if let Some(shape) = input_shape {
+        seed_uniform_ref_metadata(&mut ad_ctx, &inputs, shape);
     }
     let result = op.transpose_rule(
         &mut builder,
@@ -256,7 +294,6 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(
         StdTensorOp::NaryEinsum {
             subscripts: "ij,jk,kl->il".into(),
-            n_inputs: 3,
         }
         .n_inputs(),
         3
@@ -285,7 +322,6 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(
         StdTensorOp::NaryEinsum {
             subscripts: "ij,jk->ik".into(),
-            n_inputs: 2,
         }
         .n_outputs(),
         1
@@ -676,7 +712,6 @@ fn test_std_tensor_op_semiring_ops_impl_constructors_cover_remaining_variants() 
     assert_eq!(
         <StdTensorOp as SemiringOps>::reshape(shape![6], shape![2, 3]),
         StdTensorOp::Reshape {
-            from_shape: shape![6],
             to_shape: shape![2, 3],
         }
     );
@@ -769,7 +804,6 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         },
         StdTensorOp::NaryEinsum {
             subscripts: "ij,jk,kl->il".into(),
-            n_inputs: 3,
         },
         StdTensorOp::Concatenate { axis: 1 },
         StdTensorOp::Reverse { axes: vec![0] },
@@ -798,7 +832,6 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
 fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
     let op = StdTensorOp::NaryEinsum {
         subscripts: "ij,jk,kl->il".into(),
-        n_inputs: 3,
     };
     let (result, fragment) = run_linearize_case(op.clone(), 3, 0, &[true, false, true]);
 
@@ -825,7 +858,6 @@ fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
 fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
     let op = StdTensorOp::NaryEinsum {
         subscripts: "ij,jk,kl->il".into(),
-        n_inputs: 3,
     };
     let (result, _, fragment) = run_transpose_case(op, 3, &[false, true, false], true);
 
@@ -839,7 +871,6 @@ fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
         fragment.ops()[2].op,
         StdTensorOp::NaryEinsum {
             subscripts: "il,ij,kl->jk".into(),
-            n_inputs: 3,
         }
     );
     assert_eq!(
@@ -1136,7 +1167,6 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert!(transpose_none_fragment.ops().is_empty());
 
     let reshape = StdTensorOp::Reshape {
-        from_shape: shape![4],
         to_shape: shape![2, 2],
     };
     let (reshape_linear_result, reshape_linear_fragment) =
@@ -1189,14 +1219,19 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert!(broadcast_none_fragment.ops().is_empty());
 
     let (reshape_transpose_result, _, reshape_transpose_fragment) =
-        run_transpose_case(reshape, 1, &[true], true);
+        run_transpose_case_with_input_shape(
+            reshape,
+            1,
+            &[true],
+            true,
+            Some(vec![SymDim::from(4usize)]),
+        );
     assert!(reshape_transpose_result[0].is_some());
     assert_eq!(reshape_transpose_fragment.ops().len(), 1);
     assert_eq!(
         reshape_transpose_fragment.ops()[0].op,
         StdTensorOp::Reshape {
-            from_shape: shape![2, 2],
-            to_shape: shape![4],
+            to_shape: DimExpr::input_shape(1, 1),
         }
     );
 
@@ -1390,10 +1425,7 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert_eq!(scalar_transpose_result[1], None);
     assert_eq!(
         scalar_transpose_fragment.ops()[0].op,
-        StdTensorOp::Reshape {
-            from_shape: shape![1],
-            to_shape: shape![],
-        }
+        StdTensorOp::Reshape { to_shape: shape![] }
     );
     assert_eq!(scalar_transpose_fragment.ops()[1].op, StdTensorOp::Conj);
     assert_eq!(

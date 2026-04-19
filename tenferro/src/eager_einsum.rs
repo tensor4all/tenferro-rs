@@ -62,7 +62,6 @@ pub fn eager_einsum_ad<B: TensorBackend>(
         inputs,
         StdTensorOp::NaryEinsum {
             subscripts: subscripts.to_string(),
-            n_inputs: inputs.len(),
         },
     )
 }

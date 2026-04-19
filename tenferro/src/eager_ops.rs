@@ -164,7 +164,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::Reshape {
-            from_shape: DimExpr::from_concrete(self.data.shape()),
             to_shape: DimExpr::from_concrete(shape),
         })
     }

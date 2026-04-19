@@ -52,7 +52,6 @@ fn test_transpose_applies_perm() {
 #[test]
 fn test_reshape_uses_to_shape() {
     let op = StdTensorOp::Reshape {
-        from_shape: vec![cst(6)],
         to_shape: vec![cst(2), cst(3)],
     };
     let input = vec![cst(6)];
@@ -258,7 +257,6 @@ fn test_structural_indexing_and_dynamic_shapes() {
 
     let einsum = StdTensorOp::NaryEinsum {
         subscripts: "ij,jk->ik".into(),
-        n_inputs: 2,
     };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(6)];
