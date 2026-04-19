@@ -43,7 +43,6 @@ fn test_constant_uses_variant_dtype() {
 fn test_eig_f32_produces_c32() {
     let op = StdTensorOp::Eig {
         input_dtype: DType::F32,
-        input_shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
     };
     assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::C32);
 }
@@ -52,7 +51,6 @@ fn test_eig_f32_produces_c32() {
 fn test_eig_f64_produces_c64() {
     let op = StdTensorOp::Eig {
         input_dtype: DType::F64,
-        input_shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
     };
     assert_eq!(infer_output_dtype(&op, &[DType::F64]), DType::C64);
 }

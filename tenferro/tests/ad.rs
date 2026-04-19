@@ -277,30 +277,20 @@ fn matmul_config() -> DotGeneralConfig {
     }
 }
 
-fn svd_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
-    StdTensorOp::Svd {
-        eps,
-        input_shape: dim_shape(&shape),
-    }
+fn svd_op(_shape: Vec<usize>, eps: f64) -> StdTensorOp {
+    StdTensorOp::Svd { eps }
 }
 
-fn qr_op(shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Qr {
-        input_shape: dim_shape(&shape),
-    }
+fn qr_op(_shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::Qr
 }
 
-fn eigh_op(shape: Vec<usize>, eps: f64) -> StdTensorOp {
-    StdTensorOp::Eigh {
-        eps,
-        input_shape: dim_shape(&shape),
-    }
+fn eigh_op(_shape: Vec<usize>, eps: f64) -> StdTensorOp {
+    StdTensorOp::Eigh { eps }
 }
 
-fn cholesky_op(shape: Vec<usize>) -> StdTensorOp {
-    StdTensorOp::Cholesky {
-        input_shape: dim_shape(&shape),
-    }
+fn cholesky_op(_shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::Cholesky
 }
 
 fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
@@ -331,13 +321,7 @@ fn add_solve_composition(
     lhs_shape: Vec<usize>,
     rhs_shape: Vec<usize>,
 ) -> LocalValId {
-    let lu = builder.add_op(
-        StdTensorOp::Lu {
-            input_shape: dim_shape(&lhs_shape),
-        },
-        vec![ValRef::Local(a)],
-        OpMode::Primal,
-    );
+    let lu = builder.add_op(StdTensorOp::Lu, vec![ValRef::Local(a)], OpMode::Primal);
     let rank = lhs_shape.len();
     let pb = builder.add_op(
         {

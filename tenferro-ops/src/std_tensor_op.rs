@@ -130,26 +130,17 @@ pub enum StdTensorOp {
     },
 
     // Linalg
-    Cholesky {
-        input_shape: Vec<DimExpr>,
-    },
-    Lu {
-        input_shape: Vec<DimExpr>,
-    },
+    Cholesky,
+    Lu,
     Svd {
         eps: f64,
-        input_shape: Vec<DimExpr>,
     },
-    Qr {
-        input_shape: Vec<DimExpr>,
-    },
+    Qr,
     Eigh {
         eps: f64,
-        input_shape: Vec<DimExpr>,
     },
     Eig {
         input_dtype: DType,
-        input_shape: Vec<DimExpr>,
     },
     TriangularSolve {
         left_side: bool,
@@ -159,9 +150,7 @@ pub enum StdTensorOp {
         lhs_shape: Vec<DimExpr>,
         rhs_shape: Vec<DimExpr>,
     },
-    ValidateNonsingular {
-        input_shape: Vec<DimExpr>,
-    },
+    ValidateNonsingular,
 }
 
 impl StdTensorOp {
@@ -265,25 +254,15 @@ impl Hash for StdTensorOp {
             | Self::Pow
             | Self::Expm1
             | Self::Log1p => {}
-            Self::Svd { eps, input_shape } => {
+            Self::Svd { eps } => {
                 hash_f64(*eps, state);
-                input_shape.hash(state);
             }
-            Self::Qr { input_shape }
-            | Self::Cholesky { input_shape }
-            | Self::Lu { input_shape } => {
-                input_shape.hash(state);
-            }
-            Self::Eig {
-                input_dtype,
-                input_shape,
-            } => {
+            Self::Qr | Self::Cholesky | Self::Lu => {}
+            Self::Eig { input_dtype } => {
                 input_dtype.hash(state);
-                input_shape.hash(state);
             }
-            Self::Eigh { eps, input_shape } => {
+            Self::Eigh { eps } => {
                 hash_f64(*eps, state);
-                input_shape.hash(state);
             }
             Self::DotGeneral { config } => {
                 config.hash(state);
@@ -356,9 +335,7 @@ impl Hash for StdTensorOp {
                 lhs_shape.hash(state);
                 rhs_shape.hash(state);
             }
-            Self::ValidateNonsingular { input_shape } => {
-                input_shape.hash(state);
-            }
+            Self::ValidateNonsingular => {}
         }
     }
 }
@@ -431,18 +408,18 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky { input_shape }
-            | Self::Lu { input_shape }
-            | Self::Svd { input_shape, .. }
-            | Self::Qr { input_shape }
-            | Self::Eigh { input_shape, .. }
-            | Self::Eig { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
+            Self::Cholesky
+            | Self::Lu
+            | Self::Svd { .. }
+            | Self::Qr
+            | Self::Eigh { .. }
+            | Self::Eig { .. }
+            | Self::ValidateNonsingular => 1,
             Self::TriangularSolve {
                 lhs_shape,
                 rhs_shape,
                 ..
             } => n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape]),
-            Self::ValidateNonsingular { input_shape } => n_inputs_from_dim_exprs(1, &[input_shape]),
         }
     }
 
@@ -494,12 +471,10 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Cholesky { .. }
-            | Self::TriangularSolve { .. }
-            | Self::ValidateNonsingular { .. } => 1,
-            Self::Lu { .. } => 4,
+            Self::Cholesky | Self::TriangularSolve { .. } | Self::ValidateNonsingular => 1,
+            Self::Lu => 4,
             Self::Svd { .. } => 3,  // U, S, Vt
-            Self::Qr { .. } => 2,   // Q, R
+            Self::Qr => 2,          // Q, R
             Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
             Self::Eig { .. } => 2,  // eigenvalues, eigenvectors
             Self::Concatenate { .. } => todo!(

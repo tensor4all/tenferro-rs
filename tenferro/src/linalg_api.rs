@@ -63,10 +63,7 @@ pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, 
     let n = shape[1];
     let k = m.min(n);
     let batch = &shape[2..];
-    let op = StdTensorOp::Svd {
-        eps,
-        input_shape: input_shape_expr(a),
-    };
+    let op = StdTensorOp::Svd { eps };
     let mut u_shape = vec![m, k];
     u_shape.extend_from_slice(batch);
     let mut s_shape = vec![k];
@@ -112,9 +109,7 @@ pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch);
     let mut results = apply_multi_output(
-        StdTensorOp::Qr {
-            input_shape: input_shape_expr(a),
-        },
+        StdTensorOp::Qr,
         a,
         vec![sym_shape(&q_shape), sym_shape(&r_shape)],
     )
@@ -147,10 +142,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
     let shape = concrete_shape(a);
     let n = shape[0];
     let batch = &shape[2..];
-    let op = StdTensorOp::Eigh {
-        eps,
-        input_shape: input_shape_expr(a),
-    };
+    let op = StdTensorOp::Eigh { eps };
     let mut vals_shape = vec![n];
     vals_shape.extend_from_slice(batch);
     let mut vecs_shape = vec![n, n];
@@ -172,14 +164,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
 /// ```
 pub fn cholesky(a: &TracedTensor) -> TracedTensor {
     let shape = concrete_shape(a);
-    apply_unary(
-        StdTensorOp::Cholesky {
-            input_shape: input_shape_expr(a),
-        },
-        a,
-        a.rank,
-        Some(sym_shape(&shape)),
-    )
+    apply_unary(StdTensorOp::Cholesky, a, a.rank, Some(sym_shape(&shape)))
 }
 
 /// LU decomposition with partial pivoting.
@@ -205,9 +190,7 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
     u_shape.extend_from_slice(batch);
     let parity_shape = batch.to_vec();
     let mut results = apply_multi_output(
-        StdTensorOp::Lu {
-            input_shape: input_shape_expr(a),
-        },
+        StdTensorOp::Lu,
         a,
         vec![
             sym_shape(&p_shape),
@@ -250,7 +233,6 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let mut results = apply_multi_output(
         StdTensorOp::Eig {
             input_dtype: a.dtype,
-            input_shape: input_shape_expr(a),
         },
         a,
         vec![sym_shape(&vals_shape), sym_shape(&vecs_shape)],
@@ -268,9 +250,7 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 
 fn validate_nonsingular(u: &TracedTensor) -> TracedTensor {
     apply_unary(
-        StdTensorOp::ValidateNonsingular {
-            input_shape: input_shape_expr(u),
-        },
+        StdTensorOp::ValidateNonsingular,
         u,
         u.rank,
         u.shape_hint.clone(),

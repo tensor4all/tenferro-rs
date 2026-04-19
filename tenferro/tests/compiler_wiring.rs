@@ -271,51 +271,18 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
 fn compile_std_to_exec_lowers_linalg_variants_directly() {
     let program = CompiledProgram {
         instructions: vec![
-            make_instr(
-                StdTensorOp::Svd {
-                    eps: 1.0e-8,
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![2, 3, 4],
-            ),
-            make_instr(
-                StdTensorOp::Qr {
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![5, 6],
-            ),
-            make_instr(
-                StdTensorOp::Lu {
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![7, 8, 9, 10],
-            ),
-            make_instr(
-                StdTensorOp::Eigh {
-                    eps: 1.0e-6,
-                    input_shape: dim_shape(&[2, 2]),
-                },
-                vec![1],
-                vec![11, 12],
-            ),
+            make_instr(StdTensorOp::Svd { eps: 1.0e-8 }, vec![0], vec![2, 3, 4]),
+            make_instr(StdTensorOp::Qr, vec![0], vec![5, 6]),
+            make_instr(StdTensorOp::Lu, vec![0], vec![7, 8, 9, 10]),
+            make_instr(StdTensorOp::Eigh { eps: 1.0e-6 }, vec![1], vec![11, 12]),
             make_instr(
                 StdTensorOp::Eig {
                     input_dtype: DType::F32,
-                    input_shape: dim_shape(&[2, 2]),
                 },
                 vec![1],
                 vec![13, 14],
             ),
-            make_instr(
-                StdTensorOp::ValidateNonsingular {
-                    input_shape: dim_shape(&[2, 2]),
-                },
-                vec![1],
-                vec![15],
-            ),
+            make_instr(StdTensorOp::ValidateNonsingular, vec![1], vec![15]),
         ],
         input_slots: vec![0, 1],
         output_slots: vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
