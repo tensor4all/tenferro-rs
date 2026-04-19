@@ -39,12 +39,8 @@ without reconstructing shapes from scratch downstream.
 |---|---|---|
 | `DotDimensionSorter` | active | Sort contracting dimensions on `ExecOp::DotGeneral` to stabilize canonical order |
 | `TransposeFolding` | active | Fold producer `ExecOp::Transpose` into downstream `ExecOp::DotGeneral` dimension numbers |
-
-### Deferred pass
-
-| Pass | Status | Notes |
-|---|---|---|
-| `DotDecomposer` | deferred | Shape tracking is now available on `ExecInstruction`, but the canonicalization pass itself is still tracked in `tensor4all/tenferro-rs#729` |
+| `DotDecomposer` | active | Canonicalize `ExecOp::DotGeneral` into `[M?, K, B...] × [K, N?, B...] → [M?, N?, B...]` by emitting explicit `Transpose`/`Reshape` wrappers |
+| `DeadCodeElimination` | active | Drop instructions whose outputs are never consumed by a program output or later instruction (preserving side-effecting `ValidateNonsingular`) |
 
 ### Removed pass
 
@@ -170,24 +166,95 @@ transposes exposed by earlier folds.
 
 ### III.3 DotDecomposer
 
-**Scope:** planned for `ExecProgram`
-
-**Status:** deferred to `tensor4all/tenferro-rs#729`
+**Scope:** `ExecProgram`
 
 **Goal:** Canonicalize arbitrary `ExecOp::DotGeneral` contractions into a
-shape more directly consumable by backend GEMM paths.
+shape directly consumable by canonical batched GEMM kernels. Runs after
+`TransposeFolding`, so pre-existing foldable transposes are already absorbed
+when decomposition kicks in.
 
-The 1-layer IR refactor intentionally landed the prerequisites first:
+**Canonical form** (tenferro column-major with batch trailing, per
+`AGENTS.md`):
 
-- direct `StdTensorOp -> ExecProgram` lowering
-- per-instruction dtype inference
-- per-instruction `output_shapes`
+```text
+LHS shape: [M?, K, B0, B1, ...]
+  lhs_contracting_dims = [|free_L|']
+  lhs_batch_dims       = [|free_L|' + 1, ..., |free_L|' + nb]
+  |free_L|' = 1 if the original LHS had any free dim, else 0.
 
-That metadata is now available to support decomposition, reshape insertion,
-and downstream validation. The transformation itself is still out of scope for
-the current branch and is not part of the live compiler pipeline.
+RHS shape: [K, N?, B0, B1, ...]
+  rhs_contracting_dims = [0]
+  rhs_batch_dims       = [|free_R|' + 1, ..., |free_R|' + nb]
+  |free_R|' = 1 if the original RHS had any free dim, else 0.
+```
 
-### III.4 ReductionSimplification
+Output shape (from `shape_infer::dot_general_shape`): `[M?, N?, B0, B1, ...]`
+with 0-or-1 `M` dim, 0-or-1 `N` dim, and the batch sizes trailing.
+
+**When to fire:** any `ExecOp::DotGeneral` whose `(config, lhs_rank, rhs_rank)`
+is not already in canonical form.
+
+**Algorithm** per non-canonical DotGeneral (inputs: LHS and RHS slots with
+shapes in `slot_shapes`):
+
+1. **LHS Transpose** to target order `free_L ++ contracting_L ++ batch_L`.
+   Skip if already identity.
+2. **LHS Reshape** to `[M?, K, B...]` by merging multiple free/contracting
+   dims. Skip if `|free_L| ≤ 1` and `|contracting_L| == 1`.
+3. **RHS Transpose** to target order `contracting_R ++ free_R ++ batch_R`.
+   Skip if already identity.
+4. **RHS Reshape** to `[K, N?, B...]`. Same skip rule as LHS.
+5. **Canonical `DotGeneral`** with the dim-number positions described above.
+6. **Output Reshape** — the XLA Step 5 that the pre-#729 skeleton was
+   missing — restores the original output shape when either side had
+   multiple free dims. It takes the canonical DotGeneral output and the
+   original LHS and RHS slots as shape-providing inputs, so the dynamic
+   free-dim sizes can be recovered at runtime.
+
+Skipping the output Reshape (step 6) is what caused the historical
+downstream-Permute bug: downstream consumers would observe the merged rank
+instead of the expected unmerged rank, and subsequent `Transpose`/`Reshape`
+users would fall out of bounds. With the Reshape in place, downstream ops
+see the original output shape and no further rewriting is required.
+
+**Example** (single non-canonical case):
+
+```text
+Before:
+  DotGeneral lhs=[a, b, M, K1, K2] rhs=[a, b, K1, K2, N]
+             lhs_batch=[0, 1] rhs_batch=[0, 1]
+             lhs_cont=[3, 4]  rhs_cont=[2, 3]
+
+After:
+  Transpose(lhs, perm=[2, 3, 4, 0, 1])  -> [M, K1, K2, a, b]
+  Reshape(...)                           -> [M, K1*K2, a, b]
+  Transpose(rhs, perm=[2, 3, 4, 0, 1])  -> [K1, K2, N, a, b]
+  Reshape(...)                           -> [K1*K2, N, a, b]
+  DotGeneral(canonical)                  -> [M, N, a, b]
+```
+
+**Interaction with `TransposeFolding`:** `TransposeFolding` runs first and
+may leave dead `Transpose` producers (its folded-away producer is bypassed
+but not removed). The subsequent `DeadCodeElimination` reclaims that runtime
+cost. For programs where the user already wrote a canonical `Transpose →
+DotGeneral`, the fold+decomp combination is net-identity (the fold absorbs,
+the decomp re-emits), so the compiled result is equivalent to the input up
+to dead-code cleanup.
+
+### III.4 DeadCodeElimination
+
+**Scope:** `ExecProgram`
+
+**Purpose:** Remove instructions whose outputs are not consumed by any
+downstream instruction or program output. Preserves instructions with
+observable side effects (currently only `ExecOp::ValidateNonsingular`,
+which errors on singular matrices).
+
+**When to fire:** always. In practice, instructions die after
+`DotDecomposer` re-canonicalizes a DotGeneral whose upstream Transpose was
+already folded into dim-numbers by `TransposeFolding`.
+
+### III.5 ReductionSimplification
 
 `ReductionSimplification` no longer exists in the compiler. Historical notes
 about hoisting independent reductions remain useful background, but there is no
@@ -209,13 +276,21 @@ ExecProgram
     │
     │ 1. DotDimensionSorter
     │ 2. TransposeFolding (fixed point)
-    │ 3. populate_last_use
+    │ 3. DotDecomposer
+    │ 4. DeadCodeElimination
+    │ 5. populate_last_use
     ▼
 Ready for execution
 ```
 
-`DotDecomposer` is intentionally absent from this list until issue `#729`
-lands. `ReductionSimplification` is intentionally absent because the pass was
+`DotDecomposer` runs after `TransposeFolding` so that any pre-existing
+foldable transpose is absorbed into the DotGeneral dim numbers before the
+decomposition step canonicalizes the result. `DeadCodeElimination` runs last
+among the optimizations to remove bypassed instructions (typically
+`Transpose` producers the fold left behind) before `populate_last_use`
+records the final liveness map.
+
+`ReductionSimplification` is intentionally absent because the pass was
 deleted.
 
 ---
@@ -226,7 +301,7 @@ deleted.
 |---|---|
 | Contracting-dimension normalization during execution planning | Moved into `DotDimensionSorter` on `ExecProgram` |
 | Lazy transpose absorption around GEMM | Moved into `TransposeFolding` on `ExecProgram` |
-| Multi-step `DotGeneral` canonicalization | Deferred to `DotDecomposer` in `#729` |
+| Multi-step `DotGeneral` canonicalization | Implemented in `DotDecomposer` (#729) with the full XLA-style algorithm, including the output Reshape step |
 | Reduction hoisting before contraction | No dedicated pass today |
 | Linalg passthrough via string `CustomCall` | Removed; linalg ops are structured `ExecOp` variants |
 
