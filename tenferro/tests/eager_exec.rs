@@ -187,7 +187,6 @@ fn reshape_resolves_dim_exprs() {
     let x = f64t(vec![6], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let result = exec_op_on_tensors(
         &StdTensorOp::Reshape {
-            from_shape: vec![DimExpr::Const(6)],
             to_shape: vec![DimExpr::Const(2), DimExpr::Const(3)],
         },
         &[&x],

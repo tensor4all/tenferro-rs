@@ -162,16 +162,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             require_input(op, input_shapes, 1),
             config,
         )],
-        StdTensorOp::NaryEinsum {
-            subscripts,
-            n_inputs,
-        } => {
-            assert_eq!(
-                input_shapes.len(),
-                *n_inputs,
-                "NaryEinsum expects {n_inputs} inputs, got {}",
-                input_shapes.len()
-            );
+        StdTensorOp::NaryEinsum { subscripts } => {
             vec![einsum_output_shape(subscripts, input_shapes)]
         }
         StdTensorOp::Concatenate { axis } => vec![concatenate_shape(input_shapes, *axis)],

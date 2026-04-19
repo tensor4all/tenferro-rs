@@ -27,7 +27,6 @@ pub enum StdTensorOp {
         perm: Vec<usize>,
     },
     Reshape {
-        from_shape: Vec<DimExpr>,
         to_shape: Vec<DimExpr>,
     },
     BroadcastInDim {
@@ -97,7 +96,6 @@ pub enum StdTensorOp {
     /// Contraction path is optimized at execution time from actual input shapes.
     NaryEinsum {
         subscripts: String,
-        n_inputs: usize,
     },
     Concatenate {
         axis: usize,
@@ -289,11 +287,7 @@ impl Hash for StdTensorOp {
                 config.hash(state);
             }
             Self::Transpose { perm } => perm.hash(state),
-            Self::Reshape {
-                from_shape,
-                to_shape,
-            } => {
-                from_shape.hash(state);
+            Self::Reshape { to_shape } => {
                 to_shape.hash(state);
             }
             Self::BroadcastInDim { shape, dims } => {
@@ -323,12 +317,8 @@ impl Hash for StdTensorOp {
             Self::Slice(config) => config.hash(state),
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
             Self::Pad(config) => config.hash(state),
-            Self::NaryEinsum {
-                subscripts,
-                n_inputs,
-            } => {
+            Self::NaryEinsum { subscripts } => {
                 subscripts.hash(state);
-                n_inputs.hash(state);
             }
             Self::Concatenate { axis } => axis.hash(state),
             Self::Reverse { axes } => axes.hash(state),
@@ -378,6 +368,15 @@ fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
     max_idx.max(min_inputs)
 }
 
+/// Count the number of inputs in an einsum subscript string.
+///
+/// The subscript string is expected to be in the form `"<in_1>,<in_2>,...-><out>"`.
+/// This counts comma-separated input subscripts before the `->` marker.
+pub(crate) fn n_inputs_from_einsum_subscripts(subscripts: &str) -> usize {
+    let input_part = subscripts.split_once("->").map_or(subscripts, |(i, _)| i);
+    input_part.split(',').count()
+}
+
 impl GraphOp for StdTensorOp {
     type Operand = tenferro_tensor::Tensor;
     type Context = ();
@@ -399,10 +398,7 @@ impl GraphOp for StdTensorOp {
             | Self::Reverse { .. }
             | Self::ShapeOf { .. } => 1,
             Self::DynamicTruncate { .. } | Self::PadToMatch { .. } => 2,
-            Self::Reshape {
-                from_shape,
-                to_shape,
-            } => n_inputs_from_dim_exprs(1, &[from_shape, to_shape]),
+            Self::Reshape { to_shape } => n_inputs_from_dim_exprs(1, &[to_shape]),
             Self::BroadcastInDim { shape, .. } => n_inputs_from_dim_exprs(1, &[shape]),
             Self::ReduceSum { input_shape, .. }
             | Self::ReduceProd { input_shape, .. }
@@ -411,7 +407,7 @@ impl GraphOp for StdTensorOp {
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
-            Self::NaryEinsum { n_inputs, .. } => *n_inputs,
+            Self::NaryEinsum { subscripts } => n_inputs_from_einsum_subscripts(subscripts),
             Self::Concatenate { .. } => {
                 todo!(
                     "n_inputs not yet implemented for variable-arity op {:?}",
@@ -561,11 +557,8 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::Transpose { perm }
     }
 
-    fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
-        StdTensorOp::Reshape {
-            from_shape,
-            to_shape,
-        }
+    fn reshape(_from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
+        StdTensorOp::Reshape { to_shape }
     }
 
     fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {

@@ -183,7 +183,6 @@ fn representative_fragment_values_all_have_queryable_tensor_metadata() {
     )[0];
     let reshape = builder.add_op(
         StdTensorOp::Reshape {
-            from_shape: DimExpr::from_concrete(&[2]),
             to_shape: DimExpr::from_concrete(&[1, 2]),
         },
         vec![ValRef::Local(reduce)],

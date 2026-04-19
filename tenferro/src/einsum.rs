@@ -326,7 +326,6 @@ fn build_symbolic_nary_einsum(
     let outputs = builder.add_op(
         StdTensorOp::NaryEinsum {
             subscripts: subscripts.to_string(),
-            n_inputs: inputs.len(),
         },
         input_vals,
         computegraph::types::OpMode::Primal,
