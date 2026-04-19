@@ -31,35 +31,11 @@ fn assert_panic_contains(config: DotGeneralConfig, expected_substring: &str) {
     }
 }
 
-#[test]
-fn traced_dot_general_rejects_stale_lhs_rank() {
-    assert_panic_contains(
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 3,
-            rhs_rank: 2,
-        },
-        "lhs_rank",
-    );
-}
-
-#[test]
-fn traced_dot_general_rejects_stale_rhs_rank() {
-    assert_panic_contains(
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 5,
-        },
-        "rhs_rank",
-    );
-}
+// Tests for stale lhs_rank/rhs_rank in config were removed after Task 4 of the
+// rank-removal plan: `TracedTensor::dot_general` no longer validates
+// `config.lhs_rank`/`config.rhs_rank` against the actual tensor rank. The
+// traced path now derives ranks directly from the tensor shapes and ignores
+// the stale config fields (which are removed entirely in Task 10).
 
 #[test]
 fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {

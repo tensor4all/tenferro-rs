@@ -207,7 +207,7 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
             dtype: *dtype,
             bytes: bytes.clone(),
         },
-        StdTensorOp::DotGeneral(config) => ExecOp::DotGeneral(config.clone()),
+        StdTensorOp::DotGeneral { config, .. } => ExecOp::DotGeneral(config.clone()),
         StdTensorOp::NaryEinsum { subscripts, .. } => ExecOp::NaryEinsum {
             subscripts: subscripts.clone(),
         },
@@ -291,7 +291,11 @@ fn infer_semiring_output_shapes(
     let op = match kind {
         SemiringOpKind::Add => StdTensorOp::Add,
         SemiringOpKind::Mul => StdTensorOp::Mul,
-        SemiringOpKind::DotGeneral(config) => StdTensorOp::DotGeneral(config.clone()),
+        SemiringOpKind::DotGeneral(config) => StdTensorOp::DotGeneral {
+            config: config.clone(),
+            lhs_rank: config.lhs_rank,
+            rhs_rank: config.rhs_rank,
+        },
         SemiringOpKind::ReduceSum { axes } => StdTensorOp::ReduceSum {
             axes: axes.clone(),
             input_shape: require_input_shape(kind, input_shapes, 0).to_vec(),
@@ -498,21 +502,20 @@ fn find_producer(program: &ExecProgram, slot: usize) -> Option<usize> {
 }
 
 fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[usize]) -> bool {
-    let (rank, contracting_dims, batch_dims) = if operand_idx == 0 {
+    let (contracting_dims, batch_dims) = if operand_idx == 0 {
         (
-            config.lhs_rank,
             config.lhs_contracting_dims.as_slice(),
             config.lhs_batch_dims.as_slice(),
         )
     } else {
         (
-            config.rhs_rank,
             config.rhs_contracting_dims.as_slice(),
             config.rhs_batch_dims.as_slice(),
         )
     };
+    let rank = perm.len();
 
-    if perm.len() != rank || !is_valid_permutation(perm, rank) {
+    if !is_valid_permutation(perm, rank) {
         return false;
     }
 

@@ -43,7 +43,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Compare(dir) => vec![exec.compare(inputs[0], inputs[1], dir)?],
             StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
             StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
-            StdTensorOp::DotGeneral(config) => {
+            StdTensorOp::DotGeneral { config, .. } => {
                 vec![exec.dot_general(inputs[0], inputs[1], config)?]
             }
             StdTensorOp::Reshape { to_shape, .. } => {
