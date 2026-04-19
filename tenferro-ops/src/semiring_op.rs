@@ -1,3 +1,22 @@
+//! **Non-mainline.** The semiring graph op is retained for Stage 2-6
+//! compatibility but is no longer the architectural source of truth for the
+//! traced AD substrate.
+//!
+//! The mainline traced op vocabulary is [`StdTensorOp`](crate::std_tensor_op::StdTensorOp);
+//! `SemiringOp<Alg>` is an auxiliary path whose forward execution still runs
+//! through [`SemiringBackend`](tenferro_tensor::SemiringBackend), but it does
+//! not integrate with the mainline AD rules in [`crate::ad`] and should not be
+//! reasoned about as co-equal with `StdTensorOp`.
+//!
+//! This module — together with [`crate::semiring_op_kind`] and
+//! [`crate::semiring_ops`] — is scheduled for removal when the
+//! `ExtensionOp` substrate lands in Stage 6. See
+//! `docs/design/design_v3/30-algebra-and-tropical.md` ("Recommended Fate Of
+//! `SemiringOp`") and `docs/design/design_v3/90-migration-plan.md` Stage 6
+//! ("Implement The `ExtensionOp` Mechanism") for the retirement plan. New code
+//! must not extend this path; lower tropical/semiring use cases through core
+//! primitives or, once Stage 6 lands, through the `ExtensionOp` mechanism.
+
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;

@@ -1,3 +1,15 @@
+//! **Non-mainline.** The `SemiringOps` trait exists so that the algebra-generic
+//! [`crate::semiring_op::SemiringOp`] and the mainline
+//! [`crate::std_tensor_op::StdTensorOp`] can share a common constructor
+//! vocabulary. Per design_v3, the trait is demoted together with the rest of
+//! the semiring graph substrate and is kept only for Stage 2-6 compatibility;
+//! Stage 6 removes it entirely.
+//!
+//! New graph code must construct `StdTensorOp` variants directly rather than
+//! going through this trait. See
+//! `docs/design/design_v3/30-algebra-and-tropical.md` and
+//! `docs/design/design_v3/90-migration-plan.md` Stage 6 for context.
+
 use computegraph::GraphOp;
 use tenferro_tensor::DotGeneralConfig;
 

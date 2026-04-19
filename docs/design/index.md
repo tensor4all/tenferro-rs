@@ -33,6 +33,12 @@ architecture see [Architecture](../architecture/). For normative specs see
 |----------|-------------|
 | [design_v3/README.md](./design_v3/README.md) | Non-canonical proposal set for traced graph, AD, shape metadata, and tropical externalization |
 
+Per design_v3, the `SemiringOp` / `SemiringBackend` graph substrate is
+**non-mainline** and scheduled for removal in Stage 6; see
+[`design_v3/30-algebra-and-tropical.md`](./design_v3/30-algebra-and-tropical.md)
+and [`design_v3/90-migration-plan.md`](./design_v3/90-migration-plan.md) Stage
+6. The mainline traced op vocabulary is `StdTensorOp` in `tenferro-ops`.
+
 ## Reference
 
 See [Reference](../reference/) for external system surveys and comparison notes.

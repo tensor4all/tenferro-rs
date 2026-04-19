@@ -553,6 +553,16 @@ pub trait TensorBackend {
 
 /// Algebra-generic backend over typed tensors.
 ///
+/// **Non-mainline.** This trait backs the legacy `SemiringOp` graph substrate
+/// (defined in `tenferro-ops`) and is retained only for Stage 2-6
+/// compatibility with that pipeline. The mainline traced AD substrate is
+/// [`TensorBackend`] acting on `StdTensorOp`; new backend code must not grow
+/// additional coupling to `SemiringBackend`. This trait is scheduled for
+/// removal together with the rest of the semiring pipeline in Stage 6; see
+/// `docs/design/design_v3/30-algebra-and-tropical.md` and
+/// `docs/design/design_v3/90-migration-plan.md` Stage 6 for the retirement
+/// plan.
+///
 /// # Examples
 ///
 /// ```ignore
