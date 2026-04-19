@@ -145,20 +145,26 @@ The traced path should not require the graph value itself to become
 Fused tropical support is a committed part of the migration plan, not a
 speculative future add-on.
 
-- **Stage 4 (Phase 1)** ships tropical support via composition of core
-  primitives, in an external crate
-- **Stage 7 (Phase 2)** adds `FusedTropicalDotGeneral` to that same external
-  crate as an `ExtensionOp`, registered via the Stage 6 mechanism
-- the Stage 7 AD path is argmax-based: `linearize` records argmax indices;
-  `transpose_rule` emits `Gather` / `Scatter` on the core op vocabulary, so
-  AD closure on the core op set is preserved
+- **Stage 4a (Phase 1, concrete shapes)** ships tropical support via
+  composition of core primitives on concrete-shape inputs, in an external
+  crate. Stage 4a is scoped to the traced `tenferro` facade only; eager
+  tropical typed-tensor work is separate.
+- **Stage 4b (Phase 1, symbolic shapes)** extends the same composition to
+  symbolic-shape inputs, acting as the contract test for Stage 3's
+  symbolic-AD correctness work.
+- **Stage 7 (Phase 2)** adds `FusedTropicalDotGeneral` to that same
+  external crate as an `ExtensionOp`, registered via the Stage 6
+  mechanism.
+- the Stage 7 AD path is argmax-based: `linearize` records argmax
+  indices; `transpose_rule` emits `Gather` / `Scatter` on the core op
+  vocabulary, so AD closure on the core op set is preserved.
 
-The fused primitive therefore lives in the external crate and never appears
-as a core op variant. This keeps the fast path as a packaging decision
-rather than a second semantic substrate inside the core.
+The fused primitive therefore lives in the external crate and never
+appears as a core op variant. This keeps the fast path as a packaging
+decision rather than a second semantic substrate inside the core.
 
-See `90-migration-plan.md` Stage 7 for the full acceptance criteria and
-`40-extension-boundary.md` Recipe B for the authoring flow.
+See `90-migration-plan.md` Stages 4a/4b and 7 for the full acceptance
+criteria and `40-extension-boundary.md` Recipe B for the authoring flow.
 
 ## Design Position
 

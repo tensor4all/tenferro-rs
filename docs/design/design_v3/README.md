@@ -95,13 +95,21 @@ The recommended interpretation of `v3` is:
                               │
   Stage 3  ┌──────────────────▼──────────────────┐
   AD       │ AD rules read value metadata        │
-  consol.  │ ★ exit gate: algebra A(delete) / B  │
+  consol.  │ symbolic-shape AD correctness       │
+           │ ★ exit gate: algebra A(delete) / B  │
            └──────────────────┬──────────────────┘
                               │
-  Stage 4  ┌──────────────────▼──────────────────┐
+  Stage 4a ┌──────────────────▼──────────────────┐
   tropical │ external tenferro-ext-tropical      │
-  Phase 1  │ MaxPlus/MinPlus scalar newtypes     │
-           │ traced = composition to core ops    │
+  concrete │ concrete-shape composition          │
+           │ traced facade only                  │
+           │ in-tree tropical tests migrated     │
+           └──────────────────┬──────────────────┘
+                              │
+  Stage 4b ┌──────────────────▼──────────────────┐
+  tropical │ same composition on symbolic shapes │
+  symbolic │ contract test for Stage 3           │
+           │ symbolic-AD correctness self-test   │
            └──────────────────┬──────────────────┘
                               │
   Stage 5  ┌──────────────────▼──────────────────┐

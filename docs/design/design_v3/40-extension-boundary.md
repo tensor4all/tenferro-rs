@@ -52,11 +52,15 @@ including the tropical Phase 1 surface.
 
 ### Phase B — Generic `ExtensionOp` Substrate (Stages 5–7)
 
-- **Stage 5 (spec)**: write the `ExtensionOp` contract — identity, hashing,
-  equality, `Clone`, AD closure, serialization versioning
-- **Stage 6 (impl)**: add the `TensorOp::Extension(Arc<dyn ExtensionOp>)`
-  variant and a registration API; wire it through engine, compile path,
-  eager emitter, and backend dispatch
+- **Stage 5 (spec)**: write the `ExtensionOp` contract — identity,
+  hashing, equality, `Clone`, arity, shape inference, dispatch, registry,
+  AD closure, serialization versioning, failure modes, and legacy
+  retirement
+- **Stage 6 (impl)**: add the `Extension(Arc<dyn ExtensionOp>)` variant
+  to the core op enum (today that is `StdTensorOp`;
+  `tenferro-ops/src/std_tensor_op.rs:16-17`) and a registration API;
+  wire it through engine, compile path, eager emitter, and backend
+  dispatch; retire the legacy `SemiringOp` / `SemiringBackend` pipeline
 - **Stage 7 (self-test)**: ship `FusedTropicalDotGeneral` in
   `tenferro-ext-tropical` as the first canonical `ExtensionOp`, with
   argmax-based AD via `Gather` / `Scatter` on core ops
@@ -92,12 +96,24 @@ protects against that.
 
 The Stage 5 spec must satisfy all of these:
 
-- explicit equality semantics
-- explicit hashing semantics
+- explicit equality, hashing, and `Clone` semantics
 - stable family identification
-- AD closure: `linearize` and `transpose_rule` emit only core ops
-- eager and traced execution boundaries remain understandable
-- failure behavior is explicit when a backend lacks a forward implementation
+- arity / `n_inputs` / `n_outputs` contract
+- shape and dtype inference hook (analogue of
+  `tenferro/src/shape_infer.rs`)
+- forward execution dispatch responsibility split between compiled exec
+  (`tenferro/src/compiler.rs`) and eager path
+  (`tenferro/src/eager_exec.rs`, `tenferro/src/eager_emitter.rs`)
+- registration and lookup API (registry location, failure on lookup
+  miss, version-mismatch behavior)
+- AD closure: `linearize` and `transpose_rule` emit only core ops and
+  respect the `ShapeGuardContext` surface from
+  `tenferro-ops/src/std_tensor_op.rs:521-548`
+- serialization versioning (family identifier format, cross-process and
+  cross-version policy)
+- explicit failure mode when a backend lacks a forward implementation
+- explicit legacy-substrate policy: whether the existing `SemiringOp` /
+  `SemiringBackend` pipeline is retired at Stage 6 or kept in parallel
 
 The contract is modality-agnostic: whether it is modeled as a trait object,
 a registered descriptor, or a small extension enum is secondary to these
@@ -119,18 +135,30 @@ Tropical is the pressure test that drives Stages 5–7 to ship:
 The following recipes describe how an external author actually adds a new
 primitive at each phase.
 
-### Recipe A — Composition (Stage 4, available today)
+### Recipe A — Composition (Stage 4, available after Stage 4a public-API lift)
 
 For any operation expressible as a composition of core primitives:
 
 1. write a Rust wrapper that takes `&TracedTensor` / `&EagerTensor<B>`
    arguments
-2. call existing methods (`add`, `mul`, `reduce_max`, `dot_general`, ...) to
-   build the composition
+2. call public methods (`add`, `mul`, `reduce_max`, `dot_general`, ...)
+   to build the composition
 3. rely on the existing AD rules for those core primitives
 
-No core change is required. Tropical `max-plus matmul` lowers to
-`BroadcastInDim + Add + ReduceMax` this way.
+**Stage 4a (concrete shapes)**: several ops that tropical composition
+needs are currently internal — e.g. `tenferro/src/linalg_api.rs:713`
+defines `reduce_max` for `TracedTensor` but keeps it non-public.
+Stage 4a lifts these onto the public facade before the external crate
+can use this recipe.
+
+**Stage 4b (symbolic shapes)**: the public facade currently exposes only
+`broadcast(shape: &[usize], dims)` with concrete shapes
+(`tenferro/src/traced.rs:1413`). Stage 4b adds a `DimExpr`-accepting
+variant or derives shapes from `TensorMeta`. Symbolic tropical
+composition lands after that.
+
+Tropical `max-plus matmul` lowers to `BroadcastInDim + Add + ReduceMax`
+this way once Stage 4a's public-API lift is in place.
 
 ### Recipe B — Fused `ExtensionOp` (Stages 5–7)
 

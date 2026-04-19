@@ -109,10 +109,12 @@ The core vocabulary should be a flattened op enum covering:
 - linalg primitives already present in the traced stack
 - optional fused performance ops only when justified
 
-Predicate/select-style tensor ops (such as `Where`) are **intentionally out of
-scope** for `v3`. Per `docs/design/supported-ops.md`, a dedicated
-boolean/predicate substrate must land before they can be added cleanly, and
-that substrate is not part of this proposal set.
+Public predicate/select-style APIs (such as a user-facing `Where`) are
+**intentionally out of scope** for `v3`. Internal primitives like `Compare`
+and `Select` already exist in the core op enum
+(`tenferro-ops/src/std_tensor_op.rs`), but a dedicated public
+boolean/predicate substrate that exposes them cleanly is not part of this
+proposal set.
 
 The exact enum name is less important than the contract:
 

@@ -57,6 +57,16 @@ variants that currently carry input-shape history on the op itself.
 
 The traced stack should expose value metadata through one small abstraction.
 
+> **`TensorMeta` is a proposed new type**, not an existing one. It is the
+> working name for the carrier that Stage 1 delivers. The type itself does
+> not exist in the codebase today — the building blocks (`DimExpr` in
+> `tenferro-ops/src/dim_expr.rs`, `SymDim` in `tenferro/src/sym_dim.rs`,
+> and the internal `TracedTensor.shape_hint` field at
+> `tenferro/src/traced.rs:53`) are already present. Stage 1 lifts these
+> into a single public carrier and wires it through AD and lowering. The
+> final Rust name may be `TensorMeta`, `ValueMeta`, or another short name
+> settled during implementation.
+
 Minimal required fields:
 
 ```text
@@ -99,20 +109,50 @@ forcing unrelated API churn.
 
 ## Recommended Migration Order
 
-Baseline: step 2 below already landed in `#737` (via `#664`). The remaining
-safest order is:
+The safest order is:
 
 1. introduce metadata queries on builder and emitter APIs
-2. ~~remove `lhs_rank` and `rhs_rank` from traced `DotGeneral` variants~~ —
-   **done in `#737`**
+2. remove `lhs_rank` and `rhs_rank` from `StdTensorOp::DotGeneral`. These
+   ranks were already removed from `DotGeneralConfig` in `#737`, but they
+   were relocated to the enclosing traced op variant rather than deleted —
+   `tenferro-ops/src/std_tensor_op.rs:23-27` still carries them as
+   Category C snapshot fields on the op
 3. remove reduction `input_shape` fields
 4. remove `Reshape::from_shape` and `NaryEinsum::n_inputs` where derivable
 5. remove linalg input-shape snapshots
 6. remove `TriangularSolve` shape snapshots
 
-Each step should preserve behavior and keep tests focused on proving that the
-shape-sensitive AD paths still produce identical results. Oracle-replay
+Each step should preserve behavior and keep tests focused on proving that
+the shape-sensitive AD paths still produce identical results. Oracle-replay
 baselines must stay green across every step.
+
+## Relation To JAX's Shape Polymorphism
+
+JAX handles symbolic shapes via `jax.export` (2024 GA) and internal
+`_DimExpr` types. The principles `v3` aligns with are narrower than JAX's
+full machinery but follow the same direction.
+
+| Mechanism | JAX | `v3` target |
+|---|---|---|
+| Symbolic dim type | `_DimExpr` (variables + arithmetic + constraints) | existing `DimExpr` / `SymDim` (simpler, no constraint solver) |
+| Abstract shape eval | *total* for every primitive | Stage 3 closes existing gaps |
+| Shape as first-class value | `jnp.shape(x)` returns traced value | existing `shape_of(axis)` returns scalar `f64` tensor |
+| Broadcast with symbolic shape | primitive-level support | Stage 4b adds a public `DimExpr`-accepting variant |
+| AD under symbolic inputs | all rules total | Stage 3 fixes the zero-tangent collapse at `tenferro/src/traced.rs:820-833` |
+| Opt-in polymorphism UX | `jax.export.export(polymorphic_shapes=...)` | out of scope for `v3` |
+| Constraint solver | built into `_DimExpr` | out of scope for `v3` |
+
+`v3` explicitly does not try to replicate JAX's full shape-polymorphism
+UX. What it does match is the two correctness invariants that make a
+symbolic system viable at all:
+
+- abstract evaluation is total over symbolic inputs
+- AD rules emit valid cotangents under symbolic shapes
+
+Stage 3 (symbolic-AD correctness) and Stage 4b (symbolic tropical as the
+contract test) close these. The constraint solver and polymorphic export
+UX are not on the `v3` critical path and may be revisited as follow-up
+work.
 
 ## Design Position
 
