@@ -95,35 +95,62 @@ impl DotGeneralConfig {
     }
 
     pub fn validate_dims(&self) -> Result<(), String> {
+        self.validate_dims_with_ranks(self.lhs_rank, self.rhs_rank)
+    }
+
+    /// Validate that all dimension indices are within range for the given
+    /// explicit ranks and that no axis appears in multiple roles.
+    ///
+    /// This variant accepts the lhs/rhs ranks as parameters instead of reading
+    /// them from `self.lhs_rank`/`self.rhs_rank`, so call sites with the
+    /// tensor shapes in hand can validate without having to populate the
+    /// redundant rank fields on the config.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DotGeneralConfig;
+    ///
+    /// let config = DotGeneralConfig {
+    ///     lhs_contracting_dims: vec![1],
+    ///     rhs_contracting_dims: vec![0],
+    ///     lhs_batch_dims: vec![],
+    ///     rhs_batch_dims: vec![],
+    ///     lhs_rank: 2,
+    ///     rhs_rank: 2,
+    /// };
+    /// config.validate_dims_with_ranks(2, 2).unwrap();
+    /// ```
+    pub fn validate_dims_with_ranks(&self, lhs_rank: usize, rhs_rank: usize) -> Result<(), String> {
         for &d in &self.lhs_contracting_dims {
-            if d >= self.lhs_rank {
+            if d >= lhs_rank {
                 return Err(format!(
                     "lhs_contracting_dim {} out of bounds for lhs_rank {}",
-                    d, self.lhs_rank
+                    d, lhs_rank
                 ));
             }
         }
         for &d in &self.rhs_contracting_dims {
-            if d >= self.rhs_rank {
+            if d >= rhs_rank {
                 return Err(format!(
                     "rhs_contracting_dim {} out of bounds for rhs_rank {}",
-                    d, self.rhs_rank
+                    d, rhs_rank
                 ));
             }
         }
         for &d in &self.lhs_batch_dims {
-            if d >= self.lhs_rank {
+            if d >= lhs_rank {
                 return Err(format!(
                     "lhs_batch_dim {} out of bounds for lhs_rank {}",
-                    d, self.lhs_rank
+                    d, lhs_rank
                 ));
             }
         }
         for &d in &self.rhs_batch_dims {
-            if d >= self.rhs_rank {
+            if d >= rhs_rank {
                 return Err(format!(
                     "rhs_batch_dim {} out of bounds for rhs_rank {}",
-                    d, self.rhs_rank
+                    d, rhs_rank
                 ));
             }
         }
