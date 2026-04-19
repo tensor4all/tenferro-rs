@@ -31,35 +31,11 @@ fn assert_panic_contains(config: DotGeneralConfig, expected_substring: &str) {
     }
 }
 
-#[test]
-fn traced_dot_general_rejects_stale_lhs_rank() {
-    assert_panic_contains(
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 3,
-            rhs_rank: 2,
-        },
-        "lhs_rank",
-    );
-}
-
-#[test]
-fn traced_dot_general_rejects_stale_rhs_rank() {
-    assert_panic_contains(
-        DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 5,
-        },
-        "rhs_rank",
-    );
-}
+// Tests for stale lhs_rank/rhs_rank in config were removed after Task 4 of the
+// rank-removal plan: `TracedTensor::dot_general` no longer validates any stale
+// rank fields against the actual tensor rank. The traced path now derives
+// ranks directly from the tensor shapes, and issue #664 removed the redundant
+// `lhs_rank`/`rhs_rank` fields on `DotGeneralConfig` entirely (Task 10).
 
 #[test]
 fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
@@ -69,8 +45,6 @@ fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "out of bounds",
     );
@@ -84,8 +58,6 @@ fn traced_dot_general_rejects_contracting_batch_overlap() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![1],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "both contracting and batch",
     );
@@ -102,8 +74,6 @@ fn traced_dot_general_accepts_valid_config() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let mut c = a.dot_general(&b, config);
     let mut engine = tenferro::engine::Engine::new(CpuBackend::new());
@@ -113,57 +83,14 @@ fn traced_dot_general_accepts_valid_config() {
 }
 
 #[test]
-fn dot_general_config_validate_ranks_ok() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
-    };
-    assert!(config.validate_ranks(2, 2).is_ok());
-}
-
-#[test]
-fn dot_general_config_validate_ranks_mismatch_lhs() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 4,
-        rhs_rank: 2,
-    };
-    let err = config.validate_ranks(2, 2).unwrap_err();
-    assert!(err.contains("lhs_rank") && err.contains("4") && err.contains("2"));
-}
-
-#[test]
-fn dot_general_config_validate_ranks_mismatch_rhs() {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 3,
-    };
-    let err = config.validate_ranks(2, 2).unwrap_err();
-    assert!(err.contains("rhs_rank") && err.contains("3") && err.contains("2"));
-}
-
-#[test]
 fn dot_general_config_validate_dims_ok() {
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![1],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
-    assert!(config.validate_dims().is_ok());
+    assert!(config.validate_dims_with_ranks(2, 2).is_ok());
 }
 
 #[test]
@@ -173,10 +100,8 @@ fn dot_general_config_validate_dims_out_of_bounds() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
-    let err = config.validate_dims().unwrap_err();
+    let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert!(err.contains("out of bounds"));
 }
 
@@ -187,10 +112,8 @@ fn dot_general_config_validate_dims_contracting_count_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
-    let err = config.validate_dims().unwrap_err();
+    let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert!(err.contains("contracting dim counts differ"));
 }
 
@@ -201,10 +124,8 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![0],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
-    let err = config.validate_dims().unwrap_err();
+    let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert!(err.contains("batch dim counts differ"));
 }
 
@@ -216,8 +137,6 @@ fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
             rhs_contracting_dims: vec![5],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "out of bounds",
     );
@@ -231,8 +150,6 @@ fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![5],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "out of bounds",
     );
@@ -246,8 +163,6 @@ fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![5],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "out of bounds",
     );
@@ -261,8 +176,6 @@ fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![0],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "both contracting and batch",
     );
@@ -276,8 +189,6 @@ fn traced_dot_general_rejects_duplicate_contracting_dims() {
             rhs_contracting_dims: vec![0, 1],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         "duplicate dim",
     );
@@ -290,10 +201,8 @@ fn dot_general_config_validate_dims_rhs_out_of_bounds() {
         rhs_contracting_dims: vec![5],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
-    let err = config.validate_dims().unwrap_err();
+    let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
     assert!(err.contains("out of bounds"));
 }
 
@@ -304,37 +213,9 @@ fn dot_general_config_validate_dims_duplicate_batch_dims() {
         rhs_contracting_dims: vec![2],
         lhs_batch_dims: vec![0, 0],
         rhs_batch_dims: vec![1, 1],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
-    let err = config.validate_dims().unwrap_err();
+    let err = config.validate_dims_with_ranks(3, 3).unwrap_err();
     assert!(err.contains("duplicate dim"));
-}
-
-#[test]
-fn eager_dot_general_rejects_stale_lhs_rank() {
-    use tenferro::EagerTensor;
-
-    let a = EagerTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0, 2.0, 3.0, 4.0],
-    )));
-    let b = EagerTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![5.0, 6.0, 7.0, 8.0],
-    )));
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 3,
-        rhs_rank: 2,
-    };
-    assert!(
-        a.dot_general(&b, config).is_err(),
-        "expected error for stale lhs_rank"
-    );
 }
 
 #[test]
@@ -352,8 +233,6 @@ fn traced_dot_general_accepts_batched_valid_config() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![0, 2],
         rhs_batch_dims: vec![1, 2],
-        lhs_rank: 3,
-        rhs_rank: 3,
     };
     let mut c = a.dot_general(&b, config);
     let mut engine = tenferro::engine::Engine::new(CpuBackend::new());

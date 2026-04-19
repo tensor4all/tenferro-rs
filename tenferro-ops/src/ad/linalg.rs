@@ -1238,7 +1238,11 @@ fn matmul_fixed(
     rank: usize,
 ) -> LocalValId {
     builder.add_op(
-        StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
+        StdTensorOp::DotGeneral {
+            config: matrix_multiply_config(rank),
+            lhs_rank: rank,
+            rhs_rank: rank,
+        },
         vec![lhs, rhs],
         OpMode::Primal,
     )[0]
@@ -1252,7 +1256,11 @@ fn matmul_linear(
     rank: usize,
 ) -> LocalValId {
     builder.add_op(
-        StdTensorOp::DotGeneral(matrix_multiply_config(rank)),
+        StdTensorOp::DotGeneral {
+            config: matrix_multiply_config(rank),
+            lhs_rank: rank,
+            rhs_rank: rank,
+        },
         vec![lhs, rhs],
         OpMode::Linear { active_mask },
     )[0]
@@ -1266,8 +1274,6 @@ fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: batch_dims.clone(),
         rhs_batch_dims: batch_dims,
-        lhs_rank: rank,
-        rhs_rank: rank,
     }
 }
 

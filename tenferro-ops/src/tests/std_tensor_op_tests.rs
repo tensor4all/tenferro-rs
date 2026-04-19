@@ -113,14 +113,16 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Neg.n_inputs(), 1);
     assert_eq!(StdTensorOp::Conj.n_inputs(), 1);
     assert_eq!(
-        StdTensorOp::DotGeneral(DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: vec![],
-            rhs_batch_dims: vec![],
+        StdTensorOp::DotGeneral {
+            config: DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
             lhs_rank: 2,
             rhs_rank: 2,
-        })
+        }
         .n_inputs(),
         2
     );
@@ -497,8 +499,6 @@ fn test_semiring_op_kind_counts() {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: 2,
-            rhs_rank: 2,
         })
         .n_inputs(),
         2
@@ -526,14 +526,16 @@ fn test_semiring_op_kind_counts() {
 #[test]
 fn test_semiring_op_uses_algebra_marker_type() {
     let add = SemiringOp::<Standard<f64>>::add_op();
-    let gemm = SemiringOp::<Standard<f64>>::dot_general(DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
-    });
+    let gemm = SemiringOp::<Standard<f64>>::dot_general(
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+        2,
+        2,
+    );
 
     assert_eq!(add.n_inputs(), 2);
     assert_eq!(add.n_outputs(), 1);
@@ -629,11 +631,9 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     assert_eq!(
-        SemiringOp::<Standard<f64>>::dot_general(config.clone()).kind,
+        SemiringOp::<Standard<f64>>::dot_general(config.clone(), 2, 2).kind,
         SemiringOpKind::DotGeneral(config)
     );
 }
@@ -1286,14 +1286,16 @@ fn test_std_tensor_op_convert_linearize_and_transpose_swap_dtypes() {
 
 #[test]
 fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
-    let matmul = StdTensorOp::DotGeneral(DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+    let matmul = StdTensorOp::DotGeneral {
+        config: DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
         lhs_rank: 2,
         rhs_rank: 2,
-    });
+    };
     let (linearize_none_result, linearize_none_fragment) =
         run_linearize_case(matmul.clone(), 2, 0, &[false, false]);
     assert_eq!(linearize_none_result, vec![None]);
@@ -1343,14 +1345,16 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert_eq!(reduce_transpose_none_result, vec![None]);
     assert!(reduce_transpose_none_fragment.ops().is_empty());
 
-    let scalar_contract = StdTensorOp::DotGeneral(DotGeneralConfig {
-        lhs_contracting_dims: vec![1, 0],
-        rhs_contracting_dims: vec![0, 1],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+    let scalar_contract = StdTensorOp::DotGeneral {
+        config: DotGeneralConfig {
+            lhs_contracting_dims: vec![1, 0],
+            rhs_contracting_dims: vec![0, 1],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
         lhs_rank: 2,
         rhs_rank: 2,
-    });
+    };
     let (scalar_transpose_result, _, scalar_transpose_fragment) =
         run_transpose_case(scalar_contract, 2, &[true, false], true);
     assert!(scalar_transpose_result[0].is_some());

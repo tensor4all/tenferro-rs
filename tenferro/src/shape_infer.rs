@@ -61,7 +61,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Pad(_)
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::Reverse { .. }
-        | StdTensorOp::DotGeneral(_)
+        | StdTensorOp::DotGeneral { .. }
         | StdTensorOp::NaryEinsum { .. }
         | StdTensorOp::Cholesky { .. }
         | StdTensorOp::Lu { .. }
@@ -157,7 +157,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
         }
         StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0), config)],
-        StdTensorOp::DotGeneral(config) => vec![dot_general_shape(
+        StdTensorOp::DotGeneral { config, .. } => vec![dot_general_shape(
             require_input(op, input_shapes, 0),
             require_input(op, input_shapes, 1),
             config,
@@ -274,25 +274,13 @@ fn dot_general_shape(
     rhs_shape: &[DimExpr],
     config: &DotGeneralConfig,
 ) -> Vec<DimExpr> {
-    assert_eq!(
-        lhs_shape.len(),
-        config.lhs_rank,
-        "DotGeneral lhs rank mismatch: config={}, actual={}",
-        config.lhs_rank,
-        lhs_shape.len()
-    );
-    assert_eq!(
-        rhs_shape.len(),
-        config.rhs_rank,
-        "DotGeneral rhs rank mismatch: config={}, actual={}",
-        config.rhs_rank,
-        rhs_shape.len()
-    );
+    let lhs_rank = lhs_shape.len();
+    let rhs_rank = rhs_shape.len();
 
-    let lhs_free = (0..config.lhs_rank).filter(|axis| {
+    let lhs_free = (0..lhs_rank).filter(|axis| {
         !config.lhs_contracting_dims.contains(axis) && !config.lhs_batch_dims.contains(axis)
     });
-    let rhs_free = (0..config.rhs_rank).filter(|axis| {
+    let rhs_free = (0..rhs_rank).filter(|axis| {
         !config.rhs_contracting_dims.contains(axis) && !config.rhs_batch_dims.contains(axis)
     });
 

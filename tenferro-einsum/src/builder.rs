@@ -279,8 +279,6 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
             rhs_contracting_dims,
             lhs_batch_dims,
             rhs_batch_dims,
-            lhs_rank: lhs.shape.len(),
-            rhs_rank: rhs.shape.len(),
         };
 
         // DotGeneral output order: lhs_free + rhs_free + batch (col-major batch trailing)
@@ -293,7 +291,7 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
         let result_shape: Vec<usize> = result_labels.iter().map(|&l| label_to_size(l)).collect();
 
         let outputs = builder.add_op(
-            Op::dot_general(config),
+            Op::dot_general(config, lhs.shape.len(), rhs.shape.len()),
             vec![lhs.val.clone(), rhs.val.clone()],
             OpMode::Primal,
         );

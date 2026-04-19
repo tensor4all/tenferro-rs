@@ -89,7 +89,9 @@ where
         Self::new(SemiringOpKind::Mul)
     }
 
-    fn dot_general(config: DotGeneralConfig) -> Self {
+    fn dot_general(config: DotGeneralConfig, _lhs_rank: usize, _rhs_rank: usize) -> Self {
+        // `SemiringOp` does not track rank on the op; ranks are recovered from
+        // the tensor operands at execution time. The parameters are ignored.
         Self::new(SemiringOpKind::DotGeneral(config))
     }
 

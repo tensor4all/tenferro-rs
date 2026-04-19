@@ -62,8 +62,6 @@ pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: a.rank,
-        rhs_rank: b.rank,
     };
     a.dot_general(b, config)
 }

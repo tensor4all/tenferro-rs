@@ -116,14 +116,21 @@ impl<B: TensorBackend> EagerTensor<B> {
     ///     rhs_contracting_dims: vec![0],
     ///     lhs_batch_dims: vec![],
     ///     rhs_batch_dims: vec![],
-    ///     lhs_rank: 2,
-    ///     rhs_rank: 2,
     /// }).unwrap();
     ///
     /// assert_eq!(c.data().shape(), &[2, 2]);
     /// ```
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Result<Self> {
-        self.binary_op(other, StdTensorOp::DotGeneral(config))
+        let lhs_rank = self.data.shape().len();
+        let rhs_rank = other.data.shape().len();
+        self.binary_op(
+            other,
+            StdTensorOp::DotGeneral {
+                config,
+                lhs_rank,
+                rhs_rank,
+            },
+        )
     }
 
     /// Permute tensor axes.

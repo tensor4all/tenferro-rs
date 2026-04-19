@@ -29,8 +29,6 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
                 rhs_contracting_dims: vec![0],
                 lhs_batch_dims: vec![],
                 rhs_batch_dims: vec![],
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
         )
         .unwrap_err();
@@ -122,8 +120,6 @@ fn semiring_batched_gemm_returns_error_instead_of_panicking() {
         rhs_contracting_dims: vec![0, 1],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {

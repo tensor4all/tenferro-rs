@@ -1096,8 +1096,6 @@ impl Tensor {
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
-            lhs_rank: self.shape().len(),
-            rhs_rank: other.shape().len(),
         };
         ctx.with_exec_session(|exec| exec.dot_general(self, other, &config))
     }

@@ -350,8 +350,6 @@ fn binary_contract<'a>(
             rhs_contracting_dims,
             lhs_batch_dims,
             rhs_batch_dims,
-            lhs_rank: lhs.labels.len(),
-            rhs_rank: rhs.labels.len(),
         };
         let tensor = exec.dot_general(lhs.tensor(), rhs.tensor(), &config)?;
         LabeledTensor {

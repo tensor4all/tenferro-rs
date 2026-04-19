@@ -204,8 +204,6 @@ fn matmul_config() -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
-        lhs_rank: 2,
-        rhs_rank: 2,
     }
 }
 
@@ -253,8 +251,6 @@ fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: batch_dims.clone(),
         rhs_batch_dims: batch_dims,
-        lhs_rank: rank,
-        rhs_rank: rank,
     }
 }
 
@@ -274,7 +270,14 @@ fn add_solve_composition(
     );
     let rank = lhs_shape.len();
     let pb = builder.add_op(
-        StdTensorOp::DotGeneral(solve_dot_general_config(rank)),
+        {
+            let config = solve_dot_general_config(rank);
+            StdTensorOp::DotGeneral {
+                lhs_rank: rank,
+                rhs_rank: rank,
+                config,
+            }
+        },
         vec![ValRef::Local(lu[0]), ValRef::Local(b)],
         OpMode::Primal,
     )[0];
@@ -456,7 +459,14 @@ fn build_svd_uv_product_fragment(
         OpMode::Primal,
     );
     let uv_product = builder.add_op(
-        StdTensorOp::DotGeneral(matmul_config()),
+        {
+            let config = matmul_config();
+            StdTensorOp::DotGeneral {
+                lhs_rank: 2,
+                rhs_rank: 2,
+                config,
+            }
+        },
         vec![ValRef::Local(svd[0]), ValRef::Local(svd[2])],
         OpMode::Primal,
     );
@@ -520,12 +530,26 @@ fn build_svd_reconstruction_sum_fragment(
         OpMode::Primal,
     );
     let us = builder.add_op(
-        StdTensorOp::DotGeneral(matmul_config()),
+        {
+            let config = matmul_config();
+            StdTensorOp::DotGeneral {
+                lhs_rank: 2,
+                rhs_rank: 2,
+                config,
+            }
+        },
         vec![ValRef::Local(svd[0]), ValRef::Local(diag_s[0])],
         OpMode::Primal,
     );
     let reconstructed = builder.add_op(
-        StdTensorOp::DotGeneral(matmul_config()),
+        {
+            let config = matmul_config();
+            StdTensorOp::DotGeneral {
+                lhs_rank: 2,
+                rhs_rank: 2,
+                config,
+            }
+        },
         vec![ValRef::Local(us[0]), ValRef::Local(svd[2])],
         OpMode::Primal,
     );
@@ -618,7 +642,14 @@ fn build_eigh_projector_fragment(
         OpMode::Primal,
     );
     let weighted_vectors = builder.add_op(
-        StdTensorOp::DotGeneral(matmul_config()),
+        {
+            let config = matmul_config();
+            StdTensorOp::DotGeneral {
+                lhs_rank: 2,
+                rhs_rank: 2,
+                config,
+            }
+        },
         vec![ValRef::Local(eigh[1]), ValRef::Local(diag[0])],
         OpMode::Primal,
     );
@@ -641,7 +672,14 @@ fn build_eigh_projector_fragment(
         )
     };
     let projector = builder.add_op(
-        StdTensorOp::DotGeneral(matmul_config()),
+        {
+            let config = matmul_config();
+            StdTensorOp::DotGeneral {
+                lhs_rank: 2,
+                rhs_rank: 2,
+                config,
+            }
+        },
         vec![ValRef::Local(weighted_vectors[0]), ValRef::Local(vt[0])],
         OpMode::Primal,
     );

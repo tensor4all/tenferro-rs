@@ -95,20 +95,6 @@ fn validate_dot_general<T>(
 
     let lhs_rank = lhs.shape.len();
     let rhs_rank = rhs.shape.len();
-    if config.lhs_rank != lhs_rank {
-        return Err(Error::RankMismatch {
-            op: OP,
-            expected: config.lhs_rank,
-            actual: lhs_rank,
-        });
-    }
-    if config.rhs_rank != rhs_rank {
-        return Err(Error::RankMismatch {
-            op: OP,
-            expected: config.rhs_rank,
-            actual: rhs_rank,
-        });
-    }
     validate_axis_list(
         OP,
         "lhs_contracting",
@@ -239,8 +225,6 @@ fn canonical_gemm_layout(
         rhs_contracting_dims: (0..nc).collect(),
         lhs_batch_dims: (nf_lhs + nc..nf_lhs + nc + nb).collect(),
         rhs_batch_dims: (nc + nf_rhs..nc + nf_rhs + nb).collect(),
-        lhs_rank,
-        rhs_rank,
     };
 
     (lhs_perm, rhs_perm, new_config)

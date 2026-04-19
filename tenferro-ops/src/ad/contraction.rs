@@ -11,12 +11,18 @@ pub fn linearize_dot_general(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
 ) -> Vec<Option<LocalValId>> {
     let mut terms = Vec::with_capacity(2);
 
     if let Some(dx) = tangent_in[0] {
         let term = builder.add_op(
-            StdTensorOp::DotGeneral(config.clone()),
+            StdTensorOp::DotGeneral {
+                config: config.clone(),
+                lhs_rank,
+                rhs_rank,
+            },
             vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
             OpMode::Linear {
                 active_mask: vec![true, false],
@@ -27,7 +33,11 @@ pub fn linearize_dot_general(
 
     if let Some(dy) = tangent_in[1] {
         let term = builder.add_op(
-            StdTensorOp::DotGeneral(config.clone()),
+            StdTensorOp::DotGeneral {
+                config: config.clone(),
+                lhs_rank,
+                rhs_rank,
+            },
             vec![ValRef::External(primal_in[0].clone()), ValRef::Local(dy)],
             OpMode::Linear {
                 active_mask: vec![false, true],
@@ -236,6 +246,8 @@ pub fn transpose_dot_general(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -248,12 +260,12 @@ pub fn transpose_dot_general(
     };
 
     let lhs_free = compute_free_dims(
-        config.lhs_rank,
+        lhs_rank,
         &config.lhs_contracting_dims,
         &config.lhs_batch_dims,
     );
     let rhs_free = compute_free_dims(
-        config.rhs_rank,
+        rhs_rank,
         &config.rhs_contracting_dims,
         &config.rhs_batch_dims,
     );
@@ -265,9 +277,14 @@ pub fn transpose_dot_general(
     if active_mask[0] {
         let rhs_conj =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
-        let (transpose_config, perm) = transpose_plan_for_lhs(config, &lhs_free, &rhs_free);
+        let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
+            transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = emitter.add_op(
-            StdTensorOp::DotGeneral(transpose_config),
+            StdTensorOp::DotGeneral {
+                config: transpose_config,
+                lhs_rank: new_lhs_rank,
+                rhs_rank: new_rhs_rank,
+            },
             vec![cotangent.clone(), ValRef::Local(rhs_conj)],
             OpMode::Linear {
                 active_mask: vec![true, false],
@@ -279,9 +296,14 @@ pub fn transpose_dot_general(
     if active_mask[1] {
         let lhs_conj =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
-        let (transpose_config, perm) = transpose_plan_for_rhs(config, &lhs_free, &rhs_free);
+        let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
+            transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = emitter.add_op(
-            StdTensorOp::DotGeneral(transpose_config),
+            StdTensorOp::DotGeneral {
+                config: transpose_config,
+                lhs_rank: new_lhs_rank,
+                rhs_rank: new_rhs_rank,
+            },
             vec![ValRef::Local(lhs_conj), cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
@@ -676,17 +698,23 @@ fn normalize_scalar_cotangent(
 
 fn transpose_plan_for_lhs(
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
     lhs_free: &[usize],
     rhs_free: &[usize],
-) -> (DotGeneralConfig, Vec<usize>) {
+) -> (
+    DotGeneralConfig,
+    /* new_lhs_rank */ usize,
+    /* new_rhs_rank */ usize,
+    Vec<usize>,
+) {
     let n_batch = config.lhs_batch_dims.len();
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
     let ct_rhs_free_positions: Vec<usize> =
         (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
 
-    let rhs_contracting_order =
-        compute_free_dims(config.rhs_rank, rhs_free, &config.rhs_batch_dims);
-    let mut result_order = Vec::with_capacity(config.lhs_rank);
+    let rhs_contracting_order = compute_free_dims(rhs_rank, rhs_free, &config.rhs_batch_dims);
+    let mut result_order = Vec::with_capacity(lhs_rank);
     result_order.extend(lhs_free.iter().copied());
     for rhs_dim in rhs_contracting_order {
         let pair_idx = config
@@ -698,30 +726,37 @@ fn transpose_plan_for_lhs(
     }
     result_order.extend(config.lhs_batch_dims.iter().copied());
 
+    let new_config = DotGeneralConfig {
+        lhs_contracting_dims: ct_rhs_free_positions,
+        rhs_contracting_dims: rhs_free.to_vec(),
+        lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
+        rhs_batch_dims: config.rhs_batch_dims.clone(),
+    };
     (
-        DotGeneralConfig {
-            lhs_contracting_dims: ct_rhs_free_positions,
-            rhs_contracting_dims: rhs_free.to_vec(),
-            lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
-            rhs_batch_dims: config.rhs_batch_dims.clone(),
-            lhs_rank: output_rank,
-            rhs_rank: config.rhs_rank,
-        },
-        permutation_to_original_order(config.lhs_rank, &result_order),
+        new_config,
+        output_rank,
+        rhs_rank,
+        permutation_to_original_order(lhs_rank, &result_order),
     )
 }
 
 fn transpose_plan_for_rhs(
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
     lhs_free: &[usize],
     rhs_free: &[usize],
-) -> (DotGeneralConfig, Vec<usize>) {
+) -> (
+    DotGeneralConfig,
+    /* new_lhs_rank */ usize,
+    /* new_rhs_rank */ usize,
+    Vec<usize>,
+) {
     let n_batch = config.lhs_batch_dims.len();
     let ct_lhs_free_positions: Vec<usize> = (0..lhs_free.len()).collect();
 
-    let lhs_contracting_order =
-        compute_free_dims(config.lhs_rank, lhs_free, &config.lhs_batch_dims);
-    let mut result_order = Vec::with_capacity(config.rhs_rank);
+    let lhs_contracting_order = compute_free_dims(lhs_rank, lhs_free, &config.lhs_batch_dims);
+    let mut result_order = Vec::with_capacity(rhs_rank);
     for lhs_dim in lhs_contracting_order {
         let pair_idx = config
             .lhs_contracting_dims
@@ -734,16 +769,17 @@ fn transpose_plan_for_rhs(
     result_order.extend(config.rhs_batch_dims.iter().copied());
 
     let output_rank = lhs_free.len() + rhs_free.len() + n_batch;
+    let new_config = DotGeneralConfig {
+        lhs_contracting_dims: lhs_free.to_vec(),
+        rhs_contracting_dims: ct_lhs_free_positions,
+        lhs_batch_dims: config.lhs_batch_dims.clone(),
+        rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
+    };
     (
-        DotGeneralConfig {
-            lhs_contracting_dims: lhs_free.to_vec(),
-            rhs_contracting_dims: ct_lhs_free_positions,
-            lhs_batch_dims: config.lhs_batch_dims.clone(),
-            rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
-            lhs_rank: config.lhs_rank,
-            rhs_rank: output_rank,
-        },
-        permutation_to_original_order(config.rhs_rank, &result_order),
+        new_config,
+        lhs_rank,
+        output_rank,
+        permutation_to_original_order(rhs_rank, &result_order),
     )
 }
 

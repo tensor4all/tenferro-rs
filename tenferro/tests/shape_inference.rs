@@ -84,14 +84,16 @@ fn test_reduce_sum_removes_axes() {
 
 #[test]
 fn test_dot_general_canonical() {
-    let op = StdTensorOp::DotGeneral(DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
+    let op = StdTensorOp::DotGeneral {
+        config: DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
         lhs_rank: 2,
         rhs_rank: 2,
-    });
+    };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(5)];
     let out = infer_output_shapes(&op, &[&lhs, &rhs]);
