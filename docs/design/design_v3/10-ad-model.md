@@ -47,6 +47,30 @@ This should be documented as an invariant of the traced AD substrate:
 
 This is why tropical composition does not require a second AD algebra.
 
+Flow at a glance:
+
+```text
+Primal                              (core ops only)
+────────────
+    a, b   ──▶   y = f(a, b)
+                     │
+                     │  tidu::differentiate
+                     ▼
+Linearized                          (core ops, linear in ȧ, ḃ)
+────────────
+    ȧ, ḃ   ──▶   ẏ = df(a, b; ȧ, ḃ)
+                     │
+                     │  tidu::transpose
+                     ▼
+Cotangent                           (core ops, always Standard)
+────────────
+    ȳ      ──▶   (ā, b̄)
+
+Invariant: every arrow emits values only in the core op vocabulary.
+Tropical, ExtensionOp, and any future extension mechanism lower to
+this same vocabulary for the backward pass.
+```
+
 ## Implications For Tropical
 
 For tropical-style traced APIs, the preferred path is:

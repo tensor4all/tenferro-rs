@@ -22,6 +22,24 @@ The design rule is:
 
 > Categories A and B stay on the op. Category C moves to value metadata.
 
+### Before / After
+
+```text
+               Op payload (today / v2)
+               ┌─────────────────────────┐
+               │ A: structural params    │   ← kept
+               │ B: required output      │   ← kept
+               │ C: input-shape snapshot │   ── moves ──┐
+               └─────────────────────────┘              │
+                                                        │
+                                                        ▼
+               Value-side metadata (v3)
+               ┌─────────────────────────┐
+               │ shape  (DimExpr list)   │   ◀── shape_of(value)
+               │ dtype                   │   ◀── dtype_of(value)
+               └─────────────────────────┘
+```
+
 ## Why This Matters
 
 Moving Category C metadata off the op has immediate benefits:

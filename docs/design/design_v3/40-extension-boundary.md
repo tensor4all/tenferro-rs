@@ -27,6 +27,23 @@ must address these explicitly.
 The extension mechanism lands in three committed phases plus one optional
 stage. Full stage definitions live in `90-migration-plan.md`.
 
+```text
+Phase A                   Phase B                    Phase C (opt)
+───────                   ───────                    ───────
+Stage 4                   Stages 5-6-7               Stage 8
+
+external crate            external crate             core workspace
+uses tenferro facade      uses ExtensionOp           adds TensorOp variant
+        │                         │                          │
+        ▼                         ▼                          ▼
+composition-only          TensorOp::Extension        dedicated fused op
+(no core change)          (Arc<dyn ExtensionOp>)     (profile-gated)
+        │                         │                          │
+        ▼                         ▼                          ▼
+tropical Phase 1          tropical Phase 2           — evidence only —
+                          = contract self-test
+```
+
 ### Phase A — Composition-Only External Extensions (Stage 4)
 
 External crates define user-facing wrappers that lower directly to the core

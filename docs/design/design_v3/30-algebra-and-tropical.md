@@ -87,6 +87,33 @@ BroadcastInDim + Add + ReduceMax
 
 or the appropriate variant for the chosen tropical flavor.
 
+Full lowering of `max-plus matmul`:
+
+```text
+External crate call
+───────────────────
+    tropical_dot_general(a, b)         ← user-facing
+            │
+            │  lowered by Stage 4 wrapper
+            ▼
+Core primitives (inside tenferro)
+───────────────────
+    BroadcastInDim(a, shape_of(b))
+            │
+            ▼
+    BroadcastInDim(b, shape_of(a))
+            │
+            ▼
+           Add
+            │
+            ▼
+    ReduceMax(contract_axis)
+            │
+            ▼
+    existing core AD rules handle the backward pass
+    (no new AD math required)
+```
+
 ### Principle 2: Externalize The Surface
 
 The tropical user-facing API should live outside the core workspace, or at
