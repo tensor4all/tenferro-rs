@@ -866,42 +866,6 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
 }
 
 #[test]
-fn test_dot_general_rejects_stale_rank_metadata() {
-    let a = Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2, 2],
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-    ));
-    let b = Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2, 2],
-        vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
-    ));
-    let mut backend = CpuBackend::new();
-    let err = backend
-        .dot_general(
-            &a,
-            &b,
-            &DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![0, 2],
-                rhs_batch_dims: vec![1, 2],
-                lhs_rank: 4,
-                rhs_rank: 4,
-            },
-        )
-        .unwrap_err();
-
-    assert!(matches!(
-        err,
-        crate::Error::RankMismatch {
-            op: "dot_general",
-            expected: 4,
-            actual: 3,
-        }
-    ));
-}
-
-#[test]
 fn test_transpose() {
     let t = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],

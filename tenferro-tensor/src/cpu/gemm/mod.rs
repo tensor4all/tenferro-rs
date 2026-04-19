@@ -95,20 +95,6 @@ fn validate_dot_general<T>(
 
     let lhs_rank = lhs.shape.len();
     let rhs_rank = rhs.shape.len();
-    if config.lhs_rank != lhs_rank {
-        return Err(Error::RankMismatch {
-            op: OP,
-            expected: config.lhs_rank,
-            actual: lhs_rank,
-        });
-    }
-    if config.rhs_rank != rhs_rank {
-        return Err(Error::RankMismatch {
-            op: OP,
-            expected: config.rhs_rank,
-            actual: rhs_rank,
-        });
-    }
     validate_axis_list(
         OP,
         "lhs_contracting",

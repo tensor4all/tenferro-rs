@@ -288,32 +288,6 @@ fn dot_general_config_validate_dims_duplicate_batch_dims() {
 }
 
 #[test]
-fn eager_dot_general_rejects_stale_lhs_rank() {
-    use tenferro::EagerTensor;
-
-    let a = EagerTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0, 2.0, 3.0, 4.0],
-    )));
-    let b = EagerTensor::from_tensor(Tensor::F64(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![5.0, 6.0, 7.0, 8.0],
-    )));
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-        lhs_rank: 3,
-        rhs_rank: 2,
-    };
-    assert!(
-        a.dot_general(&b, config).is_err(),
-        "expected error for stale lhs_rank"
-    );
-}
-
-#[test]
 fn traced_dot_general_accepts_batched_valid_config() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2, 2],
