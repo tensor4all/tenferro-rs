@@ -7,17 +7,43 @@ use super::context::{resolve_and_guard, ShapeGuardContext};
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
+/// Derive an op-local `Vec<DimExpr>` for the primal input of a 1-input linalg op.
+///
+/// Category C `input_shape` snapshots have been removed from the linalg op
+/// variants; instead, AD rules resolve the primal input's shape through the
+/// [`ShapeGuardContext`] metadata surface. Concrete shapes collapse to
+/// `DimExpr::Const`; symbolic shapes fall back to `DimExpr::input_shape(0, rank)`
+/// so downstream op constructors that still carry shape fields (e.g.
+/// `TriangularSolve`) see a well-formed shape expression.
+fn primal_input_shape(
+    ctx: &ShapeGuardContext,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+) -> Vec<DimExpr> {
+    let shape = ctx.shape_of(&ValRef::External(primal_in[0].clone()));
+    if let Some(concrete) = shape
+        .iter()
+        .map(|dim| dim.constant_value())
+        .collect::<Option<Vec<_>>>()
+    {
+        DimExpr::from_concrete(&concrete)
+    } else {
+        DimExpr::input_shape(0, shape.len())
+    }
+}
+
 pub fn linearize_lu(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let k = DimExpr::min(m.clone(), n.clone());
@@ -129,15 +155,18 @@ pub fn linearize_lu(
 
 pub fn linearize_eig(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     input_dtype: DType,
-    input_shape: &[DimExpr],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
     let v = ValRef::External(primal_out[1].clone());
     let da_complex = match input_dtype {
@@ -275,16 +304,18 @@ fn triangular_solve_rhs_tangent(
 
 pub fn linearize_svd(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let matrix_rank = input_shape.len();
@@ -445,15 +476,18 @@ pub fn linearize_svd(
 
 pub fn linearize_eigh(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    input_shape: &[DimExpr],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let w = ValRef::External(primal_out[0].clone());
     let v = ValRef::External(primal_out[1].clone());
@@ -509,14 +543,17 @@ pub fn linearize_eigh(
 
 pub fn linearize_cholesky(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let l = ValRef::External(primal_out[0].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
@@ -575,15 +612,17 @@ pub fn linearize_cholesky(
 
 pub fn linearize_qr(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let k = DimExpr::min(m.clone(), n.clone());
@@ -843,13 +882,7 @@ fn solve_in_graph(
     rhs_shape: &[DimExpr],
     rank: usize,
 ) -> LocalValId {
-    let lu_outputs = builder.add_op(
-        StdTensorOp::Lu {
-            input_shape: lhs_shape.to_vec(),
-        },
-        vec![a],
-        OpMode::Primal,
-    );
+    let lu_outputs = builder.add_op(StdTensorOp::Lu, vec![a], OpMode::Primal);
     let p = lu_outputs[0];
     let l = lu_outputs[1];
     let u = lu_outputs[2];

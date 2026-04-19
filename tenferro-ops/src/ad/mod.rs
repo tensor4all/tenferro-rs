@@ -86,9 +86,7 @@ fn linearize_non_semiring(
             dynamic::linearize_pad_to_match(builder, primal_in, tangent_in, *axis)
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
-        StdTensorOp::Lu { input_shape } => {
-            linalg::linearize_lu(builder, primal_out, tangent_in, input_shape, ctx)
-        }
+        StdTensorOp::Lu => linalg::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
@@ -108,23 +106,25 @@ fn linearize_non_semiring(
             lhs_shape,
             rhs_shape,
         ),
-        StdTensorOp::Cholesky { input_shape } => {
-            linalg::linearize_cholesky(builder, primal_out, tangent_in, input_shape)
+        StdTensorOp::Cholesky => {
+            linalg::linearize_cholesky(builder, primal_in, primal_out, tangent_in, ctx)
         }
-        StdTensorOp::Svd { eps, input_shape } => {
-            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, input_shape, ctx)
+        StdTensorOp::Svd { eps } => {
+            linalg::linearize_svd(builder, primal_in, primal_out, tangent_in, *eps, ctx)
         }
-        StdTensorOp::Qr { input_shape } => {
-            linalg::linearize_qr(builder, primal_out, tangent_in, input_shape, ctx)
+        StdTensorOp::Qr => linalg::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
+        StdTensorOp::Eigh { eps } => {
+            linalg::linearize_eigh(builder, primal_in, primal_out, tangent_in, *eps, ctx)
         }
-        StdTensorOp::Eigh { eps, input_shape } => {
-            linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
-        }
-        StdTensorOp::Eig {
-            input_dtype,
-            input_shape,
-        } => linalg::linearize_eig(builder, primal_out, tangent_in, *input_dtype, input_shape),
-        StdTensorOp::ValidateNonsingular { .. } => vec![tangent_in[0]],
+        StdTensorOp::Eig { input_dtype } => linalg::linearize_eig(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            *input_dtype,
+            ctx,
+        ),
+        StdTensorOp::ValidateNonsingular => vec![tangent_in[0]],
         _ => return None,
     })
 }
@@ -230,7 +230,7 @@ fn transpose_non_semiring(
             lhs_shape,
             rhs_shape,
         ),
-        StdTensorOp::ValidateNonsingular { .. } => vec![cotangent_out[0]],
+        StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
         _ => return None,
     })
 }
