@@ -13,10 +13,16 @@ pub fn linearize_dot_general(
     config: &DotGeneralConfig,
 ) -> Vec<Option<LocalValId>> {
     let mut terms = Vec::with_capacity(2);
+    let lhs_rank = config.lhs_rank;
+    let rhs_rank = config.rhs_rank;
 
     if let Some(dx) = tangent_in[0] {
         let term = builder.add_op(
-            StdTensorOp::DotGeneral(config.clone()),
+            StdTensorOp::DotGeneral {
+                config: config.clone(),
+                lhs_rank,
+                rhs_rank,
+            },
             vec![ValRef::Local(dx), ValRef::External(primal_in[1].clone())],
             OpMode::Linear {
                 active_mask: vec![true, false],
@@ -27,7 +33,11 @@ pub fn linearize_dot_general(
 
     if let Some(dy) = tangent_in[1] {
         let term = builder.add_op(
-            StdTensorOp::DotGeneral(config.clone()),
+            StdTensorOp::DotGeneral {
+                config: config.clone(),
+                lhs_rank,
+                rhs_rank,
+            },
             vec![ValRef::External(primal_in[0].clone()), ValRef::Local(dy)],
             OpMode::Linear {
                 active_mask: vec![false, true],
@@ -236,6 +246,8 @@ pub fn transpose_dot_general(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -248,12 +260,12 @@ pub fn transpose_dot_general(
     };
 
     let lhs_free = compute_free_dims(
-        config.lhs_rank,
+        lhs_rank,
         &config.lhs_contracting_dims,
         &config.lhs_batch_dims,
     );
     let rhs_free = compute_free_dims(
-        config.rhs_rank,
+        rhs_rank,
         &config.rhs_contracting_dims,
         &config.rhs_batch_dims,
     );
@@ -266,8 +278,14 @@ pub fn transpose_dot_general(
         let rhs_conj =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_lhs(config, &lhs_free, &rhs_free);
+        let new_lhs_rank = transpose_config.lhs_rank;
+        let new_rhs_rank = transpose_config.rhs_rank;
         let out = emitter.add_op(
-            StdTensorOp::DotGeneral(transpose_config),
+            StdTensorOp::DotGeneral {
+                config: transpose_config,
+                lhs_rank: new_lhs_rank,
+                rhs_rank: new_rhs_rank,
+            },
             vec![cotangent.clone(), ValRef::Local(rhs_conj)],
             OpMode::Linear {
                 active_mask: vec![true, false],
@@ -280,8 +298,14 @@ pub fn transpose_dot_general(
         let lhs_conj =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let (transpose_config, perm) = transpose_plan_for_rhs(config, &lhs_free, &rhs_free);
+        let new_lhs_rank = transpose_config.lhs_rank;
+        let new_rhs_rank = transpose_config.rhs_rank;
         let out = emitter.add_op(
-            StdTensorOp::DotGeneral(transpose_config),
+            StdTensorOp::DotGeneral {
+                config: transpose_config,
+                lhs_rank: new_lhs_rank,
+                rhs_rank: new_rhs_rank,
+            },
             vec![ValRef::Local(lhs_conj), cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
