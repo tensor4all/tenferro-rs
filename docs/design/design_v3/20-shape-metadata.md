@@ -81,17 +81,18 @@ graph construction and transpose/linearization infrastructure can query:
 - input dtype
 - input symbolic or concrete shape
 
-## Emitter And Builder Queries
+## Metadata Queries
 
-The builder and emitter boundary should grow metadata accessors so AD
-rules can stay generic over traced graph building and eager execution.
+The AD rule surface, the builder, and the emitter all need metadata
+accessors so that no consumer has to re-derive shape or dtype from an
+op-embedded snapshot.
 
 ### Required conceptual operations
 
 ```text
-shape_of(value) -> &[DimExpr]
-dtype_of(value) -> DType
-metadata_of(value) -> TensorMeta
+shape_of(val: &ValRef<StdTensorOp>)    -> &[DimExpr]
+dtype_of(val: &ValRef<StdTensorOp>)    -> DType
+metadata_of(val: &ValRef<StdTensorOp>) -> &TensorMeta
 ```
 
 The first two are sufficient for the initial migration. A richer
@@ -107,13 +108,18 @@ explicit choice to avoid drift between call sites:
   already threaded through `linearize` and `transpose_rule` via the
   `PrimitiveOp` contract
   (`tenferro-ops/src/ad/context.rs:49-109`). Stage 1 extends it so every
-  call site can call `ctx.shape_of(key)` / `ctx.dtype_of(key)` /
-  `ctx.metadata_of(key)`. The key type is `GlobalValKey<StdTensorOp>`
-  (or `ValRef<StdTensorOp>` where the AD rule receives that form) —
-  the same global-identity keys that AD rules already receive.
-  `LocalValId` is fragment-local and insufficient; the metadata map
-  must be keyed by global identity so that multi-fragment AD passes
-  resolve consistently.
+  call site can call `ctx.shape_of(val)` / `ctx.dtype_of(val)` /
+  `ctx.metadata_of(val)` where `val: &ValRef<StdTensorOp>`. This is the
+  same input form that `transpose_rule` already receives
+  (`inputs: &[ValRef<Self>]`).
+- **Key resolution**: the underlying metadata store is keyed by
+  `GlobalValKey<StdTensorOp>`. `ShapeGuardContext` resolves a
+  `ValRef::Local(LocalValId)` to its corresponding `GlobalValKey` via
+  the fragment it is attached to, using the same resolution the AD
+  engine already performs when materializing fragments. Callers never
+  construct raw metadata keys; they pass the `ValRef` they were given
+  and the context does the lookup. `ValRef::Global(...)` resolves
+  directly.
 - **Underlying storage is an implementation detail.** The simplest
   realization is a `HashMap<GlobalValKey<StdTensorOp>, TensorMeta>`
   owned by the AD pass that is populated as graph nodes are added.
@@ -151,7 +157,12 @@ forcing unrelated API churn.
 
 The safest order is:
 
-1. introduce metadata queries on builder and emitter APIs
+1. extend `ShapeGuardContext` with `shape_of` / `dtype_of` /
+   `metadata_of` queries against `ValRef<StdTensorOp>`; populate the
+   underlying `GlobalValKey<StdTensorOp>`-keyed metadata store as graph
+   nodes are constructed. Builder / emitter convenience wrappers land
+   after the `ShapeGuardContext` surface is in place and are backed by
+   the same store
 2. remove `lhs_rank` and `rhs_rank` from `StdTensorOp::DotGeneral`. These
    ranks were already removed from `DotGeneralConfig` in `#737`, but they
    were relocated to the enclosing traced op variant rather than deleted —

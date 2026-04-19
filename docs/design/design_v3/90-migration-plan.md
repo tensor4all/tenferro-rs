@@ -29,7 +29,12 @@ Land the `20-shape-metadata.md` direction first.
 
 Goals:
 
-- expose shape and dtype queries at the builder and emitter boundary
+- extend `ShapeGuardContext` with `shape_of` / `dtype_of` /
+  `metadata_of` queries (the normative AD metadata surface), keyed by
+  `ValRef<StdTensorOp>` and backed by a
+  `GlobalValKey<StdTensorOp>`-keyed metadata store. Builder and emitter
+  convenience wrappers land after the `ShapeGuardContext` surface is in
+  place, over the same store
 - remove Category C shape snapshots from op variants incrementally
 
 Why first:
