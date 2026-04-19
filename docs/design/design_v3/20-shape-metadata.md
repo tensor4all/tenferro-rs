@@ -83,10 +83,10 @@ graph construction and transpose/linearization infrastructure can query:
 
 ## Emitter And Builder Queries
 
-The builder and emitter boundary should grow metadata accessors so AD rules can
-stay generic over traced graph building and eager execution.
+The builder and emitter boundary should grow metadata accessors so AD
+rules can stay generic over traced graph building and eager execution.
 
-Required conceptual operations:
+### Required conceptual operations
 
 ```text
 shape_of(value) -> &[DimExpr]
@@ -94,8 +94,42 @@ dtype_of(value) -> DType
 metadata_of(value) -> TensorMeta
 ```
 
-The first two are sufficient for the initial migration. A richer `TensorMeta`
-handle can be added later if it clarifies downstream code.
+The first two are sufficient for the initial migration. A richer
+`TensorMeta` handle can be added later if it clarifies downstream code.
+
+### Where metadata lives in the graph
+
+The per-value metadata must be reachable from the builder, the emitter,
+and from AD-rule code without requiring each rule to re-derive it.
+
+Proposed placement:
+
+- **Fragment-side storage**: metadata is attached to each `LocalValId`
+  inside the fragment. Whether this is an extension of
+  `Fragment<StdTensorOp>` itself or a parallel side table is a Stage 1
+  implementation choice; either works as long as lookups are O(1) on the
+  hot path.
+- **Builder accessors**: `builder.shape_of(val)` and
+  `builder.dtype_of(val)` read from the fragment-side storage.
+- **Emitter accessors**: the eager `OpEmitter` gains the same accessors
+  with the same semantics, so that eager AD paths consume the same API
+  as traced AD paths.
+- **AD-rule surface**: `ShapeGuardContext`
+  (`tenferro-ops/src/std_tensor_op.rs:521-548`) is extended to expose
+  shape/dtype queries so that `linearize` and `transpose_rule` never
+  need to read op-embedded snapshots.
+- **Symbolic inputs**: when a value's shape is symbolic, `shape_of`
+  returns a `Vec<DimExpr>` that may contain variables; when concrete,
+  all entries resolve to constants via `DimExpr::constant_value`. The
+  metadata layer itself never invents a zero-length or
+  placeholder-only shape — this is what Stage 1's totality acceptance
+  criterion asserts.
+
+Stage 1 must wire these accessors consistently across all three
+surfaces (builder, emitter, `ShapeGuardContext`). The existing
+`TracedTensor.shape_hint` (`tenferro/src/traced.rs:53`) is an internal
+precursor and continues to exist during the migration as a shim; it
+becomes derivable from the metadata accessors once Stage 1 is complete.
 
 ## Interaction With Existing Runtime Types
 

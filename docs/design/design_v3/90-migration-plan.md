@@ -52,8 +52,15 @@ stage lands.
   `StdTensorOp::DotGeneral` itself
   (`tenferro-ops/src/std_tensor_op.rs:23-27`) and continues with the order
   in `20-shape-metadata.md`
-- `TensorMeta` is total over symbolic inputs — no panic, no
-  placeholder-to-zero collapse
+- `TensorMeta` queries (`shape_of`, `dtype_of`) at the builder / emitter /
+  `ShapeGuardContext` boundary are total for every traced value: the
+  query returns without panic for both concrete and symbolic inputs, and
+  symbolic placeholders are represented explicitly as `DimExpr` values
+  rather than silently collapsed. Fixing the AD-side zero-tangent
+  collapse at `tenferro/src/traced.rs:820-833` is a **Stage 3** goal and
+  is out of Stage 1 scope — Stage 1 only guarantees that the *metadata
+  carrier itself* is total, not that every AD rule returns a nonzero
+  tangent under symbolic shapes
 
 ## Stage 2: Clarify The Mainline Graph Story
 
