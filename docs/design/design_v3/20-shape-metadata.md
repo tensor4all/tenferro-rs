@@ -72,14 +72,23 @@ Minimal required fields:
 ```text
 TensorMeta
   dtype: DType
-  shape: [DimExpr]
+  shape: [SymDim]   // value-absolute: concrete size or graph-global
+                    // symbolic ID
 ```
 
-The exact Rust type name is not important. What matters is that both traced
-graph construction and transpose/linearization infrastructure can query:
+`SymDim` (`tenferro/src/sym_dim.rs`) is the value-absolute symbolic
+dimension type already present in the codebase. It is **not** the same
+as `DimExpr` (`tenferro-ops/src/dim_expr.rs`): `DimExpr::InputDim {
+input_idx, dim_idx }` is op-local (it names dims of *this op's inputs*)
+and lives inside op payloads, not as value metadata. Stage 1 populates
+`TensorMeta.shape` by resolving each output dim's `DimExpr` against the
+input values' `TensorMeta.shape` to obtain `SymDim` entries.
+
+What matters is that both traced graph construction and
+transpose/linearization infrastructure can query:
 
 - input dtype
-- input symbolic or concrete shape
+- input symbolic or concrete shape (as `Vec<SymDim>`)
 
 ## Metadata Queries
 
@@ -90,7 +99,7 @@ op-embedded snapshot.
 ### Required conceptual operations
 
 ```text
-shape_of(val: &ValRef<StdTensorOp>)    -> &[DimExpr]
+shape_of(val: &ValRef<StdTensorOp>)    -> &[SymDim]
 dtype_of(val: &ValRef<StdTensorOp>)    -> DType
 metadata_of(val: &ValRef<StdTensorOp>) -> &TensorMeta
 ```
@@ -131,10 +140,13 @@ explicit choice to avoid drift between call sites:
   `GlobalValKey`-keyed metadata map so they cannot drift from the
   `ShapeGuardContext` view.
 - **Symbolic inputs**: when a value's shape is symbolic, `shape_of`
-  returns a `Vec<DimExpr>` that may contain variables; when concrete,
-  all entries resolve to constants via `DimExpr::constant_value`. The
-  metadata layer itself never invents a zero-length or placeholder-only
-  shape — this is what Stage 1's totality acceptance criterion asserts.
+  returns a `Vec<SymDim>` where each entry is either
+  `SymDim::Concrete(n)` or a graph-global symbolic ID (variants per
+  the existing `SymDim` enum). Symbolic IDs are consistent across
+  values in the same graph, so equal dims across different values
+  share the same ID. The metadata layer itself never invents a
+  zero-length or placeholder-only shape — this is what Stage 1's
+  totality acceptance criterion asserts.
 
 Stage 1 wires `ShapeGuardContext` metadata queries first, and only then
 adds builder / emitter convenience wrappers against the same underlying
