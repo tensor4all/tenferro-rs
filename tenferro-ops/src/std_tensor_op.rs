@@ -141,8 +141,6 @@ pub enum StdTensorOp {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        lhs_shape: Vec<DimExpr>,
-        rhs_shape: Vec<DimExpr>,
     },
     ValidateNonsingular,
 }
@@ -307,15 +305,11 @@ impl Hash for StdTensorOp {
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape,
-                rhs_shape,
             } => {
                 left_side.hash(state);
                 lower.hash(state);
                 transpose_a.hash(state);
                 unit_diagonal.hash(state);
-                lhs_shape.hash(state);
-                rhs_shape.hash(state);
             }
             Self::ValidateNonsingular => {}
         }
@@ -403,11 +397,7 @@ impl GraphOp for StdTensorOp {
             | Self::Eigh { .. }
             | Self::Eig { .. }
             | Self::ValidateNonsingular => 1,
-            Self::TriangularSolve {
-                lhs_shape,
-                rhs_shape,
-                ..
-            } => n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape]),
+            Self::TriangularSolve { .. } => 2,
         }
     }
 

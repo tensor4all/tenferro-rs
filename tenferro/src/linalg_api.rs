@@ -1,5 +1,4 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
@@ -23,20 +22,6 @@ pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
 
 fn sym_shape(shape: &[usize]) -> Vec<SymDim> {
     shape.iter().copied().map(SymDim::from).collect()
-}
-
-fn input_shape_expr(tensor: &TracedTensor) -> Vec<DimExpr> {
-    tensor
-        .shape_hint
-        .as_ref()
-        .and_then(|shape| {
-            shape
-                .iter()
-                .map(SymDim::constant_value)
-                .collect::<Option<Vec<_>>>()
-        })
-        .map(|shape| DimExpr::from_concrete(&shape))
-        .unwrap_or_else(|| DimExpr::input_shape(0, tensor.rank))
 }
 
 /// Singular value decomposition with a default numerical epsilon.
@@ -313,8 +298,6 @@ pub fn triangular_solve(
         lower,
         transpose_a,
         unit_diagonal,
-        lhs_shape: input_shape_expr(a),
-        rhs_shape: input_shape_expr(b),
     };
     if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         let b2d = b.reshape(&matrix_rhs_shape);
@@ -324,8 +307,6 @@ pub fn triangular_solve(
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: input_shape_expr(a),
-                rhs_shape: DimExpr::from_concrete(&matrix_rhs_shape),
             },
             a,
             &b2d,

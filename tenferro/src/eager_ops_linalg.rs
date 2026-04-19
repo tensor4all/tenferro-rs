@@ -1,4 +1,3 @@
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, TensorBackend};
 
@@ -190,8 +189,6 @@ impl<B: TensorBackend> EagerTensor<B> {
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: DimExpr::from_concrete(self.data.shape()),
-                rhs_shape: DimExpr::from_concrete(b.data.shape()),
             },
         )
     }

@@ -57,8 +57,6 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
                 lower: true,
                 transpose_a: false,
                 unit_diagonal: false,
-                lhs_shape: dim_shape(&[2, 2]),
-                rhs_shape: dim_shape(&[2, 2]),
             },
             vec![0, 1],
             vec![11],

@@ -283,14 +283,12 @@ fn cholesky_op(_shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::Cholesky
 }
 
-fn triangular_solve_op(lhs_shape: Vec<usize>, rhs_shape: Vec<usize>) -> StdTensorOp {
+fn triangular_solve_op(_lhs_shape: Vec<usize>, _rhs_shape: Vec<usize>) -> StdTensorOp {
     StdTensorOp::TriangularSolve {
         left_side: true,
         lower: true,
         transpose_a: false,
         unit_diagonal: false,
-        lhs_shape: dim_shape(&lhs_shape),
-        rhs_shape: dim_shape(&rhs_shape),
     }
 }
 
@@ -309,7 +307,7 @@ fn add_solve_composition(
     a: LocalValId,
     b: LocalValId,
     lhs_shape: Vec<usize>,
-    rhs_shape: Vec<usize>,
+    _rhs_shape: Vec<usize>,
 ) -> LocalValId {
     let lu = builder.add_op(StdTensorOp::Lu, vec![ValRef::Local(a)], OpMode::Primal);
     let rank = lhs_shape.len();
@@ -327,8 +325,6 @@ fn add_solve_composition(
             lower: true,
             transpose_a: false,
             unit_diagonal: true,
-            lhs_shape: dim_shape(&lhs_shape),
-            rhs_shape: dim_shape(&rhs_shape),
         },
         vec![ValRef::Local(lu[1]), ValRef::Local(pb)],
         OpMode::Primal,
@@ -339,8 +335,6 @@ fn add_solve_composition(
             lower: false,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: dim_shape(&lhs_shape),
-            rhs_shape: dim_shape(&rhs_shape),
         },
         vec![ValRef::Local(lu[2]), ValRef::Local(z)],
         OpMode::Primal,

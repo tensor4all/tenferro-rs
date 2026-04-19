@@ -315,19 +315,6 @@ fn infer_semiring_output_shapes(
     infer_output_shapes(&op, input_shapes)
 }
 
-fn require_input_shape<'a>(
-    kind: &SemiringOpKind,
-    input_shapes: &'a [&[DimExpr]],
-    index: usize,
-) -> &'a [DimExpr] {
-    input_shapes.get(index).copied().unwrap_or_else(|| {
-        panic!(
-            "semiring shape inference for {kind:?} requires input index {index}, got {}",
-            input_shapes.len()
-        )
-    })
-}
-
 fn populate_last_use(program: &mut ExecProgram) {
     let all_input_slots: Vec<Vec<usize>> = program
         .instructions

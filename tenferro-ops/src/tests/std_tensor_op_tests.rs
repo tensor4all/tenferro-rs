@@ -409,8 +409,6 @@ fn test_std_tensor_op_linalg_input_output_counts() {
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: shape![2, 2],
-            rhs_shape: shape![2, 1],
         }
         .n_inputs(),
         2
@@ -421,8 +419,6 @@ fn test_std_tensor_op_linalg_input_output_counts() {
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: shape![2, 2],
-            rhs_shape: shape![2, 1],
         }
         .n_outputs(),
         1
