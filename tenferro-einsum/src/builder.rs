@@ -1,11 +1,3 @@
-// `SemiringOps` is deprecated (design_v3 Stage 2) and scheduled for removal
-// in Stage 6, but the einsum fragment builder is generic over it so the
-// mainline `StdTensorOp` path and the legacy `SemiringOp` path can share the
-// same lowering code. Suppress deprecation warnings within this module; the
-// trait parameter will be replaced with a direct `StdTensorOp`-targeted
-// builder in Stage 6.
-#![allow(deprecated)]
-
 // TODO: Remaining einsum optimizations
 //
 // The current v2 einsum lowering is correct and already removes some
@@ -41,24 +33,21 @@
 //     BLAS trans flags for transposed inputs. v2 engine does physical copies.
 //   - Buffer pooling: v1 reuses buffers via Arc refcount + pool.
 //     v2 has last_use liveness analysis but no pool.
-//   - SemiringFastPath: optional fused patterns (contract, elementwise_mul/add).
-//     Trait exists but no implementation.
 
 use std::collections::{HashMap, HashSet};
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
-use computegraph::GraphOp;
 
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::semiring_ops::SemiringOps;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DotGeneralConfig;
 
 use crate::planning::tree::ContractionTree;
 
 #[derive(Clone, Debug)]
-struct LabeledVal<Op: GraphOp> {
-    val: ValRef<Op>,
+struct LabeledVal {
+    val: ValRef<StdTensorOp>,
     labels: Vec<u32>,
     shape: Vec<usize>,
 }
@@ -67,11 +56,11 @@ fn label_size_map(labels: &[u32], shape: &[usize]) -> Vec<(u32, usize)> {
     labels.iter().copied().zip(shape.iter().copied()).collect()
 }
 
-fn reduce_val<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
-    lv: &LabeledVal<Op>,
+fn reduce_val(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lv: &LabeledVal,
     reduce_labels: &HashSet<u32>,
-) -> LabeledVal<Op> {
+) -> LabeledVal {
     if reduce_labels.is_empty() {
         return lv.clone();
     }
@@ -101,7 +90,7 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
         .map(|(_, &s)| s)
         .collect();
     let outputs = builder.add_op(
-        Op::reduce_sum(reduce_axes),
+        StdTensorOp::ReduceSum { axes: reduce_axes },
         vec![lv.val.clone()],
         OpMode::Primal,
     );
@@ -115,11 +104,11 @@ fn reduce_val<Op: GraphOp + SemiringOps>(
 /// Embed diagonal axes when the output requires higher multiplicity of a label
 /// than the current tensor has. For example, "i->ii" needs to embed axis 0
 /// into a new axis 1 of the same size.
-fn embed_repeated<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
-    lv: &LabeledVal<Op>,
+fn embed_repeated(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lv: &LabeledVal,
     output_labels: &[u32],
-) -> LabeledVal<Op> {
+) -> LabeledVal {
     // Count how many times each label appears in output vs current labels.
     let mut result = lv.clone();
     for &label in output_labels {
@@ -137,7 +126,7 @@ fn embed_repeated<Op: GraphOp + SemiringOps>(
             let axis_b = axis_a + 1;
             let n = result.shape[axis_a];
             let outputs = builder.add_op(
-                Op::embed_diag(axis_a, axis_b),
+                StdTensorOp::EmbedDiag { axis_a, axis_b },
                 vec![result.val.clone()],
                 OpMode::Primal,
             );
@@ -157,16 +146,16 @@ fn embed_repeated<Op: GraphOp + SemiringOps>(
     result
 }
 
-fn diagonalize_repeated<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
-    lv: &LabeledVal<Op>,
-) -> LabeledVal<Op> {
+fn diagonalize_repeated(builder: &mut FragmentBuilder<StdTensorOp>, lv: &LabeledVal) -> LabeledVal {
     let mut seen: HashMap<u32, usize> = HashMap::new();
     for (i, &label) in lv.labels.iter().enumerate() {
         if let Some(&first) = seen.get(&label) {
             // Found repeated label at axes `first` and `i`
             let outputs = builder.add_op(
-                Op::extract_diag(first, i),
+                StdTensorOp::ExtractDiag {
+                    axis_a: first,
+                    axis_b: i,
+                },
                 vec![lv.val.clone()],
                 OpMode::Primal,
             );
@@ -187,13 +176,13 @@ fn diagonalize_repeated<Op: GraphOp + SemiringOps>(
     lv.clone()
 }
 
-fn binary_contract<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
-    lhs: &LabeledVal<Op>,
-    rhs: &LabeledVal<Op>,
+fn binary_contract(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lhs: &LabeledVal,
+    rhs: &LabeledVal,
     survive_labels: &[u32],
     reorder_result: bool,
-) -> LabeledVal<Op> {
+) -> LabeledVal {
     let survive_set: HashSet<u32> = survive_labels.iter().copied().collect();
     let rhs_label_set: HashSet<u32> = rhs.labels.iter().copied().collect();
     let lhs_label_set: HashSet<u32> = lhs.labels.iter().copied().collect();
@@ -299,7 +288,7 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
         let result_shape: Vec<usize> = result_labels.iter().map(|&l| label_to_size(l)).collect();
 
         let outputs = builder.add_op(
-            Op::dot_general(config, lhs.shape.len(), rhs.shape.len()),
+            StdTensorOp::DotGeneral { config },
             vec![lhs.val.clone(), rhs.val.clone()],
             OpMode::Primal,
         );
@@ -356,7 +345,7 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
 
     let new_shape: Vec<usize> = perm.iter().map(|&p| result.shape[p]).collect();
     let outputs = builder.add_op(
-        Op::transpose_op(perm),
+        StdTensorOp::Transpose { perm },
         vec![result.val.clone()],
         OpMode::Primal,
     );
@@ -368,15 +357,15 @@ fn binary_contract<Op: GraphOp + SemiringOps>(
     }
 }
 
-fn outer_product<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
-    lhs: &LabeledVal<Op>,
-    rhs: &LabeledVal<Op>,
+fn outer_product(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    lhs: &LabeledVal,
+    rhs: &LabeledVal,
     batch_labels: &[u32],
     lhs_free_labels: &[u32],
     rhs_free_labels: &[u32],
     label_to_size: &dyn Fn(u32) -> usize,
-) -> LabeledVal<Op> {
+) -> LabeledVal {
     let combined_labels: Vec<u32> = lhs_free_labels
         .iter()
         .chain(rhs_free_labels.iter())
@@ -388,7 +377,7 @@ fn outer_product<Op: GraphOp + SemiringOps>(
     if lhs.labels == rhs.labels {
         // Same labels: just Mul
         let outputs = builder.add_op(
-            Op::mul_op(),
+            StdTensorOp::Mul,
             vec![lhs.val.clone(), rhs.val.clone()],
             OpMode::Primal,
         );
@@ -412,17 +401,23 @@ fn outer_product<Op: GraphOp + SemiringOps>(
         .collect();
 
     let lhs_bc = builder.add_op(
-        Op::broadcast_in_dim(DimExpr::from_concrete(&combined_shape), lhs_dims),
+        StdTensorOp::BroadcastInDim {
+            shape: DimExpr::from_concrete(&combined_shape),
+            dims: lhs_dims,
+        },
         vec![lhs.val.clone()],
         OpMode::Primal,
     );
     let rhs_bc = builder.add_op(
-        Op::broadcast_in_dim(DimExpr::from_concrete(&combined_shape), rhs_dims),
+        StdTensorOp::BroadcastInDim {
+            shape: DimExpr::from_concrete(&combined_shape),
+            dims: rhs_dims,
+        },
         vec![rhs.val.clone()],
         OpMode::Primal,
     );
     let outputs = builder.add_op(
-        Op::mul_op(),
+        StdTensorOp::Mul,
         vec![ValRef::Local(lhs_bc[0]), ValRef::Local(rhs_bc[0])],
         OpMode::Primal,
     );
@@ -433,12 +428,12 @@ fn outer_product<Op: GraphOp + SemiringOps>(
     }
 }
 
-pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
-    builder: &mut FragmentBuilder<Op>,
+pub fn build_einsum_fragment(
+    builder: &mut FragmentBuilder<StdTensorOp>,
     tree: &ContractionTree,
-    input_vals: &[ValRef<Op>],
+    input_vals: &[ValRef<StdTensorOp>],
     input_shapes: &[Vec<usize>],
-) -> ValRef<Op> {
+) -> ValRef<StdTensorOp> {
     let subscripts = &tree.subscripts;
     let n_inputs = subscripts.inputs.len();
     assert_eq!(
@@ -454,7 +449,7 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
 
     let output_labels = &subscripts.output;
 
-    let mut labeled: Vec<LabeledVal<Op>> = input_vals
+    let mut labeled: Vec<LabeledVal> = input_vals
         .iter()
         .zip(subscripts.inputs.iter())
         .zip(input_shapes.iter())
@@ -503,7 +498,11 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         if perm.iter().enumerate().all(|(i, &p)| i == p) {
             return result.val;
         }
-        let outputs = builder.add_op(Op::transpose_op(perm), vec![result.val], OpMode::Primal);
+        let outputs = builder.add_op(
+            StdTensorOp::Transpose { perm },
+            vec![result.val],
+            OpMode::Primal,
+        );
         return ValRef::Local(outputs[0]);
     }
 
@@ -557,7 +556,7 @@ pub fn build_einsum_fragment<Op: GraphOp + SemiringOps>(
         return result.val;
     }
     let outputs = builder.add_op(
-        Op::transpose_op(perm),
+        StdTensorOp::Transpose { perm },
         vec![result.val.clone()],
         OpMode::Primal,
     );

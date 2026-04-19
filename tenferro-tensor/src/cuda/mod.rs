@@ -1,16 +1,8 @@
-use tenferro_algebra::Semiring;
-
 use crate::backend::TensorBackend;
-// `SemiringBackend` is the legacy algebra-generic backend trait, deprecated in
-// design_v3 Stage 2 and scheduled for removal in Stage 6. The stubs below are
-// retained so CUDA builds continue to compile; suppress the import-level
-// warning at the narrow scope of the import.
-#[allow(deprecated)]
-use crate::backend::SemiringBackend;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Tensor, TypedTensor};
+use crate::Tensor;
 
 #[derive(Default)]
 pub struct CudaBackend;
@@ -232,18 +224,6 @@ macro_rules! impl_stub_backend {
             }
             fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> crate::Result<Tensor> {
                 todo!(concat!($label, " solve"))
-            }
-        }
-
-        #[allow(deprecated)]
-        impl<Alg: Semiring> SemiringBackend<Alg> for $ty {
-            fn batched_gemm(
-                &mut self,
-                _lhs: &TypedTensor<Alg::Scalar>,
-                _rhs: &TypedTensor<Alg::Scalar>,
-                _config: &DotGeneralConfig,
-            ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-                todo!(concat!($label, " batched_gemm"))
             }
         }
     };

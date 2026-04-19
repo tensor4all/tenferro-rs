@@ -7,16 +7,6 @@ use crate::shape_infer::{infer_output_dtype, infer_output_shapes};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
-pub mod semiring;
-
-// Re-export legacy semiring compile entry point for integration tests
-// (e.g. `tenferro/tests/tropical.rs`). Mainline code must not depend on
-// this path. See `docs/design/design_v3/30-algebra-and-tropical.md`
-// ("Recommended Fate Of `SemiringOp`") — this symbol is scheduled for
-// removal in Stage 6 of the `design_v3` migration plan.
-#[allow(deprecated)]
-pub use semiring::compile_semiring_to_exec;
-
 pub fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],

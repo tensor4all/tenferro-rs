@@ -1,12 +1,6 @@
-// Test file exercises the deprecated legacy `eval_semiring_ir` alongside the
-// mainline `eval_exec_ir`; suppress the deprecation warnings at module scope
-// rather than annotating each test.
-#![allow(deprecated)]
-
 use num_complex::Complex64;
 use tenferro::error::Error;
-use tenferro::exec::{eval_exec_ir, eval_semiring_ir, ExecInstruction, ExecOp, ExecProgram};
-use tenferro_algebra::Standard;
+use tenferro::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
@@ -45,10 +39,6 @@ fn scalar_c64_value(tensor: &Tensor) -> Complex64 {
         Tensor::C64(inner) => inner.host_data()[0],
         other => panic!("expected scalar c64 tensor, got {other:?}"),
     }
-}
-
-fn typed_scalar(value: f64) -> TypedTensor<f64> {
-    TypedTensor::from_vec(vec![], vec![value])
 }
 
 fn gather_config() -> GatherConfig {
@@ -719,148 +709,4 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(scalar_value(&outputs[0]), 3.0);
     assert_eq!(backend.reclaimed, 3);
-}
-
-#[test]
-fn eval_semiring_ir_executes_semiring_structural_and_gemm_ops() {
-    let mut backend = CpuBackend::new();
-
-    let add_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(ExecOp::Add, 2),
-        vec![typed_scalar(2.0), typed_scalar(3.0)],
-    )
-    .unwrap();
-    assert_eq!(add_out[0].host_data(), &[5.0]);
-
-    let mul_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(ExecOp::Multiply, 2),
-        vec![typed_scalar(2.0), typed_scalar(3.0)],
-    )
-    .unwrap();
-    assert_eq!(mul_out[0].host_data(), &[6.0]);
-
-    let reduce_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(ExecOp::ReduceSum { axes: vec![0] }, 1),
-        vec![TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])],
-    )
-    .unwrap();
-    assert_eq!(reduce_out[0].shape, vec![2]);
-    assert_eq!(reduce_out[0].host_data(), &[3.0, 7.0]);
-
-    let permute_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(ExecOp::Transpose { perm: vec![1, 0] }, 1),
-        vec![TypedTensor::from_vec(
-            vec![2, 3],
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        )],
-    )
-    .unwrap();
-    assert_eq!(permute_out[0].shape, vec![3, 2]);
-    assert_eq!(permute_out[0].host_data(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
-
-    let reshape_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(
-            ExecOp::Reshape {
-                shape: dim_shape(&[3, 2]),
-            },
-            1,
-        ),
-        vec![TypedTensor::from_vec(
-            vec![2, 3],
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        )],
-    )
-    .unwrap();
-    assert_eq!(reshape_out[0].shape, vec![3, 2]);
-    assert_eq!(reshape_out[0].host_data(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-
-    let broadcast_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(
-            ExecOp::BroadcastInDim {
-                shape: dim_shape(&[3, 2]),
-                dims: vec![0],
-            },
-            1,
-        ),
-        vec![TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0])],
-    )
-    .unwrap();
-    assert_eq!(broadcast_out[0].shape, vec![3, 2]);
-    assert_eq!(
-        broadcast_out[0].host_data(),
-        &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
-    );
-
-    let extract_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(
-            ExecOp::ExtractDiag {
-                axis_a: 0,
-                axis_b: 1,
-            },
-            1,
-        ),
-        vec![TypedTensor::from_vec(
-            vec![3, 3],
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-        )],
-    )
-    .unwrap();
-    assert_eq!(extract_out[0].shape, vec![3]);
-    assert_eq!(extract_out[0].host_data(), &[1.0, 5.0, 9.0]);
-
-    let embed_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(
-            ExecOp::EmbedDiag {
-                axis_a: 0,
-                axis_b: 1,
-            },
-            1,
-        ),
-        vec![TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0])],
-    )
-    .unwrap();
-    assert_eq!(embed_out[0].shape, vec![3, 3]);
-    assert_eq!(
-        embed_out[0].host_data(),
-        &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]
-    );
-
-    let gemm_out = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(
-            ExecOp::DotGeneral(DotGeneralConfig {
-                lhs_contracting_dims: vec![1],
-                rhs_contracting_dims: vec![0],
-                lhs_batch_dims: vec![],
-                rhs_batch_dims: vec![],
-            }),
-            2,
-        ),
-        vec![
-            TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
-            TypedTensor::from_vec(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]),
-        ],
-    )
-    .unwrap();
-    assert_eq!(gemm_out[0].shape, vec![2, 2]);
-    assert_eq!(gemm_out[0].host_data(), &[23.0, 34.0, 31.0, 46.0]);
-}
-
-#[test]
-#[should_panic(expected = "non-semiring op in semiring program")]
-fn eval_semiring_ir_panics_on_non_semiring_ops() {
-    let mut backend = CpuBackend::new();
-    let _ = eval_semiring_ir::<_, Standard<f64>>(
-        &mut backend,
-        &single_instruction_program(ExecOp::Negate, 1),
-        vec![typed_scalar(1.0)],
-    );
 }
