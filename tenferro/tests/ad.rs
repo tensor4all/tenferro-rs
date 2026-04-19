@@ -183,16 +183,6 @@ fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
 }
 
-fn concrete_dim_shape(shape: &[DimExpr]) -> Vec<usize> {
-    shape
-        .iter()
-        .map(|dim| match dim {
-            DimExpr::Const(value) => *value,
-            other => panic!("expected concrete DimExpr in test shape, got {other:?}"),
-        })
-        .collect()
-}
-
 fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
     TensorMeta {
         dtype: tensor.dtype(),
@@ -437,7 +427,6 @@ fn add_real_reduce_sum_loss(
     builder.add_op(
         StdTensorOp::ReduceSum {
             axes: (0..input_shape.len()).collect(),
-            input_shape: dim_shape(&input_shape),
         },
         vec![ValRef::Local(scaled[0])],
         OpMode::Primal,
@@ -458,10 +447,7 @@ fn build_svd_values_sum_fragment() -> (
         OpMode::Primal,
     );
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0],
-            input_shape: dim_shape(&[2]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0] },
         vec![ValRef::Local(svd[1])],
         OpMode::Primal,
     );
@@ -536,10 +522,7 @@ fn build_svd_uv_product_fragment(
         add_real_reduce_sum_loss(&mut builder, uv_product[0], product_shape)
     } else {
         builder.add_op(
-            StdTensorOp::ReduceSum {
-                axes: vec![0, 1],
-                input_shape: dim_shape(&product_shape),
-            },
+            StdTensorOp::ReduceSum { axes: vec![0, 1] },
             vec![ValRef::Local(uv_product[0])],
             OpMode::Primal,
         )[0]
@@ -608,10 +591,7 @@ fn build_svd_reconstruction_sum_fragment(
         OpMode::Primal,
     );
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0, 1],
-            input_shape: dim_shape(&[m, n]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
         vec![ValRef::Local(reconstructed[0])],
         OpMode::Primal,
     );
@@ -634,10 +614,7 @@ fn build_eigh_values_sum_fragment() -> (
         OpMode::Primal,
     );
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0],
-            input_shape: dim_shape(&[2]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0] },
         vec![ValRef::Local(eigh[0])],
         OpMode::Primal,
     );
@@ -738,10 +715,7 @@ fn build_eigh_projector_fragment(
         add_real_reduce_sum_loss(&mut builder, weighted[0], vec![2, 2])
     } else {
         builder.add_op(
-            StdTensorOp::ReduceSum {
-                axes: vec![0, 1],
-                input_shape: dim_shape(&[2, 2]),
-            },
+            StdTensorOp::ReduceSum { axes: vec![0, 1] },
             vec![ValRef::Local(weighted[0])],
             OpMode::Primal,
         )[0]
@@ -802,10 +776,7 @@ fn build_solve_sum_fragment() -> (
     let b = builder.add_input(b_key.clone());
     let solve = add_solve_composition(&mut builder, a, b, vec![2, 2], vec![2, 1]);
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0, 1],
-            input_shape: dim_shape(&[2, 1]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
         vec![ValRef::Local(solve)],
         OpMode::Primal,
     );
@@ -831,10 +802,7 @@ fn build_triangular_solve_sum_fragment() -> (
         OpMode::Primal,
     );
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0, 1],
-            input_shape: dim_shape(&[2, 1]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
         vec![ValRef::Local(solve[0])],
         OpMode::Primal,
     );
@@ -897,10 +865,7 @@ fn build_cholesky_sum_fragment() -> (
         OpMode::Primal,
     );
     let loss = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![0, 1],
-            input_shape: dim_shape(&[3, 3]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
         vec![ValRef::Local(cholesky[0])],
         OpMode::Primal,
     );
@@ -943,10 +908,7 @@ fn build_qr_r_fragment(
         add_real_reduce_sum_loss(&mut builder, qr[1], vec![2, 2])
     } else {
         builder.add_op(
-            StdTensorOp::ReduceSum {
-                axes: vec![0, 1],
-                input_shape: dim_shape(&[2, 2]),
-            },
+            StdTensorOp::ReduceSum { axes: vec![0, 1] },
             vec![ValRef::Local(qr[1])],
             OpMode::Primal,
         )[0]
@@ -1006,6 +968,11 @@ fn grad_from_fragment_with_inputs_and_cotangent(
         )],
     );
     ad_ctx.refresh_global_metadata();
+    let linear_tangent_input_ids: Vec<LocalValId> = linear
+        .tangent_inputs
+        .iter()
+        .map(|(_, local_id)| *local_id)
+        .collect();
     let transposed = transpose(&linear, &mut ad_ctx);
     let linear_fragment = Arc::new(linear.fragment);
     let grad_key = transposed.tangent_outputs[0]
@@ -1020,6 +987,23 @@ fn grad_from_fragment_with_inputs_and_cotangent(
 
     inputs_map.insert(cotangent_input_key, cotangent);
 
+    // Linear-mode tangent ops in the transposed fragment may reference values
+    // whose dependency chain passes through the linear fragment's tangent
+    // inputs (e.g. shape-source references). Provide zero placeholders for
+    // those inputs so materialize_merge can satisfy the dependency.
+    let input_tensor = inputs_map
+        .get(&input_key)
+        .cloned()
+        .expect("missing primal input tensor for zero-tangent fill");
+    let zero_tangent = zeros_by_dtype(input_tensor.dtype(), input_tensor.shape().to_vec());
+    for local_id in linear_tangent_input_ids {
+        if let GlobalValKey::Input(key) = &linear_fragment.vals()[local_id].key {
+            inputs_map
+                .entry(key.clone())
+                .or_insert_with(|| zero_tangent.clone());
+        }
+    }
+
     eval_fragment_outputs(
         vec![fragment, linear_fragment, transposed_fragment.clone()],
         &[grad_key],
@@ -1028,6 +1012,15 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     .into_iter()
     .next()
     .expect("gradient output")
+}
+
+fn zeros_by_dtype(dtype: DType, shape: Vec<usize>) -> Tensor {
+    match dtype {
+        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
+        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
+        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
+    }
 }
 
 fn grad_from_fragment_with_inputs(
@@ -1122,19 +1115,19 @@ fn build_unary_fragment(
     (Arc::new(builder.build()), input_key, output_key)
 }
 
-fn eval_f64_reduction_op(op: &StdTensorOp, data: &[f64]) -> Vec<f64> {
+fn eval_f64_reduction_op(op: &StdTensorOp, input_shape: &[usize], data: &[f64]) -> Vec<f64> {
     let mut backend = CpuBackend::new();
     let output = match op {
-        StdTensorOp::ReduceProd { axes, input_shape } => {
-            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
+        StdTensorOp::ReduceProd { axes } => {
+            let input = f64_tensor(input_shape.to_vec(), data.to_vec());
             backend.reduce_prod(&input, axes).unwrap()
         }
-        StdTensorOp::ReduceMax { axes, input_shape } => {
-            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
+        StdTensorOp::ReduceMax { axes } => {
+            let input = f64_tensor(input_shape.to_vec(), data.to_vec());
             backend.reduce_max(&input, axes).unwrap()
         }
-        StdTensorOp::ReduceMin { axes, input_shape } => {
-            let input = f64_tensor(concrete_dim_shape(input_shape), data.to_vec());
+        StdTensorOp::ReduceMin { axes } => {
+            let input = f64_tensor(input_shape.to_vec(), data.to_vec());
             backend.reduce_min(&input, axes).unwrap()
         }
         _ => panic!("expected reduction op"),
@@ -1934,48 +1927,47 @@ fn grad_full_vector_reduction() {
 
 #[test]
 fn test_reduce_prod_jvp() {
-    let op = StdTensorOp::ReduceProd {
-        axes: vec![0],
-        input_shape: dim_shape(&[4]),
-    };
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![4usize];
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_000));
     let x_data = vec![1.5, -2.0, 0.75, 4.0];
     let dx_data = vec![0.25, -0.5, 1.0, 0.75];
     let mut inputs_map = HashMap::new();
-    inputs_map.insert(input_key.clone(), f64_tensor(vec![4], x_data.clone()));
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), x_data.clone()),
+    );
 
     let tangent = jvp_from_fragment_with_inputs(
         fragment,
         output_key,
         input_key,
         inputs_map,
-        f64_tensor(vec![4], dx_data.clone()),
+        f64_tensor(input_shape.clone(), dx_data.clone()),
     );
 
     assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
-        eval_f64_reduction_op(&op, xs)
+        eval_f64_reduction_op(&op, &input_shape, xs)
     });
 }
 
 #[test]
 fn test_reduce_prod_vjp() {
-    let op = StdTensorOp::ReduceProd {
-        axes: vec![0],
-        input_shape: dim_shape(&[2, 3]),
-    };
+    let op = StdTensorOp::ReduceProd { axes: vec![0] };
+    let input_shape = vec![2usize, 3];
     let input_key = tensor_input_key(60_001);
     let x_data = vec![1.5, -2.0, 0.75, 4.0, -0.5, 2.0];
     let cotangent = vec![0.5, -1.0, 2.0];
     let grad = transpose_primal_unary_op_with_inputs(
         op.clone(),
         input_key,
-        f64_tensor(vec![2, 3], x_data.clone()),
+        f64_tensor(input_shape.clone(), x_data.clone()),
         f64_tensor(vec![3], cotangent.clone()),
     );
 
     assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
-        eval_f64_reduction_op(&op, xs)
+        eval_f64_reduction_op(&op, &input_shape, xs)
             .iter()
             .zip(cotangent.iter())
             .map(|(value, weight)| value * weight)
@@ -1985,95 +1977,93 @@ fn test_reduce_prod_vjp() {
 
 #[test]
 fn test_reduce_max_jvp() {
-    let op = StdTensorOp::ReduceMax {
-        axes: vec![0],
-        input_shape: dim_shape(&[2, 3]),
-    };
+    let op = StdTensorOp::ReduceMax { axes: vec![0] };
+    let input_shape = vec![2usize, 3];
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_002));
     let x_data = vec![2.0, 2.0, 4.0, 1.0, -3.0, -3.0];
     let dx_data = vec![1.0, -0.5, 0.75, -1.25, 2.0, -1.0];
     let mut inputs_map = HashMap::new();
-    inputs_map.insert(input_key.clone(), f64_tensor(vec![2, 3], x_data.clone()));
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), x_data.clone()),
+    );
 
     let tangent = jvp_from_fragment_with_inputs(
         fragment,
         output_key,
         input_key,
         inputs_map,
-        f64_tensor(vec![2, 3], dx_data.clone()),
+        f64_tensor(input_shape.clone(), dx_data.clone()),
     );
 
     assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
-        eval_f64_reduction_op(&op, xs)
+        eval_f64_reduction_op(&op, &input_shape, xs)
     });
 }
 
 #[test]
 fn test_reduce_max_vjp() {
-    let op = StdTensorOp::ReduceMax {
-        axes: vec![0],
-        input_shape: dim_shape(&[4]),
-    };
+    let op = StdTensorOp::ReduceMax { axes: vec![0] };
+    let input_shape = vec![4usize];
     let input_key = tensor_input_key(60_003);
     let x_data = vec![1.0, 3.0, 3.0, -2.0];
     let cotangent = 2.5;
     let grad = transpose_primal_unary_op_with_inputs(
         op.clone(),
         input_key,
-        f64_tensor(vec![4], x_data.clone()),
+        f64_tensor(input_shape.clone(), x_data.clone()),
         scalar_f64_tensor(cotangent),
     );
 
     assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
-        cotangent * eval_f64_reduction_op(&op, xs)[0]
+        cotangent * eval_f64_reduction_op(&op, &input_shape, xs)[0]
     });
 }
 
 #[test]
 fn test_reduce_min_jvp() {
-    let op = StdTensorOp::ReduceMin {
-        axes: vec![0],
-        input_shape: dim_shape(&[4]),
-    };
+    let op = StdTensorOp::ReduceMin { axes: vec![0] };
+    let input_shape = vec![4usize];
     let (fragment, input_key, output_key) =
         build_unary_fragment(op.clone(), tensor_input_key(60_004));
     let x_data = vec![1.0, -2.0, 4.0, -2.0];
     let dx_data = vec![0.5, 1.0, -1.0, -0.5];
     let mut inputs_map = HashMap::new();
-    inputs_map.insert(input_key.clone(), f64_tensor(vec![4], x_data.clone()));
+    inputs_map.insert(
+        input_key.clone(),
+        f64_tensor(input_shape.clone(), x_data.clone()),
+    );
 
     let tangent = jvp_from_fragment_with_inputs(
         fragment,
         output_key,
         input_key,
         inputs_map,
-        f64_tensor(vec![4], dx_data.clone()),
+        f64_tensor(input_shape.clone(), dx_data.clone()),
     );
 
     assert_jvp_matches_finite_diff(get_f64_data(&tangent), &x_data, &dx_data, |xs| {
-        eval_f64_reduction_op(&op, xs)
+        eval_f64_reduction_op(&op, &input_shape, xs)
     });
 }
 
 #[test]
 fn test_reduce_min_vjp() {
-    let op = StdTensorOp::ReduceMin {
-        axes: vec![0],
-        input_shape: dim_shape(&[2, 3]),
-    };
+    let op = StdTensorOp::ReduceMin { axes: vec![0] };
+    let input_shape = vec![2usize, 3];
     let input_key = tensor_input_key(60_005);
     let x_data = vec![-4.0, -4.0, 0.5, 2.0, 1.0, 1.0];
     let cotangent = vec![1.5, -0.25, 0.75];
     let grad = transpose_primal_unary_op_with_inputs(
         op.clone(),
         input_key,
-        f64_tensor(vec![2, 3], x_data.clone()),
+        f64_tensor(input_shape.clone(), x_data.clone()),
         f64_tensor(vec![3], cotangent.clone()),
     );
 
     assert_grad_matches_finite_diff(get_f64_data(&grad), &x_data, |xs| {
-        eval_f64_reduction_op(&op, xs)
+        eval_f64_reduction_op(&op, &input_shape, xs)
             .iter()
             .zip(cotangent.iter())
             .map(|(value, weight)| value * weight)

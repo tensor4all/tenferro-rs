@@ -294,10 +294,7 @@ fn infer_semiring_output_shapes(
         SemiringOpKind::DotGeneral(config) => StdTensorOp::DotGeneral {
             config: config.clone(),
         },
-        SemiringOpKind::ReduceSum { axes } => StdTensorOp::ReduceSum {
-            axes: axes.clone(),
-            input_shape: require_input_shape(kind, input_shapes, 0).to_vec(),
-        },
+        SemiringOpKind::ReduceSum { axes } => StdTensorOp::ReduceSum { axes: axes.clone() },
         SemiringOpKind::Transpose { perm } => StdTensorOp::Transpose { perm: perm.clone() },
         SemiringOpKind::Reshape { shape } => StdTensorOp::Reshape {
             from_shape: require_input_shape(kind, input_shapes, 0).to_vec(),

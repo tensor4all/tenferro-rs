@@ -145,6 +145,50 @@ fn run_transpose_case(
     (result, cotangent, builder.build())
 }
 
+/// Variant of `run_transpose_case` that seeds input shape metadata for
+/// op kinds whose transpose rules query `ctx.shape_of`.
+fn run_transpose_case_with_input_shapes(
+    op: StdTensorOp,
+    n_inputs: usize,
+    active_mask: &[bool],
+    cotangent_present: bool,
+    input_shapes: &[&[usize]],
+) -> (
+    Vec<Option<LocalValId>>,
+    Option<LocalValId>,
+    Fragment<StdTensorOp>,
+) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let cotangent = cotangent_present.then(|| builder.add_input(tensor_input_key(400)));
+    let inputs = external_inputs(500, n_inputs);
+    assert_eq!(
+        input_shapes.len(),
+        n_inputs,
+        "seed shapes must match input count",
+    );
+    for (input, shape) in inputs.iter().zip(input_shapes.iter()) {
+        let ValRef::External(key) = input else {
+            panic!("expected external input reference");
+        };
+        ad_ctx.insert_metadata(
+            key.clone(),
+            TensorMeta {
+                dtype: DType::F64,
+                shape: shape.iter().copied().map(SymDim::from).collect(),
+            },
+        );
+    }
+    let result = op.transpose_rule(
+        &mut builder,
+        &[cotangent],
+        &inputs,
+        &linear_mode(active_mask),
+        &mut ad_ctx,
+    );
+    (result, cotangent, builder.build())
+}
+
 #[test]
 fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Add.n_inputs(), 2);
@@ -163,14 +207,7 @@ fn test_std_tensor_op_input_output_counts() {
         .n_inputs(),
         2
     );
-    assert_eq!(
-        StdTensorOp::ReduceSum {
-            axes: vec![0],
-            input_shape: shape![2, 3],
-        }
-        .n_inputs(),
-        1
-    );
+    assert_eq!(StdTensorOp::ReduceSum { axes: vec![0] }.n_inputs(), 1);
     assert_eq!(StdTensorOp::constant_f64(1.0).n_inputs(), 0);
     assert_eq!(
         StdTensorOp::ExtractDiag {
@@ -476,54 +513,12 @@ fn test_std_tensor_op_n_outputs_panics_for_concatenate() {
 
 #[test]
 fn test_std_tensor_op_reduction_counts_cover_remaining_variants() {
-    assert_eq!(
-        StdTensorOp::ReduceProd {
-            axes: vec![1],
-            input_shape: shape![2, 3]
-        }
-        .n_inputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::ReduceProd {
-            axes: vec![1],
-            input_shape: shape![2, 3]
-        }
-        .n_outputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::ReduceMax {
-            axes: vec![0],
-            input_shape: shape![2, 3]
-        }
-        .n_inputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::ReduceMax {
-            axes: vec![0],
-            input_shape: shape![2, 3]
-        }
-        .n_outputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::ReduceMin {
-            axes: vec![0, 1],
-            input_shape: shape![2, 3]
-        }
-        .n_inputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::ReduceMin {
-            axes: vec![0, 1],
-            input_shape: shape![2, 3]
-        }
-        .n_outputs(),
-        1
-    );
+    assert_eq!(StdTensorOp::ReduceProd { axes: vec![1] }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::ReduceProd { axes: vec![1] }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::ReduceMax { axes: vec![0] }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::ReduceMax { axes: vec![0] }.n_outputs(), 1);
+    assert_eq!(StdTensorOp::ReduceMin { axes: vec![0, 1] }.n_inputs(), 1);
+    assert_eq!(StdTensorOp::ReduceMin { axes: vec![0, 1] }.n_outputs(), 1);
 }
 
 #[test]
@@ -634,7 +629,7 @@ fn test_semiring_op_constructors_cover_all_supported_kinds() {
         SemiringOpKind::Transpose { perm: vec![1, 0] }
     );
     assert_eq!(
-        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2], shape![2, 3, 4]).kind,
+        SemiringOp::<Standard<f64>>::reduce_sum(vec![0, 2]).kind,
         SemiringOpKind::ReduceSum { axes: vec![0, 2] }
     );
     assert_eq!(
@@ -781,18 +776,9 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         StdTensorOp::ShapeOf { axis: 0 },
         StdTensorOp::DynamicTruncate { axis: 0 },
         StdTensorOp::PadToMatch { axis: 0 },
-        StdTensorOp::ReduceProd {
-            axes: vec![0],
-            input_shape: shape![2, 2],
-        },
-        StdTensorOp::ReduceMax {
-            axes: vec![0],
-            input_shape: shape![2, 2],
-        },
-        StdTensorOp::ReduceMin {
-            axes: vec![0],
-            input_shape: shape![2, 2],
-        },
+        StdTensorOp::ReduceProd { axes: vec![0] },
+        StdTensorOp::ReduceMax { axes: vec![0] },
+        StdTensorOp::ReduceMin { axes: vec![0] },
     ];
 
     for op in variants {
@@ -1355,23 +1341,32 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
     assert_eq!(primal_mode_result, vec![None, None]);
     assert!(builder.build().ops().is_empty());
 
-    let reduce = StdTensorOp::ReduceSum {
-        axes: vec![1],
-        input_shape: shape![2, 3],
-    };
+    let reduce = StdTensorOp::ReduceSum { axes: vec![1] };
     let (reduce_linearize_none_result, reduce_linearize_none_fragment) =
         run_linearize_case(reduce.clone(), 0, 0, &[false]);
     assert_eq!(reduce_linearize_none_result, vec![None]);
     assert!(reduce_linearize_none_fragment.ops().is_empty());
 
     let (reduce_transpose_result, _, reduce_transpose_fragment) =
-        run_transpose_case(reduce.clone(), 1, &[true], true);
+        run_transpose_case_with_input_shapes(reduce.clone(), 1, &[true], true, &[&[2, 3]]);
     assert!(reduce_transpose_result[0].is_some());
     assert_eq!(reduce_transpose_fragment.ops().len(), 1);
+    // The transpose rule reads input shape via `ctx.shape_of` and emits
+    // `BroadcastInDim` with `InputDim` references into the primal input
+    // (which sits at op input index 1 after the cotangent at index 0).
     assert_eq!(
         reduce_transpose_fragment.ops()[0].op,
         StdTensorOp::BroadcastInDim {
-            shape: shape![2, 3],
+            shape: vec![
+                DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                },
+                DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 1,
+                },
+            ],
             dims: vec![0],
         }
     );

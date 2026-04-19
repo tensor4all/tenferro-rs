@@ -73,10 +73,7 @@ fn test_broadcast_in_dim_uses_shape() {
 
 #[test]
 fn test_reduce_sum_removes_axes() {
-    let op = StdTensorOp::ReduceSum {
-        axes: vec![0],
-        input_shape: vec![cst(3), cst(4)],
-    };
+    let op = StdTensorOp::ReduceSum { axes: vec![0] };
     let input = vec![cst(3), cst(4)];
     let out = infer_output_shapes(&op, &[&input]);
     assert_eq!(out, vec![vec![cst(4)]]);

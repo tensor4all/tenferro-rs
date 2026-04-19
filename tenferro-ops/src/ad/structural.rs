@@ -264,7 +264,6 @@ pub fn transpose_broadcast_in_dim(
             let out = emitter.add_op(
                 StdTensorOp::ReduceSum {
                     axes: broadcast_axes,
-                    input_shape: shape.to_vec(),
                 },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {

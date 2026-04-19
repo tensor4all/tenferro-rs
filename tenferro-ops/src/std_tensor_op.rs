@@ -44,7 +44,6 @@ pub enum StdTensorOp {
     },
     ReduceSum {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
 
     // Tier 2: elementwise
@@ -118,15 +117,12 @@ pub enum StdTensorOp {
     // Tier 2: reductions
     ReduceProd {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
     ReduceMax {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
     ReduceMin {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
 
     // Linalg
@@ -308,9 +304,8 @@ impl Hash for StdTensorOp {
                 dtype.hash(state);
                 bytes.hash(state);
             }
-            Self::ReduceSum { axes, input_shape } => {
+            Self::ReduceSum { axes } => {
                 axes.hash(state);
-                input_shape.hash(state);
             }
             Self::Compare(dir) => dir.hash(state),
             Self::ExtractDiag { axis_a, axis_b } | Self::EmbedDiag { axis_a, axis_b } => {
@@ -335,11 +330,8 @@ impl Hash for StdTensorOp {
             Self::ShapeOf { axis } | Self::DynamicTruncate { axis } | Self::PadToMatch { axis } => {
                 axis.hash(state)
             }
-            Self::ReduceProd { axes, input_shape }
-            | Self::ReduceMax { axes, input_shape }
-            | Self::ReduceMin { axes, input_shape } => {
+            Self::ReduceProd { axes } | Self::ReduceMax { axes } | Self::ReduceMin { axes } => {
                 axes.hash(state);
-                input_shape.hash(state);
             }
             Self::TriangularSolve {
                 left_side,
@@ -404,10 +396,10 @@ impl GraphOp for StdTensorOp {
                 to_shape,
             } => n_inputs_from_dim_exprs(1, &[from_shape, to_shape]),
             Self::BroadcastInDim { shape, .. } => n_inputs_from_dim_exprs(1, &[shape]),
-            Self::ReduceSum { input_shape, .. }
-            | Self::ReduceProd { input_shape, .. }
-            | Self::ReduceMax { input_shape, .. }
-            | Self::ReduceMin { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
+            Self::ReduceSum { .. }
+            | Self::ReduceProd { .. }
+            | Self::ReduceMax { .. }
+            | Self::ReduceMin { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
@@ -553,8 +545,8 @@ impl SemiringOps for StdTensorOp {
         StdTensorOp::DotGeneral { config }
     }
 
-    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self {
-        StdTensorOp::ReduceSum { axes, input_shape }
+    fn reduce_sum(axes: Vec<usize>) -> Self {
+        StdTensorOp::ReduceSum { axes }
     }
 
     fn transpose_op(perm: Vec<usize>) -> Self {

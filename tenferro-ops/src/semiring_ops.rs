@@ -16,7 +16,7 @@ pub trait SemiringOps: GraphOp {
     /// #664). Implementors that do not track rank (e.g. `SemiringOp`) may
     /// ignore them.
     fn dot_general(config: DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> Self;
-    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self;
+    fn reduce_sum(axes: Vec<usize>) -> Self;
     fn transpose_op(perm: Vec<usize>) -> Self;
     fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self;
     fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self;

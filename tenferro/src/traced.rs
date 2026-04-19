@@ -1279,7 +1279,6 @@ impl TracedTensor {
         apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),
-                input_shape: DimExpr::input_shape(0, self.rank),
             },
             self,
             self.rank - axes.len(),

@@ -59,10 +59,7 @@ fn test_eig_f64_produces_c64() {
 
 #[test]
 fn test_reduce_sum_preserves_dtype() {
-    let op = StdTensorOp::ReduceSum {
-        axes: vec![0],
-        input_shape: vec![DimExpr::Const(4), DimExpr::Const(3)],
-    };
+    let op = StdTensorOp::ReduceSum { axes: vec![0] };
     assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::F32);
 }
 

@@ -39,27 +39,10 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         strides: vec![1, 1],
     };
     let program = make_program(vec![
+        make_instr(StdTensorOp::ReduceProd { axes: vec![0] }, vec![0], vec![3]),
+        make_instr(StdTensorOp::ReduceMax { axes: vec![1] }, vec![1], vec![4]),
         make_instr(
-            StdTensorOp::ReduceProd {
-                axes: vec![0],
-                input_shape: dim_shape(&[2, 2]),
-            },
-            vec![0],
-            vec![3],
-        ),
-        make_instr(
-            StdTensorOp::ReduceMax {
-                axes: vec![1],
-                input_shape: dim_shape(&[2, 2]),
-            },
-            vec![1],
-            vec![4],
-        ),
-        make_instr(
-            StdTensorOp::ReduceMin {
-                axes: vec![0, 1],
-                input_shape: dim_shape(&[2, 2]),
-            },
+            StdTensorOp::ReduceMin { axes: vec![0, 1] },
             vec![2],
             vec![5],
         ),

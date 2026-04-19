@@ -47,26 +47,17 @@ fn linearize_non_semiring(
         StdTensorOp::NaryEinsum { subscripts, .. } => {
             contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }
-        StdTensorOp::ReduceSum { axes, .. } => {
+        StdTensorOp::ReduceSum { axes } => {
             contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
         }
-        StdTensorOp::ReduceProd { axes, input_shape } => contraction::linearize_reduce_prod(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            axes,
-            input_shape,
+        StdTensorOp::ReduceProd { axes } => contraction::linearize_reduce_prod(
+            builder, primal_in, primal_out, tangent_in, axes, ctx,
         ),
-        StdTensorOp::ReduceMax { axes, input_shape }
-        | StdTensorOp::ReduceMin { axes, input_shape } => contraction::linearize_reduce_chooser(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            axes,
-            input_shape,
-        ),
+        StdTensorOp::ReduceMax { axes } | StdTensorOp::ReduceMin { axes } => {
+            contraction::linearize_reduce_chooser(
+                builder, primal_in, primal_out, tangent_in, axes, ctx,
+            )
+        }
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
         }
@@ -193,13 +184,13 @@ fn transpose_non_semiring(
             *n_inputs,
         ),
         StdTensorOp::ReduceSum { .. } => {
-            contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs)
+            contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs, ctx)
         }
         StdTensorOp::ReduceProd { .. } => {
-            contraction::transpose_reduce_prod(emitter, cotangent_out, inputs, op)
+            contraction::transpose_reduce_prod(emitter, cotangent_out, inputs, op, ctx)
         }
         StdTensorOp::ReduceMax { .. } | StdTensorOp::ReduceMin { .. } => {
-            contraction::transpose_reduce_chooser(emitter, cotangent_out, inputs, op)
+            contraction::transpose_reduce_chooser(emitter, cotangent_out, inputs, op, ctx)
         }
         StdTensorOp::Transpose { perm } => {
             structural::transpose_transpose(emitter, cotangent_out, perm)

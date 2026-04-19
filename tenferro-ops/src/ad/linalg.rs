@@ -979,17 +979,9 @@ fn broadcast_in_dim_fixed(
 fn reduce_sum_fixed(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: ValRef<StdTensorOp>,
-    input_shape: &[DimExpr],
     axes: Vec<usize>,
 ) -> LocalValId {
-    fixed_unary(
-        builder,
-        StdTensorOp::ReduceSum {
-            axes,
-            input_shape: input_shape.to_vec(),
-        },
-        input,
-    )
+    fixed_unary(builder, StdTensorOp::ReduceSum { axes }, input)
 }
 
 fn pad_fixed(
@@ -1396,7 +1388,6 @@ fn scalar_one_fixed(
         reduce_sum_fixed(
             builder,
             ValRef::Local(zero),
-            anchor_shape,
             (0..anchor_shape.len()).collect(),
         )
     };

@@ -6,6 +6,7 @@ use tenferro_tensor::{CompareDir, DotGeneralConfig};
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
+use crate::sym_dim::SymDim;
 
 pub fn linearize_dot_general(
     builder: &mut FragmentBuilder<StdTensorOp>,
@@ -150,18 +151,21 @@ pub fn linearize_reduce_prod(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    input_shape: &[DimExpr],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
     };
 
+    let input_shape = ctx
+        .shape_of(&ValRef::External(primal_in[0].clone()))
+        .to_vec();
     let kept_dims = kept_dims(input_shape.len(), axes);
     let prod_broadcast = broadcast_reduction_output(
         builder,
         ValRef::External(primal_out[0].clone()),
         ValRef::External(primal_in[0].clone()),
-        input_shape,
+        &input_shape,
         &kept_dims,
     );
     let coeff = builder.add_op(
@@ -182,7 +186,6 @@ pub fn linearize_reduce_prod(
     let out = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(scaled_tangent)],
         OpMode::Linear {
@@ -198,18 +201,21 @@ pub fn linearize_reduce_chooser(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    input_shape: &[DimExpr],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
     };
 
+    let input_shape = ctx
+        .shape_of(&ValRef::External(primal_in[0].clone()))
+        .to_vec();
     let kept_dims = kept_dims(input_shape.len(), axes);
     let answer_broadcast = broadcast_reduction_output(
         builder,
         ValRef::External(primal_out[0].clone()),
         ValRef::External(primal_in[0].clone()),
-        input_shape,
+        &input_shape,
         &kept_dims,
     );
     let indicators = reduction_location_indicators(
@@ -227,14 +233,13 @@ pub fn linearize_reduce_chooser(
     let tangent_sum = builder.add_op(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(weighted_tangent)],
         OpMode::Linear {
             active_mask: vec![true],
         },
     )[0];
-    let counts = reduction_location_counts(builder, indicators, axes, input_shape);
+    let counts = reduction_location_counts(builder, indicators, axes);
     let out = builder.add_op(
         StdTensorOp::Div,
         vec![ValRef::Local(tangent_sum), ValRef::Local(counts)],
@@ -402,13 +407,15 @@ pub fn transpose_reduce_sum(
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::ReduceSum { axes, input_shape } = op else {
+    let StdTensorOp::ReduceSum { axes } = op else {
         unreachable!("transpose_reduce_sum expects ReduceSum");
     };
 
     match cotangent_out[0] {
         Some(ct) => {
+            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
             let kept_dims = (0..input_shape.len())
                 .filter(|dim| !axes.contains(dim))
                 .collect::<Vec<_>>();
@@ -427,8 +434,7 @@ pub fn transpose_reduce_sum(
             } else {
                 ValRef::Local(ct)
             };
-            let shape = DimExpr::remap_all(input_shape, 0, 1);
-            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -455,17 +461,18 @@ pub fn transpose_reduce_prod(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::ReduceProd { axes, input_shape } = op else {
+    let StdTensorOp::ReduceProd { axes } = op else {
         unreachable!("transpose_reduce_prod expects ReduceProd");
     };
 
     match cotangent_out[0] {
         Some(ct) => {
+            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(emitter, ct, &kept_dims);
-            let shape = DimExpr::remap_all(input_shape, 0, 1);
-            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -486,7 +493,7 @@ pub fn transpose_reduce_prod(
                 emitter,
                 ValRef::Local(prod),
                 inputs[0].clone(),
-                input_shape,
+                &input_shape,
                 &kept_dims,
             );
             let coeff = emitter.add_op(
@@ -517,19 +524,19 @@ pub fn transpose_reduce_chooser(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    let (axes, input_shape) = match op {
-        StdTensorOp::ReduceMax { axes, input_shape }
-        | StdTensorOp::ReduceMin { axes, input_shape } => (axes, input_shape),
+    let axes = match op {
+        StdTensorOp::ReduceMax { axes } | StdTensorOp::ReduceMin { axes } => axes,
         _ => unreachable!("transpose_reduce_chooser expects ReduceMax or ReduceMin"),
     };
 
     match cotangent_out[0] {
         Some(ct) => {
+            let input_shape = ctx.shape_of(&inputs[0]).to_vec();
             let kept_dims = kept_dims(input_shape.len(), axes);
             let cotangent = normalize_reduction_cotangent(emitter, ct, &kept_dims);
-            let shape = DimExpr::remap_all(input_shape, 0, 1);
-            let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+            let (shape, needs_shape_source) = sym_shape_to_dim_expr(&input_shape, 1);
             let mut op_inputs = vec![cotangent];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -550,7 +557,7 @@ pub fn transpose_reduce_chooser(
                 emitter,
                 ValRef::Local(answer),
                 inputs[0].clone(),
-                input_shape,
+                &input_shape,
                 &kept_dims,
             );
             let indicators = reduction_location_indicators(
@@ -558,12 +565,12 @@ pub fn transpose_reduce_chooser(
                 inputs[0].clone(),
                 ValRef::Local(answer_broadcast),
             );
-            let counts = reduction_location_counts(emitter, indicators, axes, input_shape);
+            let counts = reduction_location_counts(emitter, indicators, axes);
             let counts_broadcast = broadcast_reduction_output(
                 emitter,
                 ValRef::Local(counts),
                 inputs[0].clone(),
-                input_shape,
+                &input_shape,
                 &kept_dims,
             );
             let weights = emitter.add_op(
@@ -605,6 +612,30 @@ fn kept_dims(rank: usize, axes: &[usize]) -> Vec<usize> {
     (0..rank).filter(|dim| !axes.contains(dim)).collect()
 }
 
+/// Convert a [`SymDim`] shape to a [`DimExpr`] shape for a builder op.
+///
+/// Each axis is resolved as a reference to `source_idx`'s axis so that the
+/// emitted op reads the *runtime* shape of the primal input. Folding the
+/// [`SymDim`] to a constant is not safe in general: ops such as
+/// [`StdTensorOp::DynamicTruncate`] keep a static metadata shape that does
+/// not match the runtime tensor shape, so emitting `Const(static_size)`
+/// would disagree with the runtime broadcast target.
+///
+/// Returns `(dim_exprs, needs_shape_source)`. When `shape` is empty the
+/// resulting `DimExpr` list is empty and no shape source is needed.
+fn sym_shape_to_dim_expr(shape: &[SymDim], source_idx: usize) -> (Vec<DimExpr>, bool) {
+    let needs_shape_source = !shape.is_empty();
+    let dim_exprs = shape
+        .iter()
+        .enumerate()
+        .map(|(axis, _)| DimExpr::InputDim {
+            input_idx: source_idx,
+            axis,
+        })
+        .collect();
+    (dim_exprs, needs_shape_source)
+}
+
 fn normalize_reduction_cotangent(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent: LocalValId,
@@ -631,11 +662,10 @@ fn broadcast_reduction_output(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     output: ValRef<StdTensorOp>,
     shape_source: ValRef<StdTensorOp>,
-    input_shape: &[DimExpr],
+    input_shape: &[SymDim],
     kept_dims: &[usize],
 ) -> LocalValId {
-    let shape = DimExpr::remap_all(input_shape, 0, 1);
-    let needs_shape_source = DimExpr::max_input_idx_all(&shape).is_some_and(|idx| idx > 0);
+    let (shape, needs_shape_source) = sym_shape_to_dim_expr(input_shape, 1);
     let inputs = if needs_shape_source {
         vec![output, shape_source]
     } else {
@@ -667,12 +697,10 @@ fn reduction_location_counts(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     indicators: LocalValId,
     axes: &[usize],
-    input_shape: &[DimExpr],
 ) -> LocalValId {
     emitter.add_op(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(indicators)],
         OpMode::Primal,

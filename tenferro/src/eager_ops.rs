@@ -99,7 +99,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -453,7 +452,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceProd {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -472,7 +470,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_max(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceMax {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -491,7 +488,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_min(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceMin {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 

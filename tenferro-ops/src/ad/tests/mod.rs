@@ -174,10 +174,7 @@ fn representative_fragment_values_all_have_queryable_tensor_metadata() {
         OpMode::Primal,
     )[0];
     let reduce = builder.add_op(
-        StdTensorOp::ReduceSum {
-            axes: vec![1],
-            input_shape: DimExpr::from_concrete(&[2, 4]),
-        },
+        StdTensorOp::ReduceSum { axes: vec![1] },
         vec![ValRef::Local(dot)],
         OpMode::Primal,
     )[0];

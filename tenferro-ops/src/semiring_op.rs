@@ -95,7 +95,7 @@ where
         Self::new(SemiringOpKind::DotGeneral(config))
     }
 
-    fn reduce_sum(axes: Vec<usize>, _input_shape: Vec<DimExpr>) -> Self {
+    fn reduce_sum(axes: Vec<usize>) -> Self {
         Self::new(SemiringOpKind::ReduceSum { axes })
     }
 
