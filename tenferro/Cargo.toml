@@ -18,7 +18,6 @@ provider-src = ["cpu-blas", "tenferro-tensor/provider-src"]
 src-openblas = ["provider-src", "tenferro-tensor/src-openblas"]
 src-accelerate = ["provider-src", "tenferro-tensor/src-accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "tenferro-tensor/src-intel-mkl-dynamic-parallel"]
-cuda = ["tenferro-tensor/cuda"]
 cubecl = ["tenferro-tensor/cubecl"]
 
 [dependencies]
