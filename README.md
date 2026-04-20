@@ -13,7 +13,7 @@ AD (VJP/JVP/HVP) on CPU and CUDA GPU (via CubeCL + cuTENSOR + cuSOLVER).
 | `tenferro` | User-facing facade: eager execution and scalar-loss reverse-mode AD via `EagerTensor` / `EagerContext`, plus traced execution and transform AD via `TracedTensor`, `Engine`, and public einsum/linalg APIs |
 | `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend, CubeCL GPU backend |
 | `tenferro-einsum` | Subscripts, contraction trees, and fragment-building utilities |
-| `tenferro-ops` | Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rule implementations |
+| `tenferro-ops` | Graph op vocabulary (`StdTensorOp`), `ExtensionOp` trait and registry, and AD rule implementations |
 | `tenferro-device` | Shared device and error infrastructure |
 
 ## Documentation
