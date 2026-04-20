@@ -93,8 +93,8 @@ mod runtime;
 
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
-    ensure_axes_unique, ensure_axis, ensure_rank, launch_binary, launch_binary_with_config,
-    launch_nullary_into, launch_ternary, launch_unary, launch_unary_into,
+    ensure_axes_unique, ensure_axis, ensure_rank, launch_binary, launch_nullary_into,
+    launch_ternary, launch_ternary_with_config, launch_unary, launch_unary_into,
     single_thread_launch_config, ternary_dtype_mismatch,
 };
 use kernels::{diagonal, elementwise, indexing, reduction, structural};
@@ -1035,20 +1035,22 @@ impl CubeclBackend {
             config,
         )?;
         let (count, dim) = single_thread_launch_config();
-        launch_binary_with_config(
+        launch_ternary_with_config(
             self.runtime(),
+            operand,
             scatter_indices,
             updates,
             &operand.shape,
             "scatter",
             count,
             dim,
-            |client, count, dim, out, scatter_arg, updates_arg| unsafe {
+            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
                 indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
                     client,
                     count,
                     dim,
                     out,
+                    operand_arg,
                     scatter_arg,
                     updates_arg,
                     comptime_sequence(&operand.shape),
@@ -1083,20 +1085,22 @@ impl CubeclBackend {
             config,
         )?;
         let (count, dim) = single_thread_launch_config();
-        launch_binary_with_config(
+        launch_ternary_with_config(
             self.runtime(),
+            operand,
             scatter_indices,
             updates,
             &operand.shape,
             "scatter",
             count,
             dim,
-            |client, count, dim, out, scatter_arg, updates_arg| unsafe {
+            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
                 indexing::scatter_complex_kernel::launch_unchecked::<T, I, CudaRuntime>(
                     client,
                     count,
                     dim,
                     out,
+                    operand_arg,
                     scatter_arg,
                     updates_arg,
                     comptime_sequence(&operand.shape),
