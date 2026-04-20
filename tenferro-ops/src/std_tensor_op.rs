@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
@@ -7,12 +8,13 @@ use computegraph::{GraphOp, OpEmitter};
 use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
+use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
 use crate::input_key::TensorInputKey;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum StdTensorOp {
     // Tier 1: semiring
     Add,
@@ -142,6 +144,13 @@ pub enum StdTensorOp {
         unit_diagonal: bool,
     },
     ValidateNonsingular,
+
+    /// Out-of-tree extension carrier.
+    ///
+    /// See [`crate::ext_op`] and `docs/spec/extension-op.md`. Identity,
+    /// hashing, equality, arity, shape inference, and AD rules are delegated
+    /// to the inner [`ExtensionOp`] trait object.
+    Extension(Arc<dyn ExtensionOp>),
 }
 
 impl StdTensorOp {
@@ -214,6 +223,126 @@ impl StdTensorOp {
         Self::Constant {
             dtype: DType::C32,
             bytes,
+        }
+    }
+}
+
+impl PartialEq for StdTensorOp {
+    fn eq(&self, other: &Self) -> bool {
+        if std::mem::discriminant(self) != std::mem::discriminant(other) {
+            return false;
+        }
+        match (self, other) {
+            (Self::Add, Self::Add)
+            | (Self::Mul, Self::Mul)
+            | (Self::Neg, Self::Neg)
+            | (Self::Conj, Self::Conj)
+            | (Self::Div, Self::Div)
+            | (Self::Abs, Self::Abs)
+            | (Self::Sign, Self::Sign)
+            | (Self::Maximum, Self::Maximum)
+            | (Self::Minimum, Self::Minimum)
+            | (Self::Select, Self::Select)
+            | (Self::Clamp, Self::Clamp)
+            | (Self::Exp, Self::Exp)
+            | (Self::Log, Self::Log)
+            | (Self::Sin, Self::Sin)
+            | (Self::Cos, Self::Cos)
+            | (Self::Tanh, Self::Tanh)
+            | (Self::Sqrt, Self::Sqrt)
+            | (Self::Rsqrt, Self::Rsqrt)
+            | (Self::Pow, Self::Pow)
+            | (Self::Expm1, Self::Expm1)
+            | (Self::Log1p, Self::Log1p)
+            | (Self::Cholesky, Self::Cholesky)
+            | (Self::Lu, Self::Lu)
+            | (Self::Qr, Self::Qr)
+            | (Self::ValidateNonsingular, Self::ValidateNonsingular) => true,
+            (Self::DotGeneral { config: a }, Self::DotGeneral { config: b }) => a == b,
+            (Self::Transpose { perm: a }, Self::Transpose { perm: b }) => a == b,
+            (Self::Reshape { to_shape: a }, Self::Reshape { to_shape: b }) => a == b,
+            (
+                Self::BroadcastInDim {
+                    shape: sa,
+                    dims: da,
+                },
+                Self::BroadcastInDim {
+                    shape: sb,
+                    dims: db,
+                },
+            ) => sa == sb && da == db,
+            (Self::Convert { from: fa, to: ta }, Self::Convert { from: fb, to: tb }) => {
+                fa == fb && ta == tb
+            }
+            (
+                Self::Constant {
+                    dtype: da,
+                    bytes: ba,
+                },
+                Self::Constant {
+                    dtype: db,
+                    bytes: bb,
+                },
+            ) => da == db && ba == bb,
+            (Self::ReduceSum { axes: a }, Self::ReduceSum { axes: b })
+            | (Self::ReduceProd { axes: a }, Self::ReduceProd { axes: b })
+            | (Self::ReduceMax { axes: a }, Self::ReduceMax { axes: b })
+            | (Self::ReduceMin { axes: a }, Self::ReduceMin { axes: b })
+            | (Self::Reverse { axes: a }, Self::Reverse { axes: b }) => a == b,
+            (Self::Compare(a), Self::Compare(b)) => a == b,
+            (
+                Self::ExtractDiag {
+                    axis_a: aa,
+                    axis_b: ba,
+                },
+                Self::ExtractDiag {
+                    axis_a: ab,
+                    axis_b: bb,
+                },
+            )
+            | (
+                Self::EmbedDiag {
+                    axis_a: aa,
+                    axis_b: ba,
+                },
+                Self::EmbedDiag {
+                    axis_a: ab,
+                    axis_b: bb,
+                },
+            ) => aa == ab && ba == bb,
+            (Self::Tril { k: a }, Self::Tril { k: b })
+            | (Self::Triu { k: a }, Self::Triu { k: b }) => a == b,
+            (Self::Gather(a), Self::Gather(b)) => a == b,
+            (Self::Scatter(a), Self::Scatter(b)) => a == b,
+            (Self::Slice(a), Self::Slice(b)) => a == b,
+            (Self::DynamicSlice { slice_sizes: a }, Self::DynamicSlice { slice_sizes: b }) => {
+                a == b
+            }
+            (Self::Pad(a), Self::Pad(b)) => a == b,
+            (Self::NaryEinsum { subscripts: a }, Self::NaryEinsum { subscripts: b }) => a == b,
+            (Self::Concatenate { axis: a }, Self::Concatenate { axis: b }) => a == b,
+            (Self::ShapeOf { axis: a }, Self::ShapeOf { axis: b })
+            | (Self::DynamicTruncate { axis: a }, Self::DynamicTruncate { axis: b })
+            | (Self::PadToMatch { axis: a }, Self::PadToMatch { axis: b }) => a == b,
+            (Self::Svd { eps: a }, Self::Svd { eps: b })
+            | (Self::Eigh { eps: a }, Self::Eigh { eps: b }) => a.to_bits() == b.to_bits(),
+            (Self::Eig { input_dtype: a }, Self::Eig { input_dtype: b }) => a == b,
+            (
+                Self::TriangularSolve {
+                    left_side: lsa,
+                    lower: la,
+                    transpose_a: ta,
+                    unit_diagonal: ua,
+                },
+                Self::TriangularSolve {
+                    left_side: lsb,
+                    lower: lb,
+                    transpose_a: tb,
+                    unit_diagonal: ub,
+                },
+            ) => lsa == lsb && la == lb && ta == tb && ua == ub,
+            (Self::Extension(a), Self::Extension(b)) => ext_op_eq(a.as_ref(), b.as_ref()),
+            _ => unreachable!("discriminant mismatch should be caught earlier"),
         }
     }
 }
@@ -311,6 +440,7 @@ impl Hash for StdTensorOp {
                 unit_diagonal.hash(state);
             }
             Self::ValidateNonsingular => {}
+            Self::Extension(op) => hash_extension(op.as_ref(), state),
         }
     }
 }
@@ -397,6 +527,7 @@ impl GraphOp for StdTensorOp {
             | Self::Eig { .. }
             | Self::ValidateNonsingular => 1,
             Self::TriangularSolve { .. } => 2,
+            Self::Extension(op) => ExtensionOp::n_inputs(op.as_ref()),
         }
     }
 
@@ -458,6 +589,7 @@ impl GraphOp for StdTensorOp {
                 "n_outputs not yet implemented for variable-arity op {:?}",
                 self
             ),
+            Self::Extension(op) => ExtensionOp::n_outputs(op.as_ref()),
         }
     }
 }

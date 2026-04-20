@@ -3,7 +3,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
-use crate::shape_infer::{infer_output_dtype, infer_output_shapes};
+use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_shapes};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
@@ -56,16 +56,51 @@ pub fn compile_std_to_exec(
             let input_shapes_refs: Vec<&[DimExpr]> =
                 input_shapes_owned.iter().map(Vec::as_slice).collect();
 
-            let output_dtype = infer_output_dtype(&instr.op, &input_dtypes);
-            let output_shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
-            assert_eq!(
-                output_shapes.len(),
-                instr.outputs.len(),
-                "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                instr.op,
-                output_shapes.len(),
-                instr.outputs.len()
-            );
+            let (output_dtype, output_shapes): (DType, Vec<Vec<DimExpr>>) =
+                if let StdTensorOp::Extension(ext) = &instr.op {
+                    let metas = infer_extension_output_meta(
+                        ext.as_ref(),
+                        &input_dtypes,
+                        &input_shapes_refs,
+                    );
+                    assert_eq!(
+                        metas.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: extension family_id={:?} \
+                         inferred {} output metas for {} output slots",
+                        ext.family_id(),
+                        metas.len(),
+                        instr.outputs.len()
+                    );
+                    // Current compiler supports a single dtype per instruction;
+                    // per spec Section 7, extensions must keep a uniform dtype
+                    // across all outputs. Surface a clean panic if violated.
+                    let dtypes_consistent = metas.iter().all(|(dtype, _)| *dtype == metas[0].0);
+                    assert!(
+                        dtypes_consistent,
+                        "compile_std_to_exec: extension family_id={:?} returned \
+                         multiple output dtypes {:?}; multi-dtype extensions are \
+                         not yet supported in the compiled path",
+                        ext.family_id(),
+                        metas.iter().map(|(dtype, _)| *dtype).collect::<Vec<_>>()
+                    );
+                    let dtype = metas[0].0;
+                    let shapes: Vec<Vec<DimExpr>> =
+                        metas.into_iter().map(|(_dtype, shape)| shape).collect();
+                    (dtype, shapes)
+                } else {
+                    let dtype = infer_output_dtype(&instr.op, &input_dtypes);
+                    let shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
+                    assert_eq!(
+                        shapes.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
+                        instr.op,
+                        shapes.len(),
+                        instr.outputs.len()
+                    );
+                    (dtype, shapes)
+                };
 
             for (slot, shape) in instr.outputs.iter().zip(output_shapes.iter()) {
                 slot_dtypes[*slot] = Some(output_dtype);
@@ -181,6 +216,7 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
             unit_diagonal: *unit_diagonal,
         },
         StdTensorOp::ValidateNonsingular { .. } => ExecOp::ValidateNonsingular,
+        StdTensorOp::Extension(ext) => ExecOp::Extension(ext.clone()),
     }
 }
 

@@ -21,6 +21,19 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
         )?]);
     }
 
+    if let StdTensorOp::Extension(ext) = op {
+        // Per spec Section 8 the eager path MUST NOT open a backend exec
+        // session for extension ops; the extension owns its execution
+        // model. Route errors through the standard tensor error channel
+        // so callers see consistent error types.
+        return ext.eager_execute(inputs).map_err(|err| {
+            Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
+                op: "extension",
+                message: format!("family_id={:?}: {err}", ext.family_id()),
+            })
+        });
+    }
+
     backend.with_exec_session(|exec| {
         let result = match op {
             StdTensorOp::Add => vec![exec.add(inputs[0], inputs[1])?],
@@ -186,6 +199,9 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::ValidateNonsingular { .. } => {
                 validate_nonsingular_u(inputs[0])?;
                 vec![inputs[0].clone()]
+            }
+            StdTensorOp::Extension(_) => {
+                unreachable!("Extension is handled before opening an exec session")
             }
         };
         Ok(result)

@@ -129,6 +129,9 @@ fn linearize_non_semiring(
             ctx,
         ),
         StdTensorOp::ValidateNonsingular => vec![tangent_in[0]],
+        StdTensorOp::Extension(ext) => {
+            ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
+        }
         _ => return None,
     })
 }
@@ -237,6 +240,10 @@ fn transpose_non_semiring(
             *unit_diagonal,
         ),
         StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
+        StdTensorOp::Extension(ext) => {
+            let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
+            ext.transpose_rule(emitter_dyn, cotangent_out, inputs, mode, ctx)
+        }
         _ => return None,
     })
 }
