@@ -1426,7 +1426,21 @@ impl TracedTensor {
         )
     }
 
-    /// Return a symbolic expression for the size of one axis.
+    /// Return a symbolic expression for the size of one axis, suitable as
+    /// an `InputDim`-style reference when composing with
+    /// [`TracedTensor::reshape_sym`].
+    ///
+    /// Semantics: if this tensor's `shape_hint` has a symbolic
+    /// (non-constant) entry for `axis`, that entry is returned
+    /// verbatim. Otherwise — including when `shape_hint[axis]` is a
+    /// concrete `SymDim::Concrete(n)` — a
+    /// `SymDim::tensor_axis(self.id, axis)` reference is returned so the
+    /// resulting graph remains shape-polymorphic if the same graph is
+    /// later evaluated against a differently-shaped binding.
+    ///
+    /// For a canonical "what is the size of this axis?" query that
+    /// reports the concrete size when it is known, prefer
+    /// [`Self::axis_sym_dim`].
     ///
     /// # Examples
     ///
@@ -1447,6 +1461,67 @@ impl TracedTensor {
             .filter(|dim| dim.constant_value().is_none())
             .cloned()
             .unwrap_or_else(|| SymDim::tensor_axis(self.id, axis))
+    }
+
+    /// Return the canonical `SymDim` for `axis` — the concrete
+    /// `SymDim::Concrete(n)` when the size is known, otherwise a symbolic
+    /// expression identifying this tensor's axis.
+    ///
+    /// Unlike [`Self::sym_size`], this method does **not** rewrite
+    /// concrete axes into `TensorAxis` references. It is the accessor
+    /// external composition wrappers should use when building mixed
+    /// concrete/symbolic target shapes for operations like
+    /// [`Self::broadcast_in_dim_sym`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// // Concrete axis: reports the constant size.
+    /// assert_eq!(a.axis_sym_dim(0).constant_value(), Some(2));
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// // Fully symbolic leaf: reports a TensorAxis reference.
+    /// assert!(b.axis_sym_dim(0).constant_value().is_none());
+    /// ```
+    pub fn axis_sym_dim(&self, axis: usize) -> SymDim {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
+            Some(dim) => dim.clone(),
+            None => SymDim::tensor_axis(self.id, axis),
+        }
+    }
+
+    /// Return the full symbolic shape of this tensor when a `shape_hint`
+    /// is present.
+    ///
+    /// Returns `None` for fully-symbolic placeholders produced via
+    /// [`Self::input_symbolic_shape`] (where `shape_hint` is intentionally
+    /// absent). For those, build the shape axis-by-axis via
+    /// [`Self::axis_sym_dim`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// assert!(a.sym_shape().is_some());
+    /// assert_eq!(a.sym_shape().unwrap().len(), 2);
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert!(b.sym_shape().is_none());
+    /// ```
+    pub fn sym_shape(&self) -> Option<&[SymDim]> {
+        self.shape_hint.as_deref()
     }
 
     /// Reshape using symbolic dimensions derived from traced tensor axes.
@@ -1490,6 +1565,97 @@ impl TracedTensor {
             self,
             shape.len(),
             Some(shape.iter().copied().map(SymDim::from).collect()),
+        )
+    }
+
+    /// Broadcast into a symbolic target shape with explicit dimension
+    /// placement.
+    ///
+    /// Unlike [`Self::broadcast_in_dim`], each axis of `shape` is a
+    /// [`SymDim`], so the target shape can mix concrete sizes (via
+    /// `SymDim::from(n)`) with symbolic references to this tensor's axes
+    /// (via [`Self::axis_sym_dim`]) or to axes of other traced tensors.
+    ///
+    /// When `shape` contains a `SymDim` that references a traced tensor
+    /// other than `self`, the referenced tensor(s) must be supplied in
+    /// `shape_refs`. They are wired into the built op as auxiliary
+    /// shape-reference inputs — the op does not read their data, only
+    /// their runtime shape. `shape_refs` must be listed in the same order
+    /// in which their tensor IDs first appear when walking `shape` after
+    /// any references to `self`. Usually the simplest correct thing is to
+    /// pass each unique non-self reference tensor once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a `SymDim` in `shape` references a traced tensor that is
+    /// neither `self` nor any tensor listed in `shape_refs`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    /// let m = a.axis_sym_dim(0);
+    /// let k = a.axis_sym_dim(1);
+    /// let n = b.axis_sym_dim(1);
+    /// // Broadcast `a[m, k]` to `[m, k, n]`, placing `a`'s axes at 0, 1
+    /// // and taking `n` from `b` as an auxiliary shape reference.
+    /// let a_b = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b]);
+    /// assert_eq!(a_b.rank, 3);
+    /// ```
+    pub fn broadcast_in_dim_sym(
+        &self,
+        shape: &[SymDim],
+        dims: &[usize],
+        shape_refs: &[&TracedTensor],
+    ) -> TracedTensor {
+        // Build a dedup'd list of shape-reference tensors (first occurrence
+        // wins) and index them starting at 1 — the primary input `self`
+        // is at 0.
+        let mut dedup_refs: Vec<&TracedTensor> = Vec::with_capacity(shape_refs.len());
+        let mut tensor_map: Vec<(u64, usize)> = vec![(self.id, 0)];
+        for &t in shape_refs {
+            if !tensor_map.iter().any(|(id, _)| *id == t.id) {
+                let idx = tensor_map.len();
+                tensor_map.push((t.id, idx));
+                dedup_refs.push(t);
+            }
+        }
+
+        let to_shape: Vec<DimExpr> = shape
+            .iter()
+            .map(|dim| {
+                dim.to_dim_expr(&tensor_map).unwrap_or_else(|err| {
+                    panic!(
+                        "broadcast_in_dim_sym: unresolved symbolic dimension: {}; \
+                         pass every referenced tensor via `shape_refs`",
+                        err
+                    )
+                })
+            })
+            .collect();
+
+        // Trim auxiliary shape-reference inputs down to those actually
+        // used by the generated `DimExpr`s. If the target shape resolved
+        // to all constants (the concrete-shape case) the op is a plain
+        // unary broadcast with no extra parents. Otherwise the op needs
+        // a contiguous prefix of shape-ref inputs covering every
+        // referenced `input_idx`.
+        let max_used_idx = DimExpr::max_input_idx_all(&to_shape).unwrap_or(0);
+        let used_refs: Vec<&TracedTensor> = dedup_refs.into_iter().take(max_used_idx).collect();
+
+        let out_shape_hint = Some(shape.to_vec());
+        apply_unary_with_shape_refs(
+            StdTensorOp::BroadcastInDim {
+                shape: to_shape,
+                dims: dims.to_vec(),
+            },
+            self,
+            &used_refs,
+            shape.len(),
+            out_shape_hint,
         )
     }
 
@@ -1726,6 +1892,68 @@ pub(crate) fn apply_unary_with_dtype(
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
+    }
+}
+
+/// Apply a unary-primary op that additionally references one or more
+/// tensors for shape resolution only.
+///
+/// The primary `input` becomes op input 0; each tensor in `shape_refs`
+/// becomes op input 1, 2, … in order. Used by
+/// [`TracedTensor::broadcast_in_dim_sym`] when the target shape
+/// references axes of tensors other than the primary input; the op
+/// reads only their runtime shape, not their data.
+pub(crate) fn apply_unary_with_shape_refs(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    shape_refs: &[&TracedTensor],
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+) -> TracedTensor {
+    let mut builder = FragmentBuilder::new();
+    builder.add_parent(input.fragment.clone());
+    for t in shape_refs {
+        builder.add_parent(t.fragment.clone());
+    }
+    let mut op_inputs: Vec<ValRef<StdTensorOp>> = Vec::with_capacity(1 + shape_refs.len());
+    op_inputs.push(ValRef::External(
+        input.fragment.vals()[input.val].key.clone(),
+    ));
+    for t in shape_refs {
+        op_inputs.push(ValRef::External(t.fragment.vals()[t.val].key.clone()));
+    }
+    let outputs = builder.add_op(op, op_inputs, OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+
+    let mut merged = (*input.inputs_map).clone();
+    for t in shape_refs {
+        merged.extend(t.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
+    let mut extra_roots = input.extra_roots.clone();
+    for t in shape_refs {
+        extra_roots.extend(t.extra_roots.iter().cloned());
+    }
+
+    let mut checkpoint_chain = input.checkpoint_chain.clone();
+    for t in shape_refs {
+        checkpoint_chain =
+            CheckpointNode::merge_chains(checkpoint_chain, t.checkpoint_chain.clone());
+    }
+
+    TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: input.dtype,
+        fragment,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: Arc::new(merged),
+        extra_roots,
+        checkpoint_chain,
     }
 }
 

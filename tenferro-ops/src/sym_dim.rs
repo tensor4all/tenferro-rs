@@ -107,6 +107,50 @@ impl SymDim {
     pub fn to_dim_expr(&self, tensor_map: &[(u64, usize)]) -> std::result::Result<DimExpr, String> {
         raw_to_dim_expr(&self.0, tensor_map)
     }
+
+    /// Collect the unique traced tensor IDs referenced by `TensorAxis`
+    /// variants inside this expression, in traversal order (first
+    /// occurrence wins).
+    ///
+    /// Used by traced composition wrappers that build multi-input ops
+    /// from `SymDim`-valued target shapes — e.g.
+    /// [`TracedTensor::broadcast_in_dim_sym`](../../tenferro/struct.TracedTensor.html#method.broadcast_in_dim_sym).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::sym_dim::SymDim;
+    ///
+    /// let lhs = SymDim::tensor_axis(7, 0);
+    /// let rhs = SymDim::tensor_axis(9, 1);
+    /// let sum = lhs + rhs;
+    /// assert_eq!(sum.referenced_tensor_ids(), vec![7, 9]);
+    /// ```
+    pub fn referenced_tensor_ids(&self) -> Vec<u64> {
+        let mut ids = Vec::new();
+        collect_tensor_ids(&self.0, &mut ids);
+        ids
+    }
+}
+
+fn collect_tensor_ids(raw: &RawSymDim, ids: &mut Vec<u64>) {
+    match raw {
+        RawSymDim::Const(_) => {}
+        RawSymDim::TensorAxis { tensor_id, .. } => {
+            if !ids.contains(tensor_id) {
+                ids.push(*tensor_id);
+            }
+        }
+        RawSymDim::Add(lhs, rhs)
+        | RawSymDim::Sub(lhs, rhs)
+        | RawSymDim::Mul(lhs, rhs)
+        | RawSymDim::FloorDiv(lhs, rhs)
+        | RawSymDim::Min(lhs, rhs)
+        | RawSymDim::Max(lhs, rhs) => {
+            collect_tensor_ids(lhs, ids);
+            collect_tensor_ids(rhs, ids);
+        }
+    }
 }
 
 impl From<usize> for SymDim {

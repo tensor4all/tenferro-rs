@@ -246,8 +246,14 @@ pub fn transpose_broadcast_in_dim(
     let output_rank = shape.len();
     let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
 
-    match cotangent_out[0] {
-        Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],
+    // When `shape` references input_idx > 0 the primal op carries
+    // auxiliary shape-reference inputs. Those inputs contribute no
+    // cotangent, but the transpose-rule contract requires one entry per
+    // input. Pad with `None` for each shape-ref slot.
+    let extra_inputs = DimExpr::max_input_idx_all(shape).unwrap_or(0);
+
+    let primary = match cotangent_out[0] {
+        Some(ct) if broadcast_axes.is_empty() => Some(ct),
         Some(ct) => {
             let out = emitter.add_op(
                 StdTensorOp::ReduceSum {
@@ -258,10 +264,17 @@ pub fn transpose_broadcast_in_dim(
                     active_mask: vec![true],
                 },
             );
-            vec![Some(out[0])]
+            Some(out[0])
         }
-        None => vec![None],
+        None => None,
+    };
+
+    let mut result = Vec::with_capacity(1 + extra_inputs);
+    result.push(primary);
+    for _ in 0..extra_inputs {
+        result.push(None);
     }
+    result
 }
 
 pub fn transpose_convert(
