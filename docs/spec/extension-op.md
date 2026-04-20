@@ -715,21 +715,21 @@ signatures. They mirror `PrimitiveOp::linearize` and
 
    ```rust
    // Stage 6 addition (conceptual):
-   fn linearize_non_semiring(
+   pub fn linearize(
        op: &StdTensorOp,
        builder: &mut FragmentBuilder<StdTensorOp>,
        primal_in: &[GlobalValKey<StdTensorOp>],
        primal_out: &[GlobalValKey<StdTensorOp>],
        tangent_in: &[Option<LocalValId>],
        ctx: &mut context::ShapeGuardContext,
-   ) -> Option<Vec<Option<LocalValId>>> {
-       Some(match op {
+   ) -> Vec<Option<LocalValId>> {
+       match op {
            // ... existing arms ...
            StdTensorOp::Extension(ext) => {
                ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
            }
-           _ => return None,
-       })
+           _ => todo_linearize(op),
+       }
    }
    ```
 

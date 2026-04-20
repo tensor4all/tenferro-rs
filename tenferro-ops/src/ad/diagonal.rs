@@ -10,7 +10,7 @@ pub fn linearize_extract_diag(
     axis_a: usize,
     axis_b: usize,
 ) -> Vec<Option<LocalValId>> {
-    // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
+    // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
             let out = builder.add_op(
@@ -32,7 +32,7 @@ pub fn linearize_embed_diag(
     axis_a: usize,
     axis_b: usize,
 ) -> Vec<Option<LocalValId>> {
-    // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
+    // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match tangent_in[0] {
         Some(dx) => {
             let out = builder.add_op(
@@ -54,7 +54,7 @@ pub fn transpose_extract_diag(
     axis_a: usize,
     axis_b: usize,
 ) -> Vec<Option<LocalValId>> {
-    // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
+    // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
             let out = emitter.add_op(
@@ -76,7 +76,7 @@ pub fn transpose_embed_diag(
     axis_a: usize,
     axis_b: usize,
 ) -> Vec<Option<LocalValId>> {
-    // TODO: ExtractDiag/EmbedDiag will be replaced by Gather/Scatter (Tier-2)
+    // TODO: ExtractDiag/EmbedDiag could be replaced by Gather/Scatter
     match cotangent_out[0] {
         Some(ct) => {
             let out = emitter.add_op(

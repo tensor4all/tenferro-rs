@@ -765,7 +765,7 @@ fn test_std_tensor_op_analytic_linearize_emits_ops_for_remaining_variants() {
 }
 
 #[test]
-fn test_std_tensor_op_elementwise_tier2_special_cases_are_covered() {
+fn test_std_tensor_op_elementwise_special_cases_are_covered() {
     let (div_sum_result, div_sum_fragment) =
         run_linearize_case(StdTensorOp::Div, 2, 1, &[true, true]);
     assert!(div_sum_result[0].is_some());

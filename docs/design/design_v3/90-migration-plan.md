@@ -95,10 +95,10 @@ Goals:
   `tenferro/tests/symbolic_grad.rs`, and document the deferred
   zero-tangent policy
 - add `Gather` and `Scatter` to the core AD dispatch. Today these variants
-  are absent from `linearize_non_semiring` and `transpose_non_semiring`
-  (`tenferro-ops/src/ad/mod.rs:18,161`), which means Stage 7's
-  argmax-based tropical backward has no core op to emit. Closing this gap
-  is a prerequisite for Stage 7
+  are absent from the `linearize` and `transpose_rule` match arms in
+  `tenferro-ops/src/ad/mod.rs`, which means Stage 7's argmax-based
+  tropical backward has no core op to emit. Closing this gap is a
+  prerequisite for Stage 7
 
 This stage is still an architectural consolidation, not a runtime rewrite.
 
