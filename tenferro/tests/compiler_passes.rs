@@ -1,5 +1,8 @@
 use computegraph::compile::{CompiledProgram, Instruction};
-use tenferro::compiler::{compile_std_to_exec, dot_dimension_sorter, transpose_folding};
+use tenferro::compiler::{
+    compile_std_to_exec, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
+    transpose_folding,
+};
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -289,17 +292,417 @@ fn test_full_pipeline_transpose_matmul() {
         &[dim_shape(&[3, 2]), dim_shape(&[3, 4])],
     );
 
+    // `transpose_folding` absorbs the Transpose into DotGeneral dim-numbers,
+    // but `dot_decomposer` then canonicalizes the resulting non-canonical
+    // DotGeneral, re-emitting a Transpose. The final DotGeneral must be
+    // canonical: LHS rank 2 with one free dim -> contracting = [1].
     let dot_instr = exec
         .instructions
         .iter()
         .find(|instr| matches!(instr.op, ExecOp::DotGeneral(_)))
         .expect("expected DotGeneral after direct lowering");
-    assert_eq!(dot_instr.input_slots, vec![0, 1]);
     match &dot_instr.op {
         ExecOp::DotGeneral(config) => {
-            assert_eq!(config.lhs_contracting_dims, vec![0]);
+            assert_eq!(config.lhs_contracting_dims, vec![1]);
             assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert!(config.lhs_batch_dims.is_empty());
+            assert!(config.rhs_batch_dims.is_empty());
         }
         _ => panic!("expected DotGeneral"),
+    }
+
+    // The canonical DotGeneral's LHS must come from a Transpose on input 0,
+    // and the dead fold-then-decompose Transpose must have been eliminated.
+    let lhs_slot = dot_instr.input_slots[0];
+    let lhs_producer = exec
+        .instructions
+        .iter()
+        .find(|i| i.output_slots.contains(&lhs_slot))
+        .expect("LHS slot must have a producer");
+    match &lhs_producer.op {
+        ExecOp::Transpose { perm } => {
+            assert_eq!(perm, &vec![1, 0]);
+            assert_eq!(lhs_producer.input_slots, vec![0]);
+        }
+        other => panic!("expected Transpose producing LHS, got {other:?}"),
+    }
+    assert_eq!(dot_instr.input_slots[1], 1);
+    let transpose_count = exec
+        .instructions
+        .iter()
+        .filter(|i| matches!(i.op, ExecOp::Transpose { .. }))
+        .count();
+    assert_eq!(transpose_count, 1, "dead-code elimination failed");
+    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 3])]);
+}
+
+// ----------------------------------------------------------------------------
+// DotDecomposer tests
+// ----------------------------------------------------------------------------
+
+fn dot_general_exec_instr(
+    lhs_contracting_dims: Vec<usize>,
+    rhs_contracting_dims: Vec<usize>,
+    lhs_batch_dims: Vec<usize>,
+    rhs_batch_dims: Vec<usize>,
+    input_slots: Vec<usize>,
+    output_slot: usize,
+    output_shape: Vec<DimExpr>,
+) -> ExecInstruction {
+    ExecInstruction {
+        op: ExecOp::DotGeneral(DotGeneralConfig {
+            lhs_contracting_dims,
+            rhs_contracting_dims,
+            lhs_batch_dims,
+            rhs_batch_dims,
+        }),
+        input_slots,
+        output_slots: vec![output_slot],
+        dtype: DType::F64,
+        output_shapes: vec![output_shape],
+        last_use: Vec::new(),
+    }
+}
+
+#[test]
+fn test_dot_decomposer_already_canonical_is_noop() {
+    // LHS [M, K] rank 2, RHS [K, N] rank 2, cont=[1], rhs_cont=[0]. Canonical.
+    let instr = dot_general_exec_instr(
+        vec![1],
+        vec![0],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[4, 6]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    dot_decomposer(&mut program, &[dim_shape(&[4, 5]), dim_shape(&[5, 6])]);
+
+    assert_eq!(program.instructions.len(), 1);
+    assert_eq!(program.n_slots, 3);
+}
+
+#[test]
+fn test_dot_decomposer_multi_contracting_dim() {
+    // LHS [a, b, M, K1, K2] rank 5, RHS [a, b, K1, K2, N] rank 5,
+    // lhs_batch=[0, 1], rhs_batch=[0, 1], lhs_cont=[3, 4], rhs_cont=[2, 3].
+    // Output: [M, N, a, b] (free_L=[M], free_R=[N], batch=[a, b]).
+    let instr = dot_general_exec_instr(
+        vec![3, 4],
+        vec![2, 3],
+        vec![0, 1],
+        vec![0, 1],
+        vec![0, 1],
+        2,
+        dim_shape(&[7, 11, 2, 3]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    dot_decomposer(
+        &mut program,
+        &[dim_shape(&[2, 3, 7, 4, 5]), dim_shape(&[2, 3, 4, 5, 11])],
+    );
+
+    // Expected instruction chain:
+    //   Transpose(slot 0) -> N1        // [M, K1, K2, a, b]
+    //   Reshape(N1)       -> N2        // [M, K1*K2, a, b]
+    //   Transpose(slot 1) -> N3        // [K1, K2, N, a, b]
+    //   Reshape(N3)       -> N4        // [K1*K2, N, a, b]
+    //   DotGeneral(N2, N4) -> slot 2   // canonical, [M, N, a, b]
+    // No output Reshape because fi_L = fi_R = 1.
+    assert_eq!(program.instructions.len(), 5);
+
+    assert!(matches!(
+        program.instructions[0].op,
+        ExecOp::Transpose { .. }
+    ));
+    assert!(matches!(program.instructions[1].op, ExecOp::Reshape { .. }));
+    assert!(matches!(
+        program.instructions[2].op,
+        ExecOp::Transpose { .. }
+    ));
+    assert!(matches!(program.instructions[3].op, ExecOp::Reshape { .. }));
+    let dot = &program.instructions[4];
+    assert_eq!(dot.output_slots, vec![2]);
+    match &dot.op {
+        ExecOp::DotGeneral(config) => {
+            assert_eq!(config.lhs_contracting_dims, vec![1]);
+            assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert_eq!(config.lhs_batch_dims, vec![2, 3]);
+            assert_eq!(config.rhs_batch_dims, vec![2, 3]);
+        }
+        _ => panic!("expected canonical DotGeneral"),
+    }
+}
+
+#[test]
+fn test_dot_decomposer_multi_free_dim_emits_output_reshape() {
+    // LHS [M1, M2, K] rank 3, RHS [K, N] rank 2, no batch,
+    // lhs_cont=[2], rhs_cont=[0]. free_L=[0, 1] (multi-free).
+    // Output: [M1, M2, N].
+    let instr = dot_general_exec_instr(
+        vec![2],
+        vec![0],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[2, 3, 5]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    dot_decomposer(&mut program, &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])]);
+
+    // Expected: merge Reshape for LHS (no Transpose needed), canonical
+    // DotGeneral, output Reshape.
+    assert_eq!(program.instructions.len(), 3);
+
+    let reshape_lhs = &program.instructions[0];
+    assert!(matches!(reshape_lhs.op, ExecOp::Reshape { .. }));
+    assert_eq!(reshape_lhs.input_slots, vec![0]);
+
+    let dot = &program.instructions[1];
+    match &dot.op {
+        ExecOp::DotGeneral(config) => {
+            assert_eq!(config.lhs_contracting_dims, vec![1]);
+            assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert!(config.lhs_batch_dims.is_empty());
+            assert!(config.rhs_batch_dims.is_empty());
+        }
+        _ => panic!("expected canonical DotGeneral"),
+    }
+
+    let out_reshape = &program.instructions[2];
+    match &out_reshape.op {
+        ExecOp::Reshape { .. } => {}
+        _ => panic!("expected output Reshape"),
+    }
+    // Output Reshape must carry the original LHS/RHS as shape providers so
+    // the dynamic axes can be recovered at runtime.
+    assert_eq!(out_reshape.input_slots.len(), 3);
+    assert_eq!(out_reshape.input_slots[1], 0);
+    assert_eq!(out_reshape.input_slots[2], 1);
+    assert_eq!(out_reshape.output_slots, vec![2]);
+}
+
+#[test]
+fn test_dot_decomposer_noncanonical_dot_then_permute_downstream() {
+    // A non-canonical DotGeneral whose output is consumed by a downstream
+    // Transpose must still produce the original output shape after the
+    // decomp, so the downstream Transpose doesn't fall out of bounds.
+    //
+    // LHS [a, M, K] rank 3, RHS [a, K, N] rank 3, lhs_batch=[0], rhs_batch=[0],
+    // lhs_cont=[2], rhs_cont=[1]. Canonical-by-shape but batch is leading;
+    // decomp must canonicalize to batch-trailing.
+    let dot = dot_general_exec_instr(
+        vec![2],
+        vec![1],
+        vec![0],
+        vec![0],
+        vec![0, 1],
+        2,
+        dim_shape(&[3, 5, 7]), // [M, N, a]
+    );
+    let downstream = make_exec_instr(
+        ExecOp::Transpose {
+            perm: vec![2, 0, 1],
+        },
+        vec![2],
+        vec![3],
+    );
+    let mut program = make_exec_program(vec![dot, downstream], vec![0, 1], vec![3], 4);
+
+    dot_decomposer(
+        &mut program,
+        &[dim_shape(&[7, 3, 4]), dim_shape(&[7, 4, 5])],
+    );
+
+    // Downstream Transpose must still refer to the same slot (the original
+    // DotGeneral output slot) and must still see the original [M, N, a]
+    // shape.
+    let downstream = program
+        .instructions
+        .iter()
+        .find(|i| matches!(&i.op, ExecOp::Transpose { perm } if perm == &vec![2, 0, 1]))
+        .expect("downstream Transpose must be preserved");
+    assert_eq!(downstream.input_slots, vec![2]);
+}
+
+#[test]
+fn test_dot_decomposer_noncanonical_dot_then_dot_downstream() {
+    // First DotGeneral non-canonical, feeds its output as LHS to a second
+    // DotGeneral. The decomp must not break the second DotGeneral's
+    // dimension contract on the shared slot.
+    //
+    // Op 0: LHS [a, M1, M2, K] rank 4, RHS [a, K, N] rank 3,
+    //       lhs_batch=[0], rhs_batch=[0], lhs_cont=[3], rhs_cont=[1].
+    //       Output: [M1, M2, N, a] rank 4.
+    //
+    // Op 1: DotGeneral(Output_0 [M1, M2, N, a] rank 4, RHS2 [a, N, P] rank 3,
+    //       lhs_batch=[3], rhs_batch=[0], lhs_cont=[2], rhs_cont=[1]).
+    //       Output: [M1, M2, P, a].
+    let first = dot_general_exec_instr(
+        vec![3],
+        vec![1],
+        vec![0],
+        vec![0],
+        vec![0, 1],
+        2,
+        dim_shape(&[3, 4, 5, 6]),
+    );
+    let second = dot_general_exec_instr(
+        vec![2],
+        vec![1],
+        vec![3],
+        vec![0],
+        vec![2, 3],
+        4,
+        dim_shape(&[3, 4, 7, 6]),
+    );
+    let mut program = make_exec_program(vec![first, second], vec![0, 1, 3], vec![4], 5);
+
+    dot_decomposer(
+        &mut program,
+        &[
+            dim_shape(&[6, 3, 4, 8]), // LHS 0: [a, M1, M2, K]
+            dim_shape(&[6, 8, 5]),    // RHS 0: [a, K, N]
+            dim_shape(&[6, 5, 7]),    // RHS 1: [a, N, P]
+        ],
+    );
+
+    // Two canonical DotGenerals must be present after decomp, and the
+    // first dot's output (slot 2) must still be consumed somewhere in the
+    // decomposed program (possibly via an intermediate Reshape rather than
+    // directly by the second DotGeneral).
+    let dot_count = program
+        .instructions
+        .iter()
+        .filter(|i| matches!(i.op, ExecOp::DotGeneral(_)))
+        .count();
+    assert_eq!(dot_count, 2);
+    for i in program
+        .instructions
+        .iter()
+        .filter(|i| matches!(i.op, ExecOp::DotGeneral(_)))
+    {
+        match &i.op {
+            ExecOp::DotGeneral(config) => {
+                assert_eq!(config.lhs_contracting_dims.len(), 1);
+                assert_eq!(config.rhs_contracting_dims.len(), 1);
+            }
+            _ => unreachable!(),
+        }
+    }
+    let slot2_has_consumer = program
+        .instructions
+        .iter()
+        .any(|i| i.input_slots.contains(&2));
+    assert!(
+        slot2_has_consumer,
+        "slot 2 (first-dot output) must still be consumed"
+    );
+    // Final output slot still resolves in the program.
+    let produces_slot_4 = program
+        .instructions
+        .iter()
+        .any(|i| i.output_slots.contains(&4));
+    assert!(produces_slot_4, "final output slot 4 must be produced");
+}
+
+#[test]
+fn test_eliminate_dead_code_removes_unused_transpose() {
+    // A Transpose whose output is never consumed must be removed.
+    let transpose = make_exec_instr(ExecOp::Transpose { perm: vec![1, 0] }, vec![0], vec![2]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr(ExecOp::DotGeneral(config), vec![0, 1], vec![3]);
+    let mut program = make_exec_program(vec![transpose, dot], vec![0, 1], vec![3], 4);
+
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
+    assert!(matches!(program.instructions[0].op, ExecOp::DotGeneral(_)));
+}
+
+#[test]
+fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
+    // End-to-end: build a traced graph with multiple free dims, compile,
+    // and run it through the CPU backend. Compare the output to the
+    // equivalent matmul result.
+    use tenferro::{CpuBackend, Tensor, TypedTensor};
+
+    // LHS [M1, M2, K] * RHS [K, N] => [M1, M2, N]. The compile pipeline
+    // should emit a canonical DotGeneral + output Reshape. Run end-to-end
+    // to verify numerical correctness.
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![2],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let program = CompiledProgram {
+        instructions: vec![make_std_instr(
+            StdTensorOp::DotGeneral { config },
+            vec![0, 1],
+            vec![2],
+        )],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])],
+    );
+
+    // Build concrete inputs: LHS = sequential 0..24, reshaped as [2, 3, 4];
+    //                       RHS = sequential 0..20, reshaped as [4, 5].
+    let lhs_data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let rhs_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
+    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec(
+        vec![2, 3, 4],
+        lhs_data.clone(),
+    ));
+    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec(vec![4, 5], rhs_data.clone()));
+
+    let mut backend = CpuBackend::default();
+    let mut outputs = tenferro::exec::eval_exec_ir(&mut backend, &exec, vec![lhs, rhs])
+        .expect("executing decomposed program must not fail");
+    let out = outputs.remove(0);
+    let typed = match &out {
+        Tensor::F64(inner) => inner,
+        other => panic!("expected F64 tensor, got {other:?}"),
+    };
+    assert_eq!(typed.shape, vec![2, 3, 5]);
+
+    // Reference: column-major (tenferro storage convention) matmul.
+    // For LHS shape [2, 3, 4], flat index = m1 + 2*m2 + 6*k.
+    // For RHS shape [4, 5], flat index = k + 4*n.
+    // For output shape [2, 3, 5], flat index = m1 + 2*m2 + 6*n.
+    let mut expected = vec![0.0f64; 2 * 3 * 5];
+    for m1 in 0..2 {
+        for m2 in 0..3 {
+            for n in 0..5 {
+                let mut acc = 0.0;
+                for k in 0..4 {
+                    acc += lhs_data[m1 + 2 * m2 + 6 * k] * rhs_data[k + 4 * n];
+                }
+                expected[m1 + 2 * m2 + 6 * n] = acc;
+            }
+        }
+    }
+    for (i, (got, want)) in typed.host_data().iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (got - want).abs() < 1e-9,
+            "index {i}: got {got}, expected {want}"
+        );
     }
 }
