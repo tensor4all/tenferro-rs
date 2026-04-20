@@ -337,7 +337,7 @@ pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 
     let (_, _, u, parity) = lu(a);
     let diag_u = u.extract_diag(0, 1);
-    let sign_u = reduce_prod(&diag_u.sign(), &[0]);
+    let sign_u = diag_u.sign().reduce_prod(&[0]);
     let sign = &parity * &sign_u;
     let logabsdet = diag_u.abs().log().reduce_sum(&[0]);
     (sign, logabsdet)
@@ -426,7 +426,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
 
     let (u, s, vt) = svd(a);
     let abs_s = s.abs();
-    let s_max = reduce_max(&abs_s, &[0]);
+    let s_max = abs_s.reduce_max(&[0]);
     let s_max_shape = concrete_shape(&s_max);
     let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max_shape);
     let s_shape = concrete_shape(&s);
@@ -470,8 +470,8 @@ pub fn norm(
             let abs = a.abs();
             match ord {
                 None => frobenius_norm(&abs, &axes),
-                Some(p) if p == f64::INFINITY => reduce_max(&abs, &axes),
-                Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &axes),
+                Some(p) if p == f64::INFINITY => abs.reduce_max(&axes),
+                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes),
                 Some(p) if p == 0.0 => count_nonzero(&abs, &axes),
                 Some(p) => p_norm(&abs, &axes, p),
             }
@@ -570,8 +570,8 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor 
     match ord {
         None => frobenius_norm(&abs, &[axis]),
         Some(p) if p == 0.0 => count_nonzero(&abs, &[axis]),
-        Some(p) if p == f64::INFINITY => reduce_max(&abs, &[axis]),
-        Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &[axis]),
+        Some(p) if p == f64::INFINITY => abs.reduce_max(&[axis]),
+        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&[axis]),
         Some(p) => p_norm(&abs, &[axis], p),
     }
 }
@@ -587,11 +587,11 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> TracedTens
         Some(p) if p == -1.0 => matrix_col_sum_norm(&abs, false),
         Some(p) if p == 2.0 => {
             let singular_values = svd(&matrix).1.abs();
-            reduce_max(&singular_values, &[0])
+            singular_values.reduce_max(&[0])
         }
         Some(p) if p == -2.0 => {
             let singular_values = svd(&matrix).1.abs();
-            reduce_min(&singular_values, &[0])
+            singular_values.reduce_min(&[0])
         }
         Some(p) if p == 0.0 => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
@@ -606,18 +606,18 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     let row_sums = abs.reduce_sum(&[1]);
     if take_max {
-        reduce_max(&row_sums, &[0])
+        row_sums.reduce_max(&[0])
     } else {
-        reduce_min(&row_sums, &[0])
+        row_sums.reduce_min(&[0])
     }
 }
 
 fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     let col_sums = abs.reduce_sum(&[0]);
     if take_max {
-        reduce_max(&col_sums, &[0])
+        col_sums.reduce_max(&[0])
     } else {
-        reduce_min(&col_sums, &[0])
+        col_sums.reduce_min(&[0])
     }
 }
 
@@ -655,45 +655,6 @@ fn restore_keepdim(
         kept_shape[axis] = 1;
     }
     reduced.reshape(&kept_shape)
-}
-
-fn reduce_prod(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceProd {
-            axes: axes.to_vec(),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
-}
-
-fn reduce_max(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceMax {
-            axes: axes.to_vec(),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
-}
-
-fn reduce_min(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceMin {
-            axes: axes.to_vec(),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
 }
 
 fn compare_dir(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> TracedTensor {
@@ -742,13 +703,6 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..rank).collect();
     perm.swap(0, 1);
     perm
-}
-
-fn reduced_shape(shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    (0..shape.len())
-        .filter(|axis| !axes.contains(axis))
-        .map(|axis| shape[axis])
-        .collect()
 }
 
 fn batched_vector_rhs_shape(a: &TracedTensor, b: &TracedTensor) -> Option<Vec<usize>> {

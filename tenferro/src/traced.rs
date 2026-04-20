@@ -472,6 +472,30 @@ impl TracedTensor {
         try_concrete_shape(self).is_some()
     }
 
+    /// Return the fully-concrete shape of this tensor, if every dim of
+    /// its shape-hint is a constant `SymDim`. Returns `None` if any
+    /// dimension is symbolic.
+    ///
+    /// This is the counterpart to [`Self::is_concrete_shape`] for callers
+    /// that need to *use* the concrete shape (e.g. external composition
+    /// wrappers building `broadcast_in_dim` payloads from known shapes).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert!(b.try_concrete_shape().is_none());
+    /// ```
+    pub fn try_concrete_shape(&self) -> Option<Vec<usize>> {
+        try_concrete_shape(self)
+    }
+
     /// If this `TracedTensor` is a leaf (single-node input fragment),
     /// return its input key. Computed tensors return `None`.
     pub fn input_key(&self) -> Option<TensorInputKey> {
@@ -1298,6 +1322,84 @@ impl TracedTensor {
         });
         apply_unary(
             StdTensorOp::ReduceSum {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the maximum along the given axes.
+    ///
+    /// Used by tropical (max-plus) compositions: a max-plus reduction over
+    /// an axis is `ReduceMax` on that axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_max(&[0]);
+    /// ```
+    pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceMax {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the minimum along the given axes.
+    ///
+    /// Used by tropical (min-plus) compositions: a min-plus reduction over
+    /// an axis is `ReduceMin` on that axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_min(&[0]);
+    /// ```
+    pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceMin {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the product along the given axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_prod(&[0]);
+    /// ```
+    pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceProd {
                 axes: axes.to_vec(),
             },
             self,
