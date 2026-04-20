@@ -5,19 +5,24 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
 publish = false
-description = "External tropical (max-plus / min-plus / max-mul) extensions for tenferro. Composition-only (design_v3 Stage 4a) over the public tenferro facade."
+description = "External tropical (max-plus / min-plus / max-mul) extensions for tenferro. Stage 4a/b compositions plus Stage 7 fused ExtensionOp."
 
 # This crate is its own standalone workspace — it is intentionally NOT a
-# member of the core `tenferro-rs` workspace. Stage 4a deliberately forces
-# the external tropical crate to depend only on the public `tenferro`
-# facade, which is a contract test for whether the public surface is
-# sufficient for realistic composition-based extensions.
+# member of the core `tenferro-rs` workspace. Stage 4a forces the
+# composition-only surface to depend only on the public `tenferro` facade
+# (a contract test for "the public facade is sufficient"). Stage 7's fused
+# `FusedTropicalDotGeneral` `ExtensionOp` additionally depends on
+# `tenferro-ops` and `computegraph` because the `ExtensionOp` trait signatures
+# (`linearize`, `transpose_rule`) are irreducibly generic in types owned by
+# those crates. That is a separate contract test (the `ExtensionOp` substrate
+# self-test) — see `docs/design/design_v3/90-migration-plan.md` Stage 7.
 [workspace]
 
 [dependencies]
-# Only depend on the PUBLIC facade crates. Internal crates (tenferro-ops,
-# tenferro-einsum, ...) must not appear here — that is the Stage 4a
-# contract test for "the public facade is sufficient".
+# Public facade crates (Stage 4a):
 tenferro = { path = "../../tenferro" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
+# Stage 7 `ExtensionOp` implementation surface:
+tenferro-ops = { path = "../../tenferro-ops" }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "8306196" }
 num-traits = "0.2"

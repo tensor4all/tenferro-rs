@@ -1,29 +1,42 @@
-//! Traced tropical operations expressed as compositions of core `tenferro`
-//! primitives.
+//! Traced tropical operations.
 //!
-//! These wrappers accept `TracedTensor` arguments with either **concrete
-//! shapes** (Stage 4a) or **symbolic shapes** (Stage 4b). The same code
-//! path handles both: axis sizes are derived via
-//! [`TracedTensor::axis_sym_dim`], which returns `SymDim::Concrete(n)`
-//! when the size is known at graph-build time and a symbolic reference
-//! otherwise. The target shape is then fed to
-//! [`TracedTensor::broadcast_in_dim_sym`], which constructs
-//! `BroadcastInDim` with either concrete or symbolic `DimExpr` entries.
+//! This module ships two flavours of tropical matmul:
 //!
-//! Tropical semantics are lowered into `BroadcastInDim + Add +
-//! ReduceMax` (or `ReduceMin`) chains — no new core ops, no new AD
-//! rules. Automatic differentiation flows through the core AD rules of
-//! the underlying primitives.
+//! - Stage 4a/4b **composition wrappers** — [`tropical_dot_general`],
+//!   [`min_plus_dot_general`], [`tropical_reduce_sum`]. Lower directly to
+//!   `BroadcastInDim + Add + ReduceMax` (or `ReduceMin`). No new core ops,
+//!   no new AD rules; AD flows through the existing core rules.
+//! - Stage 7 **fused `ExtensionOp` wrappers** — [`tropical_dot_general_fused`],
+//!   [`min_plus_dot_general_fused`]. Package
+//!   [`crate::fused::FusedTropicalDotGeneralOp`] into the traced graph via
+//!   the Stage 6 `ExtensionOp` carrier. AD is emitted inside the
+//!   `ExtensionOp::linearize` / `transpose_rule` methods, still targeting
+//!   only core `StdTensorOp` variants so the AD closure rule holds.
+//!
+//! The composition and fused paths compute the **same mathematical
+//! function** (and the same AD gradient modulo tie-breaking) for the
+//! cases Stage 7 covers (rank-2 inputs). They exist side-by-side so the
+//! fused path can be benchmarked against composition without changing the
+//! composition wrappers.
+//!
+//! Both paths accept `TracedTensor` arguments with either **concrete
+//! shapes** (Stage 4a) or **symbolic shapes** (Stage 4b). The composition
+//! wrappers derive axis sizes via [`TracedTensor::axis_sym_dim`] and feed
+//! them to [`TracedTensor::broadcast_in_dim_sym`]; the fused wrappers
+//! route through `tenferro::extension::apply`, whose `infer_output_meta`
+//! returns [`tenferro_ops::SymDim`] shapes that remain valid under either
+//! regime.
 //!
 //! # Stage boundaries
 //!
-//! - Stage 4a: concrete-shape compositions via the public `tenferro`
+//! - Stage 4a: concrete-shape composition via the public `tenferro`
 //!   facade.
-//! - Stage 4b (this module): same composition extended to symbolic-shape
-//!   inputs. Acts as the contract test for Stage 3's symbolic-AD
-//!   correctness work.
-//! - Stage 7: `FusedTropicalDotGeneral` as an `ExtensionOp` with argmax-
-//!   based AD — not implemented here.
+//! - Stage 4b: same composition extended to symbolic-shape inputs. Acts as
+//!   the contract test for Stage 3's symbolic-AD correctness work.
+//! - Stage 7 (this module also): `FusedTropicalDotGeneral` as an
+//!   `ExtensionOp` with indicator-based AD. See
+//!   `docs/design/design_v3/30-algebra-and-tropical.md` and
+//!   `docs/design/design_v3/40-extension-boundary.md` Recipe B.
 //!
 //! # Examples
 //!
@@ -40,7 +53,13 @@
 //! assert_eq!(out.shape(), &[2, 2]);
 //! ```
 
+use std::sync::Arc;
+
+use tenferro::extension::apply;
 use tenferro::TracedTensor;
+use tenferro_ops::ext_op::ExtensionOp;
+
+use crate::fused::{register_fused_tropical, FusedTropicalDotGeneralOp, TropicalKind};
 
 /// Shape helper: panics with a clear message if `t` is not rank-2.
 fn require_rank2(t: &TracedTensor, label: &str) {
@@ -175,4 +194,88 @@ pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> TracedTensor 
 /// ```
 pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> TracedTensor {
     a.reduce_max(axes)
+}
+
+// ---------------------------------------------------------------------------
+// Stage 7 fused-`ExtensionOp` wrappers.
+// ---------------------------------------------------------------------------
+
+/// Max-plus matrix multiplication via the Stage 7 fused `ExtensionOp`.
+///
+/// Semantically identical to [`tropical_dot_general`]: `out[i, j] = max_k
+/// (a[i, k] + b[k, j])`. The difference is how the computation reaches
+/// the execution backend:
+///
+/// - [`tropical_dot_general`] lowers to `BroadcastInDim + Add + ReduceMax`
+///   at graph-build time.
+/// - [`tropical_dot_general_fused`] packages a
+///   [`crate::fused::FusedTropicalDotGeneralOp`] as an `ExtensionOp`, so
+///   the graph carries a single `StdTensorOp::Extension` node that the
+///   eager and compiled paths route to the fused primal kernel. AD still
+///   emits only core ops (indicator-based VJP/JVP; see the module docs
+///   on `crate::fused`).
+///
+/// Automatic registration: this function calls
+/// [`register_fused_tropical`] on first invocation so callers can build
+/// traced graphs without manually bootstrapping the registry. Tests that
+/// exercise registry behaviour directly should still call
+/// `register_fused_tropical` explicitly before any fused op is built.
+///
+/// # Panics
+///
+/// Panics if `a` or `b` is not rank-2.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro_ext_tropical::traced::tropical_dot_general_fused;
+///
+/// let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// let b = TracedTensor::from_vec(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
+/// let mut c = tropical_dot_general_fused(&a, &b);
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let out = c.eval(&mut engine).unwrap();
+/// assert_eq!(out.shape(), &[2, 2]);
+/// ```
+pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+    require_rank2(a, "tropical_dot_general_fused.a");
+    require_rank2(b, "tropical_dot_general_fused.b");
+    register_fused_tropical().expect("register_fused_tropical");
+    let op: Arc<dyn ExtensionOp> = Arc::new(FusedTropicalDotGeneralOp::new(TropicalKind::MaxPlus));
+    let mut outputs = apply(op, &[a, b]);
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
+}
+
+/// Min-plus matrix multiplication via the Stage 7 fused `ExtensionOp`.
+///
+/// Semantically identical to [`min_plus_dot_general`]; the packaging and
+/// AD path is the Stage 7 fused one — see
+/// [`tropical_dot_general_fused`] for the full explanation.
+///
+/// # Panics
+///
+/// Panics if `a` or `b` is not rank-2.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro_ext_tropical::traced::min_plus_dot_general_fused;
+///
+/// let a = TracedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// let b = TracedTensor::from_vec(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+/// let mut c = min_plus_dot_general_fused(&a, &b);
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let _ = c.eval(&mut engine).unwrap();
+/// ```
+pub fn min_plus_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+    require_rank2(a, "min_plus_dot_general_fused.a");
+    require_rank2(b, "min_plus_dot_general_fused.b");
+    register_fused_tropical().expect("register_fused_tropical");
+    let op: Arc<dyn ExtensionOp> = Arc::new(FusedTropicalDotGeneralOp::new(TropicalKind::MinPlus));
+    let mut outputs = apply(op, &[a, b]);
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
 }
