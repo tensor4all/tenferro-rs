@@ -141,3 +141,56 @@ The practical recommendation is:
 - continue to evolve the current `PrimitiveOp` substrate
 - clarify that one core op vocabulary is the traced-AD source of truth
 - reduce all adjacent abstractions that imply otherwise
+
+## Deferred Zero-Tangent Policy
+
+### Motivation
+
+The VJP transpose pass must supply a zero cotangent for every inactive tangent
+input — i.e. every tangent slot that is not the seed cotangent. When the
+primal input has a **concrete shape**, the zero tensor can be materialised
+eagerly with the exact shape at graph-build time.
+
+When the primal input has a **symbolic shape** (`TracedTensor::shape_hint ==
+None`, as produced by `TracedTensor::input_symbolic_shape`), the concrete
+shape is not known until the caller binds the placeholder at evaluation time.
+Materialising zeros eagerly is therefore impossible without introducing a new
+op that takes the shape as a runtime argument.
+
+### Policy
+
+`v3` uses a lightweight **deferred zero-tangent** strategy:
+
+- **Concrete shape**: zero cotangents are materialised eagerly and stored in
+  `inputs_map` during `try_vjp`.  Behaviour is unchanged from `v2`.
+- **Symbolic shape**: zero cotangent keys are left absent from `inputs_map`
+  during `try_vjp`.  `TracedTensor::eval_with_inputs` synthesises the zeros
+  at evaluation time once the caller supplies a concrete binding for the
+  primal placeholder.  The synthesis rule is:
+
+  > A required input key `k` that is absent from `inputs_map` and from the
+  > explicit `bindings` argument is a **deferred zero** if and only if it is
+  > a `TensorInputKey::Tangent` key whose root `User` key was provided in
+  > `bindings`.  The zero tensor has the same shape and dtype as the bound
+  > primal tensor.
+
+### Invariants Preserved
+
+- **Cotangent always lives in the Standard additive space**: the deferred
+  zero is a concrete zero tensor of matching dtype; it is numerically
+  equivalent to the eager zero and participates in the same additive
+  accumulation.
+- **AD rules emit only core ops**: no new op variant or special zero marker
+  is introduced.  The zero is synthesised at the evaluation boundary, not
+  inside the traced graph.
+- **Shape consistency**: the deferred zero always has the same shape as the
+  actual primal input once bound, so shape-sensitive ops downstream (e.g.
+  reductions whose transpose rules sum over the input shape) receive
+  correctly sized inputs.
+
+### Implementation Reference
+
+The synthesis is in `TracedTensor::eval_with_inputs`
+(`tenferro/src/traced.rs`) via the `deferred_zero_for_tangent_key` helper,
+which chases the `Tangent { of: ... }` chain to the root `User` key and
+looks that key up in the caller-supplied binding map.

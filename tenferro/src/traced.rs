@@ -602,10 +602,19 @@ impl TracedTensor {
                         input_tensors.push(tensor.as_ref().clone());
                         input_dtypes.push(tensor.dtype());
                         input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some(bound) = binding_map.remove(k) {
+                    } else if let Some(bound) = binding_map.get(k) {
                         input_tensors.push((*bound).clone());
                         input_dtypes.push(bound.dtype());
                         input_shapes.push(DimExpr::from_concrete(bound.shape()));
+                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
+                        // Deferred zero-tangent: `k` is a tangent input whose
+                        // primal root was provided as a user binding. The
+                        // zero tensor inherits the primal's concrete shape and
+                        // dtype. See "Deferred Zero-Tangent Policy" in
+                        // `docs/design/design_v3/10-ad-model.md`.
+                        input_dtypes.push(zero.dtype());
+                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
+                        input_tensors.push(zero);
                     } else {
                         return Err(Error::UnboundPlaceholder {
                             input_key: format!("{:?}", k),
@@ -881,20 +890,31 @@ impl TracedTensor {
                 .clone()
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
-        let zero_tangent = Arc::new(zeros_tensor(
-            wrt.dtype,
-            try_concrete_shape(wrt).unwrap_or_else(|| vec![0; wrt.rank]),
-        ));
-        for (_, local_id) in &transposed.tangent_inputs {
-            let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
-            if tangent_input_key != cotangent_input_key {
+        // Build the zero-cotangent for inactive tangent inputs.
+        //
+        // When `wrt` has a concrete shape we materialise the zero tensor
+        // eagerly and store it in `inputs_map`. When `wrt` is symbolic
+        // (shape_hint == None) we leave those tangent input keys absent from
+        // `inputs_map`; `eval_with_inputs` will synthesise the zeros at
+        // evaluation time once the concrete shape is known from the caller's
+        // binding. See "Deferred Zero-Tangent Policy" in
+        // `docs/design/design_v3/10-ad-model.md`.
+        if let Some(concrete_shape) = try_concrete_shape(wrt) {
+            let zero_tangent = Arc::new(zeros_tensor(wrt.dtype, concrete_shape));
+            for (_, local_id) in &transposed.tangent_inputs {
+                let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
+                if tangent_input_key != cotangent_input_key {
+                    inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
+                }
+            }
+            for local_id in linear_tangent_input_ids {
+                let tangent_input_key = linear_input_key(&linear_fragment, local_id);
                 inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
             }
         }
-        for local_id in linear_tangent_input_ids {
-            let tangent_input_key = linear_input_key(&linear_fragment, local_id);
-            inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
-        }
+        // Symbolic case: tangent keys are intentionally absent from
+        // inputs_map; eval_with_inputs resolves them via deferred-zero
+        // synthesis keyed on the primal binding.
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
         extra_roots.extend(checkpoint_fragments);
@@ -1722,6 +1742,40 @@ fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
         GlobalValKey::Input(key) => key.clone(),
         other => panic!("expected traced leaf input, got {:?}", other),
     }
+}
+
+/// Chase the `Tangent { of: ... }` chain to find the root `User` key.
+///
+/// For a concrete user input key the function returns the key itself.
+/// For any depth of `Tangent` wrapping it returns the innermost key
+/// (which should be a `User` key under normal VJP use).
+fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
+    match key {
+        TensorInputKey::User { .. } => key,
+        TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
+    }
+}
+
+/// Synthesise a deferred zero tangent for `key` when its primal root is
+/// present in `binding_map`.
+///
+/// Returns `Some(zero_tensor)` if and only if `key` is a `Tangent` key
+/// whose root `User` key maps to a concrete tensor in `binding_map`. The
+/// synthesised zero tensor has the same shape and dtype as the bound
+/// primal tensor.
+///
+/// Returns `None` when `key` is a `User` key (i.e. not a tangent at all),
+/// or when the root primal key is not in `binding_map`.
+fn deferred_zero_for_tangent_key(
+    key: &TensorInputKey,
+    binding_map: &HashMap<TensorInputKey, &Tensor>,
+) -> Option<Tensor> {
+    if matches!(key, TensorInputKey::User { .. }) {
+        return None;
+    }
+    let root = tangent_primal_root(key);
+    let primal = binding_map.get(root)?;
+    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
 }
 
 fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
