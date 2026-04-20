@@ -206,7 +206,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     /// `StdTensorOp::Extension` variants (no extension-to-extension
     /// lowering in AD). MUST respect `OpMode::Linear { active_mask }`
     /// on every emitted op, following the same convention as core
-    /// primitives (see `tenferro-ops/src/ad/elementwise_tier1.rs`).
+    /// primitives (see `tenferro-ops/src/ad/semiring.rs`).
     fn linearize(
         &self,
         builder: &mut computegraph::fragment::FragmentBuilder<StdTensorOp>,

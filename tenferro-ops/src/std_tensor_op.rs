@@ -16,7 +16,7 @@ use tenferro_tensor::{
 
 #[derive(Clone, Debug)]
 pub enum StdTensorOp {
-    // Tier 1: semiring
+    // Semiring arithmetic core
     Add,
     Mul,
     Neg,
@@ -46,7 +46,7 @@ pub enum StdTensorOp {
         axes: Vec<usize>,
     },
 
-    // Tier 2: elementwise
+    // Elementwise (non-semiring)
     Div,
     Abs,
     Sign,
@@ -56,7 +56,7 @@ pub enum StdTensorOp {
     Select,
     Clamp,
 
-    // Tier 2: analytic
+    // Analytic
     Exp,
     Log,
     Sin,
@@ -68,7 +68,7 @@ pub enum StdTensorOp {
     Expm1,
     Log1p,
 
-    // Tier 1: diagonal extraction / embedding (AD-closed pair)
+    // Diagonal extraction / embedding (AD-closed pair)
     ExtractDiag {
         axis_a: usize,
         axis_b: usize,
@@ -84,7 +84,7 @@ pub enum StdTensorOp {
         k: i64,
     },
 
-    // Tier 2: indexing
+    // Indexing
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
@@ -113,7 +113,7 @@ pub enum StdTensorOp {
         axis: usize,
     },
 
-    // Tier 2: reductions
+    // Reductions
     ReduceProd {
         axes: Vec<usize>,
     },
