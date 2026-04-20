@@ -84,7 +84,7 @@ fn linearize_non_semiring(
             indexing::linearize_gather(builder, primal_in, tangent_in, config)
         }
         StdTensorOp::Scatter(config) => {
-            indexing::linearize_scatter(builder, primal_in, tangent_in, config)
+            indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
         }
         StdTensorOp::DynamicTruncate { axis } => {
             dynamic::linearize_dynamic_truncate(builder, primal_in, tangent_in, *axis)
@@ -209,7 +209,7 @@ fn transpose_non_semiring(
         StdTensorOp::Tril { k } => structural::transpose_tril(emitter, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(emitter, cotangent_out, *k),
         StdTensorOp::Gather(config) => {
-            indexing::transpose_gather(emitter, cotangent_out, inputs, mode, config)
+            indexing::transpose_gather(emitter, cotangent_out, inputs, mode, config, ctx)
         }
         StdTensorOp::Scatter(config) => {
             indexing::transpose_scatter(emitter, cotangent_out, inputs, mode, config, ctx)

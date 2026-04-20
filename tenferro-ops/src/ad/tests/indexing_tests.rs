@@ -135,8 +135,15 @@ fn transpose_gather_emits_scatter_with_inverted_config() {
     assert_eq!(result[1], None, "indices cotangent must stay None");
 
     let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
-    let scatter = &fragment.ops()[0];
+    // Under StableHLO add-scatter semantics the inverse scatter must use
+    // a zero operand built from Constant + BroadcastInDim, so the fragment
+    // contains [Constant, BroadcastInDim, Scatter].
+    assert_eq!(fragment.ops().len(), 3);
+    let scatter = fragment
+        .ops()
+        .iter()
+        .find(|op_node| matches!(op_node.op, StdTensorOp::Scatter(_)))
+        .expect("expected a Scatter op in the fragment");
     let StdTensorOp::Scatter(scatter_cfg) = &scatter.op else {
         panic!("expected Scatter op, got {:?}", scatter.op);
     };
@@ -150,10 +157,19 @@ fn transpose_gather_emits_scatter_with_inverted_config() {
         config.start_index_map
     );
     assert_eq!(scatter_cfg.index_vector_dim, config.index_vector_dim);
-    // The scatter's third input (updates) must be the cotangent; indices are
-    // reused from the primal.
+    // The scatter's first input (operand) must be the broadcast zero
+    // local, not the primal forward-gather operand.
+    assert!(matches!(scatter.inputs[0], ValRef::Local(_)));
+    assert_ne!(scatter.inputs[0], ValRef::External(operand_key));
+    // Indices are reused from the primal; updates are the cotangent.
     assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
     assert_eq!(scatter.inputs[2], ValRef::Local(cot));
+    assert_eq!(
+        scatter.mode,
+        OpMode::Linear {
+            active_mask: vec![false, false, true],
+        }
+    );
 }
 
 #[test]
@@ -180,40 +196,8 @@ fn transpose_gather_inactive_path_returns_all_none() {
 }
 
 #[test]
-fn linearize_scatter_threads_updates_tangent_through_same_scatter() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let mut ctx = ShapeGuardContext::default();
-    let operand_key = input_key(40);
-    let indices_key = input_key(41);
-    let updates_key = input_key(42);
-    let updates_tangent = builder.add_input(tensor_input(43));
-
-    let config = rank1_scatter_config();
-    let op = StdTensorOp::Scatter(config.clone());
-    let primal_in = vec![operand_key.clone(), indices_key.clone(), updates_key];
-    let tangent_in = [None, None, Some(updates_tangent)];
-
-    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
-
-    assert_eq!(result.len(), 1);
-    let _tangent_out = result[0].expect("output tangent must be active");
-    let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
-    let emitted = &fragment.ops()[0];
-    assert_eq!(emitted.op, StdTensorOp::Scatter(config));
-    assert_eq!(
-        emitted.mode,
-        OpMode::Linear {
-            active_mask: vec![false, false, true],
-        }
-    );
-    assert_eq!(emitted.inputs[0], ValRef::External(operand_key));
-    assert_eq!(emitted.inputs[1], ValRef::External(indices_key));
-    assert_eq!(emitted.inputs[2], ValRef::Local(updates_tangent));
-}
-
-#[test]
-fn linearize_scatter_inactive_updates_tangent_returns_none() {
+fn linearize_scatter_inactive_tangents_returns_none() {
+    // Both operand_dot = None and updates_dot = None => [None] with no ops.
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let operand_key = input_key(50);
@@ -228,7 +212,166 @@ fn linearize_scatter_inactive_updates_tangent_returns_none() {
 }
 
 #[test]
-fn transpose_scatter_emits_gather_for_updates_cotangent() {
+fn linearize_scatter_operand_only_is_identity_passthrough() {
+    // Only operand_dot is active: the output tangent is the operand
+    // tangent itself, with no ops emitted.
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(40);
+    let indices_key = input_key(41);
+    let updates_key = input_key(42);
+    let operand_tangent = builder.add_input(tensor_input(43));
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (indices_key.clone(), &[3, 1]),
+            (updates_key.clone(), &[3]),
+        ],
+    );
+
+    let config = rank1_scatter_config();
+    let op = StdTensorOp::Scatter(config);
+    let primal_in = vec![operand_key, indices_key, updates_key];
+    let tangent_in = [Some(operand_tangent), None, None];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    assert_eq!(
+        result,
+        vec![Some(operand_tangent)],
+        "operand-only scatter tangent must be the operand tangent itself"
+    );
+    let fragment = builder.build();
+    assert!(
+        fragment.ops().is_empty(),
+        "identity passthrough must not emit any ops"
+    );
+}
+
+#[test]
+fn linearize_scatter_updates_only_uses_zero_operand() {
+    // Only updates_dot is active: emit Scatter(zeros_like(operand), ..., d_updates)
+    // via Constant + BroadcastInDim + Scatter.
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(40);
+    let indices_key = input_key(41);
+    let updates_key = input_key(42);
+    let updates_tangent = builder.add_input(tensor_input(43));
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (indices_key.clone(), &[3, 1]),
+            (updates_key.clone(), &[3]),
+        ],
+    );
+
+    let config = rank1_scatter_config();
+    let op = StdTensorOp::Scatter(config.clone());
+    let primal_in = vec![
+        operand_key.clone(),
+        indices_key.clone(),
+        updates_key.clone(),
+    ];
+    let tangent_in = [None, None, Some(updates_tangent)];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    assert_eq!(result.len(), 1);
+    let _ = result[0].expect("output tangent must be active");
+
+    let fragment = builder.build();
+    // Fragment: [Constant, BroadcastInDim, Scatter]
+    assert_eq!(
+        fragment.ops().len(),
+        3,
+        "expected Constant + BroadcastInDim + Scatter in the fragment"
+    );
+    let scatter = fragment
+        .ops()
+        .iter()
+        .find(|op_node| matches!(op_node.op, StdTensorOp::Scatter(_)))
+        .expect("expected a Scatter op");
+    assert_eq!(scatter.op, StdTensorOp::Scatter(config));
+    assert_eq!(
+        scatter.mode,
+        OpMode::Linear {
+            active_mask: vec![false, false, true],
+        }
+    );
+    // The scatter's operand must be a freshly built zero local, not the
+    // primal operand.
+    assert!(matches!(scatter.inputs[0], ValRef::Local(_)));
+    assert_ne!(scatter.inputs[0], ValRef::External(operand_key));
+    assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
+    assert_eq!(scatter.inputs[2], ValRef::Local(updates_tangent));
+
+    // And the fragment should contain a matching Constant + BroadcastInDim
+    // pair feeding the scatter's operand.
+    let constant_count = fragment
+        .ops()
+        .iter()
+        .filter(|op_node| matches!(op_node.op, StdTensorOp::Constant { .. }))
+        .count();
+    let broadcast_count = fragment
+        .ops()
+        .iter()
+        .filter(|op_node| matches!(op_node.op, StdTensorOp::BroadcastInDim { .. }))
+        .count();
+    assert_eq!(constant_count, 1, "exactly one Constant(zero) expected");
+    assert_eq!(broadcast_count, 1, "exactly one BroadcastInDim expected");
+}
+
+#[test]
+fn linearize_scatter_both_tangents_emit_single_scatter() {
+    // Both operand_dot and updates_dot active => single Scatter with
+    // active_mask [true, false, true], no zero-operand plumbing.
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(40);
+    let indices_key = input_key(41);
+    let updates_key = input_key(42);
+    let operand_tangent = builder.add_input(tensor_input(43));
+    let updates_tangent = builder.add_input(tensor_input(44));
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (indices_key.clone(), &[3, 1]),
+            (updates_key.clone(), &[3]),
+        ],
+    );
+
+    let config = rank1_scatter_config();
+    let op = StdTensorOp::Scatter(config.clone());
+    let primal_in = vec![operand_key, indices_key.clone(), updates_key];
+    let tangent_in = [Some(operand_tangent), None, Some(updates_tangent)];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    assert_eq!(result.len(), 1);
+    let _ = result[0].expect("output tangent must be active");
+
+    let fragment = builder.build();
+    assert_eq!(
+        fragment.ops().len(),
+        1,
+        "both-tangents case must emit exactly one Scatter"
+    );
+    let scatter = &fragment.ops()[0];
+    assert_eq!(scatter.op, StdTensorOp::Scatter(config));
+    assert_eq!(
+        scatter.mode,
+        OpMode::Linear {
+            active_mask: vec![true, false, true],
+        }
+    );
+    assert_eq!(scatter.inputs[0], ValRef::Local(operand_tangent));
+    assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
+    assert_eq!(scatter.inputs[2], ValRef::Local(updates_tangent));
+}
+
+#[test]
+fn transpose_scatter_emits_identity_for_operand_and_gather_for_updates() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();
     let cot = builder.add_input(tensor_input(60));
@@ -257,19 +400,24 @@ fn transpose_scatter_emits_gather_for_updates_cotangent() {
         &[Some(cot)],
         &inputs,
         &OpMode::Linear {
-            active_mask: vec![false, false, true],
+            active_mask: vec![true, false, true],
         },
         &mut ctx,
     );
     assert_eq!(
-        result[0], None,
-        "operand cotangent is None (zeros-based scatter)"
+        result[0],
+        Some(cot),
+        "operand cotangent must be an identity passthrough of cot_out"
     );
     assert_eq!(result[1], None, "indices cotangent must stay None");
     assert!(result[2].is_some(), "updates cotangent must be active");
 
     let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(
+        fragment.ops().len(),
+        1,
+        "identity passthrough must not emit extra ops; only the Gather"
+    );
     let gather = &fragment.ops()[0];
     let StdTensorOp::Gather(gather_cfg) = &gather.op else {
         panic!("expected Gather op, got {:?}", gather.op);
@@ -288,6 +436,103 @@ fn transpose_scatter_emits_gather_for_updates_cotangent() {
     );
     assert_eq!(gather.inputs[0], ValRef::Local(cot));
     assert_eq!(gather.inputs[1], ValRef::External(indices_key));
+}
+
+#[test]
+fn transpose_scatter_updates_only_emits_only_gather() {
+    // active_mask[0] = false, active_mask[2] = true → only the updates
+    // cotangent comes back, via a single Gather.
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(60));
+    let operand_key = input_key(61);
+    let indices_key = input_key(62);
+    let updates_key = input_key(63);
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (indices_key.clone(), &[3, 1]),
+            (updates_key.clone(), &[3]),
+        ],
+    );
+
+    let config = rank1_scatter_config();
+    let op = StdTensorOp::Scatter(config);
+    let inputs = vec![
+        ValRef::External(operand_key),
+        ValRef::External(indices_key.clone()),
+        ValRef::External(updates_key),
+    ];
+
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![false, false, true],
+        },
+        &mut ctx,
+    );
+    assert_eq!(
+        result[0], None,
+        "operand cotangent is None when operand is inactive"
+    );
+    assert_eq!(result[1], None, "indices cotangent must stay None");
+    assert!(result[2].is_some(), "updates cotangent must be active");
+
+    let fragment = builder.build();
+    assert_eq!(fragment.ops().len(), 1);
+    let gather = &fragment.ops()[0];
+    let StdTensorOp::Gather(_) = &gather.op else {
+        panic!("expected Gather op, got {:?}", gather.op);
+    };
+    assert_eq!(gather.inputs[0], ValRef::Local(cot));
+    assert_eq!(gather.inputs[1], ValRef::External(indices_key));
+}
+
+#[test]
+fn transpose_scatter_operand_only_is_identity_and_no_ops() {
+    // active_mask[0] = true, active_mask[2] = false → operand cotangent is
+    // cot_out (identity passthrough); no ops emitted.
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(60));
+    let operand_key = input_key(61);
+    let indices_key = input_key(62);
+    let updates_key = input_key(63);
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (indices_key.clone(), &[3, 1]),
+            (updates_key.clone(), &[3]),
+        ],
+    );
+
+    let config = rank1_scatter_config();
+    let op = StdTensorOp::Scatter(config);
+    let inputs = vec![
+        ValRef::External(operand_key),
+        ValRef::External(indices_key),
+        ValRef::External(updates_key),
+    ];
+
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![true, false, false],
+        },
+        &mut ctx,
+    );
+    assert_eq!(
+        result,
+        vec![Some(cot), None, None],
+        "operand-only transpose must be identity passthrough and no-op"
+    );
+    assert!(builder.build().ops().is_empty());
 }
 
 #[test]

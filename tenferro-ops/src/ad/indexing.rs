@@ -12,15 +12,25 @@
 //! - `offset_dims` ↔ `update_window_dims`
 //! - `index_vector_dim` carried over unchanged
 //!
+//! Scatter uses the StableHLO add-scatter semantics: the output is
+//! `operand + scatter_add(zeros, indices, updates, config)`, so the
+//! output depends on both the operand (identity passthrough plus the
+//! base value at scattered slots) and the updates (accumulated at the
+//! scattered slots). The forward rule treats the scatter as linear in
+//! both operand and updates; the backward rule sends the output
+//! cotangent to the operand as an identity passthrough and to the
+//! updates through the inverse `Gather`.
+//!
 //! Closing the core op vocabulary under AD is a Stage 7 prerequisite (the
 //! tropical fused backward emits `Gather` / `Scatter` on this vocabulary).
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro_tensor::{GatherConfig, ScatterConfig};
+use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
@@ -59,12 +69,17 @@ pub fn linearize_gather(
 /// cotangent values are scattered into the positions the forward gather
 /// read from. The scatter uses add-mode semantics, so multiple gathers
 /// reading the same slot accumulate additively in the operand cotangent.
+/// Because the underlying scatter now follows StableHLO add-scatter
+/// semantics (output starts from `operand`), the inverse scatter must
+/// use a zero operand so the operand cotangent is only the sum over
+/// gather reads, not `original operand + sum over gather reads`.
 pub fn transpose_gather(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &GatherConfig,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -87,9 +102,18 @@ pub fn transpose_gather(
         index_vector_dim: config.index_vector_dim,
     };
 
+    let operand_meta = ctx.metadata_of(&inputs[0]);
+    let operand_rank = operand_meta.shape.len();
+    let operand_dtype = operand_meta.dtype;
+    let zero_operand = build_zero_like(emitter, operand_dtype, inputs[0].clone(), operand_rank);
+
     let out = emitter.add_op(
         StdTensorOp::Scatter(inverse_config),
-        vec![inputs[0].clone(), inputs[1].clone(), ValRef::Local(ct)],
+        vec![
+            ValRef::Local(zero_operand),
+            inputs[1].clone(),
+            ValRef::Local(ct),
+        ],
         OpMode::Linear {
             active_mask: vec![false, false, true],
         },
@@ -102,26 +126,47 @@ pub fn transpose_gather(
 ///
 /// `scatter_indices` is integer-valued and non-differentiable.
 ///
-/// The CPU scatter implementation starts with a zero buffer shaped like
-/// `operand` (rather than a copy of `operand`) and accumulates `updates`
-/// additively. The operand therefore contributes only its shape to the
-/// output, so the output tangent comes solely from the updates' tangent:
-/// `Scatter(operand, indices, updates_dot, config)`. The operand tangent
-/// is ignored because `d_out / d_operand = 0` under these semantics.
+/// Under StableHLO add-scatter semantics the scatter output is
+/// `operand + scatter_add(zeros, indices, updates, config)`, so the
+/// forward tangent factors into an identity contribution from
+/// `operand_dot` and a scattered contribution from `updates_dot`.
+/// Four cases:
+///
+/// - Both `operand_dot = None`, `updates_dot = None` → `[None]`.
+/// - Only `operand_dot = Some` → identity passthrough `[Some(operand_dot)]`
+///   (scattering a zero updates tangent adds nothing).
+/// - Only `updates_dot = Some` → emit
+///   `Scatter(zeros_like(operand), indices, updates_dot, config)` so the
+///   output tangent is only the scattered contribution.
+/// - Both `Some` → emit
+///   `Scatter(operand_dot, indices, updates_dot, config)`; by linearity
+///   this captures both contributions in a single scatter.
 pub fn linearize_scatter(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &ScatterConfig,
+    ctx: &ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    match tangent_in[2] {
-        Some(d_updates) => {
+    let d_operand = tangent_in[0];
+    let d_updates = tangent_in[2];
+
+    match (d_operand, d_updates) {
+        (None, None) => vec![None],
+        (Some(d_op), None) => vec![Some(d_op)],
+        (None, Some(d_up)) => {
+            let operand_key = ValRef::External(primal_in[0].clone());
+            let operand_meta = ctx.metadata_of(&operand_key);
+            let operand_rank = operand_meta.shape.len();
+            let operand_dtype = operand_meta.dtype;
+            let zero_operand =
+                build_zero_like(builder, operand_dtype, operand_key.clone(), operand_rank);
             let out = builder.add_op(
                 StdTensorOp::Scatter(config.clone()),
                 vec![
-                    ValRef::External(primal_in[0].clone()),
+                    ValRef::Local(zero_operand),
                     ValRef::External(primal_in[1].clone()),
-                    ValRef::Local(d_updates),
+                    ValRef::Local(d_up),
                 ],
                 OpMode::Linear {
                     active_mask: vec![false, false, true],
@@ -129,18 +174,36 @@ pub fn linearize_scatter(
             );
             vec![Some(out[0])]
         }
-        None => vec![None],
+        (Some(d_op), Some(d_up)) => {
+            let out = builder.add_op(
+                StdTensorOp::Scatter(config.clone()),
+                vec![
+                    ValRef::Local(d_op),
+                    ValRef::External(primal_in[1].clone()),
+                    ValRef::Local(d_up),
+                ],
+                OpMode::Linear {
+                    active_mask: vec![true, false, true],
+                },
+            );
+            vec![Some(out[0])]
+        }
     }
 }
 
 /// Reverse-mode AD rule for `Scatter(operand, scatter_indices, updates, config)`.
 ///
-/// Because the scatter semantics initialise the output with zeros (using
-/// `operand` only for its shape), the operand makes no contribution to the
-/// output value and its cotangent is `None`. Updates flow back through the
-/// inverse `Gather`: `Gather(cot_out, scatter_indices, inverse_config)`.
-/// The inverse config uses the primal `updates`' shape to derive the
-/// `slice_sizes` vector required by `GatherConfig`.
+/// Under StableHLO add-scatter semantics the output depends on both the
+/// operand (identity passthrough for non-scattered slots, plus the base
+/// value at scattered slots) and the updates (accumulated at the
+/// scattered slots). The cotangent therefore flows back to both:
+///
+/// - operand cotangent: identity passthrough of `cot_out`. The first
+///   entry of the active mask gates whether it is returned.
+/// - scatter_indices cotangent: always `None` (integer-valued).
+/// - updates cotangent: `Gather(cot_out, scatter_indices, inverse_config)`
+///   with `slice_sizes` derived from the primal `updates`' shape. The
+///   third entry of the active mask gates whether it is returned.
 pub fn transpose_scatter(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
@@ -159,31 +222,39 @@ pub fn transpose_scatter(
         OpMode::Primal => return vec![None, None, None],
     };
 
-    if !active_mask.get(2).copied().unwrap_or(false) {
-        return vec![None, None, None];
+    let operand_active = active_mask.first().copied().unwrap_or(false);
+    let updates_active = active_mask.get(2).copied().unwrap_or(false);
+
+    let mut result = vec![None, None, None];
+
+    if operand_active {
+        result[0] = Some(ct);
     }
 
-    let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
-    let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
-    let slice_sizes = compute_inverse_slice_sizes(&operand_shape, &updates_shape, config);
+    if updates_active {
+        let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
+        let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
+        let slice_sizes = compute_inverse_slice_sizes(&operand_shape, &updates_shape, config);
 
-    let inverse_config = GatherConfig {
-        offset_dims: config.update_window_dims.clone(),
-        collapsed_slice_dims: config.inserted_window_dims.clone(),
-        start_index_map: config.scatter_dims_to_operand_dims.clone(),
-        index_vector_dim: config.index_vector_dim,
-        slice_sizes,
-    };
+        let inverse_config = GatherConfig {
+            offset_dims: config.update_window_dims.clone(),
+            collapsed_slice_dims: config.inserted_window_dims.clone(),
+            start_index_map: config.scatter_dims_to_operand_dims.clone(),
+            index_vector_dim: config.index_vector_dim,
+            slice_sizes,
+        };
 
-    let out = emitter.add_op(
-        StdTensorOp::Gather(inverse_config),
-        vec![ValRef::Local(ct), inputs[1].clone()],
-        OpMode::Linear {
-            active_mask: vec![true, false],
-        },
-    );
+        let out = emitter.add_op(
+            StdTensorOp::Gather(inverse_config),
+            vec![ValRef::Local(ct), inputs[1].clone()],
+            OpMode::Linear {
+                active_mask: vec![true, false],
+            },
+        );
+        result[2] = Some(out[0]);
+    }
 
-    vec![None, None, Some(out[0])]
+    result
 }
 
 /// Build `slice_sizes` for the inverse `GatherConfig` used in
@@ -235,4 +306,64 @@ fn compute_inverse_slice_sizes(
         slice_sizes[operand_dim] = dim;
     }
     slice_sizes
+}
+
+/// Emit a zero tensor shaped like `anchor` (rank `anchor_rank`) with
+/// dtype `dtype`. Uses `StdTensorOp::Constant { bytes: zeros }` for the
+/// scalar, then `BroadcastInDim` reading axis sizes from `anchor`.
+///
+/// When `anchor_rank == 0` returns the scalar `Constant` directly.
+fn build_zero_like(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    dtype: DType,
+    anchor: ValRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> LocalValId {
+    let zero_scalar = emitter.add_op(
+        StdTensorOp::Constant {
+            dtype,
+            bytes: zero_bytes(dtype),
+        },
+        vec![],
+        OpMode::Primal,
+    )[0];
+    if anchor_rank == 0 {
+        return zero_scalar;
+    }
+    // `BroadcastInDim` evaluates `DimExpr::InputDim { input_idx, axis }`
+    // against its own inputs at execution time. Input 0 is the scalar
+    // `zero_scalar`; input 1 is the anchor, whose shape we match.
+    let shape: Vec<DimExpr> = (0..anchor_rank)
+        .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
+        .collect();
+    let out = emitter.add_op(
+        StdTensorOp::BroadcastInDim {
+            shape,
+            dims: vec![],
+        },
+        vec![ValRef::Local(zero_scalar), anchor],
+        OpMode::Primal,
+    );
+    out[0]
+}
+
+/// Bytes for a zero value of the given dtype (little-endian, matching
+/// the repr `Constant { dtype, bytes }` expects).
+fn zero_bytes(dtype: DType) -> Vec<u8> {
+    match dtype {
+        DType::F32 => 0.0_f32.to_le_bytes().to_vec(),
+        DType::F64 => 0.0_f64.to_le_bytes().to_vec(),
+        DType::C32 => {
+            let mut bytes = Vec::with_capacity(8);
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+            bytes
+        }
+        DType::C64 => {
+            let mut bytes = Vec::with_capacity(16);
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            bytes
+        }
+    }
 }
