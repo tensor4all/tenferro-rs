@@ -1097,4 +1097,10 @@ permitted to decide these without revisiting this document.
 ## 16. Change log
 
 - 2026-04-19: Initial draft — Stage 5 deliverable, landed in commit
-  `<this-commit-sha>` on `refactor_ad_v3`.
+  `efd91a7` on `refactor_ad_v3`.
+- 2026-04-20: Stage 6 implementation — `ExtensionOp` trait, registry,
+  `StdTensorOp::Extension` carrier, and full forward / AD / shape-infer
+  / compile / eager wiring landed in commit `2c7e26c` on
+  `codex-stage-6` (branched from `efd91a7`). Public `tenferro::extension`
+  facade (including `apply(op, inputs)`) and nine smoke tests landed in
+  commit `be9f985`.
