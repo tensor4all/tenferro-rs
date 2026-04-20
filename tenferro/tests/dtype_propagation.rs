@@ -43,7 +43,6 @@ fn test_constant_uses_variant_dtype() {
 fn test_eig_f32_produces_c32() {
     let op = StdTensorOp::Eig {
         input_dtype: DType::F32,
-        input_shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
     };
     assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::C32);
 }
@@ -52,17 +51,13 @@ fn test_eig_f32_produces_c32() {
 fn test_eig_f64_produces_c64() {
     let op = StdTensorOp::Eig {
         input_dtype: DType::F64,
-        input_shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
     };
     assert_eq!(infer_output_dtype(&op, &[DType::F64]), DType::C64);
 }
 
 #[test]
 fn test_reduce_sum_preserves_dtype() {
-    let op = StdTensorOp::ReduceSum {
-        axes: vec![0],
-        input_shape: vec![DimExpr::Const(4), DimExpr::Const(3)],
-    };
+    let op = StdTensorOp::ReduceSum { axes: vec![0] };
     assert_eq!(infer_output_dtype(&op, &[DType::F32]), DType::F32);
 }
 
@@ -75,8 +70,6 @@ fn test_dot_general_preserves_lhs_dtype() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     assert_eq!(
         infer_output_dtype(&op, &[DType::F32, DType::F32]),

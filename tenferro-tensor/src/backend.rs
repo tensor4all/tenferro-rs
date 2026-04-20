@@ -1,5 +1,4 @@
-use strided_kernel::{col_major_strides, reduce_axis, zip_map2_into, StridedArray, StridedView};
-use tenferro_algebra::Semiring;
+use strided_kernel::{col_major_strides, StridedArray, StridedView};
 
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -72,43 +71,6 @@ pub(crate) fn typed_array<T: Clone>(shape: &[usize], fill: T) -> StridedArray<T>
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
     TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
-}
-
-fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: err.to_string(),
-    }
-}
-
-fn validate_axis_list(
-    op: &'static str,
-    role: &'static str,
-    axes: &[usize],
-    rank: usize,
-) -> crate::Result<()> {
-    let mut seen = vec![false; rank];
-    for &axis in axes {
-        if axis >= rank {
-            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
-        }
-        if seen[axis] {
-            return Err(crate::Error::DuplicateAxis { op, axis, role });
-        }
-        seen[axis] = true;
-    }
-    Ok(())
-}
-
-fn validate_binary_shapes(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::Result<()> {
-    if lhs != rhs {
-        return Err(crate::Error::ShapeMismatch {
-            op,
-            lhs: lhs.to_vec(),
-            rhs: rhs.to_vec(),
-        });
-    }
-    Ok(())
 }
 
 /// Execution session surface for dense tensor backends.
@@ -548,98 +510,5 @@ pub trait TensorBackend {
         _plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
         Ok(None)
-    }
-}
-
-/// Algebra-generic backend over typed tensors.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_algebra::Standard;
-/// use tenferro_tensor::{cpu::CpuBackend, SemiringBackend};
-///
-/// fn needs_semiring_backend<B: SemiringBackend<Standard<f64>>>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// needs_semiring_backend(&mut backend);
-/// ```
-pub trait SemiringBackend<Alg: Semiring> {
-    fn batched_gemm(
-        &mut self,
-        lhs: &TypedTensor<Alg::Scalar>,
-        rhs: &TypedTensor<Alg::Scalar>,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<TypedTensor<Alg::Scalar>>;
-
-    fn add(
-        &mut self,
-        lhs: &TypedTensor<Alg::Scalar>,
-        rhs: &TypedTensor<Alg::Scalar>,
-    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        validate_binary_shapes("add", &lhs.shape, &rhs.shape)?;
-        let mut out = typed_array(&lhs.shape, Alg::zero());
-        zip_map2_into(
-            &mut out.view_mut(),
-            &typed_view(lhs),
-            &typed_view(rhs),
-            |x, y| Alg::add(x, y),
-        )
-        .map_err(|err| backend_failure("add", err))?;
-        Ok(tensor_from_array(out))
-    }
-
-    fn mul(
-        &mut self,
-        lhs: &TypedTensor<Alg::Scalar>,
-        rhs: &TypedTensor<Alg::Scalar>,
-    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        validate_binary_shapes("mul", &lhs.shape, &rhs.shape)?;
-        let mut out = typed_array(&lhs.shape, Alg::zero());
-        zip_map2_into(
-            &mut out.view_mut(),
-            &typed_view(lhs),
-            &typed_view(rhs),
-            |x, y| Alg::mul(x, y),
-        )
-        .map_err(|err| backend_failure("mul", err))?;
-        Ok(tensor_from_array(out))
-    }
-
-    fn reduce_sum(
-        &mut self,
-        input: &TypedTensor<Alg::Scalar>,
-        axes: &[usize],
-    ) -> crate::Result<TypedTensor<Alg::Scalar>> {
-        validate_axis_list("reduce_sum", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-
-        let output_shape: Vec<usize> = input
-            .shape
-            .iter()
-            .enumerate()
-            .filter(|(axis, _)| !axes.contains(axis))
-            .map(|(_, &dim)| dim)
-            .collect();
-
-        let strides = col_major_strides(&input.shape);
-        let mut current =
-            StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
-                .map_err(|err| backend_failure("reduce_sum", err))?;
-
-        let mut sorted_axes = axes.to_vec();
-        sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
-        for axis in sorted_axes {
-            current = reduce_axis(
-                &current.view(),
-                axis,
-                |x| x,
-                |a, b| Alg::add(a, b),
-                Alg::zero(),
-            )
-            .map_err(|err| backend_failure("reduce_sum", err))?;
-        }
-        Ok(TypedTensor::from_vec(output_shape, current.into_data()))
     }
 }

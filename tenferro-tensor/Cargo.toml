@@ -16,7 +16,6 @@ provider-inject = ["cpu-blas", "dep:cblas-inject"]
 src-openblas = ["provider-src", "blas-src/openblas"]
 src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
-cuda = ["dep:cudarc"]
 cubecl = ["dep:cubecl", "dep:cubecl-cuda", "dep:cubecl-runtime", "dep:cudarc"]
 rocm = []
 
@@ -26,7 +25,6 @@ num-complex.workspace = true
 smallvec.workspace = true
 libloading.workspace = true
 rayon = "1"
-tenferro-algebra = { path = "../tenferro-algebra" }
 strided-kernel.workspace = true
 thiserror.workspace = true
 faer = { workspace = true, optional = true }

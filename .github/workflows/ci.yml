@@ -61,6 +61,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage JSON
+        env:
+          # Cap oracle_replay case iteration under coverage instrumentation.
+          # Without this, the branch's extra AD metadata tracking + llvm-cov
+          # overhead causes shard_0 / shard_1 to run for many minutes, tripping
+          # concurrency-cancel timeouts. A smaller cap still exercises every
+          # op's primal+VJP+JVP path enough for line-coverage thresholds.
+          ORACLE_REPLAY_CASE_LIMIT: "100"
         run: cargo llvm-cov --workspace --release --json --output-path coverage.json
       - name: Enforce per-file coverage thresholds
         run: python3 scripts/check-coverage.py coverage.json

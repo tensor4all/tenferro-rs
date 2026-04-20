@@ -23,9 +23,6 @@ mod typed_linalg;
 pub mod types;
 pub mod validate;
 
-#[cfg(feature = "cuda")]
-pub mod cuda;
-
 #[cfg(feature = "rocm")]
 pub mod rocm;
 
@@ -34,7 +31,7 @@ pub mod cubecl;
 
 pub use backend::{
     default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
-    SemiringBackend, TensorBackend, TensorExec,
+    TensorBackend, TensorExec,
 };
 pub use config::*;
 pub use error::*;

@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use chainrules_core::PrimitiveOp;
 use computegraph::fragment::FragmentBuilder;
@@ -7,29 +8,26 @@ use computegraph::{GraphOp, OpEmitter};
 use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
+use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
 use crate::input_key::TensorInputKey;
-use crate::semiring_ops::SemiringOps;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum StdTensorOp {
-    // Tier 1: semiring
+    // Semiring arithmetic core
     Add,
     Mul,
     Neg,
     Conj,
     DotGeneral {
         config: DotGeneralConfig,
-        lhs_rank: usize,
-        rhs_rank: usize,
     },
     Transpose {
         perm: Vec<usize>,
     },
     Reshape {
-        from_shape: Vec<DimExpr>,
         to_shape: Vec<DimExpr>,
     },
     BroadcastInDim {
@@ -46,10 +44,9 @@ pub enum StdTensorOp {
     },
     ReduceSum {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
 
-    // Tier 2: elementwise
+    // Elementwise (non-semiring)
     Div,
     Abs,
     Sign,
@@ -59,7 +56,7 @@ pub enum StdTensorOp {
     Select,
     Clamp,
 
-    // Tier 2: analytic
+    // Analytic
     Exp,
     Log,
     Sin,
@@ -71,7 +68,7 @@ pub enum StdTensorOp {
     Expm1,
     Log1p,
 
-    // Tier 1: diagonal extraction / embedding (AD-closed pair)
+    // Diagonal extraction / embedding (AD-closed pair)
     ExtractDiag {
         axis_a: usize,
         axis_b: usize,
@@ -87,7 +84,7 @@ pub enum StdTensorOp {
         k: i64,
     },
 
-    // Tier 2: indexing
+    // Indexing
     Gather(GatherConfig),
     Scatter(ScatterConfig),
     Slice(SliceConfig),
@@ -99,7 +96,6 @@ pub enum StdTensorOp {
     /// Contraction path is optimized at execution time from actual input shapes.
     NaryEinsum {
         subscripts: String,
-        n_inputs: usize,
     },
     Concatenate {
         axis: usize,
@@ -117,53 +113,44 @@ pub enum StdTensorOp {
         axis: usize,
     },
 
-    // Tier 2: reductions
+    // Reductions
     ReduceProd {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
     ReduceMax {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
     ReduceMin {
         axes: Vec<usize>,
-        input_shape: Vec<DimExpr>,
     },
 
     // Linalg
-    Cholesky {
-        input_shape: Vec<DimExpr>,
-    },
-    Lu {
-        input_shape: Vec<DimExpr>,
-    },
+    Cholesky,
+    Lu,
     Svd {
         eps: f64,
-        input_shape: Vec<DimExpr>,
     },
-    Qr {
-        input_shape: Vec<DimExpr>,
-    },
+    Qr,
     Eigh {
         eps: f64,
-        input_shape: Vec<DimExpr>,
     },
     Eig {
         input_dtype: DType,
-        input_shape: Vec<DimExpr>,
     },
     TriangularSolve {
         left_side: bool,
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-        lhs_shape: Vec<DimExpr>,
-        rhs_shape: Vec<DimExpr>,
     },
-    ValidateNonsingular {
-        input_shape: Vec<DimExpr>,
-    },
+    ValidateNonsingular,
+
+    /// Out-of-tree extension carrier.
+    ///
+    /// See [`crate::ext_op`] and `docs/spec/extension-op.md`. Identity,
+    /// hashing, equality, arity, shape inference, and AD rules are delegated
+    /// to the inner [`ExtensionOp`] trait object.
+    Extension(Arc<dyn ExtensionOp>),
 }
 
 impl StdTensorOp {
@@ -240,6 +227,126 @@ impl StdTensorOp {
     }
 }
 
+impl PartialEq for StdTensorOp {
+    fn eq(&self, other: &Self) -> bool {
+        if std::mem::discriminant(self) != std::mem::discriminant(other) {
+            return false;
+        }
+        match (self, other) {
+            (Self::Add, Self::Add)
+            | (Self::Mul, Self::Mul)
+            | (Self::Neg, Self::Neg)
+            | (Self::Conj, Self::Conj)
+            | (Self::Div, Self::Div)
+            | (Self::Abs, Self::Abs)
+            | (Self::Sign, Self::Sign)
+            | (Self::Maximum, Self::Maximum)
+            | (Self::Minimum, Self::Minimum)
+            | (Self::Select, Self::Select)
+            | (Self::Clamp, Self::Clamp)
+            | (Self::Exp, Self::Exp)
+            | (Self::Log, Self::Log)
+            | (Self::Sin, Self::Sin)
+            | (Self::Cos, Self::Cos)
+            | (Self::Tanh, Self::Tanh)
+            | (Self::Sqrt, Self::Sqrt)
+            | (Self::Rsqrt, Self::Rsqrt)
+            | (Self::Pow, Self::Pow)
+            | (Self::Expm1, Self::Expm1)
+            | (Self::Log1p, Self::Log1p)
+            | (Self::Cholesky, Self::Cholesky)
+            | (Self::Lu, Self::Lu)
+            | (Self::Qr, Self::Qr)
+            | (Self::ValidateNonsingular, Self::ValidateNonsingular) => true,
+            (Self::DotGeneral { config: a }, Self::DotGeneral { config: b }) => a == b,
+            (Self::Transpose { perm: a }, Self::Transpose { perm: b }) => a == b,
+            (Self::Reshape { to_shape: a }, Self::Reshape { to_shape: b }) => a == b,
+            (
+                Self::BroadcastInDim {
+                    shape: sa,
+                    dims: da,
+                },
+                Self::BroadcastInDim {
+                    shape: sb,
+                    dims: db,
+                },
+            ) => sa == sb && da == db,
+            (Self::Convert { from: fa, to: ta }, Self::Convert { from: fb, to: tb }) => {
+                fa == fb && ta == tb
+            }
+            (
+                Self::Constant {
+                    dtype: da,
+                    bytes: ba,
+                },
+                Self::Constant {
+                    dtype: db,
+                    bytes: bb,
+                },
+            ) => da == db && ba == bb,
+            (Self::ReduceSum { axes: a }, Self::ReduceSum { axes: b })
+            | (Self::ReduceProd { axes: a }, Self::ReduceProd { axes: b })
+            | (Self::ReduceMax { axes: a }, Self::ReduceMax { axes: b })
+            | (Self::ReduceMin { axes: a }, Self::ReduceMin { axes: b })
+            | (Self::Reverse { axes: a }, Self::Reverse { axes: b }) => a == b,
+            (Self::Compare(a), Self::Compare(b)) => a == b,
+            (
+                Self::ExtractDiag {
+                    axis_a: aa,
+                    axis_b: ba,
+                },
+                Self::ExtractDiag {
+                    axis_a: ab,
+                    axis_b: bb,
+                },
+            )
+            | (
+                Self::EmbedDiag {
+                    axis_a: aa,
+                    axis_b: ba,
+                },
+                Self::EmbedDiag {
+                    axis_a: ab,
+                    axis_b: bb,
+                },
+            ) => aa == ab && ba == bb,
+            (Self::Tril { k: a }, Self::Tril { k: b })
+            | (Self::Triu { k: a }, Self::Triu { k: b }) => a == b,
+            (Self::Gather(a), Self::Gather(b)) => a == b,
+            (Self::Scatter(a), Self::Scatter(b)) => a == b,
+            (Self::Slice(a), Self::Slice(b)) => a == b,
+            (Self::DynamicSlice { slice_sizes: a }, Self::DynamicSlice { slice_sizes: b }) => {
+                a == b
+            }
+            (Self::Pad(a), Self::Pad(b)) => a == b,
+            (Self::NaryEinsum { subscripts: a }, Self::NaryEinsum { subscripts: b }) => a == b,
+            (Self::Concatenate { axis: a }, Self::Concatenate { axis: b }) => a == b,
+            (Self::ShapeOf { axis: a }, Self::ShapeOf { axis: b })
+            | (Self::DynamicTruncate { axis: a }, Self::DynamicTruncate { axis: b })
+            | (Self::PadToMatch { axis: a }, Self::PadToMatch { axis: b }) => a == b,
+            (Self::Svd { eps: a }, Self::Svd { eps: b })
+            | (Self::Eigh { eps: a }, Self::Eigh { eps: b }) => a.to_bits() == b.to_bits(),
+            (Self::Eig { input_dtype: a }, Self::Eig { input_dtype: b }) => a == b,
+            (
+                Self::TriangularSolve {
+                    left_side: lsa,
+                    lower: la,
+                    transpose_a: ta,
+                    unit_diagonal: ua,
+                },
+                Self::TriangularSolve {
+                    left_side: lsb,
+                    lower: lb,
+                    transpose_a: tb,
+                    unit_diagonal: ub,
+                },
+            ) => lsa == lsb && la == lb && ta == tb && ua == ub,
+            (Self::Extension(a), Self::Extension(b)) => ext_op_eq(a.as_ref(), b.as_ref()),
+            _ => unreachable!("discriminant mismatch should be caught earlier"),
+        }
+    }
+}
+
 impl Eq for StdTensorOp {}
 
 impl Hash for StdTensorOp {
@@ -267,41 +374,21 @@ impl Hash for StdTensorOp {
             | Self::Pow
             | Self::Expm1
             | Self::Log1p => {}
-            Self::Svd { eps, input_shape } => {
+            Self::Svd { eps } => {
                 hash_f64(*eps, state);
-                input_shape.hash(state);
             }
-            Self::Qr { input_shape }
-            | Self::Cholesky { input_shape }
-            | Self::Lu { input_shape } => {
-                input_shape.hash(state);
-            }
-            Self::Eig {
-                input_dtype,
-                input_shape,
-            } => {
+            Self::Qr | Self::Cholesky | Self::Lu => {}
+            Self::Eig { input_dtype } => {
                 input_dtype.hash(state);
-                input_shape.hash(state);
             }
-            Self::Eigh { eps, input_shape } => {
+            Self::Eigh { eps } => {
                 hash_f64(*eps, state);
-                input_shape.hash(state);
             }
-            Self::DotGeneral {
-                config,
-                lhs_rank,
-                rhs_rank,
-            } => {
+            Self::DotGeneral { config } => {
                 config.hash(state);
-                lhs_rank.hash(state);
-                rhs_rank.hash(state);
             }
             Self::Transpose { perm } => perm.hash(state),
-            Self::Reshape {
-                from_shape,
-                to_shape,
-            } => {
-                from_shape.hash(state);
+            Self::Reshape { to_shape } => {
                 to_shape.hash(state);
             }
             Self::BroadcastInDim { shape, dims } => {
@@ -316,9 +403,8 @@ impl Hash for StdTensorOp {
                 dtype.hash(state);
                 bytes.hash(state);
             }
-            Self::ReduceSum { axes, input_shape } => {
+            Self::ReduceSum { axes } => {
                 axes.hash(state);
-                input_shape.hash(state);
             }
             Self::Compare(dir) => dir.hash(state),
             Self::ExtractDiag { axis_a, axis_b } | Self::EmbedDiag { axis_a, axis_b } => {
@@ -331,42 +417,30 @@ impl Hash for StdTensorOp {
             Self::Slice(config) => config.hash(state),
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
             Self::Pad(config) => config.hash(state),
-            Self::NaryEinsum {
-                subscripts,
-                n_inputs,
-            } => {
+            Self::NaryEinsum { subscripts } => {
                 subscripts.hash(state);
-                n_inputs.hash(state);
             }
             Self::Concatenate { axis } => axis.hash(state),
             Self::Reverse { axes } => axes.hash(state),
             Self::ShapeOf { axis } | Self::DynamicTruncate { axis } | Self::PadToMatch { axis } => {
                 axis.hash(state)
             }
-            Self::ReduceProd { axes, input_shape }
-            | Self::ReduceMax { axes, input_shape }
-            | Self::ReduceMin { axes, input_shape } => {
+            Self::ReduceProd { axes } | Self::ReduceMax { axes } | Self::ReduceMin { axes } => {
                 axes.hash(state);
-                input_shape.hash(state);
             }
             Self::TriangularSolve {
                 left_side,
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape,
-                rhs_shape,
             } => {
                 left_side.hash(state);
                 lower.hash(state);
                 transpose_a.hash(state);
                 unit_diagonal.hash(state);
-                lhs_shape.hash(state);
-                rhs_shape.hash(state);
             }
-            Self::ValidateNonsingular { input_shape } => {
-                input_shape.hash(state);
-            }
+            Self::ValidateNonsingular => {}
+            Self::Extension(op) => hash_extension(op.as_ref(), state),
         }
     }
 }
@@ -384,6 +458,15 @@ fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
         .max()
         .map_or(0, |max_idx| max_idx + 1);
     max_idx.max(min_inputs)
+}
+
+/// Count the number of inputs in an einsum subscript string.
+///
+/// The subscript string is expected to be in the form `"<in_1>,<in_2>,...-><out>"`.
+/// This counts comma-separated input subscripts before the `->` marker.
+pub(crate) fn n_inputs_from_einsum_subscripts(subscripts: &str) -> usize {
+    let input_part = subscripts.split_once("->").map_or(subscripts, |(i, _)| i);
+    input_part.split(',').count()
 }
 
 impl GraphOp for StdTensorOp {
@@ -407,19 +490,16 @@ impl GraphOp for StdTensorOp {
             | Self::Reverse { .. }
             | Self::ShapeOf { .. } => 1,
             Self::DynamicTruncate { .. } | Self::PadToMatch { .. } => 2,
-            Self::Reshape {
-                from_shape,
-                to_shape,
-            } => n_inputs_from_dim_exprs(1, &[from_shape, to_shape]),
+            Self::Reshape { to_shape } => n_inputs_from_dim_exprs(1, &[to_shape]),
             Self::BroadcastInDim { shape, .. } => n_inputs_from_dim_exprs(1, &[shape]),
-            Self::ReduceSum { input_shape, .. }
-            | Self::ReduceProd { input_shape, .. }
-            | Self::ReduceMax { input_shape, .. }
-            | Self::ReduceMin { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
+            Self::ReduceSum { .. }
+            | Self::ReduceProd { .. }
+            | Self::ReduceMax { .. }
+            | Self::ReduceMin { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
-            Self::NaryEinsum { n_inputs, .. } => *n_inputs,
+            Self::NaryEinsum { subscripts } => n_inputs_from_einsum_subscripts(subscripts),
             Self::Concatenate { .. } => {
                 todo!(
                     "n_inputs not yet implemented for variable-arity op {:?}",
@@ -439,18 +519,15 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky { input_shape }
-            | Self::Lu { input_shape }
-            | Self::Svd { input_shape, .. }
-            | Self::Qr { input_shape }
-            | Self::Eigh { input_shape, .. }
-            | Self::Eig { input_shape, .. } => n_inputs_from_dim_exprs(1, &[input_shape]),
-            Self::TriangularSolve {
-                lhs_shape,
-                rhs_shape,
-                ..
-            } => n_inputs_from_dim_exprs(2, &[lhs_shape, rhs_shape]),
-            Self::ValidateNonsingular { input_shape } => n_inputs_from_dim_exprs(1, &[input_shape]),
+            Self::Cholesky
+            | Self::Lu
+            | Self::Svd { .. }
+            | Self::Qr
+            | Self::Eigh { .. }
+            | Self::Eig { .. }
+            | Self::ValidateNonsingular => 1,
+            Self::TriangularSolve { .. } => 2,
+            Self::Extension(op) => ExtensionOp::n_inputs(op.as_ref()),
         }
     }
 
@@ -502,18 +579,17 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Cholesky { .. }
-            | Self::TriangularSolve { .. }
-            | Self::ValidateNonsingular { .. } => 1,
-            Self::Lu { .. } => 4,
+            Self::Cholesky | Self::TriangularSolve { .. } | Self::ValidateNonsingular => 1,
+            Self::Lu => 4,
             Self::Svd { .. } => 3,  // U, S, Vt
-            Self::Qr { .. } => 2,   // Q, R
+            Self::Qr => 2,          // Q, R
             Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
             Self::Eig { .. } => 2,  // eigenvalues, eigenvectors
             Self::Concatenate { .. } => todo!(
                 "n_outputs not yet implemented for variable-arity op {:?}",
                 self
             ),
+            Self::Extension(op) => ExtensionOp::n_outputs(op.as_ref()),
         }
     }
 }
@@ -545,50 +621,5 @@ impl PrimitiveOp for StdTensorOp {
         ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
         crate::ad::transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
-    }
-}
-
-impl SemiringOps for StdTensorOp {
-    fn add_op() -> Self {
-        StdTensorOp::Add
-    }
-
-    fn mul_op() -> Self {
-        StdTensorOp::Mul
-    }
-
-    fn dot_general(config: DotGeneralConfig, lhs_rank: usize, rhs_rank: usize) -> Self {
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        }
-    }
-
-    fn reduce_sum(axes: Vec<usize>, input_shape: Vec<DimExpr>) -> Self {
-        StdTensorOp::ReduceSum { axes, input_shape }
-    }
-
-    fn transpose_op(perm: Vec<usize>) -> Self {
-        StdTensorOp::Transpose { perm }
-    }
-
-    fn reshape(from_shape: Vec<DimExpr>, to_shape: Vec<DimExpr>) -> Self {
-        StdTensorOp::Reshape {
-            from_shape,
-            to_shape,
-        }
-    }
-
-    fn broadcast_in_dim(shape: Vec<DimExpr>, dims: Vec<usize>) -> Self {
-        StdTensorOp::BroadcastInDim { shape, dims }
-    }
-
-    fn extract_diag(axis_a: usize, axis_b: usize) -> Self {
-        StdTensorOp::ExtractDiag { axis_a, axis_b }
-    }
-
-    fn embed_diag(axis_a: usize, axis_b: usize) -> Self {
-        StdTensorOp::EmbedDiag { axis_a, axis_b }
     }
 }

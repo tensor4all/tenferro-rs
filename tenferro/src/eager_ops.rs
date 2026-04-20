@@ -10,11 +10,12 @@ use tenferro_tensor::{
 };
 
 use crate::eager::{
-    eager_val_key, exec_single_output, saved_forward_values, saved_forward_values_multi,
-    EagerTensor,
+    derived_output_key, eager_val_key, exec_single_output, saved_forward_values,
+    saved_forward_values_multi, EagerTensor,
 };
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
+use crate::metadata::{register_value_metadata, tensor_meta_from_tensor};
 
 impl<B: TensorBackend> EagerTensor<B> {
     /// Elementwise addition.
@@ -98,7 +99,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -121,16 +121,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(c.data().shape(), &[2, 2]);
     /// ```
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Result<Self> {
-        let lhs_rank = self.data.shape().len();
-        let rhs_rank = other.data.shape().len();
-        self.binary_op(
-            other,
-            StdTensorOp::DotGeneral {
-                config,
-                lhs_rank,
-                rhs_rank,
-            },
-        )
+        self.binary_op(other, StdTensorOp::DotGeneral { config })
     }
 
     /// Permute tensor axes.
@@ -173,7 +164,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::Reshape {
-            from_shape: DimExpr::from_concrete(self.data.shape()),
             to_shape: DimExpr::from_concrete(shape),
         })
     }
@@ -461,7 +451,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceProd {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -480,7 +469,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_max(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceMax {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -499,7 +487,6 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn reduce_min(&self, axes: &[usize]) -> Result<Self> {
         self.unary_op(StdTensorOp::ReduceMin {
             axes: axes.to_vec(),
-            input_shape: DimExpr::from_concrete(self.data.shape()),
         })
     }
 
@@ -507,6 +494,15 @@ impl<B: TensorBackend> EagerTensor<B> {
         let output = exec_single_output(&op, &[self.data.as_ref()], &self.ctx)?;
         let result_key = eager_val_key();
         let input_aliases = vec![eager_val_key()];
+        register_value_metadata(
+            input_aliases[0].clone(),
+            tensor_meta_from_tensor(self.data.as_ref()),
+        );
+        register_value_metadata(result_key.clone(), tensor_meta_from_tensor(&output));
+        register_value_metadata(
+            derived_output_key(&op, &input_aliases, 0),
+            tensor_meta_from_tensor(&output),
+        );
         let grad_node = self.requires_grad.then(|| {
             Arc::new(GradNode {
                 op: op.clone(),
@@ -560,6 +556,19 @@ impl<B: TensorBackend> EagerTensor<B> {
         let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
         let output_keys: Vec<_> = (0..num_outputs).map(|_| eager_val_key()).collect();
         let input_aliases = vec![eager_val_key()];
+        register_value_metadata(
+            input_aliases[0].clone(),
+            tensor_meta_from_tensor(self.data.as_ref()),
+        );
+        for (output_key, output) in output_keys.iter().zip(outputs.iter()) {
+            register_value_metadata(output_key.clone(), tensor_meta_from_tensor(output.as_ref()));
+        }
+        for (slot, output) in outputs.iter().enumerate() {
+            register_value_metadata(
+                derived_output_key(&op, &input_aliases, slot),
+                tensor_meta_from_tensor(output.as_ref()),
+            );
+        }
         let grad_node = self.requires_grad.then(|| {
             Arc::new(GradNode {
                 op: op.clone(),
@@ -619,6 +628,17 @@ impl<B: TensorBackend> EagerTensor<B> {
         let requires_grad = tensors.iter().any(|tensor| tensor.requires_grad);
         let result_key = eager_val_key();
         let input_aliases: Vec<_> = tensors.iter().map(|_| eager_val_key()).collect();
+        for (alias_key, tensor) in input_aliases.iter().zip(tensors.iter()) {
+            register_value_metadata(
+                alias_key.clone(),
+                tensor_meta_from_tensor(tensor.data.as_ref()),
+            );
+        }
+        register_value_metadata(result_key.clone(), tensor_meta_from_tensor(&output));
+        register_value_metadata(
+            derived_output_key(&op, &input_aliases, 0),
+            tensor_meta_from_tensor(&output),
+        );
         let input_data: Vec<_> = tensors
             .iter()
             .map(|tensor| Arc::clone(&tensor.data))

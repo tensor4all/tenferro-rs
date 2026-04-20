@@ -1,0 +1,36 @@
+[package]
+name = "tenferro-ext-tropical"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
+publish = false
+description = "External tropical (max-plus / min-plus / max-mul) extensions for tenferro. Stage 4a/b compositions plus Stage 7 fused ExtensionOp."
+
+# This crate is its own standalone workspace — it is intentionally NOT a
+# member of the core `tenferro-rs` workspace. Stage 4a forces the
+# composition-only surface to depend only on the public `tenferro` facade
+# (a contract test for "the public facade is sufficient"). Stage 7's fused
+# `FusedTropicalDotGeneral` `ExtensionOp` additionally depends on
+# `tenferro-ops` and `computegraph` because the `ExtensionOp` trait signatures
+# (`linearize`, `transpose_rule`) are irreducibly generic in types owned by
+# those crates. That is a separate contract test (the `ExtensionOp` substrate
+# self-test) — see `docs/design/design_v3/90-migration-plan.md` Stage 7.
+[workspace]
+
+[dependencies]
+# Public facade crates (Stage 4a):
+tenferro = { path = "../../tenferro" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
+# Stage 7 `ExtensionOp` implementation surface:
+tenferro-ops = { path = "../../tenferro-ops" }
+computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "8306196" }
+num-traits = "0.2"
+
+[dev-dependencies]
+# design_v3 Stage 8 evidence gate: composition vs fused-ExtensionOp bench.
+criterion = "0.5"
+
+[[bench]]
+name = "tropical_matmul"
+harness = false

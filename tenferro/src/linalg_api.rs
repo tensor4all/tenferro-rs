@@ -1,5 +1,4 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
@@ -23,20 +22,6 @@ pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
 
 fn sym_shape(shape: &[usize]) -> Vec<SymDim> {
     shape.iter().copied().map(SymDim::from).collect()
-}
-
-fn input_shape_expr(tensor: &TracedTensor) -> Vec<DimExpr> {
-    tensor
-        .shape_hint
-        .as_ref()
-        .and_then(|shape| {
-            shape
-                .iter()
-                .map(SymDim::constant_value)
-                .collect::<Option<Vec<_>>>()
-        })
-        .map(|shape| DimExpr::from_concrete(&shape))
-        .unwrap_or_else(|| DimExpr::input_shape(0, tensor.rank))
 }
 
 /// Singular value decomposition with a default numerical epsilon.
@@ -63,10 +48,7 @@ pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, 
     let n = shape[1];
     let k = m.min(n);
     let batch = &shape[2..];
-    let op = StdTensorOp::Svd {
-        eps,
-        input_shape: input_shape_expr(a),
-    };
+    let op = StdTensorOp::Svd { eps };
     let mut u_shape = vec![m, k];
     u_shape.extend_from_slice(batch);
     let mut s_shape = vec![k];
@@ -112,9 +94,7 @@ pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch);
     let mut results = apply_multi_output(
-        StdTensorOp::Qr {
-            input_shape: input_shape_expr(a),
-        },
+        StdTensorOp::Qr,
         a,
         vec![sym_shape(&q_shape), sym_shape(&r_shape)],
     )
@@ -147,10 +127,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
     let shape = concrete_shape(a);
     let n = shape[0];
     let batch = &shape[2..];
-    let op = StdTensorOp::Eigh {
-        eps,
-        input_shape: input_shape_expr(a),
-    };
+    let op = StdTensorOp::Eigh { eps };
     let mut vals_shape = vec![n];
     vals_shape.extend_from_slice(batch);
     let mut vecs_shape = vec![n, n];
@@ -172,14 +149,7 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
 /// ```
 pub fn cholesky(a: &TracedTensor) -> TracedTensor {
     let shape = concrete_shape(a);
-    apply_unary(
-        StdTensorOp::Cholesky {
-            input_shape: input_shape_expr(a),
-        },
-        a,
-        a.rank,
-        Some(sym_shape(&shape)),
-    )
+    apply_unary(StdTensorOp::Cholesky, a, a.rank, Some(sym_shape(&shape)))
 }
 
 /// LU decomposition with partial pivoting.
@@ -205,9 +175,7 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
     u_shape.extend_from_slice(batch);
     let parity_shape = batch.to_vec();
     let mut results = apply_multi_output(
-        StdTensorOp::Lu {
-            input_shape: input_shape_expr(a),
-        },
+        StdTensorOp::Lu,
         a,
         vec![
             sym_shape(&p_shape),
@@ -250,7 +218,6 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     let mut results = apply_multi_output(
         StdTensorOp::Eig {
             input_dtype: a.dtype,
-            input_shape: input_shape_expr(a),
         },
         a,
         vec![sym_shape(&vals_shape), sym_shape(&vecs_shape)],
@@ -268,9 +235,7 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 
 fn validate_nonsingular(u: &TracedTensor) -> TracedTensor {
     apply_unary(
-        StdTensorOp::ValidateNonsingular {
-            input_shape: input_shape_expr(u),
-        },
+        StdTensorOp::ValidateNonsingular,
         u,
         u.rank,
         u.shape_hint.clone(),
@@ -333,8 +298,6 @@ pub fn triangular_solve(
         lower,
         transpose_a,
         unit_diagonal,
-        lhs_shape: input_shape_expr(a),
-        rhs_shape: input_shape_expr(b),
     };
     if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         let b2d = b.reshape(&matrix_rhs_shape);
@@ -344,8 +307,6 @@ pub fn triangular_solve(
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: input_shape_expr(a),
-                rhs_shape: DimExpr::from_concrete(&matrix_rhs_shape),
             },
             a,
             &b2d,
@@ -376,7 +337,7 @@ pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 
     let (_, _, u, parity) = lu(a);
     let diag_u = u.extract_diag(0, 1);
-    let sign_u = reduce_prod(&diag_u.sign(), &[0]);
+    let sign_u = diag_u.sign().reduce_prod(&[0]);
     let sign = &parity * &sign_u;
     let logabsdet = diag_u.abs().log().reduce_sum(&[0]);
     (sign, logabsdet)
@@ -465,7 +426,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
 
     let (u, s, vt) = svd(a);
     let abs_s = s.abs();
-    let s_max = reduce_max(&abs_s, &[0]);
+    let s_max = abs_s.reduce_max(&[0]);
     let s_max_shape = concrete_shape(&s_max);
     let threshold = &s_max * &broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0)), &s_max_shape);
     let s_shape = concrete_shape(&s);
@@ -509,8 +470,8 @@ pub fn norm(
             let abs = a.abs();
             match ord {
                 None => frobenius_norm(&abs, &axes),
-                Some(p) if p == f64::INFINITY => reduce_max(&abs, &axes),
-                Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &axes),
+                Some(p) if p == f64::INFINITY => abs.reduce_max(&axes),
+                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes),
                 Some(p) if p == 0.0 => count_nonzero(&abs, &axes),
                 Some(p) => p_norm(&abs, &axes, p),
             }
@@ -609,8 +570,8 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor 
     match ord {
         None => frobenius_norm(&abs, &[axis]),
         Some(p) if p == 0.0 => count_nonzero(&abs, &[axis]),
-        Some(p) if p == f64::INFINITY => reduce_max(&abs, &[axis]),
-        Some(p) if p == f64::NEG_INFINITY => reduce_min(&abs, &[axis]),
+        Some(p) if p == f64::INFINITY => abs.reduce_max(&[axis]),
+        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&[axis]),
         Some(p) => p_norm(&abs, &[axis], p),
     }
 }
@@ -626,11 +587,11 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> TracedTens
         Some(p) if p == -1.0 => matrix_col_sum_norm(&abs, false),
         Some(p) if p == 2.0 => {
             let singular_values = svd(&matrix).1.abs();
-            reduce_max(&singular_values, &[0])
+            singular_values.reduce_max(&[0])
         }
         Some(p) if p == -2.0 => {
             let singular_values = svd(&matrix).1.abs();
-            reduce_min(&singular_values, &[0])
+            singular_values.reduce_min(&[0])
         }
         Some(p) if p == 0.0 => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
@@ -645,18 +606,18 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     let row_sums = abs.reduce_sum(&[1]);
     if take_max {
-        reduce_max(&row_sums, &[0])
+        row_sums.reduce_max(&[0])
     } else {
-        reduce_min(&row_sums, &[0])
+        row_sums.reduce_min(&[0])
     }
 }
 
 fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {
     let col_sums = abs.reduce_sum(&[0]);
     if take_max {
-        reduce_max(&col_sums, &[0])
+        col_sums.reduce_max(&[0])
     } else {
-        reduce_min(&col_sums, &[0])
+        col_sums.reduce_min(&[0])
     }
 }
 
@@ -694,48 +655,6 @@ fn restore_keepdim(
         kept_shape[axis] = 1;
     }
     reduced.reshape(&kept_shape)
-}
-
-fn reduce_prod(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceProd {
-            axes: axes.to_vec(),
-            input_shape: DimExpr::input_shape(0, input.rank),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
-}
-
-fn reduce_max(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceMax {
-            axes: axes.to_vec(),
-            input_shape: DimExpr::input_shape(0, input.rank),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
-}
-
-fn reduce_min(input: &TracedTensor, axes: &[usize]) -> TracedTensor {
-    let input_shape = concrete_shape(input);
-    let out_shape = reduced_shape(&input_shape, axes);
-    apply_unary(
-        StdTensorOp::ReduceMin {
-            axes: axes.to_vec(),
-            input_shape: DimExpr::input_shape(0, input.rank),
-        },
-        input,
-        input.rank - axes.len(),
-        Some(sym_shape(&out_shape)),
-    )
 }
 
 fn compare_dir(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> TracedTensor {
@@ -784,13 +703,6 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..rank).collect();
     perm.swap(0, 1);
     perm
-}
-
-fn reduced_shape(shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    (0..shape.len())
-        .filter(|axis| !axes.contains(axis))
-        .map(|axis| shape[axis])
-        .collect()
 }
 
 fn batched_vector_rhs_shape(a: &TracedTensor, b: &TracedTensor) -> Option<Vec<usize>> {

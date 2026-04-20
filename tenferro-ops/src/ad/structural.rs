@@ -3,6 +3,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::PadConfig;
 
+use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -34,20 +35,14 @@ pub fn linearize_reshape(
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::Reshape {
-        from_shape,
-        to_shape,
-    } = op
-    else {
+    let StdTensorOp::Reshape { to_shape } = op else {
         unreachable!("linearize_reshape expects Reshape");
     };
 
     match tangent_in[0] {
         Some(dx) => {
-            let needs_shape_source = DimExpr::max_input_idx_all(from_shape)
-                .into_iter()
-                .chain(DimExpr::max_input_idx_all(to_shape))
-                .any(|idx| idx > 0);
+            let needs_shape_source =
+                DimExpr::max_input_idx_all(to_shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![ValRef::Local(dx)];
             let active_mask = if needs_shape_source {
                 op_inputs.push(ValRef::External(primal_in[1].clone()));
@@ -57,7 +52,6 @@ pub fn linearize_reshape(
             };
             let out = builder.add_op(
                 StdTensorOp::Reshape {
-                    from_shape: from_shape.clone(),
                     to_shape: to_shape.clone(),
                 },
                 op_inputs,
@@ -211,23 +205,18 @@ pub fn transpose_reshape(
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    let StdTensorOp::Reshape {
-        from_shape,
-        to_shape,
-    } = op
-    else {
+    let StdTensorOp::Reshape { to_shape: _ } = op else {
         unreachable!("transpose_reshape expects Reshape");
     };
 
     match cotangent_out[0] {
         Some(ct) => {
-            let remapped_from_shape = DimExpr::remap_all(to_shape, 0, 1);
-            let remapped_to_shape = DimExpr::remap_all(from_shape, 0, 1);
-            let needs_shape_source = DimExpr::max_input_idx_all(&remapped_from_shape)
-                .into_iter()
-                .chain(DimExpr::max_input_idx_all(&remapped_to_shape))
-                .any(|idx| idx > 0);
+            let input_rank = ctx.shape_of(&inputs[0]).len();
+            let remapped_to_shape = DimExpr::input_shape(1, input_rank);
+            let needs_shape_source =
+                DimExpr::max_input_idx_all(&remapped_to_shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![ValRef::Local(ct)];
             let active_mask = if needs_shape_source {
                 op_inputs.push(inputs[0].clone());
@@ -237,7 +226,6 @@ pub fn transpose_reshape(
             };
             let out = emitter.add_op(
                 StdTensorOp::Reshape {
-                    from_shape: remapped_from_shape,
                     to_shape: remapped_to_shape,
                 },
                 op_inputs,
@@ -258,23 +246,35 @@ pub fn transpose_broadcast_in_dim(
     let output_rank = shape.len();
     let broadcast_axes: Vec<usize> = (0..output_rank).filter(|dim| !dims.contains(dim)).collect();
 
-    match cotangent_out[0] {
-        Some(ct) if broadcast_axes.is_empty() => vec![Some(ct)],
+    // When `shape` references input_idx > 0 the primal op carries
+    // auxiliary shape-reference inputs. Those inputs contribute no
+    // cotangent, but the transpose-rule contract requires one entry per
+    // input. Pad with `None` for each shape-ref slot.
+    let extra_inputs = DimExpr::max_input_idx_all(shape).unwrap_or(0);
+
+    let primary = match cotangent_out[0] {
+        Some(ct) if broadcast_axes.is_empty() => Some(ct),
         Some(ct) => {
             let out = emitter.add_op(
                 StdTensorOp::ReduceSum {
                     axes: broadcast_axes,
-                    input_shape: shape.to_vec(),
                 },
                 vec![ValRef::Local(ct)],
                 OpMode::Linear {
                     active_mask: vec![true],
                 },
             );
-            vec![Some(out[0])]
+            Some(out[0])
         }
-        None => vec![None],
+        None => None,
+    };
+
+    let mut result = Vec::with_capacity(1 + extra_inputs);
+    result.push(primary);
+    for _ in 0..extra_inputs {
+        result.push(None);
     }
+    result
 }
 
 pub fn transpose_convert(

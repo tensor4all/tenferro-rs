@@ -1,0 +1,224 @@
+# Shape Metadata In Design V3
+
+## Summary
+
+`v3` adopts the direction of issue `#741`: input shape snapshots should move
+off most op variants and onto value-side metadata.
+
+This is one of the safest and most clearly incremental parts of the broader
+refactor.
+
+## The Three Categories
+
+`v3` keeps the same useful classification:
+
+| Category | Meaning | Examples | Keep on op? |
+|---|---|---|---|
+| A | Structural identity | `axes`, `perm`, `dims`, diagonal axes | Yes |
+| B | Required output shape | reshape target, broadcast target | Yes |
+| C | Input shape snapshot | `input_shape`, `lhs_shape`, `rhs_shape`, ranks derived from inputs | No |
+
+The design rule is:
+
+> Categories A and B stay on the op. Category C moves to value metadata.
+
+### Before / After
+
+```text
+               Op payload (today / v2)
+               ┌─────────────────────────┐
+               │ A: structural params    │   ← kept
+               │ B: required output      │   ← kept
+               │ C: input-shape snapshot │   ── moves ──┐
+               └─────────────────────────┘              │
+                                                        │
+                                                        ▼
+               Value-side metadata (v3)
+               ┌─────────────────────────┐
+               │ shape  (DimExpr list)   │   ◀── shape_of(value)
+               │ dtype                   │   ◀── dtype_of(value)
+               └─────────────────────────┘
+```
+
+## Why This Matters
+
+Moving Category C metadata off the op has immediate benefits:
+
+- smaller op payloads
+- better op hashing and interning behavior
+- less duplicated state to keep synchronized
+- cleaner AD rules, because they read input metadata from values instead of
+  trusting construction-time snapshots
+
+This is particularly important for reductions, linalg ops, and dot-general
+variants that currently carry input-shape history on the op itself.
+
+## Proposed Value-Side Metadata
+
+The traced stack should expose value metadata through one small abstraction.
+
+> **`TensorMeta` is a proposed new type**, not an existing one. It is the
+> working name for the carrier that Stage 1 delivers. The type itself does
+> not exist in the codebase today — the building blocks (`DimExpr` in
+> `tenferro-ops/src/dim_expr.rs`, `SymDim` in `tenferro/src/sym_dim.rs`,
+> and the internal `TracedTensor.shape_hint` field at
+> `tenferro/src/traced.rs:53`) are already present. Stage 1 lifts these
+> into a single public carrier and wires it through AD and lowering. The
+> final Rust name may be `TensorMeta`, `ValueMeta`, or another short name
+> settled during implementation.
+
+Minimal required fields:
+
+```text
+TensorMeta
+  dtype: DType
+  shape: [SymDim]   // value-absolute: concrete size or graph-global
+                    // symbolic ID
+```
+
+`SymDim` (`tenferro/src/sym_dim.rs`) is the value-absolute symbolic
+dimension type already present in the codebase. It is **not** the same
+as `DimExpr` (`tenferro-ops/src/dim_expr.rs`): `DimExpr::InputDim {
+input_idx, dim_idx }` is op-local (it names dims of *this op's inputs*)
+and lives inside op payloads, not as value metadata. Stage 1 populates
+`TensorMeta.shape` by resolving each output dim's `DimExpr` against the
+input values' `TensorMeta.shape` to obtain `SymDim` entries.
+
+What matters is that both traced graph construction and
+transpose/linearization infrastructure can query:
+
+- input dtype
+- input symbolic or concrete shape (as `Vec<SymDim>`)
+
+## Metadata Queries
+
+The AD rule surface, the builder, and the emitter all need metadata
+accessors so that no consumer has to re-derive shape or dtype from an
+op-embedded snapshot.
+
+### Required conceptual operations
+
+```text
+shape_of(val: &ValRef<StdTensorOp>)    -> &[SymDim]
+dtype_of(val: &ValRef<StdTensorOp>)    -> DType
+metadata_of(val: &ValRef<StdTensorOp>) -> &TensorMeta
+```
+
+The first two are sufficient for the initial migration. A richer
+`TensorMeta` handle can be added later if it clarifies downstream code.
+
+### Where metadata lives in the graph
+
+The per-value metadata must be reachable from AD rules and from lowering
+code without requiring each consumer to re-derive it. `v3` makes one
+explicit choice to avoid drift between call sites:
+
+- **`ShapeGuardContext` is the normative AD metadata surface.** It is
+  already threaded through `linearize` and `transpose_rule` via the
+  `PrimitiveOp` contract
+  (`tenferro-ops/src/ad/context.rs:49-109`). Stage 1 extends it so every
+  call site can call `ctx.shape_of(val)` / `ctx.dtype_of(val)` /
+  `ctx.metadata_of(val)` where `val: &ValRef<StdTensorOp>`. This is the
+  same input form that `transpose_rule` already receives
+  (`inputs: &[ValRef<Self>]`).
+- **Key resolution**: the underlying metadata store is keyed by
+  `GlobalValKey<StdTensorOp>`. `ShapeGuardContext` resolves a
+  `ValRef::Local(LocalValId)` to its corresponding `GlobalValKey` via
+  the fragment it is attached to, using the same resolution the AD
+  engine already performs when materializing fragments. Callers never
+  construct raw metadata keys; they pass the `ValRef` they were given
+  and the context does the lookup. `ValRef::Global(...)` resolves
+  directly.
+- **Underlying storage is an implementation detail.** The simplest
+  realization is a `HashMap<GlobalValKey<StdTensorOp>, TensorMeta>`
+  owned by the AD pass that is populated as graph nodes are added.
+  Stage 1 may choose any storage that yields O(1) hot-path lookup; it
+  must not require caller-side re-derivation.
+- **Builder and emitter helpers are convenience wrappers**, not the
+  fundamental seam. If `builder.shape_of(val)` / `emitter.shape_of(val)`
+  are added for ergonomics, they must be backed by the same
+  `GlobalValKey`-keyed metadata map so they cannot drift from the
+  `ShapeGuardContext` view.
+- **Symbolic inputs**: when a value's shape is symbolic, `shape_of`
+  returns a `Vec<SymDim>` where each entry is either
+  `SymDim::Concrete(n)` or a graph-global symbolic ID (variants per
+  the existing `SymDim` enum). Symbolic IDs are consistent across
+  values in the same graph, so equal dims across different values
+  share the same ID. The metadata layer itself never invents a
+  zero-length or placeholder-only shape — this is what Stage 1's
+  totality acceptance criterion asserts.
+
+Stage 1 wires `ShapeGuardContext` metadata queries first, and only then
+adds builder / emitter convenience wrappers against the same underlying
+map. The existing `TracedTensor.shape_hint`
+(`tenferro/src/traced.rs:53`) is an internal precursor at the facade
+level and continues to exist during the migration as a shim; it becomes
+derivable from the metadata accessors once Stage 1 is complete.
+
+## Interaction With Existing Runtime Types
+
+`v3` does not require inventing a new dynamic tensor value type. The runtime
+already has a `Tensor` enum. The missing piece is abstract metadata attached to
+graph values, not another concrete tensor container.
+
+This is why the shape-metadata cleanup should happen before any larger op
+vocabulary redesign. It gives the repository the right source of truth without
+forcing unrelated API churn.
+
+## Recommended Migration Order
+
+The safest order is:
+
+1. extend `ShapeGuardContext` with `shape_of` / `dtype_of` /
+   `metadata_of` queries against `ValRef<StdTensorOp>`; populate the
+   underlying `GlobalValKey<StdTensorOp>`-keyed metadata store as graph
+   nodes are constructed. Builder / emitter convenience wrappers land
+   after the `ShapeGuardContext` surface is in place and are backed by
+   the same store
+2. remove `lhs_rank` and `rhs_rank` from `StdTensorOp::DotGeneral`. These
+   ranks were already removed from `DotGeneralConfig` in `#737`, but they
+   were relocated to the enclosing traced op variant rather than deleted —
+   `tenferro-ops/src/std_tensor_op.rs:23-27` still carries them as
+   Category C snapshot fields on the op
+3. remove reduction `input_shape` fields
+4. remove `Reshape::from_shape` and `NaryEinsum::n_inputs` where derivable
+5. remove linalg input-shape snapshots
+6. remove `TriangularSolve` shape snapshots
+
+Each step should preserve behavior and keep tests focused on proving that
+the shape-sensitive AD paths still produce identical results. Oracle-replay
+baselines must stay green across every step.
+
+## Relation To JAX's Shape Polymorphism
+
+JAX handles symbolic shapes via `jax.export` (2024 GA) and internal
+`_DimExpr` types. The principles `v3` aligns with are narrower than JAX's
+full machinery but follow the same direction.
+
+| Mechanism | JAX | `v3` target |
+|---|---|---|
+| Symbolic dim type | `_DimExpr` (variables + arithmetic + constraints) | existing `DimExpr` / `SymDim` (simpler, no constraint solver) |
+| Abstract shape eval | *total* for every primitive | Stage 3 closes existing gaps |
+| Shape as first-class value | `jnp.shape(x)` returns traced value | existing `shape_of(axis)` returns scalar `f64` tensor |
+| Broadcast with symbolic shape | primitive-level support | Stage 4b adds a public `DimExpr`-accepting variant |
+| AD under symbolic inputs | all rules total | Stage 3 fixes the zero-tangent collapse at `tenferro/src/traced.rs:820-833` |
+| Opt-in polymorphism UX | `jax.export.export(polymorphic_shapes=...)` | out of scope for `v3` |
+| Constraint solver | built into `_DimExpr` | out of scope for `v3` |
+
+`v3` explicitly does not try to replicate JAX's full shape-polymorphism
+UX. What it does match is the two correctness invariants that make a
+symbolic system viable at all:
+
+- abstract evaluation is total over symbolic inputs
+- AD rules emit valid cotangents under symbolic shapes
+
+Stage 3 (symbolic-AD correctness) and Stage 4b (symbolic tropical as the
+contract test) close these. The constraint solver and polymorphic export
+UX are not on the `v3` critical path and may be revisited as follow-up
+work.
+
+## Design Position
+
+This part of `v3` is straightforward normal evolution. It aligns the codebase
+with what the traced graph already knows and removes historical debt rather
+than adding new mechanism.

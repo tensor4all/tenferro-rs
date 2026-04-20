@@ -12,6 +12,9 @@ use tidu::{backward_dag, topo_sort_grad_dag, BackwardCallbacks, GradNode, Linear
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
+use crate::metadata::{
+    register_fragment_metadata, register_value_metadata, tensor_meta_from_tensor,
+};
 use crate::traced::next_input_key;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
@@ -272,6 +275,7 @@ impl<B: TensorBackend> EagerTensor<B> {
 
     pub(crate) fn new_leaf(ctx: Arc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
         let key = eager_val_key();
+        register_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
@@ -294,6 +298,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         requires_grad: bool,
         grad_node: Option<Arc<GradNode<StdTensorOp>>>,
     ) -> Self {
+        register_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
@@ -445,7 +450,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         let mut callbacks = TenferroBackwardCallbacks {
             backend: &mut *backend,
         };
-        let mut ad_ctx = ShapeGuardContext::default();
+        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let cotangents = backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx);
         self.ctx.store_grads(&cotangents, &mut *backend)?;
         Ok(cotangents)
@@ -511,6 +516,22 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
             }
         }
 
+        register_fragment_metadata(
+            fragment,
+            fragment.inputs().iter().map(|input_id| {
+                let key = fragment.vals()[*input_id].key.clone();
+                let meta = tensor_meta_from_tensor(
+                    all_values
+                        .get(&key)
+                        .unwrap_or_else(|| {
+                            panic!("missing eager value for fragment input {:?}", key)
+                        })
+                        .as_ref(),
+                );
+                (key, meta)
+            }),
+        );
+
         all_values
     }
 
@@ -532,6 +553,7 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
             })
             .collect::<Vec<_>>();
 
+        ctx.refresh_global_metadata();
         tidu::eager_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx)
             .into_iter()
             .map(|maybe_id| maybe_id.map(|id| emitter.tensor(id)))

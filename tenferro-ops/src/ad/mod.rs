@@ -4,7 +4,8 @@ mod analytic;
 mod contraction;
 mod diagonal;
 mod dynamic;
-mod elementwise_tier2;
+mod elementwise;
+mod indexing;
 mod linalg;
 mod semiring;
 mod structural;
@@ -15,22 +16,46 @@ use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
 
-fn linearize_non_semiring(
+fn todo_linearize(op: &StdTensorOp) -> ! {
+    todo!("linearize not implemented for {:?}", op)
+}
+
+fn todo_transpose_rule(op: &StdTensorOp) -> ! {
+    todo!("transpose_rule not implemented for {:?}", op)
+}
+
+/// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its
+/// tangent inputs, emit the linearized fragment into `builder` and return
+/// the output tangents.
+///
+/// Rules per op live in the category submodules (`semiring`, `analytic`,
+/// `elementwise`, `structural`, `contraction`, `indexing`, `linalg`,
+/// `diagonal`, `dynamic`). `StdTensorOp::Extension(_)` delegates to the
+/// trait.
+pub fn linearize(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     ctx: &mut context::ShapeGuardContext,
-) -> Option<Vec<Option<LocalValId>>> {
-    Some(match op {
-        StdTensorOp::Div => {
-            elementwise_tier2::linearize_div(builder, primal_in, primal_out, tangent_in)
-        }
-        StdTensorOp::Abs => elementwise_tier2::linearize_abs(builder, primal_in, tangent_in),
-        StdTensorOp::Sign => elementwise_tier2::linearize_sign(builder, tangent_in),
+) -> Vec<Option<LocalValId>> {
+    match op {
+        // Semiring-arithmetic family (Add/Mul/Neg/Conj form a commutative
+        // semiring over the supported scalar dtypes).
+        StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
+        StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
+        StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
+        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+
+        // Elementwise (non-semiring) family.
+        StdTensorOp::Div => elementwise::linearize_div(builder, primal_in, primal_out, tangent_in),
+        StdTensorOp::Abs => elementwise::linearize_abs(builder, primal_in, tangent_in),
+        StdTensorOp::Sign => elementwise::linearize_sign(builder, tangent_in),
         StdTensorOp::Constant { .. } => vec![None],
         StdTensorOp::Compare(_) => vec![None],
+
+        // Analytic family.
         StdTensorOp::Exp => analytic::linearize_exp(builder, primal_out, tangent_in),
         StdTensorOp::Log => analytic::linearize_log(builder, primal_in, tangent_in),
         StdTensorOp::Sin => analytic::linearize_sin(builder, primal_in, tangent_in),
@@ -41,36 +66,27 @@ fn linearize_non_semiring(
         StdTensorOp::Pow => analytic::linearize_pow(builder, primal_in, primal_out, tangent_in),
         StdTensorOp::Expm1 => analytic::linearize_expm1(builder, primal_out, tangent_in),
         StdTensorOp::Log1p => analytic::linearize_log1p(builder, primal_in, tangent_in),
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        } => contraction::linearize_dot_general(
-            builder, primal_in, tangent_in, config, *lhs_rank, *rhs_rank,
-        ),
-        StdTensorOp::NaryEinsum { subscripts, .. } => {
+
+        // Contraction family.
+        StdTensorOp::DotGeneral { config } => {
+            contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
+        }
+        StdTensorOp::NaryEinsum { subscripts } => {
             contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }
-        StdTensorOp::ReduceSum { axes, .. } => {
+        StdTensorOp::ReduceSum { axes } => {
             contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
         }
-        StdTensorOp::ReduceProd { axes, input_shape } => contraction::linearize_reduce_prod(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            axes,
-            input_shape,
+        StdTensorOp::ReduceProd { axes } => contraction::linearize_reduce_prod(
+            builder, primal_in, primal_out, tangent_in, axes, ctx,
         ),
-        StdTensorOp::ReduceMax { axes, input_shape }
-        | StdTensorOp::ReduceMin { axes, input_shape } => contraction::linearize_reduce_chooser(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            axes,
-            input_shape,
-        ),
+        StdTensorOp::ReduceMax { axes } | StdTensorOp::ReduceMin { axes } => {
+            contraction::linearize_reduce_chooser(
+                builder, primal_in, primal_out, tangent_in, axes, ctx,
+            )
+        }
+
+        // Structural family.
         StdTensorOp::Transpose { perm } => {
             structural::linearize_transpose(builder, tangent_in, perm)
         }
@@ -83,15 +99,27 @@ fn linearize_non_semiring(
         StdTensorOp::Convert { from, to } => {
             structural::linearize_convert(builder, tangent_in, *from, *to)
         }
+        StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
+        StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
+        StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+
+        // Diagonal family.
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             diagonal::linearize_extract_diag(builder, tangent_in, *axis_a, *axis_b)
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::linearize_embed_diag(builder, tangent_in, *axis_a, *axis_b)
         }
-        StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
-        StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
-        StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+
+        // Indexing family.
+        StdTensorOp::Gather(config) => {
+            indexing::linearize_gather(builder, primal_in, tangent_in, config)
+        }
+        StdTensorOp::Scatter(config) => {
+            indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
+        }
+
+        // Dynamic family.
         StdTensorOp::DynamicTruncate { axis } => {
             dynamic::linearize_dynamic_truncate(builder, primal_in, tangent_in, *axis)
         }
@@ -99,16 +127,14 @@ fn linearize_non_semiring(
             dynamic::linearize_pad_to_match(builder, primal_in, tangent_in, *axis)
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
-        StdTensorOp::Lu { input_shape } => {
-            linalg::linearize_lu(builder, primal_out, tangent_in, input_shape, ctx)
-        }
+
+        // Linalg family.
+        StdTensorOp::Lu => linalg::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         } => linalg::linearize_triangular_solve(
             builder,
             primal_in,
@@ -118,61 +144,66 @@ fn linearize_non_semiring(
             *lower,
             *transpose_a,
             *unit_diagonal,
-            lhs_shape,
-            rhs_shape,
+            ctx,
         ),
-        StdTensorOp::Cholesky { input_shape } => {
-            linalg::linearize_cholesky(builder, primal_out, tangent_in, input_shape)
+        StdTensorOp::Cholesky => {
+            linalg::linearize_cholesky(builder, primal_in, primal_out, tangent_in, ctx)
         }
-        StdTensorOp::Svd { eps, input_shape } => {
-            linalg::linearize_svd(builder, primal_out, tangent_in, *eps, input_shape, ctx)
+        StdTensorOp::Svd { eps } => {
+            linalg::linearize_svd(builder, primal_in, primal_out, tangent_in, *eps, ctx)
         }
-        StdTensorOp::Qr { input_shape } => {
-            linalg::linearize_qr(builder, primal_out, tangent_in, input_shape, ctx)
+        StdTensorOp::Qr => linalg::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
+        StdTensorOp::Eigh { eps } => {
+            linalg::linearize_eigh(builder, primal_in, primal_out, tangent_in, *eps, ctx)
         }
-        StdTensorOp::Eigh { eps, input_shape } => {
-            linalg::linearize_eigh(builder, primal_out, tangent_in, *eps, input_shape)
+        StdTensorOp::Eig { input_dtype } => linalg::linearize_eig(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            *input_dtype,
+            ctx,
+        ),
+        StdTensorOp::ValidateNonsingular => vec![tangent_in[0]],
+
+        // Extension substrate.
+        StdTensorOp::Extension(ext) => {
+            ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
         }
-        StdTensorOp::Eig {
-            input_dtype,
-            input_shape,
-        } => linalg::linearize_eig(builder, primal_out, tangent_in, *input_dtype, input_shape),
-        StdTensorOp::ValidateNonsingular { .. } => vec![tangent_in[0]],
-        _ => return None,
-    })
+
+        _ => todo_linearize(op),
+    }
 }
 
-fn linearize_semiring(
-    op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-    _ctx: &mut context::ShapeGuardContext,
-) -> Option<Vec<Option<LocalValId>>> {
-    Some(match op {
-        StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
-        StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
-        StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
-        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
-        _ => return None,
-    })
-}
-
-fn transpose_non_semiring(
+/// Reverse-mode AD (VJP) for `StdTensorOp`: given the primal op, its
+/// inputs, and the output cotangent, emit the transposed fragment and
+/// return the input cotangents.
+///
+/// See [`linearize`] for the category split; the same categories appear
+/// here.
+pub fn transpose_rule(
     op: &StdTensorOp,
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     ctx: &mut context::ShapeGuardContext,
-) -> Option<Vec<Option<LocalValId>>> {
-    let _ = ctx;
-    Some(match op {
-        StdTensorOp::Div => elementwise_tier2::transpose_div(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::Abs => elementwise_tier2::transpose_abs(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::Sign => elementwise_tier2::transpose_sign(emitter, cotangent_out, mode),
+) -> Vec<Option<LocalValId>> {
+    match op {
+        // Semiring-arithmetic family.
+        StdTensorOp::Add => semiring::transpose_add(cotangent_out),
+        StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Neg => semiring::transpose_neg(emitter, cotangent_out),
+        StdTensorOp::Conj => semiring::transpose_conj(emitter, cotangent_out),
+
+        // Elementwise (non-semiring) family.
+        StdTensorOp::Div => elementwise::transpose_div(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Abs => elementwise::transpose_abs(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Sign => elementwise::transpose_sign(emitter, cotangent_out, mode),
         StdTensorOp::Constant { .. } => vec![],
         StdTensorOp::Compare(_) => vec![None, None],
+
+        // Analytic family.
         StdTensorOp::Exp => analytic::transpose_exp(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Log => analytic::transpose_log(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Sin => analytic::transpose_sin(emitter, cotangent_out, inputs, mode),
@@ -183,44 +214,30 @@ fn transpose_non_semiring(
         StdTensorOp::Pow => analytic::transpose_pow(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Expm1 => analytic::transpose_expm1(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Log1p => analytic::transpose_log1p(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::DotGeneral {
-            config,
-            lhs_rank,
-            rhs_rank,
-        } => contraction::transpose_dot_general(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            config,
-            *lhs_rank,
-            *rhs_rank,
-        ),
-        StdTensorOp::NaryEinsum {
-            subscripts,
-            n_inputs,
-        } => contraction::transpose_nary_einsum(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            subscripts,
-            *n_inputs,
-        ),
+
+        // Contraction family.
+        StdTensorOp::DotGeneral { config } => {
+            contraction::transpose_dot_general(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+        StdTensorOp::NaryEinsum { subscripts } => {
+            contraction::transpose_nary_einsum(emitter, cotangent_out, inputs, mode, subscripts)
+        }
         StdTensorOp::ReduceSum { .. } => {
-            contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs)
+            contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs, ctx)
         }
         StdTensorOp::ReduceProd { .. } => {
-            contraction::transpose_reduce_prod(emitter, cotangent_out, inputs, op)
+            contraction::transpose_reduce_prod(emitter, cotangent_out, inputs, op, ctx)
         }
         StdTensorOp::ReduceMax { .. } | StdTensorOp::ReduceMin { .. } => {
-            contraction::transpose_reduce_chooser(emitter, cotangent_out, inputs, op)
+            contraction::transpose_reduce_chooser(emitter, cotangent_out, inputs, op, ctx)
         }
+
+        // Structural family.
         StdTensorOp::Transpose { perm } => {
             structural::transpose_transpose(emitter, cotangent_out, perm)
         }
         StdTensorOp::Reshape { .. } => {
-            structural::transpose_reshape(emitter, cotangent_out, op, inputs)
+            structural::transpose_reshape(emitter, cotangent_out, op, inputs, ctx)
         }
         StdTensorOp::BroadcastInDim { shape, dims } => {
             structural::transpose_broadcast_in_dim(emitter, cotangent_out, shape, dims)
@@ -228,14 +245,26 @@ fn transpose_non_semiring(
         StdTensorOp::Convert { from, to } => {
             structural::transpose_convert(emitter, cotangent_out, mode, *from, *to)
         }
+        StdTensorOp::Tril { k } => structural::transpose_tril(emitter, cotangent_out, *k),
+        StdTensorOp::Triu { k } => structural::transpose_triu(emitter, cotangent_out, *k),
+
+        // Diagonal family.
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
             diagonal::transpose_extract_diag(emitter, cotangent_out, *axis_a, *axis_b)
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
             diagonal::transpose_embed_diag(emitter, cotangent_out, *axis_a, *axis_b)
         }
-        StdTensorOp::Tril { k } => structural::transpose_tril(emitter, cotangent_out, *k),
-        StdTensorOp::Triu { k } => structural::transpose_triu(emitter, cotangent_out, *k),
+
+        // Indexing family.
+        StdTensorOp::Gather(config) => {
+            indexing::transpose_gather(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+        StdTensorOp::Scatter(config) => {
+            indexing::transpose_scatter(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+
+        // Dynamic family.
         StdTensorOp::DynamicTruncate { axis } => {
             dynamic::transpose_dynamic_truncate(emitter, cotangent_out, inputs, *axis)
         }
@@ -243,13 +272,13 @@ fn transpose_non_semiring(
             dynamic::transpose_pad_to_match(emitter, cotangent_out, inputs, *axis)
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
+
+        // Linalg family.
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         } => linalg::transpose_triangular_solve(
             emitter,
             cotangent_out,
@@ -259,71 +288,18 @@ fn transpose_non_semiring(
             *lower,
             *transpose_a,
             *unit_diagonal,
-            lhs_shape,
-            rhs_shape,
         ),
-        StdTensorOp::ValidateNonsingular { .. } => vec![cotangent_out[0]],
-        _ => return None,
-    })
-}
+        StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
 
-fn transpose_semiring(
-    op: &StdTensorOp,
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-    _ctx: &mut context::ShapeGuardContext,
-) -> Option<Vec<Option<LocalValId>>> {
-    Some(match op {
-        StdTensorOp::Add => semiring::transpose_add(cotangent_out),
-        StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode),
-        StdTensorOp::Neg => semiring::transpose_neg(emitter, cotangent_out),
-        StdTensorOp::Conj => semiring::transpose_conj(emitter, cotangent_out),
-        _ => return None,
-    })
-}
+        // Extension substrate.
+        StdTensorOp::Extension(ext) => {
+            let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
+            ext.transpose_rule(emitter_dyn, cotangent_out, inputs, mode, ctx)
+        }
 
-fn todo_linearize(op: &StdTensorOp) -> ! {
-    todo!("linearize not implemented for {:?}", op)
-}
-
-fn todo_transpose_rule(op: &StdTensorOp) -> ! {
-    todo!("transpose_rule not implemented for {:?}", op)
-}
-
-pub fn linearize(
-    op: &StdTensorOp,
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    primal_out: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-    ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
-    if let Some(result) =
-        linearize_non_semiring(op, builder, primal_in, primal_out, tangent_in, ctx)
-    {
-        return result;
+        _ => todo_transpose_rule(op),
     }
-    if let Some(result) = linearize_semiring(op, builder, primal_in, tangent_in, ctx) {
-        return result;
-    }
-    todo_linearize(op)
 }
 
-pub fn transpose_rule(
-    op: &StdTensorOp,
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-    ctx: &mut context::ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
-    if let Some(result) = transpose_non_semiring(op, emitter, cotangent_out, inputs, mode, ctx) {
-        return result;
-    }
-    if let Some(result) = transpose_semiring(op, emitter, cotangent_out, inputs, mode, ctx) {
-        return result;
-    }
-    todo_transpose_rule(op)
-}
+#[cfg(test)]
+mod tests;

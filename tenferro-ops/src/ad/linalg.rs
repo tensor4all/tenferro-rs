@@ -7,17 +7,43 @@ use super::context::{resolve_and_guard, ShapeGuardContext};
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
+/// Derive an op-local `Vec<DimExpr>` for the primal input of a 1-input linalg op.
+///
+/// Category C `input_shape` snapshots have been removed from the linalg op
+/// variants; instead, AD rules resolve the primal input's shape through the
+/// [`ShapeGuardContext`] metadata surface. Concrete shapes collapse to
+/// `DimExpr::Const`; symbolic shapes fall back to `DimExpr::input_shape(0, rank)`
+/// so downstream op constructors that still carry shape fields (e.g.
+/// `TriangularSolve`) see a well-formed shape expression.
+fn primal_input_shape(
+    ctx: &mut ShapeGuardContext,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+) -> Vec<DimExpr> {
+    let shape = ctx.shape_of(&ValRef::External(primal_in[0].clone()));
+    if let Some(concrete) = shape
+        .iter()
+        .map(|dim| dim.constant_value())
+        .collect::<Option<Vec<_>>>()
+    {
+        DimExpr::from_concrete(&concrete)
+    } else {
+        DimExpr::input_shape(0, shape.len())
+    }
+}
+
 pub fn linearize_lu(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let k = DimExpr::min(m.clone(), n.clone());
@@ -25,8 +51,6 @@ pub fn linearize_lu(
     let rank = input_shape.len();
     let l_shape = matrix_shape(m, &k, batch_shape);
     let u_shape = matrix_shape(&k, n, batch_shape);
-    let l_square_shape = matrix_shape(m, m, batch_shape);
-    let u_square_shape = matrix_shape(n, n, batch_shape);
     let p = ValRef::External(primal_out[0].clone());
     let l = ValRef::External(primal_out[1].clone());
     let u = ValRef::External(primal_out[2].clone());
@@ -56,8 +80,6 @@ pub fn linearize_lu(
             lower: true,
             transpose_a: false,
             unit_diagonal: true,
-            lhs_shape: l_square_shape,
-            rhs_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(l_square), ValRef::Local(pd_a)],
         OpMode::Linear {
@@ -70,8 +92,6 @@ pub fn linearize_lu(
             lower: false,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: u_square_shape,
-            rhs_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(u_square), ValRef::Local(la)],
         OpMode::Linear {
@@ -129,15 +149,18 @@ pub fn linearize_lu(
 
 pub fn linearize_eig(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     input_dtype: DType,
-    input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let rank = input_shape.len();
     let v = ValRef::External(primal_out[1].clone());
     let da_complex = match input_dtype {
@@ -165,14 +188,7 @@ pub fn linearize_eig(
         vec![true, false],
         rank,
     );
-    let projected = solve_in_graph(
-        builder,
-        v,
-        ValRef::Local(dav),
-        input_shape,
-        input_shape,
-        rank,
-    );
+    let projected = solve_in_graph(builder, v, ValRef::Local(dav), rank);
     let dw = extract_diag_linear(builder, projected);
     vec![Some(dw), None]
 }
@@ -186,8 +202,7 @@ pub fn linearize_triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-    lhs_shape: &[DimExpr],
-    rhs_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     // Equation: op(A) @ X = B  (left_side=true)
     //       or  X @ op(A) = B  (left_side=false)
@@ -198,6 +213,17 @@ pub fn linearize_triangular_solve(
     //
     // When tangent_in[0] (dA) is present, we compute the correction:
     //   -d(op(A)) @ X  or  -X @ d(op(A))
+    let lhs_rank = ctx.shape_of(&ValRef::External(primal_in[0].clone())).len();
+    let rhs_rank = ctx.shape_of(&ValRef::External(primal_in[1].clone())).len();
+    assert!(
+        lhs_rank >= 2 && rhs_rank >= 2,
+        "linearize_triangular_solve: expected matrix operands"
+    );
+    assert_eq!(
+        lhs_rank, rhs_rank,
+        "linearize_triangular_solve: rank mismatch between lhs and rhs"
+    );
+    let rank = lhs_rank;
     let rhs_tangent = triangular_solve_rhs_tangent(
         builder,
         primal_out,
@@ -206,8 +232,7 @@ pub fn linearize_triangular_solve(
         lower,
         transpose_a,
         unit_diagonal,
-        lhs_shape,
-        rhs_shape,
+        rank,
     );
     let Some(rhs_tangent) = rhs_tangent else {
         return vec![None];
@@ -219,8 +244,6 @@ pub fn linearize_triangular_solve(
             lower,
             transpose_a,
             unit_diagonal,
-            lhs_shape: lhs_shape.to_vec(),
-            rhs_shape: rhs_shape.to_vec(),
         },
         vec![
             ValRef::External(primal_in[0].clone()),
@@ -241,11 +264,9 @@ fn triangular_solve_rhs_tangent(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-    lhs_shape: &[DimExpr],
-    rhs_shape: &[DimExpr],
+    rank: usize,
 ) -> Option<LocalValId> {
     let mut rhs_tangent = tangent_in[1];
-    let rank = shared_matrix_rank(lhs_shape, rhs_shape, "triangular_solve_rhs_tangent");
 
     if let Some(da) = tangent_in[0] {
         let da = project_triangular_operand_linear(builder, da, lower, unit_diagonal);
@@ -275,16 +296,18 @@ fn triangular_solve_rhs_tangent(
 
 pub fn linearize_svd(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let matrix_rank = input_shape.len();
@@ -445,15 +468,18 @@ pub fn linearize_svd(
 
 pub fn linearize_eigh(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let w = ValRef::External(primal_out[0].clone());
     let v = ValRef::External(primal_out[1].clone());
@@ -509,14 +535,17 @@ pub fn linearize_eigh(
 
 pub fn linearize_cholesky(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
     let l = ValRef::External(primal_out[0].clone());
     let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
@@ -528,8 +557,6 @@ pub fn linearize_cholesky(
             lower: true,
             transpose_a: true,
             unit_diagonal: false,
-            lhs_shape: input_shape.to_vec(),
-            rhs_shape: input_shape.to_vec(),
         },
         vec![ValRef::Local(l_conj), ValRef::Local(da_self_adjoint)],
         OpMode::Linear {
@@ -542,8 +569,6 @@ pub fn linearize_cholesky(
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: input_shape.to_vec(),
-            rhs_shape: input_shape.to_vec(),
         },
         vec![l.clone(), ValRef::Local(tmp)],
         OpMode::Linear {
@@ -575,21 +600,20 @@ pub fn linearize_cholesky(
 
 pub fn linearize_qr(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    input_shape: &[DimExpr],
     ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
     };
 
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
-    let k = DimExpr::min(m.clone(), n.clone());
     let matrix_rank = input_shape.len();
-    let r_shape = matrix_shape(k, n, batch_shape);
-    let da_h_shape = matrix_shape(n, m, batch_shape);
     let q = ValRef::External(primal_out[0].clone());
     let r = ValRef::External(primal_out[1].clone());
 
@@ -618,7 +642,6 @@ pub fn linearize_qr(
             ValRef::Local(leading_selector_t),
             matrix_rank,
         );
-        let square_shape = matrix_shape(m, m, batch_shape);
         let r_leading_h = adjoint_matrix_fixed(builder, ValRef::Local(r_leading), matrix_rank);
         let da_leading_h = adjoint_matrix_linear(builder, da_leading, matrix_rank);
         let dx_rinv_h = builder.add_op(
@@ -627,8 +650,6 @@ pub fn linearize_qr(
                 lower: true,
                 transpose_a: false,
                 unit_diagonal: false,
-                lhs_shape: square_shape.clone(),
-                rhs_shape: square_shape.clone(),
             },
             vec![ValRef::Local(r_leading_h), ValRef::Local(da_leading_h)],
             OpMode::Linear {
@@ -742,8 +763,6 @@ pub fn linearize_qr(
             lower: true,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: r_shape,
-            rhs_shape: da_h_shape,
         },
         vec![ValRef::Local(r_h), ValRef::Local(da_h)],
         OpMode::Linear {
@@ -801,8 +820,6 @@ pub fn transpose_triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-    lhs_shape: &[DimExpr],
-    rhs_shape: &[DimExpr],
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -821,8 +838,6 @@ pub fn transpose_triangular_solve(
                 lower,
                 transpose_a: !transpose_a,
                 unit_diagonal,
-                lhs_shape: lhs_shape.to_vec(),
-                rhs_shape: rhs_shape.to_vec(),
             },
             vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
             OpMode::Linear {
@@ -839,17 +854,9 @@ fn solve_in_graph(
     builder: &mut FragmentBuilder<StdTensorOp>,
     a: ValRef<StdTensorOp>,
     b: ValRef<StdTensorOp>,
-    lhs_shape: &[DimExpr],
-    rhs_shape: &[DimExpr],
     rank: usize,
 ) -> LocalValId {
-    let lu_outputs = builder.add_op(
-        StdTensorOp::Lu {
-            input_shape: lhs_shape.to_vec(),
-        },
-        vec![a],
-        OpMode::Primal,
-    );
+    let lu_outputs = builder.add_op(StdTensorOp::Lu, vec![a], OpMode::Primal);
     let p = lu_outputs[0];
     let l = lu_outputs[1];
     let u = lu_outputs[2];
@@ -860,8 +867,6 @@ fn solve_in_graph(
             lower: true,
             transpose_a: false,
             unit_diagonal: true,
-            lhs_shape: lhs_shape.to_vec(),
-            rhs_shape: rhs_shape.to_vec(),
         },
         vec![ValRef::Local(l), ValRef::Local(pb)],
         OpMode::Linear {
@@ -874,8 +879,6 @@ fn solve_in_graph(
             lower: false,
             transpose_a: false,
             unit_diagonal: false,
-            lhs_shape: lhs_shape.to_vec(),
-            rhs_shape: rhs_shape.to_vec(),
         },
         vec![ValRef::Local(u), ValRef::Local(z)],
         OpMode::Linear {
@@ -979,17 +982,9 @@ fn broadcast_in_dim_fixed(
 fn reduce_sum_fixed(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: ValRef<StdTensorOp>,
-    input_shape: &[DimExpr],
     axes: Vec<usize>,
 ) -> LocalValId {
-    fixed_unary(
-        builder,
-        StdTensorOp::ReduceSum {
-            axes,
-            input_shape: input_shape.to_vec(),
-        },
-        input,
-    )
+    fixed_unary(builder, StdTensorOp::ReduceSum { axes }, input)
 }
 
 fn pad_fixed(
@@ -1240,8 +1235,6 @@ fn matmul_fixed(
     builder.add_op(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
-            lhs_rank: rank,
-            rhs_rank: rank,
         },
         vec![lhs, rhs],
         OpMode::Primal,
@@ -1258,8 +1251,6 @@ fn matmul_linear(
     builder.add_op(
         StdTensorOp::DotGeneral {
             config: matrix_multiply_config(rank),
-            lhs_rank: rank,
-            rhs_rank: rank,
         },
         vec![lhs, rhs],
         OpMode::Linear { active_mask },
@@ -1290,24 +1281,6 @@ fn matrix_shape_parts<'a>(
 ) -> (&'a DimExpr, &'a DimExpr, &'a [DimExpr]) {
     assert!(shape.len() >= 2, "{op}: expected rank >= 2");
     (&shape[0], &shape[1], &shape[2..])
-}
-
-fn shared_matrix_rank(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr], op: &str) -> usize {
-    assert!(
-        lhs_shape.len() >= 2 && rhs_shape.len() >= 2,
-        "{op}: expected matrix operands"
-    );
-    assert_eq!(
-        lhs_shape.len(),
-        rhs_shape.len(),
-        "{op}: rank mismatch between lhs and rhs"
-    );
-    assert_eq!(
-        &lhs_shape[2..],
-        &rhs_shape[2..],
-        "{op}: batch shape mismatch between lhs and rhs"
-    );
-    lhs_shape.len()
 }
 
 fn matrix_shape(
@@ -1400,7 +1373,6 @@ fn scalar_one_fixed(
         reduce_sum_fixed(
             builder,
             ValRef::Local(zero),
-            anchor_shape,
             (0..anchor_shape.len()).collect(),
         )
     };

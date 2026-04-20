@@ -39,27 +39,10 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         strides: vec![1, 1],
     };
     let program = make_program(vec![
+        make_instr(StdTensorOp::ReduceProd { axes: vec![0] }, vec![0], vec![3]),
+        make_instr(StdTensorOp::ReduceMax { axes: vec![1] }, vec![1], vec![4]),
         make_instr(
-            StdTensorOp::ReduceProd {
-                axes: vec![0],
-                input_shape: dim_shape(&[2, 2]),
-            },
-            vec![0],
-            vec![3],
-        ),
-        make_instr(
-            StdTensorOp::ReduceMax {
-                axes: vec![1],
-                input_shape: dim_shape(&[2, 2]),
-            },
-            vec![1],
-            vec![4],
-        ),
-        make_instr(
-            StdTensorOp::ReduceMin {
-                axes: vec![0, 1],
-                input_shape: dim_shape(&[2, 2]),
-            },
+            StdTensorOp::ReduceMin { axes: vec![0, 1] },
             vec![2],
             vec![5],
         ),
@@ -74,8 +57,6 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
                 lower: true,
                 transpose_a: false,
                 unit_diagonal: false,
-                lhs_shape: dim_shape(&[2, 2]),
-                rhs_shape: dim_shape(&[2, 2]),
             },
             vec![0, 1],
             vec![11],
@@ -135,7 +116,6 @@ fn compile_std_to_exec_wires_nary_einsum_with_shape_and_dtype() {
         instructions: vec![make_instr(
             StdTensorOp::NaryEinsum {
                 subscripts: "ij,jk->ik".into(),
-                n_inputs: 2,
             },
             vec![0, 1],
             vec![2],
@@ -271,51 +251,18 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
 fn compile_std_to_exec_lowers_linalg_variants_directly() {
     let program = CompiledProgram {
         instructions: vec![
-            make_instr(
-                StdTensorOp::Svd {
-                    eps: 1.0e-8,
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![2, 3, 4],
-            ),
-            make_instr(
-                StdTensorOp::Qr {
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![5, 6],
-            ),
-            make_instr(
-                StdTensorOp::Lu {
-                    input_shape: dim_shape(&[3, 2]),
-                },
-                vec![0],
-                vec![7, 8, 9, 10],
-            ),
-            make_instr(
-                StdTensorOp::Eigh {
-                    eps: 1.0e-6,
-                    input_shape: dim_shape(&[2, 2]),
-                },
-                vec![1],
-                vec![11, 12],
-            ),
+            make_instr(StdTensorOp::Svd { eps: 1.0e-8 }, vec![0], vec![2, 3, 4]),
+            make_instr(StdTensorOp::Qr, vec![0], vec![5, 6]),
+            make_instr(StdTensorOp::Lu, vec![0], vec![7, 8, 9, 10]),
+            make_instr(StdTensorOp::Eigh { eps: 1.0e-6 }, vec![1], vec![11, 12]),
             make_instr(
                 StdTensorOp::Eig {
                     input_dtype: DType::F32,
-                    input_shape: dim_shape(&[2, 2]),
                 },
                 vec![1],
                 vec![13, 14],
             ),
-            make_instr(
-                StdTensorOp::ValidateNonsingular {
-                    input_shape: dim_shape(&[2, 2]),
-                },
-                vec![1],
-                vec![15],
-            ),
+            make_instr(StdTensorOp::ValidateNonsingular, vec![1], vec![15]),
         ],
         input_slots: vec![0, 1],
         output_slots: vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],

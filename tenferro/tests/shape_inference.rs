@@ -52,7 +52,6 @@ fn test_transpose_applies_perm() {
 #[test]
 fn test_reshape_uses_to_shape() {
     let op = StdTensorOp::Reshape {
-        from_shape: vec![cst(6)],
         to_shape: vec![cst(2), cst(3)],
     };
     let input = vec![cst(6)];
@@ -73,10 +72,7 @@ fn test_broadcast_in_dim_uses_shape() {
 
 #[test]
 fn test_reduce_sum_removes_axes() {
-    let op = StdTensorOp::ReduceSum {
-        axes: vec![0],
-        input_shape: vec![cst(3), cst(4)],
-    };
+    let op = StdTensorOp::ReduceSum { axes: vec![0] };
     let input = vec![cst(3), cst(4)];
     let out = infer_output_shapes(&op, &[&input]);
     assert_eq!(out, vec![vec![cst(4)]]);
@@ -91,8 +87,6 @@ fn test_dot_general_canonical() {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        lhs_rank: 2,
-        rhs_rank: 2,
     };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(5)];
@@ -110,10 +104,7 @@ fn test_shape_of_returns_scalar() {
 
 #[test]
 fn test_svd_three_outputs() {
-    let op = StdTensorOp::Svd {
-        eps: 1e-10,
-        input_shape: vec![cst(3), cst(4)],
-    };
+    let op = StdTensorOp::Svd { eps: 1e-10 };
     let input = vec![cst(3), cst(4)];
     let out = infer_output_shapes(&op, &[&input]);
     assert_eq!(out.len(), 3);
@@ -143,12 +134,8 @@ fn test_shared_passthrough_shape_rules_cover_remaining_elementwise_ops() {
         StdTensorOp::Tril { k: -1 },
         StdTensorOp::Triu { k: 2 },
         StdTensorOp::Reverse { axes: vec![0] },
-        StdTensorOp::ValidateNonsingular {
-            input_shape: vec![cst(2), cst(5)],
-        },
-        StdTensorOp::Cholesky {
-            input_shape: vec![cst(2), cst(5)],
-        },
+        StdTensorOp::ValidateNonsingular,
+        StdTensorOp::Cholesky,
     ] {
         let out = infer_output_shapes(&op, &[&unary_input]);
         assert_eq!(
@@ -263,7 +250,6 @@ fn test_structural_indexing_and_dynamic_shapes() {
 
     let einsum = StdTensorOp::NaryEinsum {
         subscripts: "ij,jk->ik".into(),
-        n_inputs: 2,
     };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(6)];
@@ -291,17 +277,13 @@ fn test_structural_indexing_and_dynamic_shapes() {
 fn test_multi_output_linalg_shape_rules() {
     let input = vec![cst(3), cst(4), cst(2)];
 
-    let qr = StdTensorOp::Qr {
-        input_shape: input.clone(),
-    };
+    let qr = StdTensorOp::Qr;
     assert_eq!(
         infer_output_shapes(&qr, &[&input]),
         vec![vec![cst(3), cst(3), cst(2)], vec![cst(3), cst(4), cst(2)]]
     );
 
-    let lu = StdTensorOp::Lu {
-        input_shape: input.clone(),
-    };
+    let lu = StdTensorOp::Lu;
     assert_eq!(
         infer_output_shapes(&lu, &[&input]),
         vec![
@@ -312,10 +294,7 @@ fn test_multi_output_linalg_shape_rules() {
         ]
     );
 
-    let eigh = StdTensorOp::Eigh {
-        eps: 1e-12,
-        input_shape: vec![cst(3), cst(3), cst(2)],
-    };
+    let eigh = StdTensorOp::Eigh { eps: 1e-12 };
     let eigh_input = vec![cst(3), cst(3), cst(2)];
     assert_eq!(
         infer_output_shapes(&eigh, &[&eigh_input]),
@@ -324,7 +303,6 @@ fn test_multi_output_linalg_shape_rules() {
 
     let eig = StdTensorOp::Eig {
         input_dtype: tenferro_tensor::DType::F64,
-        input_shape: vec![cst(3), cst(3), cst(2)],
     };
     assert_eq!(
         infer_output_shapes(&eig, &[&eigh_input]),
@@ -336,8 +314,6 @@ fn test_multi_output_linalg_shape_rules() {
         lower: true,
         transpose_a: false,
         unit_diagonal: false,
-        lhs_shape: vec![cst(3), cst(3)],
-        rhs_shape: vec![cst(3), cst(2)],
     };
     let rhs = vec![cst(3), cst(2)];
     assert_eq!(

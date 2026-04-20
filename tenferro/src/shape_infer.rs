@@ -7,13 +7,18 @@ use std::collections::HashMap;
 
 use tenferro_einsum::Subscripts;
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::sym_dim::SymDim;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
 
 /// Infer output dtype for a single instruction given its op and input dtypes.
 ///
 /// Panics if the input dtypes are inconsistent for the op (shouldn't happen
-/// in well-formed SSA programs).
+/// in well-formed SSA programs). For `StdTensorOp::Extension`, prefer the
+/// combined [`infer_extension_output_meta`] helper — this function only
+/// returns the first output's dtype, which is sufficient for single-output
+/// extensions but loses information for multi-output ones.
 pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
     match op {
         StdTensorOp::Constant { dtype, .. } => *dtype,
@@ -22,6 +27,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
             DType::F32 | DType::C32 => DType::C32,
             DType::F64 | DType::C64 => DType::C64,
         },
+        StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
         StdTensorOp::Add
         | StdTensorOp::Mul
         | StdTensorOp::Neg
@@ -162,16 +168,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             require_input(op, input_shapes, 1),
             config,
         )],
-        StdTensorOp::NaryEinsum {
-            subscripts,
-            n_inputs,
-        } => {
-            assert_eq!(
-                input_shapes.len(),
-                *n_inputs,
-                "NaryEinsum expects {n_inputs} inputs, got {}",
-                input_shapes.len()
-            );
+        StdTensorOp::NaryEinsum { subscripts } => {
             vec![einsum_output_shape(subscripts, input_shapes)]
         }
         StdTensorOp::Concatenate { axis } => vec![concatenate_shape(input_shapes, *axis)],
@@ -197,7 +194,101 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             eig_like_shapes(require_input(op, input_shapes, 0))
         }
         StdTensorOp::TriangularSolve { .. } => vec![require_input(op, input_shapes, 1).to_vec()],
+        StdTensorOp::Extension(ext) => {
+            let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes);
+            metas.into_iter().map(|(_dtype, shape)| shape).collect()
+        }
     }
+}
+
+/// Compute the full `(dtype, shape)` meta for every output of a
+/// `StdTensorOp::Extension(op)` instruction.
+///
+/// This is the single source of truth for multi-output extensions —
+/// [`infer_output_dtype`] only returns the first slot's dtype. Prefer this
+/// when populating `ExecInstruction` fields.
+///
+/// `input_dtypes` must have length `op.n_inputs()` and be consistent with
+/// `input_shapes`. `input_shapes` uses [`DimExpr`] expressions so shape
+/// inference can flow through composed symbolic graphs.
+pub fn infer_extension_output_meta(
+    op: &dyn ExtensionOp,
+    input_dtypes: &[DType],
+    input_shapes: &[&[DimExpr]],
+) -> Vec<(DType, Vec<DimExpr>)> {
+    // Build per-input SymDim representations using the input index as the
+    // synthetic tensor id. This preserves DimExpr::InputDim ↔ SymDim::TensorAxis
+    // round-trips; the tensor_id namespace is local to this call.
+    let symdim_storage: Vec<Vec<SymDim>> = input_shapes
+        .iter()
+        .enumerate()
+        .map(|(input_idx, shape)| {
+            shape
+                .iter()
+                .enumerate()
+                .map(|(axis, dim)| dim_expr_to_sym_dim(dim, input_idx, axis))
+                .collect()
+        })
+        .collect();
+    let symdim_refs: Vec<&[SymDim]> = symdim_storage.iter().map(Vec::as_slice).collect();
+
+    let metas = op.infer_output_meta(input_dtypes, &symdim_refs);
+
+    let tensor_map: Vec<(u64, usize)> = (0..input_shapes.len())
+        .map(|input_idx| (input_idx as u64, input_idx))
+        .collect();
+
+    metas
+        .into_iter()
+        .map(|(dtype, shape)| {
+            let dim_exprs: Vec<DimExpr> = shape
+                .iter()
+                .map(|dim| {
+                    dim.to_dim_expr(&tensor_map).unwrap_or_else(|err| {
+                        panic!(
+                            "ExtensionOp::infer_output_meta for family {:?} \
+                             returned a SymDim that cannot be converted to DimExpr: {err}",
+                            op.family_id(),
+                        )
+                    })
+                })
+                .collect();
+            (dtype, dim_exprs)
+        })
+        .collect()
+}
+
+fn dim_expr_to_sym_dim(expr: &DimExpr, input_idx: usize, axis: usize) -> SymDim {
+    // Prefer explicit const for concrete extents; otherwise expose as an
+    // opaque TensorAxis handle. Inner expressions (Add/Mul/…) are not
+    // expected in per-input shape vectors — callers pass them as raw
+    // `InputDim` references — so a direct mapping is sufficient.
+    match expr {
+        DimExpr::Const(value) => SymDim::from(*value),
+        DimExpr::InputDim {
+            input_idx: idx,
+            axis: ax,
+        } => SymDim::tensor_axis(*idx as u64, *ax),
+        _ => SymDim::tensor_axis(input_idx as u64, axis),
+    }
+}
+
+fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) -> DType {
+    // For dtype-only queries we synthesise a rank-0 shape list per input so
+    // the extension's `infer_output_meta` stays total even when shapes are
+    // unknown to the caller. Extensions whose dtype depends on shape must
+    // be handled through [`infer_extension_output_meta`], which
+    // `compile_std_to_exec` prefers for the `Extension` arm.
+    let empty_rows: Vec<&[SymDim]> = (0..op.n_inputs()).map(|_| [].as_slice()).collect();
+    let metas = op.infer_output_meta(input_dtypes, &empty_rows);
+    if metas.is_empty() {
+        panic!(
+            "ExtensionOp::infer_output_meta for family {:?} returned an \
+             empty meta list; expected at least one output",
+            op.family_id()
+        );
+    }
+    metas[0].0
 }
 
 fn require_input<'a>(

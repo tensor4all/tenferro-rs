@@ -233,8 +233,6 @@ fn test_full_pipeline_matmul() {
         instructions: vec![make_std_instr(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
-                lhs_rank: 2,
-                rhs_rank: 2,
             },
             vec![0, 1],
             vec![2],
@@ -277,8 +275,6 @@ fn test_full_pipeline_transpose_matmul() {
     let dot = make_std_instr(
         StdTensorOp::DotGeneral {
             config: config.clone(),
-            lhs_rank: 2,
-            rhs_rank: 2,
         },
         vec![2, 1],
         vec![3],
@@ -652,11 +648,7 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     };
     let program = CompiledProgram {
         instructions: vec![make_std_instr(
-            StdTensorOp::DotGeneral {
-                config,
-                lhs_rank: 3,
-                rhs_rank: 2,
-            },
+            StdTensorOp::DotGeneral { config },
             vec![0, 1],
             vec![2],
         )],

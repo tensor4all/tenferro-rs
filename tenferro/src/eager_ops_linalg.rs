@@ -1,4 +1,3 @@
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, TensorBackend};
 
@@ -22,13 +21,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn svd(&self) -> Result<(Self, Self, Self)> {
         let mut outputs = self
-            .multi_output_unary_op(
-                StdTensorOp::Svd {
-                    eps: 0.0,
-                    input_shape: DimExpr::from_concrete(self.data.shape()),
-                },
-                3,
-            )?
+            .multi_output_unary_op(StdTensorOp::Svd { eps: 0.0 }, 3)?
             .into_iter();
         match (
             outputs.next(),
@@ -57,14 +50,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(r.data().shape(), &[2, 2]);
     /// ```
     pub fn qr(&self) -> Result<(Self, Self)> {
-        let mut outputs = self
-            .multi_output_unary_op(
-                StdTensorOp::Qr {
-                    input_shape: DimExpr::from_concrete(self.data.shape()),
-                },
-                2,
-            )?
-            .into_iter();
+        let mut outputs = self.multi_output_unary_op(StdTensorOp::Qr, 2)?.into_iter();
         match (outputs.next(), outputs.next(), outputs.next()) {
             (Some(q), Some(r), None) => Ok((q, r)),
             _ => Err(Error::Internal(
@@ -89,14 +75,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(parity.data().shape(), &[] as &[usize]);
     /// ```
     pub fn lu(&self) -> Result<(Self, Self, Self, Self)> {
-        let mut outputs = self
-            .multi_output_unary_op(
-                StdTensorOp::Lu {
-                    input_shape: DimExpr::from_concrete(self.data.shape()),
-                },
-                4,
-            )?
-            .into_iter();
+        let mut outputs = self.multi_output_unary_op(StdTensorOp::Lu, 4)?.into_iter();
         match (
             outputs.next(),
             outputs.next(),
@@ -125,9 +104,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(l.data().as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 1.0]);
     /// ```
     pub fn cholesky(&self) -> Result<Self> {
-        self.unary_op(StdTensorOp::Cholesky {
-            input_shape: DimExpr::from_concrete(self.data.shape()),
-        })
+        self.unary_op(StdTensorOp::Cholesky)
     }
 
     /// Symmetric or Hermitian eigendecomposition: `A = V diag(W) V^T`.
@@ -145,13 +122,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn eigh(&self) -> Result<(Self, Self)> {
         let mut outputs = self
-            .multi_output_unary_op(
-                StdTensorOp::Eigh {
-                    eps: 0.0,
-                    input_shape: DimExpr::from_concrete(self.data.shape()),
-                },
-                2,
-            )?
+            .multi_output_unary_op(StdTensorOp::Eigh { eps: 0.0 }, 2)?
             .into_iter();
         match (outputs.next(), outputs.next(), outputs.next()) {
             (Some(values), Some(vectors), None) => Ok((values, vectors)),
@@ -177,13 +148,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn eig(&self) -> Result<(Self, Self)> {
         let input_dtype: DType = self.data.dtype();
         let mut outputs = self
-            .multi_output_unary_op(
-                StdTensorOp::Eig {
-                    input_dtype,
-                    input_shape: DimExpr::from_concrete(self.data.shape()),
-                },
-                2,
-            )?
+            .multi_output_unary_op(StdTensorOp::Eig { input_dtype }, 2)?
             .into_iter();
         match (outputs.next(), outputs.next(), outputs.next()) {
             (Some(values), Some(vectors), None) => Ok((values, vectors)),
@@ -224,8 +189,6 @@ impl<B: TensorBackend> EagerTensor<B> {
                 lower,
                 transpose_a,
                 unit_diagonal,
-                lhs_shape: DimExpr::from_concrete(self.data.shape()),
-                rhs_shape: DimExpr::from_concrete(b.data.shape()),
             },
         )
     }

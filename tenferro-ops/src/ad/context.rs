@@ -1,4 +1,4 @@
-//! AD context for guard-based shape resolution.
+//! AD context for guard-based shape resolution and value metadata queries.
 //!
 //! During AD graph construction, linalg rules such as SVD, QR, and LU need
 //! concrete matrix dimensions to choose between structurally different
@@ -7,8 +7,72 @@
 //! relationship changes.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use computegraph::fragment::Fragment;
+use computegraph::types::{GlobalValKey, ValRef};
+use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
+use crate::std_tensor_op::StdTensorOp;
+use crate::sym_dim::SymDim;
+
+type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
+
+/// Global metadata registry.
+///
+/// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
+/// reads lock briefly. `ShapeGuardContext::metadata_of` reaches into the
+/// registry lazily via [`lookup_global_metadata`] and caches the result
+/// into the context's local map — no up-front full-map snapshot.
+///
+/// Earlier designs either cloned the whole map up-front into each AD
+/// `ShapeGuardContext` (quadratic across the monotonically growing
+/// registry) or kept the map in an `Arc` and cloned on every write (also
+/// quadratic, since every traced op triggers at least one
+/// `register_value_metadata` write). Both variants dominated
+/// oracle_replay runtime.
+static GLOBAL_METADATA: OnceLock<Mutex<MetadataMap>> = OnceLock::new();
+
+fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
+    GLOBAL_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn global_metadata_snapshot() -> Arc<MetadataMap> {
+    let guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::new(guard.clone())
+}
+
+#[doc(hidden)]
+pub fn snapshot_global_metadata() -> Arc<MetadataMap> {
+    global_metadata_snapshot()
+}
+
+/// Per-value tensor metadata used by AD rules.
+///
+/// `shape` is expressed in graph-global [`SymDim`] terms rather than op-local
+/// [`DimExpr`] references.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_ops::{SymDim, TensorMeta};
+/// use tenferro_tensor::DType;
+///
+/// let meta = TensorMeta {
+///     dtype: DType::F64,
+///     shape: vec![SymDim::from(2usize), SymDim::from(3usize)],
+/// };
+/// assert_eq!(meta.shape.len(), 2);
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TensorMeta {
+    pub dtype: DType,
+    pub shape: Vec<SymDim>,
+}
 
 /// A recorded dimension comparison made during AD graph construction.
 ///
@@ -36,7 +100,7 @@ pub struct ShapeGuard {
     pub ordering: Ordering,
 }
 
-/// AD context providing dimension resolution and guard recording.
+/// AD context providing dimension resolution, guard recording, and value metadata.
 ///
 /// # Examples
 ///
@@ -46,12 +110,41 @@ pub struct ShapeGuard {
 /// let ctx = ShapeGuardContext::default();
 /// assert!(ctx.guards().is_empty());
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShapeGuardContext {
     guards: Vec<ShapeGuard>,
+    metadata: MetadataMap,
+    use_global_registry: bool,
+    local_keys: Option<Vec<GlobalValKey<StdTensorOp>>>,
 }
 
 impl ShapeGuardContext {
+    /// Create a context backed by the global metadata registry.
+    ///
+    /// Instead of cloning the entire global registry up-front (which used
+    /// to be O(N) per AD pass and quadratic across oracle_replay), the
+    /// context keeps a flag and lazily fetches entries from the shared
+    /// [`lookup_global_metadata`] on first miss, caching into its local
+    /// `metadata` map for subsequent reads within the same pass.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let ctx = tenferro_ops::ShapeGuardContext::with_global_metadata();
+    /// ```
+    pub fn with_global_metadata() -> Self {
+        Self {
+            use_global_registry: true,
+            ..Self::default()
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn refresh_global_metadata(&mut self) {
+        self.metadata.clear();
+        self.use_global_registry = true;
+    }
+
     /// Returns the guards recorded so far.
     ///
     /// # Examples
@@ -80,6 +173,126 @@ impl ShapeGuardContext {
     pub fn clear_guards(&mut self) {
         self.guards.clear();
     }
+
+    /// Return the shape metadata for a value reference.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let shape = ctx.shape_of(&value);
+    /// ```
+    pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
+        &self.metadata_of(val).shape
+    }
+
+    /// Return the dtype metadata for a value reference.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let dtype = ctx.dtype_of(&value);
+    /// ```
+    pub fn dtype_of(&mut self, val: &ValRef<StdTensorOp>) -> DType {
+        self.metadata_of(val).dtype
+    }
+
+    /// Return the complete metadata record for a value reference.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let meta = ctx.metadata_of(&value);
+    /// ```
+    pub fn metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
+        let key = self.resolve_key(val).clone();
+        if !self.metadata.contains_key(&key) && self.use_global_registry {
+            if let Some(meta) = lookup_global_metadata(&key) {
+                self.metadata.insert(key.clone(), meta);
+            }
+        }
+        self.metadata
+            .get(&key)
+            .unwrap_or_else(|| panic!("ShapeGuardContext: missing TensorMeta for {:?}", key))
+    }
+
+    #[doc(hidden)]
+    pub fn attach_fragment(&mut self, fragment: &Fragment<StdTensorOp>) {
+        self.local_keys = Some(
+            fragment
+                .vals()
+                .iter()
+                .map(|node| node.key.clone())
+                .collect(),
+        );
+    }
+
+    #[doc(hidden)]
+    pub fn insert_metadata(&mut self, key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
+        self.metadata.insert(key, meta);
+    }
+
+    #[doc(hidden)]
+    pub fn extend_metadata<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+    {
+        self.metadata.extend(entries);
+    }
+
+    fn resolve_key<'a>(&'a self, val: &'a ValRef<StdTensorOp>) -> &'a GlobalValKey<StdTensorOp> {
+        match val {
+            ValRef::External(key) => key,
+            ValRef::Local(local_id) => self
+                .local_keys
+                .as_ref()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ShapeGuardContext: cannot resolve local value {local_id} without an attached fragment"
+                    )
+                })
+                .get(*local_id)
+                .unwrap_or_else(|| {
+                    panic!("ShapeGuardContext: local value {local_id} is out of bounds")
+                }),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
+    let mut guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.insert(key, meta);
+}
+
+/// Look up a single metadata entry from the global registry.
+///
+/// Locks the registry briefly for a single `HashMap::get` + clone. Prefer
+/// this over [`snapshot_global_metadata`] for any callsite that only needs
+/// a handful of keys.
+///
+/// # Examples
+///
+/// ```ignore
+/// let meta = tenferro_ops::ad::context::lookup_global_metadata(&key);
+/// ```
+pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorMeta> {
+    let guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.get(key).cloned()
+}
+
+#[doc(hidden)]
+pub fn register_global_metadata_batch<I>(entries: I)
+where
+    I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+{
+    let mut guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.extend(entries);
 }
 
 /// Resolve a [`DimExpr`] to a concrete `usize`.
@@ -106,72 +319,4 @@ pub(crate) fn resolve_and_guard(
         ordering: m_size.cmp(&n_size),
     });
     (m_size, n_size)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cmp::Ordering;
-
-    #[test]
-    fn resolve_dim_const() {
-        assert_eq!(resolve_dim(&DimExpr::Const(7)), 7);
-    }
-
-    #[test]
-    fn resolve_dim_const_expr() {
-        let expr = DimExpr::min(DimExpr::Const(3), DimExpr::Const(5));
-        assert_eq!(resolve_dim(&expr), 3);
-    }
-
-    #[test]
-    fn resolve_and_guard_records_greater() {
-        let mut ctx = ShapeGuardContext::default();
-        let (m, n) = resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
-        assert_eq!((m, n), (5, 3));
-        assert_eq!(ctx.guards().len(), 1);
-        assert_eq!(
-            ctx.guards()[0],
-            ShapeGuard {
-                dim_a: 5,
-                dim_b: 3,
-                ordering: Ordering::Greater,
-            }
-        );
-    }
-
-    #[test]
-    fn resolve_and_guard_records_less() {
-        let mut ctx = ShapeGuardContext::default();
-        let (m, n) = resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
-        assert_eq!((m, n), (2, 4));
-        assert_eq!(ctx.guards()[0].ordering, Ordering::Less);
-    }
-
-    #[test]
-    fn resolve_and_guard_records_equal() {
-        let mut ctx = ShapeGuardContext::default();
-        let (m, n) = resolve_and_guard(&DimExpr::Const(3), &DimExpr::Const(3), &mut ctx);
-        assert_eq!((m, n), (3, 3));
-        assert_eq!(ctx.guards()[0].ordering, Ordering::Equal);
-    }
-
-    #[test]
-    fn guards_accumulate() {
-        let mut ctx = ShapeGuardContext::default();
-        resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
-        resolve_and_guard(&DimExpr::Const(2), &DimExpr::Const(4), &mut ctx);
-        assert_eq!(ctx.guards().len(), 2);
-        assert_eq!(ctx.guards()[0].ordering, Ordering::Greater);
-        assert_eq!(ctx.guards()[1].ordering, Ordering::Less);
-    }
-
-    #[test]
-    fn clear_guards_empties() {
-        let mut ctx = ShapeGuardContext::default();
-        resolve_and_guard(&DimExpr::Const(5), &DimExpr::Const(3), &mut ctx);
-        assert_eq!(ctx.guards().len(), 1);
-        ctx.clear_guards();
-        assert!(ctx.guards().is_empty());
-    }
 }

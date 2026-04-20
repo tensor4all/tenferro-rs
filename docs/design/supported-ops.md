@@ -250,6 +250,29 @@ The exported C surface currently focuses on a narrow, stable subset:
 - Zero-copy interoperability is intentionally unsupported.
 - Conversion helpers are CPU-buffer oriented and reject non-owned/non-CPU materialization through checked errors.
 
+## Non-mainline substrates (scheduled for Stage 6 removal)
+
+Per design_v3, the following graph/backend surfaces are **non-mainline** and
+are retained only for Stage 2-6 compatibility. They are not the architectural
+source of truth for the traced AD substrate — the mainline op vocabulary is
+`StdTensorOp` in `tenferro-ops`. These surfaces are scheduled for removal when
+the `ExtensionOp` mechanism lands in Stage 6.
+
+| Item | Crate | Role | Removal |
+| --- | --- | --- | --- |
+| `SemiringOp<Alg>` | `tenferro-ops` | Algebra-generic traced graph op with its own compile path, separate from `StdTensorOp` | Stage 6 |
+| `SemiringOps` (trait) | `tenferro-ops` | Shared constructor vocabulary kept so `SemiringOp` and `StdTensorOp` look symmetric | Stage 6 |
+| `SemiringBackend<Alg>` | `tenferro-tensor` | Algebra-generic backend that executes `SemiringOp` over typed tensors | Stage 6 |
+
+New code must not extend these surfaces. Lower tropical / semiring use cases
+through compositions of core `StdTensorOp` primitives (e.g. max-plus via
+`BroadcastInDim + Add + ReduceMax`) today, and through the `ExtensionOp`
+mechanism once Stage 6 lands. See
+[`design_v3/30-algebra-and-tropical.md`](./design_v3/30-algebra-and-tropical.md)
+("Recommended Fate Of `SemiringOp`") and
+[`design_v3/90-migration-plan.md`](./design_v3/90-migration-plan.md) Stage 6
+for the normative retirement plan.
+
 ## `chainrules`
 
 This external crate provides the scalar formula basis reused by

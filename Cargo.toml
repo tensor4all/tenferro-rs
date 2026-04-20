@@ -1,12 +1,17 @@
 [workspace]
 members = [
-    # v2 core (6 crates)
+    # v2 core (5 crates)
     "tenferro-device",
-    "tenferro-algebra",
     "tenferro-tensor",
     "tenferro-ops",
     "tenferro-einsum",
     "tenferro",
+]
+exclude = [
+    # External extension crates (design_v3 Stage 4a+): depend only on the
+    # public `tenferro` facade, are NOT core workspace members, and run
+    # their own tests standalone.
+    "ext/tropical",
 ]
 default-members = [
     "tenferro-tensor",

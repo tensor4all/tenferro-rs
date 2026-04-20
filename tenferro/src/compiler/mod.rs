@@ -1,12 +1,9 @@
 use computegraph::compile::CompiledProgram;
-use tenferro_algebra::Algebra;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::semiring_op::SemiringOp;
-use tenferro_ops::semiring_op_kind::SemiringOpKind;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, DotGeneralConfig, TensorScalar};
+use tenferro_tensor::{DType, DotGeneralConfig};
 
-use crate::shape_infer::{infer_output_dtype, infer_output_shapes};
+use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_shapes};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
@@ -59,16 +56,51 @@ pub fn compile_std_to_exec(
             let input_shapes_refs: Vec<&[DimExpr]> =
                 input_shapes_owned.iter().map(Vec::as_slice).collect();
 
-            let output_dtype = infer_output_dtype(&instr.op, &input_dtypes);
-            let output_shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
-            assert_eq!(
-                output_shapes.len(),
-                instr.outputs.len(),
-                "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                instr.op,
-                output_shapes.len(),
-                instr.outputs.len()
-            );
+            let (output_dtype, output_shapes): (DType, Vec<Vec<DimExpr>>) =
+                if let StdTensorOp::Extension(ext) = &instr.op {
+                    let metas = infer_extension_output_meta(
+                        ext.as_ref(),
+                        &input_dtypes,
+                        &input_shapes_refs,
+                    );
+                    assert_eq!(
+                        metas.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: extension family_id={:?} \
+                         inferred {} output metas for {} output slots",
+                        ext.family_id(),
+                        metas.len(),
+                        instr.outputs.len()
+                    );
+                    // Current compiler supports a single dtype per instruction;
+                    // per spec Section 7, extensions must keep a uniform dtype
+                    // across all outputs. Surface a clean panic if violated.
+                    let dtypes_consistent = metas.iter().all(|(dtype, _)| *dtype == metas[0].0);
+                    assert!(
+                        dtypes_consistent,
+                        "compile_std_to_exec: extension family_id={:?} returned \
+                         multiple output dtypes {:?}; multi-dtype extensions are \
+                         not yet supported in the compiled path",
+                        ext.family_id(),
+                        metas.iter().map(|(dtype, _)| *dtype).collect::<Vec<_>>()
+                    );
+                    let dtype = metas[0].0;
+                    let shapes: Vec<Vec<DimExpr>> =
+                        metas.into_iter().map(|(_dtype, shape)| shape).collect();
+                    (dtype, shapes)
+                } else {
+                    let dtype = infer_output_dtype(&instr.op, &input_dtypes);
+                    let shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
+                    assert_eq!(
+                        shapes.len(),
+                        instr.outputs.len(),
+                        "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
+                        instr.op,
+                        shapes.len(),
+                        instr.outputs.len()
+                    );
+                    (dtype, shapes)
+                };
 
             for (slot, shape) in instr.outputs.iter().zip(output_shapes.iter()) {
                 slot_dtypes[*slot] = Some(output_dtype);
@@ -80,80 +112,6 @@ pub fn compile_std_to_exec(
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: output_dtype,
-                output_shapes,
-                last_use: Vec::new(),
-            }
-        })
-        .collect();
-
-    let mut program = ExecProgram {
-        instructions,
-        input_slots: prog.input_slots.clone(),
-        output_slots: prog.output_slots.clone(),
-        n_slots: prog.n_slots,
-    };
-    dot_dimension_sorter(&mut program);
-    transpose_folding(&mut program);
-    dot_decomposer(&mut program, input_shapes);
-    eliminate_dead_code(&mut program);
-    populate_last_use(&mut program);
-    program
-}
-
-pub fn compile_semiring_to_exec<Alg>(
-    prog: &CompiledProgram<SemiringOp<Alg>>,
-    input_shapes: &[Vec<DimExpr>],
-) -> ExecProgram
-where
-    Alg: Algebra + Send + Sync + 'static,
-    Alg::Scalar: TensorScalar,
-{
-    assert_eq!(
-        prog.input_slots.len(),
-        input_shapes.len(),
-        "compile_semiring_to_exec: input shape count must match input slot count"
-    );
-
-    let dtype = <Alg::Scalar as TensorScalar>::dtype();
-    let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
-    for (index, &slot) in prog.input_slots.iter().enumerate() {
-        slot_shapes[slot] = Some(input_shapes[index].clone());
-    }
-
-    let instructions = prog
-        .instructions
-        .iter()
-        .map(|instr| {
-            let input_shapes_owned: Vec<Vec<DimExpr>> = instr
-                .inputs
-                .iter()
-                .map(|&slot| {
-                    slot_shapes[slot].clone().unwrap_or_else(|| {
-                        panic!("compile_semiring_to_exec: missing shape for slot {slot}")
-                    })
-                })
-                .collect();
-            let input_shapes_refs: Vec<&[DimExpr]> =
-                input_shapes_owned.iter().map(Vec::as_slice).collect();
-            let output_shapes = infer_semiring_output_shapes(&instr.op.kind, &input_shapes_refs);
-            assert_eq!(
-                output_shapes.len(),
-                instr.outputs.len(),
-                "compile_semiring_to_exec: {:?} inferred {} output shapes for {} output slots",
-                instr.op.kind,
-                output_shapes.len(),
-                instr.outputs.len()
-            );
-
-            for (slot, shape) in instr.outputs.iter().zip(output_shapes.iter()) {
-                slot_shapes[*slot] = Some(shape.clone());
-            }
-
-            ExecInstruction {
-                op: semiring_to_exec_op(&instr.op.kind),
-                input_slots: instr.inputs.clone(),
-                output_slots: instr.outputs.clone(),
-                dtype,
                 output_shapes,
                 last_use: Vec::new(),
             }
@@ -260,85 +218,11 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
             unit_diagonal: *unit_diagonal,
         },
         StdTensorOp::ValidateNonsingular { .. } => ExecOp::ValidateNonsingular,
+        StdTensorOp::Extension(ext) => ExecOp::Extension(ext.clone()),
     }
 }
 
-fn semiring_to_exec_op(kind: &SemiringOpKind) -> ExecOp {
-    match kind {
-        SemiringOpKind::Add => ExecOp::Add,
-        SemiringOpKind::Mul => ExecOp::Multiply,
-        SemiringOpKind::DotGeneral(config) => ExecOp::DotGeneral(config.clone()),
-        SemiringOpKind::ReduceSum { axes } => ExecOp::ReduceSum { axes: axes.clone() },
-        SemiringOpKind::Transpose { perm } => ExecOp::Transpose { perm: perm.clone() },
-        SemiringOpKind::Reshape { shape } => ExecOp::Reshape {
-            shape: DimExpr::from_concrete(shape),
-        },
-        SemiringOpKind::BroadcastInDim { shape, dims } => ExecOp::BroadcastInDim {
-            shape: DimExpr::from_concrete(shape),
-            dims: dims.clone(),
-        },
-        SemiringOpKind::ExtractDiag { axis_a, axis_b } => ExecOp::ExtractDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-        SemiringOpKind::EmbedDiag { axis_a, axis_b } => ExecOp::EmbedDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-    }
-}
-
-fn infer_semiring_output_shapes(
-    kind: &SemiringOpKind,
-    input_shapes: &[&[DimExpr]],
-) -> Vec<Vec<DimExpr>> {
-    let op = match kind {
-        SemiringOpKind::Add => StdTensorOp::Add,
-        SemiringOpKind::Mul => StdTensorOp::Mul,
-        SemiringOpKind::DotGeneral(config) => StdTensorOp::DotGeneral {
-            config: config.clone(),
-            lhs_rank: require_input_shape(kind, input_shapes, 0).len(),
-            rhs_rank: require_input_shape(kind, input_shapes, 1).len(),
-        },
-        SemiringOpKind::ReduceSum { axes } => StdTensorOp::ReduceSum {
-            axes: axes.clone(),
-            input_shape: require_input_shape(kind, input_shapes, 0).to_vec(),
-        },
-        SemiringOpKind::Transpose { perm } => StdTensorOp::Transpose { perm: perm.clone() },
-        SemiringOpKind::Reshape { shape } => StdTensorOp::Reshape {
-            from_shape: require_input_shape(kind, input_shapes, 0).to_vec(),
-            to_shape: DimExpr::from_concrete(shape),
-        },
-        SemiringOpKind::BroadcastInDim { shape, dims } => StdTensorOp::BroadcastInDim {
-            shape: DimExpr::from_concrete(shape),
-            dims: dims.clone(),
-        },
-        SemiringOpKind::ExtractDiag { axis_a, axis_b } => StdTensorOp::ExtractDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-        SemiringOpKind::EmbedDiag { axis_a, axis_b } => StdTensorOp::EmbedDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-    };
-    infer_output_shapes(&op, input_shapes)
-}
-
-fn require_input_shape<'a>(
-    kind: &SemiringOpKind,
-    input_shapes: &'a [&[DimExpr]],
-    index: usize,
-) -> &'a [DimExpr] {
-    input_shapes.get(index).copied().unwrap_or_else(|| {
-        panic!(
-            "semiring shape inference for {kind:?} requires input index {index}, got {}",
-            input_shapes.len()
-        )
-    })
-}
-
-fn populate_last_use(program: &mut ExecProgram) {
+pub(crate) fn populate_last_use(program: &mut ExecProgram) {
     let all_input_slots: Vec<Vec<usize>> = program
         .instructions
         .iter()

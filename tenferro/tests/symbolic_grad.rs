@@ -1,13 +1,16 @@
 //! AD tests over placeholder-input graphs.
 //!
 //! Demonstrates that `grad` built over an `input_concrete_shape` placeholder
-//! produces a graph that can be evaluated via `eval_with_inputs`. The
-//! `input_symbolic_shape` variants are currently ignored: the vjp transpose
-//! builds a dense zero-cotangent for every non-seed tangent input using
-//! `wrt.shape_hint`, which is `None` for a symbolic placeholder and falls
-//! back to a `vec![0; rank]` shape — that zero-rank fallback crashes the
-//! runtime. Fixing this needs a shape-deferred zero-tangent in the AD
-//! transpose pass and is tracked separately.
+//! as well as `input_symbolic_shape` placeholders produces graphs that can be
+//! evaluated via `eval_with_inputs`.
+//!
+//! Previously the `input_symbolic_shape` variants were ignored because the
+//! VJP code materialised zero cotangents with a concrete `vec![0; rank]`
+//! shape when `wrt.shape_hint` was `None`. That has been replaced with a
+//! deferred zero-tangent approach: the zero tensor is synthesised at
+//! `eval_with_inputs` time once the caller supplies the concrete binding.
+//! See "Deferred Zero-Tangent Policy" in
+//! `docs/design/design_v3/10-ad-model.md`.
 
 use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
 use tenferro_tensor::DType;
@@ -17,7 +20,6 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 }
 
 #[test]
-#[ignore = "symbolic-shape AD: vjp zero-tangent uses vec![0; rank] when wrt.shape_hint is None"]
 fn grad_of_sum_of_squares_against_symbolic_input() {
     // f(x) = sum(x * x), df/dx = 2 * x
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
@@ -37,7 +39,6 @@ fn grad_of_sum_of_squares_against_symbolic_input() {
 }
 
 #[test]
-#[ignore = "symbolic-shape AD: vjp zero-tangent uses vec![0; rank] when wrt.shape_hint is None"]
 fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
     // Same symbolic grad graph, eval with shape [3] then shape [5].
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
@@ -63,7 +64,6 @@ fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
 }
 
 #[test]
-#[ignore = "symbolic-shape AD: vjp zero-tangent uses vec![0; rank] when wrt.shape_hint is None"]
 fn grad_of_dot_product_against_two_symbolic_inputs() {
     // f(a, b) = sum(a * b)
     // df/da = b, df/db = a

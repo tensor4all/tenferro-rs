@@ -209,6 +209,7 @@ macro_rules! scatter_kernel {
         #[cube(launch_unchecked)]
         pub(crate) fn $float_name<E: Float, I: Float>(
             out: &mut Array<E>,
+            operand: &Array<E>,
             scatter_indices: &Array<I>,
             updates: &Array<E>,
             #[comptime] operand_shape: Sequence<usize>,
@@ -222,8 +223,10 @@ macro_rules! scatter_kernel {
             #[comptime] window_shape_updates: Sequence<usize>,
         ) {
             if ABSOLUTE_POS == 0 {
+                // StableHLO add-scatter: initialise the output from a copy of
+                // `operand` so non-scattered slots preserve the operand values.
                 for pos in 0..out.len() {
-                    out[pos] = zero_value::<E>();
+                    out[pos] = operand[pos];
                 }
 
                 let batch_iters = shape_product(batch_shape.clone());
@@ -342,6 +345,7 @@ macro_rules! scatter_kernel {
         #[cube(launch_unchecked)]
         pub(crate) fn $complex_name<E: Complex, I: Float>(
             out: &mut Array<E>,
+            operand: &Array<E>,
             scatter_indices: &Array<I>,
             updates: &Array<E>,
             #[comptime] operand_shape: Sequence<usize>,
@@ -355,8 +359,10 @@ macro_rules! scatter_kernel {
             #[comptime] window_shape_updates: Sequence<usize>,
         ) {
             if ABSOLUTE_POS == 0 {
+                // StableHLO add-scatter: initialise the output from a copy of
+                // `operand` so non-scattered slots preserve the operand values.
                 for pos in 0..out.len() {
-                    out[pos] = zero_value::<E>();
+                    out[pos] = operand[pos];
                 }
 
                 let batch_iters = shape_product(batch_shape.clone());

@@ -9,19 +9,15 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, ValRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Semiring;
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::cpu::structural::{
-    typed_broadcast_in_dim, typed_embed_diagonal, typed_extract_diagonal, typed_reshape,
-    typed_transpose,
-};
 use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SemiringBackend,
-    SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
 #[derive(Clone, Debug)]
@@ -134,6 +130,14 @@ pub enum ExecOp {
         transpose_a: bool,
         unit_diagonal: bool,
     },
+    /// Out-of-tree extension carrier in the execution IR.
+    ///
+    /// Payload and dispatch are defined by the inner [`ExtensionOp`]. The
+    /// execution pipeline treats extensions as single-instruction FFI
+    /// boundaries (spec Section 8): no elementwise fusion, and
+    /// [`ExtensionOp::eager_execute`] is invoked directly with the resolved
+    /// input tensors.
+    Extension(Arc<dyn ExtensionOp>),
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +221,7 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
             | ExecOp::Eigh { .. }
             | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
+            | ExecOp::Extension(_)
     )
 }
 
@@ -232,24 +237,6 @@ pub(crate) fn resolve_tensor_shape_exprs(
                 .as_ref()
                 .ok_or(TensorError::MissingValue { slot })?
                 .shape(),
-        );
-    }
-    Ok(DimExpr::eval_all(exprs, &input_shapes))
-}
-
-fn resolve_semiring_shape_exprs<Alg: Semiring>(
-    slots: &[Option<TypedTensor<Alg::Scalar>>],
-    input_slots: &[usize],
-    exprs: &[DimExpr],
-) -> Result<Vec<usize>> {
-    let mut input_shapes = Vec::with_capacity(input_slots.len());
-    for &slot in input_slots {
-        input_shapes.push(
-            slots[slot]
-                .as_ref()
-                .ok_or(TensorError::MissingValue { slot })?
-                .shape
-                .as_slice(),
         );
     }
     Ok(DimExpr::eval_all(exprs, &input_shapes))
@@ -592,11 +579,50 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             )?;
             slots[inst.output_slots[0]] = Some(result);
         }
+        ExecOp::Extension(ext) => execute_extension_instruction(slots, inst, ext.as_ref())?,
         other => {
             return Err(Error::Internal(format!(
                 "non-ffi op reached ffi executor: {other:?}"
             )))
         }
+    }
+    Ok(())
+}
+
+/// Dispatch a compiled `ExecOp::Extension` instruction by delegating to
+/// [`ExtensionOp::eager_execute`] with the resolved input tensors.
+///
+/// Per spec Section 8, the compiled pipeline owns metadata lowering and
+/// input resolution; the extension owns the actual forward computation.
+/// Errors are wrapped in [`Error::BackendFailure`] with `op: "extension"`
+/// and the `family_id` included in the message.
+fn execute_extension_instruction(
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    ext: &dyn ExtensionOp,
+) -> Result<()> {
+    let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
+    let outputs = ext.eager_execute(&inputs).map_err(|err| {
+        Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
+            op: "extension",
+            message: format!("family_id={:?}: {err}", ext.family_id()),
+        })
+    })?;
+    if outputs.len() != inst.output_slots.len() {
+        return Err(Error::TensorRuntime(
+            tenferro_tensor::Error::InvalidConfig {
+                op: "extension",
+                message: format!(
+                    "family_id={:?}: eager_execute returned {} outputs for {} slots",
+                    ext.family_id(),
+                    outputs.len(),
+                    inst.output_slots.len()
+                ),
+            },
+        ));
+    }
+    for (slot, tensor) in inst.output_slots.iter().copied().zip(outputs.into_iter()) {
+        slots[slot] = Some(tensor);
     }
     Ok(())
 }
@@ -830,67 +856,4 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
             }
         }
     }
-}
-
-pub fn eval_semiring_ir<B, Alg>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<TypedTensor<Alg::Scalar>>,
-) -> Result<Vec<TypedTensor<Alg::Scalar>>>
-where
-    Alg: Semiring,
-    B: SemiringBackend<Alg>,
-{
-    let mut slots: Vec<Option<TypedTensor<Alg::Scalar>>> = vec![None; program.n_slots];
-    for (i, tensor) in inputs.into_iter().enumerate() {
-        slots[program.input_slots[i]] = Some(tensor);
-    }
-
-    for inst in &program.instructions {
-        let result = match &inst.op {
-            ExecOp::Transpose { perm } => typed_transpose(get(&slots, &inst.input_slots, 0)?, perm),
-            ExecOp::Reshape { shape } => {
-                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
-                typed_reshape(get(&slots, &inst.input_slots, 0)?, &shape)
-            }
-            ExecOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_semiring_shape_exprs::<Alg>(&slots, &inst.input_slots, shape)?;
-                typed_broadcast_in_dim(get(&slots, &inst.input_slots, 0)?, &shape, dims)
-            }
-            ExecOp::DotGeneral(config) => backend.batched_gemm(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-                config,
-            ),
-            ExecOp::ReduceSum { axes } => {
-                backend.reduce_sum(get(&slots, &inst.input_slots, 0)?, axes)
-            }
-            ExecOp::ExtractDiag { axis_a, axis_b } => {
-                typed_extract_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)
-            }
-            ExecOp::EmbedDiag { axis_a, axis_b } => {
-                typed_embed_diagonal(get(&slots, &inst.input_slots, 0)?, *axis_a, *axis_b)
-            }
-            ExecOp::Add => backend.add(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            ),
-            ExecOp::Multiply => backend.mul(
-                get(&slots, &inst.input_slots, 0)?,
-                get(&slots, &inst.input_slots, 1)?,
-            ),
-            _ => panic!("non-semiring op in semiring program: {:?}", inst.op),
-        };
-        slots[inst.output_slots[0]] = Some(result?);
-    }
-
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            slots[slot]
-                .take()
-                .ok_or(TensorError::MissingValue { slot }.into())
-        })
-        .collect()
 }

@@ -21,6 +21,10 @@ use super::engine::Engine;
 use super::error::{Error, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
+use crate::metadata::{
+    concrete_tensor_meta, register_fragment_metadata, register_value_metadata, registered_meta,
+    symbolic_input_meta, tensor_meta_from_tensor,
+};
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -259,18 +263,23 @@ impl TracedTensor {
         let rank = shape.len();
         let dtype = tensor.dtype();
         let key = next_input_key();
+        let id = next_traced_id();
         let data = Arc::new(tensor);
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            concrete_tensor_meta(dtype, &shape),
+        );
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -309,18 +318,23 @@ impl TracedTensor {
         let rank = tensor.shape().len();
         let dtype = tensor.dtype();
         let key = next_input_key();
+        let id = next_traced_id();
         let data = Arc::new(tensor);
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            symbolic_input_meta(dtype, id, rank),
+        );
 
         let mut map = HashMap::new();
         map.insert(key, Arc::clone(&data));
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -353,14 +367,19 @@ impl TracedTensor {
         let shape = shape.to_vec();
         let rank = shape.len();
         let key = next_input_key();
+        let id = next_traced_id();
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            concrete_tensor_meta(dtype, &shape),
+        );
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -394,14 +413,19 @@ impl TracedTensor {
     /// ```
     pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Self {
         let key = next_input_key();
+        let id = next_traced_id();
 
         let mut builder = FragmentBuilder::new();
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
+        register_value_metadata(
+            fragment.vals()[val].key.clone(),
+            symbolic_input_meta(dtype, id, rank),
+        );
 
         Self {
-            id: next_traced_id(),
+            id,
             rank,
             dtype,
             fragment,
@@ -446,6 +470,30 @@ impl TracedTensor {
     /// ```
     pub fn is_concrete_shape(&self) -> bool {
         try_concrete_shape(self).is_some()
+    }
+
+    /// Return the fully-concrete shape of this tensor, if every dim of
+    /// its shape-hint is a constant `SymDim`. Returns `None` if any
+    /// dimension is symbolic.
+    ///
+    /// This is the counterpart to [`Self::is_concrete_shape`] for callers
+    /// that need to *use* the concrete shape (e.g. external composition
+    /// wrappers building `broadcast_in_dim` payloads from known shapes).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert!(b.try_concrete_shape().is_none());
+    /// ```
+    pub fn try_concrete_shape(&self) -> Option<Vec<usize>> {
+        try_concrete_shape(self)
     }
 
     /// If this `TracedTensor` is a leaf (single-node input fragment),
@@ -578,10 +626,19 @@ impl TracedTensor {
                         input_tensors.push(tensor.as_ref().clone());
                         input_dtypes.push(tensor.dtype());
                         input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some(bound) = binding_map.remove(k) {
+                    } else if let Some(bound) = binding_map.get(k) {
                         input_tensors.push((*bound).clone());
                         input_dtypes.push(bound.dtype());
                         input_shapes.push(DimExpr::from_concrete(bound.shape()));
+                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
+                        // Deferred zero-tangent: `k` is a tangent input whose
+                        // primal root was provided as a user binding. The
+                        // zero tensor inherits the primal's concrete shape and
+                        // dtype. See "Deferred Zero-Tangent Policy" in
+                        // `docs/design/design_v3/10-ad-model.md`.
+                        input_dtypes.push(zero.dtype());
+                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
+                        input_tensors.push(zero);
                     } else {
                         return Err(Error::UnboundPlaceholder {
                             input_key: format!("{:?}", k),
@@ -675,6 +732,10 @@ impl TracedTensor {
         let leaf_val = builder.add_input(new_key.clone());
         builder.set_outputs(vec![leaf_val]);
         let new_fragment = Arc::new(builder.build());
+        register_value_metadata(
+            new_fragment.vals()[leaf_val].key.clone(),
+            tensor_meta_from_tensor(data.as_ref()),
+        );
 
         let node = CheckpointNode {
             fragment: old_fragment,
@@ -723,7 +784,7 @@ impl TracedTensor {
         let mut roots = self.resolve_roots();
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::default();
+        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -734,6 +795,19 @@ impl TracedTensor {
         );
         let tangent_output = linear.tangent_outputs[0]?;
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &linear.fragment,
+            vec![(
+                GlobalValKey::Input(tangent_input_key.clone()),
+                tensor_meta_from_tensor(
+                    tangent
+                        .data
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data"))
+                        .as_ref(),
+                ),
+            )],
+        );
 
         let mut inputs_map = (*self.inputs_map).clone();
         if let Some(chain) = &self.checkpoint_chain {
@@ -786,7 +860,7 @@ impl TracedTensor {
         let mut roots = self.resolve_roots();
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::default();
+        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let linear = differentiate(
             &view,
             std::slice::from_ref(&output_key),
@@ -795,16 +869,39 @@ impl TracedTensor {
             &mut ad_ctx,
             &aliases,
         );
+        linear.tangent_outputs[0]?;
+        let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &linear.fragment,
+            vec![(
+                GlobalValKey::Input(linear_seed_key),
+                registered_meta(&wrt.fragment.vals()[wrt.val].key),
+            )],
+        );
+        ad_ctx.refresh_global_metadata();
         let linear_tangent_input_ids: Vec<LocalValId> = linear
             .tangent_inputs
             .iter()
             .map(|(_, local_id)| *local_id)
             .collect();
         let transposed = transpose(&linear, &mut ad_ctx);
-        let linear_fragment = Arc::new(linear.fragment);
-        let cotangent_output = transposed.tangent_outputs[0]?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
+        register_fragment_metadata(
+            &transposed.fragment,
+            vec![(
+                GlobalValKey::Input(cotangent_input_key.clone()),
+                tensor_meta_from_tensor(
+                    cotangent
+                        .data
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data"))
+                        .as_ref(),
+                ),
+            )],
+        );
+        let linear_fragment = Arc::new(linear.fragment);
+        let cotangent_output = transposed.tangent_outputs[0]?;
 
         let mut inputs_map = (*self.inputs_map).clone();
         if let Some(chain) = &self.checkpoint_chain {
@@ -817,20 +914,31 @@ impl TracedTensor {
                 .clone()
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
-        let zero_tangent = Arc::new(zeros_tensor(
-            wrt.dtype,
-            try_concrete_shape(wrt).unwrap_or_else(|| vec![0; wrt.rank]),
-        ));
-        for (_, local_id) in &transposed.tangent_inputs {
-            let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
-            if tangent_input_key != cotangent_input_key {
+        // Build the zero-cotangent for inactive tangent inputs.
+        //
+        // When `wrt` has a concrete shape we materialise the zero tensor
+        // eagerly and store it in `inputs_map`. When `wrt` is symbolic
+        // (shape_hint == None) we leave those tangent input keys absent from
+        // `inputs_map`; `eval_with_inputs` will synthesise the zeros at
+        // evaluation time once the concrete shape is known from the caller's
+        // binding. See "Deferred Zero-Tangent Policy" in
+        // `docs/design/design_v3/10-ad-model.md`.
+        if let Some(concrete_shape) = try_concrete_shape(wrt) {
+            let zero_tangent = Arc::new(zeros_tensor(wrt.dtype, concrete_shape));
+            for (_, local_id) in &transposed.tangent_inputs {
+                let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
+                if tangent_input_key != cotangent_input_key {
+                    inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
+                }
+            }
+            for local_id in linear_tangent_input_ids {
+                let tangent_input_key = linear_input_key(&linear_fragment, local_id);
                 inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
             }
         }
-        for local_id in linear_tangent_input_ids {
-            let tangent_input_key = linear_input_key(&linear_fragment, local_id);
-            inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
-        }
+        // Symbolic case: tangent keys are intentionally absent from
+        // inputs_map; eval_with_inputs resolves them via deferred-zero
+        // synthesis keyed on the primal binding.
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
         extra_roots.extend(checkpoint_fragments);
@@ -1188,14 +1296,8 @@ impl TracedTensor {
             _ => None,
         };
 
-        let lhs_rank = self.rank;
-        let rhs_rank = other.rank;
         apply_binary(
-            StdTensorOp::DotGeneral {
-                config,
-                lhs_rank,
-                rhs_rank,
-            },
+            StdTensorOp::DotGeneral { config },
             self,
             other,
             out_rank,
@@ -1221,7 +1323,84 @@ impl TracedTensor {
         apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),
-                input_shape: DimExpr::input_shape(0, self.rank),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the maximum along the given axes.
+    ///
+    /// Used by tropical (max-plus) compositions: a max-plus reduction over
+    /// an axis is `ReduceMax` on that axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_max(&[0]);
+    /// ```
+    pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceMax {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the minimum along the given axes.
+    ///
+    /// Used by tropical (min-plus) compositions: a min-plus reduction over
+    /// an axis is `ReduceMin` on that axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_min(&[0]);
+    /// ```
+    pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceMin {
+                axes: axes.to_vec(),
+            },
+            self,
+            self.rank - axes.len(),
+            out_shape_hint,
+        )
+    }
+
+    /// Reduce by taking the product along the given axes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let y = x.reduce_prod(&[0]);
+    /// ```
+    pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
+        let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
+            (0..shape.len())
+                .filter(|d| !axes.contains(d))
+                .map(|d| shape[d].clone())
+                .collect()
+        });
+        apply_unary(
+            StdTensorOp::ReduceProd {
+                axes: axes.to_vec(),
             },
             self,
             self.rank - axes.len(),
@@ -1239,7 +1418,6 @@ impl TracedTensor {
     pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
         apply_unary(
             StdTensorOp::Reshape {
-                from_shape: DimExpr::input_shape(0, self.rank),
                 to_shape: DimExpr::from_concrete(shape),
             },
             self,
@@ -1248,7 +1426,21 @@ impl TracedTensor {
         )
     }
 
-    /// Return a symbolic expression for the size of one axis.
+    /// Return a symbolic expression for the size of one axis, suitable as
+    /// an `InputDim`-style reference when composing with
+    /// [`TracedTensor::reshape_sym`].
+    ///
+    /// Semantics: if this tensor's `shape_hint` has a symbolic
+    /// (non-constant) entry for `axis`, that entry is returned
+    /// verbatim. Otherwise — including when `shape_hint[axis]` is a
+    /// concrete `SymDim::Concrete(n)` — a
+    /// `SymDim::tensor_axis(self.id, axis)` reference is returned so the
+    /// resulting graph remains shape-polymorphic if the same graph is
+    /// later evaluated against a differently-shaped binding.
+    ///
+    /// For a canonical "what is the size of this axis?" query that
+    /// reports the concrete size when it is known, prefer
+    /// [`Self::axis_sym_dim`].
     ///
     /// # Examples
     ///
@@ -1271,6 +1463,67 @@ impl TracedTensor {
             .unwrap_or_else(|| SymDim::tensor_axis(self.id, axis))
     }
 
+    /// Return the canonical `SymDim` for `axis` — the concrete
+    /// `SymDim::Concrete(n)` when the size is known, otherwise a symbolic
+    /// expression identifying this tensor's axis.
+    ///
+    /// Unlike [`Self::sym_size`], this method does **not** rewrite
+    /// concrete axes into `TensorAxis` references. It is the accessor
+    /// external composition wrappers should use when building mixed
+    /// concrete/symbolic target shapes for operations like
+    /// [`Self::broadcast_in_dim_sym`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// // Concrete axis: reports the constant size.
+    /// assert_eq!(a.axis_sym_dim(0).constant_value(), Some(2));
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// // Fully symbolic leaf: reports a TensorAxis reference.
+    /// assert!(b.axis_sym_dim(0).constant_value().is_none());
+    /// ```
+    pub fn axis_sym_dim(&self, axis: usize) -> SymDim {
+        assert!(
+            axis < self.rank,
+            "axis {axis} out of bounds for rank {}",
+            self.rank
+        );
+        match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
+            Some(dim) => dim.clone(),
+            None => SymDim::tensor_axis(self.id, axis),
+        }
+    }
+
+    /// Return the full symbolic shape of this tensor when a `shape_hint`
+    /// is present.
+    ///
+    /// Returns `None` for fully-symbolic placeholders produced via
+    /// [`Self::input_symbolic_shape`] (where `shape_hint` is intentionally
+    /// absent). For those, build the shape axis-by-axis via
+    /// [`Self::axis_sym_dim`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// assert!(a.sym_shape().is_some());
+    /// assert_eq!(a.sym_shape().unwrap().len(), 2);
+    ///
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    /// assert!(b.sym_shape().is_none());
+    /// ```
+    pub fn sym_shape(&self) -> Option<&[SymDim]> {
+        self.shape_hint.as_deref()
+    }
+
     /// Reshape using symbolic dimensions derived from traced tensor axes.
     ///
     /// # Examples
@@ -1288,10 +1541,7 @@ impl TracedTensor {
             .collect::<Result<Vec<_>>>()?;
         let out_shape_hint = Some(shape.to_vec());
         Ok(apply_unary(
-            StdTensorOp::Reshape {
-                from_shape: DimExpr::input_shape(0, self.rank),
-                to_shape,
-            },
+            StdTensorOp::Reshape { to_shape },
             self,
             shape.len(),
             out_shape_hint,
@@ -1315,6 +1565,97 @@ impl TracedTensor {
             self,
             shape.len(),
             Some(shape.iter().copied().map(SymDim::from).collect()),
+        )
+    }
+
+    /// Broadcast into a symbolic target shape with explicit dimension
+    /// placement.
+    ///
+    /// Unlike [`Self::broadcast_in_dim`], each axis of `shape` is a
+    /// [`SymDim`], so the target shape can mix concrete sizes (via
+    /// `SymDim::from(n)`) with symbolic references to this tensor's axes
+    /// (via [`Self::axis_sym_dim`]) or to axes of other traced tensors.
+    ///
+    /// When `shape` contains a `SymDim` that references a traced tensor
+    /// other than `self`, the referenced tensor(s) must be supplied in
+    /// `shape_refs`. They are wired into the built op as auxiliary
+    /// shape-reference inputs — the op does not read their data, only
+    /// their runtime shape. `shape_refs` must be listed in the same order
+    /// in which their tensor IDs first appear when walking `shape` after
+    /// any references to `self`. Usually the simplest correct thing is to
+    /// pass each unique non-self reference tensor once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a `SymDim` in `shape` references a traced tensor that is
+    /// neither `self` nor any tensor listed in `shape_refs`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    /// let m = a.axis_sym_dim(0);
+    /// let k = a.axis_sym_dim(1);
+    /// let n = b.axis_sym_dim(1);
+    /// // Broadcast `a[m, k]` to `[m, k, n]`, placing `a`'s axes at 0, 1
+    /// // and taking `n` from `b` as an auxiliary shape reference.
+    /// let a_b = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b]);
+    /// assert_eq!(a_b.rank, 3);
+    /// ```
+    pub fn broadcast_in_dim_sym(
+        &self,
+        shape: &[SymDim],
+        dims: &[usize],
+        shape_refs: &[&TracedTensor],
+    ) -> TracedTensor {
+        // Build a dedup'd list of shape-reference tensors (first occurrence
+        // wins) and index them starting at 1 — the primary input `self`
+        // is at 0.
+        let mut dedup_refs: Vec<&TracedTensor> = Vec::with_capacity(shape_refs.len());
+        let mut tensor_map: Vec<(u64, usize)> = vec![(self.id, 0)];
+        for &t in shape_refs {
+            if !tensor_map.iter().any(|(id, _)| *id == t.id) {
+                let idx = tensor_map.len();
+                tensor_map.push((t.id, idx));
+                dedup_refs.push(t);
+            }
+        }
+
+        let to_shape: Vec<DimExpr> = shape
+            .iter()
+            .map(|dim| {
+                dim.to_dim_expr(&tensor_map).unwrap_or_else(|err| {
+                    panic!(
+                        "broadcast_in_dim_sym: unresolved symbolic dimension: {}; \
+                         pass every referenced tensor via `shape_refs`",
+                        err
+                    )
+                })
+            })
+            .collect();
+
+        // Trim auxiliary shape-reference inputs down to those actually
+        // used by the generated `DimExpr`s. If the target shape resolved
+        // to all constants (the concrete-shape case) the op is a plain
+        // unary broadcast with no extra parents. Otherwise the op needs
+        // a contiguous prefix of shape-ref inputs covering every
+        // referenced `input_idx`.
+        let max_used_idx = DimExpr::max_input_idx_all(&to_shape).unwrap_or(0);
+        let used_refs: Vec<&TracedTensor> = dedup_refs.into_iter().take(max_used_idx).collect();
+
+        let out_shape_hint = Some(shape.to_vec());
+        apply_unary_with_shape_refs(
+            StdTensorOp::BroadcastInDim {
+                shape: to_shape,
+                dims: dims.to_vec(),
+            },
+            self,
+            &used_refs,
+            shape.len(),
+            out_shape_hint,
         )
     }
 
@@ -1538,6 +1879,7 @@ pub(crate) fn apply_unary_with_dtype(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -1553,6 +1895,68 @@ pub(crate) fn apply_unary_with_dtype(
     }
 }
 
+/// Apply a unary-primary op that additionally references one or more
+/// tensors for shape resolution only.
+///
+/// The primary `input` becomes op input 0; each tensor in `shape_refs`
+/// becomes op input 1, 2, … in order. Used by
+/// [`TracedTensor::broadcast_in_dim_sym`] when the target shape
+/// references axes of tensors other than the primary input; the op
+/// reads only their runtime shape, not their data.
+pub(crate) fn apply_unary_with_shape_refs(
+    op: StdTensorOp,
+    input: &TracedTensor,
+    shape_refs: &[&TracedTensor],
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+) -> TracedTensor {
+    let mut builder = FragmentBuilder::new();
+    builder.add_parent(input.fragment.clone());
+    for t in shape_refs {
+        builder.add_parent(t.fragment.clone());
+    }
+    let mut op_inputs: Vec<ValRef<StdTensorOp>> = Vec::with_capacity(1 + shape_refs.len());
+    op_inputs.push(ValRef::External(
+        input.fragment.vals()[input.val].key.clone(),
+    ));
+    for t in shape_refs {
+        op_inputs.push(ValRef::External(t.fragment.vals()[t.val].key.clone()));
+    }
+    let outputs = builder.add_op(op, op_inputs, OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+
+    let mut merged = (*input.inputs_map).clone();
+    for t in shape_refs {
+        merged.extend(t.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
+    let mut extra_roots = input.extra_roots.clone();
+    for t in shape_refs {
+        extra_roots.extend(t.extra_roots.iter().cloned());
+    }
+
+    let mut checkpoint_chain = input.checkpoint_chain.clone();
+    for t in shape_refs {
+        checkpoint_chain =
+            CheckpointNode::merge_chains(checkpoint_chain, t.checkpoint_chain.clone());
+    }
+
+    TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: input.dtype,
+        fragment,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: Arc::new(merged),
+        extra_roots,
+        checkpoint_chain,
+    }
+}
+
 pub(crate) fn apply_nullary(
     op: StdTensorOp,
     rank: usize,
@@ -1563,6 +1967,7 @@ pub(crate) fn apply_nullary(
     let outputs = builder.add_op(op, vec![], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -1593,6 +1998,7 @@ pub(crate) fn apply_binary(
     let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1627,6 +2033,7 @@ pub(crate) fn apply_multi_output(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
+    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
     assert_eq!(
         outputs.len(),
         output_shapes.len(),
@@ -1665,6 +2072,40 @@ fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
         GlobalValKey::Input(key) => key.clone(),
         other => panic!("expected traced leaf input, got {:?}", other),
     }
+}
+
+/// Chase the `Tangent { of: ... }` chain to find the root `User` key.
+///
+/// For a concrete user input key the function returns the key itself.
+/// For any depth of `Tangent` wrapping it returns the innermost key
+/// (which should be a `User` key under normal VJP use).
+fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
+    match key {
+        TensorInputKey::User { .. } => key,
+        TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
+    }
+}
+
+/// Synthesise a deferred zero tangent for `key` when its primal root is
+/// present in `binding_map`.
+///
+/// Returns `Some(zero_tensor)` if and only if `key` is a `Tangent` key
+/// whose root `User` key maps to a concrete tensor in `binding_map`. The
+/// synthesised zero tensor has the same shape and dtype as the bound
+/// primal tensor.
+///
+/// Returns `None` when `key` is a `User` key (i.e. not a tangent at all),
+/// or when the root primal key is not in `binding_map`.
+fn deferred_zero_for_tangent_key(
+    key: &TensorInputKey,
+    binding_map: &HashMap<TensorInputKey, &Tensor>,
+) -> Option<Tensor> {
+    if matches!(key, TensorInputKey::User { .. }) {
+        return None;
+    }
+    let root = tangent_primal_root(key);
+    let primal = binding_map.get(root)?;
+    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
 }
 
 fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {

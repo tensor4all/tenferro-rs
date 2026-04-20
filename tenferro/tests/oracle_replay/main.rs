@@ -99,7 +99,23 @@ oracle_replay_shard_tests!(
     (oracle_replay_shard_15, 15),
 );
 
+/// Oracle replay shards are skipped locally unless explicitly opted in, to
+/// keep `cargo nextest run --workspace` responsive on dev machines. CI
+/// (`CI=true`, set automatically by GitHub Actions on every runner) runs the
+/// full shard set. For local runs, set `RUN_ORACLE_REPLAY=1`.
+fn oracle_replay_enabled() -> bool {
+    env::var("CI").ok().as_deref() == Some("true") || env::var("RUN_ORACLE_REPLAY").is_ok()
+}
+
 fn run_oracle_replay(registered_shard_index: usize, forced_shard_count: Option<usize>) {
+    if !oracle_replay_enabled() {
+        eprintln!(
+            "oracle_replay_shard_{registered_shard_index}: skipped locally; \
+             set CI=true or RUN_ORACLE_REPLAY=1 to run"
+        );
+        return;
+    }
+
     assert!(
         registered_shard_index < MAX_ORACLE_REPLAY_SHARDS,
         "invalid registered shard index {registered_shard_index}"

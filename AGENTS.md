@@ -373,13 +373,12 @@ for_each_index(&dims, |idx| {
 Layer 4: tenferro             — Public traced frontend: Engine, TracedTensor, lowering, execution,
                                 einsum/linalg convenience APIs, VJP/JVP
 Layer 3: tenferro-einsum      — High-level einsum syntax, contraction planning, fragment builder
-         tenferro-ops         — Graph op vocabulary (`StdTensorOp`, `SemiringOp`) and AD rules
+         tenferro-ops         — Graph op vocabulary (`StdTensorOp`) and AD rules
 Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
                                 CUDA/ROCm backend stubs, execution kernels
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
          tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
-         tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
          tenferro-device       — Device enum, Error/Result types
 
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
@@ -419,10 +418,6 @@ tidu (← chainrules-core)
     │  Tape<V>, TrackedValue<V>, DualValue<V>
     │
 tenferro-device (← strided-view for StridedError, ← thiserror)
-    │
-    ↓
-tenferro-algebra (← strided-traits)
-    │  HasAlgebra trait (UX sugar), Semiring trait, Standard<T> typed algebra
     │
     ↓
 tenferro-tensor

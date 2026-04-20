@@ -573,7 +573,10 @@ where
 
     let batch_elems = product(&batch_shape).max(1);
     let window_elems = product(&window_shape_updates).max(1);
-    let mut out = TypedTensor::zeros(operand.shape.clone());
+    // StableHLO add-scatter: start from a copy of `operand` and accumulate
+    // `updates` additively at the scattered positions. Non-scattered slots
+    // retain the original operand values.
+    let mut out = operand.clone();
 
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut window_idx = vec![0usize; window_shape_updates.len()];
