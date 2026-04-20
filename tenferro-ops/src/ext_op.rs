@@ -6,7 +6,7 @@
 //! graph through the single carrier variant
 //! `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`.
 //!
-//! See [`docs/spec/extension-op.md`] for the normative contract. Key points:
+//! See `docs/spec/extension-op.md` for the normative contract. Key points:
 //!
 //! - Identity / hashing / equality are expressed on the trait so the
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
@@ -68,10 +68,11 @@ use crate::sym_dim::SymDim;
 ///
 /// # Downcast convention
 ///
-/// Implementations MUST also implement [`Any`] so that [`payload_eq`] can
-/// downcast a trait-object reference to the concrete type. The helper
-/// [`ExtensionOp::as_any`] returns `&dyn Any` for this purpose and has a
-/// provided default that implementers will rarely override.
+/// Implementations MUST also implement [`Any`] so that
+/// [`ExtensionOp::payload_eq`] can downcast a trait-object reference to
+/// the concrete type. The helper [`ExtensionOp::as_any`] returns
+/// `&dyn Any` for this purpose. Implementations usually define it as
+/// `fn as_any(&self) -> &dyn Any { self }`.
 ///
 /// # Examples
 ///
@@ -141,15 +142,12 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 
     /// Upcast this extension to `&dyn Any` for downcasting in `payload_eq`.
     ///
-    /// Implementations can rely on the provided default when they have
-    /// `Sized` `Self`. Opt out only when the extension type is itself a
-    /// trait object (extremely rare).
-    fn as_any(&self) -> &dyn Any
-    where
-        Self: Sized,
-    {
-        self
-    }
+    /// Implementations SHOULD return `self` verbatim. The method is
+    /// object-safe (no `Self: Sized` bound) so it can be called on an
+    /// `&dyn ExtensionOp`; that's what makes
+    /// `other.as_any().downcast_ref::<ConcreteType>()` work from
+    /// [`Self::payload_eq`] implementations.
+    fn as_any(&self) -> &dyn Any;
 
     // ----- Arity (spec Section 6) -----
 
