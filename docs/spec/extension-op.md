@@ -1048,12 +1048,40 @@ pub fn register() -> Result<(), RegistrationError> {
 - Shape inference mirrors a core op's shape rule (Section 7).
 - Eager execution is the extension's own kernel; the core pipeline does
   not know about tropical semantics (Section 8).
-- AD emits only `Gather` / `Scatter` / `Add` — all core ops
-  (Section 10), preserving ad-contract.md's closure rule.
+- AD emits only core ops (Section 10), preserving ad-contract.md's
+  closure rule.
 - Registration is explicit (Section 9).
 
 If Stage 7 cannot be implemented from this spec, the spec is
 insufficient and MUST be revised before Stage 6 proceeds.
+
+### Note — reconciliation with the Stage 7 implementation
+
+The Stage 7 deliverable in `tenferro-ext-tropical`
+(`ext/tropical/src/fused.rs`) lands the op shape described above with two
+deviations from this informative sketch, both within the spec's
+flexibility:
+
+- **Payload**: the actual `FusedTropicalDotGeneralOp` carries a small
+  `TropicalKind { MaxPlus, MinPlus }` enum instead of a
+  `DotGeneralConfig`. Stage 7 is scoped to rank-2 inputs with fixed
+  contracting axes, so the full `DotGeneralConfig` is not needed; a
+  richer payload is a straightforward later bump to
+  `tenferro-ext-tropical.fused_dot_general.v2` (Section 5 versioning).
+- **AD emission**: the sketch suggests `Gather` / `Scatter` on saved
+  argmax indices. The core op vocabulary intentionally does not
+  include an `ArgMax` variant, and Stage 7 is forbidden from adding
+  one (Section 10 / migration-plan Stage 7 scope). The implementation
+  therefore uses the mathematically equivalent **indicator-mask**
+  construction (the same `Compare(Eq) + Mul + ReduceSum + Div` pattern
+  used by the core `ReduceMax` / `ReduceMin` AD rule in
+  `tenferro-ops/src/ad/contraction.rs`). The two are two expressions
+  of the same subgradient; only the indicator form is expressible in
+  the current core op vocabulary.
+
+Neither deviation weakens the normative contract — identity, arity,
+shape inference, forward dispatch, registry, AD closure, serialization
+versioning, and failure modes all hold unchanged.
 
 ---
 
@@ -1104,3 +1132,11 @@ permitted to decide these without revisiting this document.
   `codex-stage-6` (branched from `efd91a7`). Public `tenferro::extension`
   facade (including `apply(op, inputs)`) and nine smoke tests landed in
   commit `be9f985`.
+- 2026-04-20: Stage 7 self-test — `FusedTropicalDotGeneralOp` landed in
+  `tenferro-ext-tropical` on branch `codex-stage-7` (branched from
+  `c9266f9`). The fused op and public traced wrappers landed in commit
+  `e03ea60`; the AD parity and Stage 5 contract self-tests in commit
+  `1d9c343`. Section 14 was updated in the same branch to reconcile its
+  informative sketch with the realised implementation (payload is
+  `TropicalKind`, AD emits indicator-mask rather than Gather/Scatter —
+  the latter requires an `ArgMax` op the core does not ship).
