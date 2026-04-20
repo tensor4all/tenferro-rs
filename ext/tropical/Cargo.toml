@@ -1,0 +1,23 @@
+[package]
+name = "tenferro-ext-tropical"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
+publish = false
+description = "External tropical (max-plus / min-plus / max-mul) extensions for tenferro. Composition-only (design_v3 Stage 4a) over the public tenferro facade."
+
+# This crate is its own standalone workspace — it is intentionally NOT a
+# member of the core `tenferro-rs` workspace. Stage 4a deliberately forces
+# the external tropical crate to depend only on the public `tenferro`
+# facade, which is a contract test for whether the public surface is
+# sufficient for realistic composition-based extensions.
+[workspace]
+
+[dependencies]
+# Only depend on the PUBLIC facade crates. Internal crates (tenferro-ops,
+# tenferro-einsum, ...) must not appear here — that is the Stage 4a
+# contract test for "the public facade is sufficient".
+tenferro = { path = "../../tenferro" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
+num-traits = "0.2"
