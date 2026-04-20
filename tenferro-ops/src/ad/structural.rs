@@ -205,7 +205,7 @@ pub fn transpose_reshape(
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::Reshape { to_shape: _ } = op else {
         unreachable!("transpose_reshape expects Reshape");

@@ -16,7 +16,7 @@ use crate::std_tensor_op::StdTensorOp;
 /// so downstream op constructors that still carry shape fields (e.g.
 /// `TriangularSolve`) see a well-formed shape expression.
 fn primal_input_shape(
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
     primal_in: &[GlobalValKey<StdTensorOp>],
 ) -> Vec<DimExpr> {
     let shape = ctx.shape_of(&ValRef::External(primal_in[0].clone()));
@@ -153,7 +153,7 @@ pub fn linearize_eig(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     input_dtype: DType,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
@@ -202,7 +202,7 @@ pub fn linearize_triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     // Equation: op(A) @ X = B  (left_side=true)
     //       or  X @ op(A) = B  (left_side=false)
@@ -472,7 +472,7 @@ pub fn linearize_eigh(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     eps: f64,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None, None];
@@ -538,7 +538,7 @@ pub fn linearize_cholesky(
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(da) = tangent_in[0] else {
         return vec![None];

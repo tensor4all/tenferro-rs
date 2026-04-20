@@ -79,7 +79,7 @@ pub fn transpose_gather(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &GatherConfig,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -146,7 +146,7 @@ pub fn linearize_scatter(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &ScatterConfig,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let d_operand = tangent_in[0];
     let d_updates = tangent_in[2];
@@ -210,7 +210,7 @@ pub fn transpose_scatter(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &ScatterConfig,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,

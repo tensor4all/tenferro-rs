@@ -13,7 +13,7 @@ pub fn linearize_dot_general(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     config: &DotGeneralConfig,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let lhs_rank = ctx.shape_of(&ValRef::External(primal_in[0].clone())).len();
     let rhs_rank = ctx.shape_of(&ValRef::External(primal_in[1].clone())).len();
@@ -150,7 +150,7 @@ pub fn linearize_reduce_prod(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
@@ -200,7 +200,7 @@ pub fn linearize_reduce_chooser(
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     axes: &[usize],
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(dx) = tangent_in[0] else {
         return vec![None];
@@ -255,7 +255,7 @@ pub fn transpose_dot_general(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     config: &DotGeneralConfig,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -400,7 +400,7 @@ pub fn transpose_reduce_sum(
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::ReduceSum { axes } = op else {
         unreachable!("transpose_reduce_sum expects ReduceSum");
@@ -451,7 +451,7 @@ pub fn transpose_reduce_prod(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::ReduceProd { axes } = op else {
         unreachable!("transpose_reduce_prod expects ReduceProd");
@@ -514,7 +514,7 @@ pub fn transpose_reduce_chooser(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
-    ctx: &ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let axes = match op {
         StdTensorOp::ReduceMax { axes } | StdTensorOp::ReduceMin { axes } => axes,

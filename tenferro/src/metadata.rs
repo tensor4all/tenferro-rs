@@ -1,7 +1,9 @@
 use computegraph::fragment::Fragment;
 use computegraph::types::{GlobalValKey, ValRef};
+use std::collections::HashMap;
+
 use tenferro_ops::ad::context::{
-    register_global_metadata, register_global_metadata_batch, snapshot_global_metadata, TensorMeta,
+    lookup_global_metadata, register_global_metadata, register_global_metadata_batch, TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -36,9 +38,7 @@ pub(crate) fn register_value_metadata(key: GlobalValKey<StdTensorOp>, meta: Tens
 }
 
 pub(crate) fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
-    snapshot_global_metadata()
-        .get(key)
-        .cloned()
+    lookup_global_metadata(key)
         .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
 }
 
@@ -47,8 +47,14 @@ pub(crate) fn register_fragment_metadata(
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 ) {
     let seeded: Vec<_> = seeded.into_iter().collect();
-    let mut known = (*snapshot_global_metadata()).clone();
-    known.extend(seeded.iter().cloned());
+    // Start from just the seeded inputs. External keys not in `seeded` are
+    // resolved on demand via a single-key lookup against the global
+    // registry — crucially, we do NOT clone the entire global map. The
+    // global registry grows monotonically across a process, so a full-map
+    // snapshot per fragment construction is quadratic in the total number
+    // of registered ops and dominated oracle_replay runtime.
+    let mut known: HashMap<GlobalValKey<StdTensorOp>, TensorMeta> =
+        seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
     for op_node in fragment.ops() {
@@ -60,12 +66,16 @@ pub(crate) fn register_fragment_metadata(
                     ValRef::Local(local_id) => &fragment.vals()[*local_id].key,
                     ValRef::External(key) => key,
                 };
-                known.get(key).cloned().unwrap_or_else(|| {
-                    panic!(
-                        "metadata registration: missing input metadata for {:?}",
-                        key
-                    )
-                })
+                known
+                    .get(key)
+                    .cloned()
+                    .or_else(|| lookup_global_metadata(key))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "metadata registration: missing input metadata for {:?}",
+                            key
+                        )
+                    })
             })
             .collect();
 

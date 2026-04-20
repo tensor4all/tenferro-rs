@@ -20,6 +20,19 @@ use crate::sym_dim::SymDim;
 
 type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
 
+/// Global metadata registry.
+///
+/// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
+/// reads lock briefly. `ShapeGuardContext::metadata_of` reaches into the
+/// registry lazily via [`lookup_global_metadata`] and caches the result
+/// into the context's local map — no up-front full-map snapshot.
+///
+/// Earlier designs either cloned the whole map up-front into each AD
+/// `ShapeGuardContext` (quadratic across the monotonically growing
+/// registry) or kept the map in an `Arc` and cloned on every write (also
+/// quadratic, since every traced op triggers at least one
+/// `register_value_metadata` write). Both variants dominated
+/// oracle_replay runtime.
 static GLOBAL_METADATA: OnceLock<Mutex<MetadataMap>> = OnceLock::new();
 
 fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
@@ -27,12 +40,10 @@ fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
 }
 
 fn global_metadata_snapshot() -> Arc<MetadataMap> {
-    Arc::new(
-        global_metadata_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone(),
-    )
+    let guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::new(guard.clone())
 }
 
 #[doc(hidden)]
@@ -99,27 +110,22 @@ pub struct ShapeGuard {
 /// let ctx = ShapeGuardContext::default();
 /// assert!(ctx.guards().is_empty());
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShapeGuardContext {
     guards: Vec<ShapeGuard>,
     metadata: MetadataMap,
-    global_metadata: Arc<MetadataMap>,
+    use_global_registry: bool,
     local_keys: Option<Vec<GlobalValKey<StdTensorOp>>>,
 }
 
-impl Default for ShapeGuardContext {
-    fn default() -> Self {
-        Self {
-            guards: Vec::new(),
-            metadata: HashMap::new(),
-            global_metadata: Arc::new(HashMap::new()),
-            local_keys: None,
-        }
-    }
-}
-
 impl ShapeGuardContext {
-    /// Create a context backed by the current global metadata snapshot.
+    /// Create a context backed by the global metadata registry.
+    ///
+    /// Instead of cloning the entire global registry up-front (which used
+    /// to be O(N) per AD pass and quadratic across oracle_replay), the
+    /// context keeps a flag and lazily fetches entries from the shared
+    /// [`lookup_global_metadata`] on first miss, caching into its local
+    /// `metadata` map for subsequent reads within the same pass.
     ///
     /// # Examples
     ///
@@ -128,14 +134,15 @@ impl ShapeGuardContext {
     /// ```
     pub fn with_global_metadata() -> Self {
         Self {
-            global_metadata: global_metadata_snapshot(),
+            use_global_registry: true,
             ..Self::default()
         }
     }
 
     #[doc(hidden)]
     pub fn refresh_global_metadata(&mut self) {
-        self.global_metadata = global_metadata_snapshot();
+        self.metadata.clear();
+        self.use_global_registry = true;
     }
 
     /// Returns the guards recorded so far.
@@ -174,7 +181,7 @@ impl ShapeGuardContext {
     /// ```ignore
     /// let shape = ctx.shape_of(&value);
     /// ```
-    pub fn shape_of(&self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
+    pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
         &self.metadata_of(val).shape
     }
 
@@ -185,7 +192,7 @@ impl ShapeGuardContext {
     /// ```ignore
     /// let dtype = ctx.dtype_of(&value);
     /// ```
-    pub fn dtype_of(&self, val: &ValRef<StdTensorOp>) -> DType {
+    pub fn dtype_of(&mut self, val: &ValRef<StdTensorOp>) -> DType {
         self.metadata_of(val).dtype
     }
 
@@ -196,11 +203,15 @@ impl ShapeGuardContext {
     /// ```ignore
     /// let meta = ctx.metadata_of(&value);
     /// ```
-    pub fn metadata_of(&self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
-        let key = self.resolve_key(val);
+    pub fn metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
+        let key = self.resolve_key(val).clone();
+        if !self.metadata.contains_key(&key) && self.use_global_registry {
+            if let Some(meta) = lookup_global_metadata(&key) {
+                self.metadata.insert(key.clone(), meta);
+            }
+        }
         self.metadata
-            .get(key)
-            .or_else(|| self.global_metadata.get(key))
+            .get(&key)
             .unwrap_or_else(|| panic!("ShapeGuardContext: missing TensorMeta for {:?}", key))
     }
 
@@ -249,10 +260,28 @@ impl ShapeGuardContext {
 
 #[doc(hidden)]
 pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
-    global_metadata_registry()
+    let mut guard = global_metadata_registry()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(key, meta);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.insert(key, meta);
+}
+
+/// Look up a single metadata entry from the global registry.
+///
+/// Locks the registry briefly for a single `HashMap::get` + clone. Prefer
+/// this over [`snapshot_global_metadata`] for any callsite that only needs
+/// a handful of keys.
+///
+/// # Examples
+///
+/// ```ignore
+/// let meta = tenferro_ops::ad::context::lookup_global_metadata(&key);
+/// ```
+pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorMeta> {
+    let guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.get(key).cloned()
 }
 
 #[doc(hidden)]
@@ -260,10 +289,10 @@ pub fn register_global_metadata_batch<I>(entries: I)
 where
     I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 {
-    global_metadata_registry()
+    let mut guard = global_metadata_registry()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .extend(entries);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.extend(entries);
 }
 
 /// Resolve a [`DimExpr`] to a concrete `usize`.
