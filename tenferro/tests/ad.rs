@@ -22,7 +22,9 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{
+    DType, DotGeneralConfig, GatherConfig, ScatterConfig, Tensor, TensorBackend, TypedTensor,
+};
 use tidu::{differentiate, transpose, LinearFragment};
 
 const TOL: f64 = 1e-6;
@@ -2960,4 +2962,135 @@ fn grad_eigh_values_degenerate_spectrum_is_finite() {
     for &value in get_f64_data(&grad) {
         assert!(value.is_finite(), "eigh gradient not finite: {value}");
     }
+}
+
+/// Build `y = ReduceSum(Gather(operand, indices, config))` and return the
+/// fragment with keys for later gradient extraction.
+fn build_gather_reduce_sum_fragment(
+    operand_key: TensorInputKey,
+    indices_key: TensorInputKey,
+    config: GatherConfig,
+    reduce_axes: Vec<usize>,
+) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let operand = builder.add_input(operand_key);
+    let indices = builder.add_input(indices_key);
+    let gathered = builder.add_op(
+        StdTensorOp::Gather(config),
+        vec![ValRef::Local(operand), ValRef::Local(indices)],
+        OpMode::Primal,
+    )[0];
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum { axes: reduce_axes },
+        vec![ValRef::Local(gathered)],
+        OpMode::Primal,
+    )[0];
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), loss_key)
+}
+
+#[test]
+fn grad_gather_reduce_sum_accumulates_indices_correctly() {
+    // operand is rank-1 with five distinct values; gather reads indices
+    // [2, 4, 0, 2, 2] so the gradient of the summed output w.r.t. the
+    // operand should count the number of times each index is read: index
+    // 0 once, index 2 three times, index 4 once, and other slots zero.
+    let operand_key = tensor_input_key(60_000);
+    let indices_key = tensor_input_key(60_001);
+    let config = GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+    let (fragment, loss_key) =
+        build_gather_reduce_sum_fragment(operand_key.clone(), indices_key.clone(), config, vec![0]);
+
+    let operand_data = vec![10.0_f64, 20.0, 30.0, 40.0, 50.0];
+    let indices_data = vec![2.0_f64, 4.0, 0.0, 2.0, 2.0];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(
+        operand_key.clone(),
+        f64_tensor(vec![5], operand_data.clone()),
+    );
+    inputs_map.insert(indices_key, f64_tensor(vec![5, 1], indices_data));
+
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, operand_key, inputs_map);
+    assert_eq!(grad.shape(), &[5]);
+    assert_close_slice(get_f64_data(&grad), &[1.0, 0.0, 3.0, 0.0, 1.0]);
+}
+
+/// Build `y = ReduceSum(Scatter(operand, indices, updates, config))`,
+/// where the Scatter output has the same shape as `operand`.
+fn build_scatter_reduce_sum_fragment(
+    operand_key: TensorInputKey,
+    indices_key: TensorInputKey,
+    updates_key: TensorInputKey,
+    config: ScatterConfig,
+    reduce_axes: Vec<usize>,
+) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let operand = builder.add_input(operand_key);
+    let indices = builder.add_input(indices_key);
+    let updates = builder.add_input(updates_key);
+    let scattered = builder.add_op(
+        StdTensorOp::Scatter(config),
+        vec![
+            ValRef::Local(operand),
+            ValRef::Local(indices),
+            ValRef::Local(updates),
+        ],
+        OpMode::Primal,
+    )[0];
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum { axes: reduce_axes },
+        vec![ValRef::Local(scattered)],
+        OpMode::Primal,
+    )[0];
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), loss_key)
+}
+
+#[test]
+fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
+    // `y = reduce_sum(scatter(operand, indices, updates, config))`. The
+    // scatter backward feeds `cot_out` (a ones tensor of operand shape)
+    // into the inverse Gather at each `scatter_indices` entry. With all
+    // indices in range, the updates gradient is ones of the updates shape.
+    let operand_key = tensor_input_key(61_000);
+    let indices_key = tensor_input_key(61_001);
+    let updates_key = tensor_input_key(61_002);
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let (fragment, loss_key) = build_scatter_reduce_sum_fragment(
+        operand_key.clone(),
+        indices_key.clone(),
+        updates_key.clone(),
+        config,
+        vec![0],
+    );
+
+    let operand_data = vec![0.0_f64, 0.0, 0.0, 0.0];
+    let indices_data = vec![1.0_f64, 3.0, 0.0];
+    let updates_data = vec![5.0_f64, 7.0, 9.0];
+    let mut inputs_map = HashMap::new();
+    inputs_map.insert(operand_key, f64_tensor(vec![4], operand_data));
+    inputs_map.insert(indices_key, f64_tensor(vec![3, 1], indices_data));
+    inputs_map.insert(
+        updates_key.clone(),
+        f64_tensor(vec![3], updates_data.clone()),
+    );
+
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, updates_key, inputs_map);
+    assert_eq!(grad.shape(), &[3]);
+    // reduce_sum over the scatter output contributes a 1 to each updated
+    // slot; the inverse Gather reads one value for each `indices` entry.
+    assert_close_slice(get_f64_data(&grad), &[1.0, 1.0, 1.0]);
 }

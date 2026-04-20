@@ -6,6 +6,7 @@ mod diagonal;
 mod dynamic;
 mod elementwise_tier1;
 mod elementwise_tier2;
+mod indexing;
 mod linalg;
 mod structural;
 
@@ -79,6 +80,12 @@ fn linearize_non_semiring(
         StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+        StdTensorOp::Gather(config) => {
+            indexing::linearize_gather(builder, primal_in, tangent_in, config)
+        }
+        StdTensorOp::Scatter(config) => {
+            indexing::linearize_scatter(builder, primal_in, tangent_in, config)
+        }
         StdTensorOp::DynamicTruncate { axis } => {
             dynamic::linearize_dynamic_truncate(builder, primal_in, tangent_in, *axis)
         }
@@ -201,6 +208,12 @@ fn transpose_non_semiring(
         }
         StdTensorOp::Tril { k } => structural::transpose_tril(emitter, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(emitter, cotangent_out, *k),
+        StdTensorOp::Gather(config) => {
+            indexing::transpose_gather(emitter, cotangent_out, inputs, mode, config)
+        }
+        StdTensorOp::Scatter(config) => {
+            indexing::transpose_scatter(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
         StdTensorOp::DynamicTruncate { axis } => {
             dynamic::transpose_dynamic_truncate(emitter, cotangent_out, inputs, *axis)
         }
