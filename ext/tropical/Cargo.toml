@@ -26,3 +26,11 @@ tenferro-tensor = { path = "../../tenferro-tensor" }
 tenferro-ops = { path = "../../tenferro-ops" }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "8306196" }
 num-traits = "0.2"
+
+[dev-dependencies]
+# design_v3 Stage 8 evidence gate: composition vs fused-ExtensionOp bench.
+criterion = "0.5"
+
+[[bench]]
+name = "tropical_matmul"
+harness = false
