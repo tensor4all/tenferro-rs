@@ -24,8 +24,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install Quarto
         uses: quarto-dev/quarto-actions/setup@v2
-      - name: Install pandoc and graphviz
-        run: sudo apt-get update && sudo apt-get install -y pandoc graphviz
+      - name: Ensure graphviz
+        run: |
+          set -euo pipefail
+          if ! command -v dot >/dev/null 2>&1; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends graphviz
+          fi
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Build unified docs site
