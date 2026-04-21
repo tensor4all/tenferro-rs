@@ -1,5 +1,4 @@
 use tenferro::shape_infer::infer_output_dtype;
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig};
 

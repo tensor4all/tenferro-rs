@@ -32,4 +32,16 @@ AD (VJP/JVP/HVP) on CPU and CUDA GPU (via CubeCL + cuTENSOR + cuSOLVER).
 tenferro = { path = "../tenferro-rs/tenferro" }
 ```
 
+The default CPU backend is `cpu-faer`. To use the LAPACK/BLAS CPU backend
+instead, disable default features and enable `cpu-blas`:
+
+```toml
+[dependencies]
+tenferro = { path = "../tenferro-rs/tenferro", default-features = false, features = ["cpu-blas"] }
+```
+
+Exactly one CPU backend must be enabled. Builds using `cpu-blas` must link a
+BLAS/LAPACK provider, either from the system toolchain or with the
+`src-openblas` feature.
+
 See the [Getting Started guide](https://tensor4all.org/tenferro-rs/getting-started/) for code examples.

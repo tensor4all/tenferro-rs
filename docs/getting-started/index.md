@@ -14,6 +14,23 @@ while the crates are still evolving:
 tenferro = { path = "/path/to/tenferro-rs/tenferro" }
 ```
 
+This uses the default `cpu-faer` backend. To use the LAPACK/BLAS CPU backend,
+disable default features and enable `cpu-blas`:
+
+```toml
+[dependencies]
+tenferro = { path = "/path/to/tenferro-rs/tenferro", default-features = false, features = ["cpu-blas"] }
+```
+
+Exactly one CPU backend must be enabled: `cpu-faer` or `cpu-blas`. The
+`cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the system
+toolchain, or enable `src-openblas` to build against OpenBLAS:
+
+```toml
+[dependencies]
+tenferro = { path = "/path/to/tenferro-rs/tenferro", default-features = false, features = ["src-openblas"] }
+```
+
 Or switch to crates.io once published:
 
 ```toml

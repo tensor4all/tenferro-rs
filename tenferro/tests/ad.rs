@@ -181,10 +181,6 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
     }
 }
 
-fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
-    DimExpr::from_concrete(shape)
-}
-
 fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
     TensorMeta {
         dtype: tensor.dtype(),

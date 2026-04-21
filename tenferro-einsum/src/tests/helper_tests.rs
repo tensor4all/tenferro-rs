@@ -1,6 +1,6 @@
 use tenferro_device::Error;
 
-use crate::planning::classify::{classify_modes, compute_permutation};
+use crate::planning::classify::classify_modes;
 use crate::syntax::notation::{char_to_label, split_and_validate_notation};
 
 #[test]
@@ -25,19 +25,6 @@ fn classify_modes_ignores_labels_missing_from_rhs_and_output() {
     assert!(lo.is_empty());
     assert_eq!(ro, vec![4]);
     assert_eq!(sum, vec![2]);
-}
-
-#[test]
-fn compute_permutation_matches_target_order() {
-    let perm = compute_permutation(&[30, 10, 20], &[10, 20, 30]).unwrap();
-    assert_eq!(perm, vec![1, 2, 0]);
-}
-
-#[test]
-fn compute_permutation_reports_missing_label() {
-    let err = compute_permutation(&[10, 20], &[20, 30]).unwrap_err();
-    assert!(err.contains("label 30 not found"));
-    assert!(err.contains("[10, 20]"));
 }
 
 #[test]

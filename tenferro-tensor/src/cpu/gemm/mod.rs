@@ -506,9 +506,16 @@ where
         });
     }
 
-    let a_ok = dims.a_rs == 1 || dims.a_cs == 1;
-    let b_ok = dims.b_rs == 1 || dims.b_cs == 1;
-    let c_ok = dims.c_rs == 1;
+    let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, 1);
+    let a_cs = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
+    let b_rs = normalize_singleton_stride(dims.b_rs, dims.k, 1);
+    let b_cs = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
+    let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
+    let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
+
+    let a_ok = a_rs == 1 || a_cs == 1;
+    let b_ok = b_rs == 1 || b_cs == 1;
+    let c_ok = c_rs == 1;
     if !a_ok || !b_ok || !c_ok {
         return None;
     }
@@ -540,16 +547,16 @@ where
                 a_data.offset(a_off),
                 dims.m,
                 dims.k,
-                dims.a_rs,
-                dims.a_cs,
+                a_rs,
+                a_cs,
                 b_data.offset(b_off),
                 dims.n,
-                dims.b_rs,
-                dims.b_cs,
+                b_rs,
+                b_cs,
                 T::zero(),
                 c_ptr.offset(c_off),
-                dims.c_rs,
-                dims.c_cs,
+                c_rs,
+                c_cs,
             );
         }
     }
@@ -559,6 +566,15 @@ where
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
     })
+}
+
+#[cfg(feature = "cpu-blas")]
+fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
+    if extent == 1 && stride == 0 {
+        fallback.max(1) as isize
+    } else {
+        stride
+    }
 }
 
 #[cfg(test)]

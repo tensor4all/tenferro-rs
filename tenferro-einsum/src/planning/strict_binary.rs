@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use tenferro_device::{Error, Result as DeviceResult};
 
-use crate::syntax::subscripts::Subscripts;
-use crate::util::{build_size_dict, compute_output_shape};
+use crate::util::compute_output_shape;
 
 /// Narrow lowering plan for the bridge-equivalent binary GEMM path.
 #[derive(Debug, PartialEq, Eq)]
@@ -173,29 +172,6 @@ fn compile_strict_binary_lowering_plan_from_parts(
         n,
         k,
     }))
-}
-
-pub(crate) fn compile_strict_binary_lowering_plan(
-    subscripts: &Subscripts,
-    shapes: &[&[usize]],
-    extra: Option<&HashMap<u32, usize>>,
-) -> DeviceResult<Option<StrictBinaryLoweringPlan>> {
-    if subscripts.inputs.len() != 2 {
-        return Err(Error::InvalidArgument(format!(
-            "binary einsum requires exactly 2 inputs, got {}",
-            subscripts.inputs.len()
-        )));
-    }
-
-    let size_dict = build_size_dict(subscripts, shapes, extra)?;
-    compile_strict_binary_lowering_plan_from_parts(
-        &subscripts.inputs[0],
-        &subscripts.inputs[1],
-        &subscripts.output,
-        shapes[0],
-        shapes[1],
-        &size_dict,
-    )
 }
 
 pub(crate) fn compile_strict_binary_lowering_step_plan(

@@ -29,21 +29,43 @@ jobs:
 
   # PRs from the same repository: run heavy CI on self-hosted runner
   ci-maintainer:
-    name: CI (same-repo PR / self-hosted heavy)
+    name: CI (same-repo PR / self-hosted heavy / ${{ matrix.backend }})
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cpu-faer
+            feature_args: ""
+            rustflags: ""
+          - backend: cpu-blas
+            feature_args: "--no-default-features --features cpu-blas"
+            rustflags: "-l dylib=openblas -l dylib=lapack"
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../target-${{ matrix.backend }}
       CARGO_PROFILE_RELEASE_DEBUG: 0
+      RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@nextest
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          if ! cargo nextest --version >/dev/null 2>&1; then
+            cargo install cargo-nextest --locked
+          fi
+      - name: Verify BLAS/LAPACK runtime libraries
+        if: matrix.backend == 'cpu-blas'
+        run: |
+          set -euo pipefail
+          ldconfig -p | grep -E 'libopenblas\.so' >/dev/null
+          ldconfig -p | grep -E 'liblapack\.so' >/dev/null
       - name: Run unit and integration tests
-        run: cargo nextest run --workspace --release --no-fail-fast
+        run: cargo nextest run --workspace --release ${{ matrix.feature_args }} --no-fail-fast
       - name: Run doc tests
-        run: cargo test --doc --workspace --release
+        run: cargo test --doc --workspace --release ${{ matrix.feature_args }}
 
   # Single check for branch protection: passes when the one runnable path
   # (fork = ci-fork, same-repo = ci-maintainer) succeeds; the other is skipped.

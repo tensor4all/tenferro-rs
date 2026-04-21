@@ -2589,6 +2589,7 @@ fn test_backend_linalg_returns_errors_for_unsupported_dtypes() {
     assert!(backend.svd(&f32_matrix).is_err());
     assert!(backend.qr(&f32_matrix).is_err());
     assert!(backend.eigh(&f32_matrix).is_err());
+    assert!(backend.eig(&f32_matrix).is_err());
     assert!(backend.solve(&f32_matrix, &f32_rhs).is_err());
     assert!(backend
         .triangular_solve(&f32_matrix, &f32_rhs, true, true, false, false)
@@ -2939,6 +2940,25 @@ fn test_lu_unsupported_dtype_returns_error() {
     ));
     let mut backend = CpuBackend::new();
     assert!(backend.lu(&input).is_err());
+}
+
+#[test]
+fn test_lu_zero_sized_batch_outputs_empty_parity() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2, 0], Vec::new()));
+    let mut backend = CpuBackend::new();
+    let outputs = backend.lu(&input).unwrap();
+
+    assert_eq!(outputs.len(), 4);
+    assert_eq!(outputs[0].shape(), &[2, 2, 0]);
+    assert_eq!(outputs[1].shape(), &[2, 2, 0]);
+    assert_eq!(outputs[2].shape(), &[2, 2, 0]);
+    assert_eq!(outputs[3].shape(), &[0]);
+    for output in outputs {
+        match output {
+            Tensor::F64(inner) => assert!(inner.host_data().is_empty()),
+            other => panic!("expected f64 tensor, got {:?}", other.dtype()),
+        }
+    }
 }
 
 #[test]

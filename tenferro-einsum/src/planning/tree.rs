@@ -7,7 +7,7 @@ use tenferro_device::{Error, Result};
 
 use crate::planning::plan::{compile_step_plans, StepPlan};
 use crate::syntax::subscripts::Subscripts;
-use crate::util::{build_size_dict, compute_output_shape, contraction_cost, intermediate_subs};
+use crate::util::{build_size_dict, contraction_cost, intermediate_subs};
 
 /// A single step in the contraction sequence.
 pub(crate) struct ContractionStep {
@@ -64,18 +64,6 @@ impl ContractionOptimizerOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChainAttachment {
-    pub(crate) prev_on_left: bool,
-    pub(crate) operand: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LinearChainPlan {
-    pub(crate) first_pair: (usize, usize),
-    pub(crate) attachments: Vec<ChainAttachment>,
-}
-
 /// Contraction tree determining pairwise contraction order for N-ary einsum.
 ///
 /// When contracting more than two tensors, the order in which pairwise
@@ -96,8 +84,6 @@ pub struct ContractionTree {
     pub(crate) size_dict: HashMap<u32, usize>,
     /// Subscripts for each operand (0..n_inputs from input, then intermediates).
     pub(crate) operand_subs: Vec<Vec<u32>>,
-    /// Pre-computed output shapes for each intermediate step (indexed by step_idx).
-    pub(crate) step_output_shapes: Vec<Vec<usize>>,
     /// Pre-compiled step plans (cached to avoid recomputation per execute call).
     pub(crate) step_plans: Vec<StepPlan>,
 }
@@ -243,20 +229,11 @@ impl ContractionTree {
             )));
         }
 
-        // Pre-compute output shapes for each intermediate step.
-        let step_output_shapes: Vec<Vec<usize>> = (0..steps.len())
-            .map(|step_idx| {
-                let result_idx = n_inputs + step_idx;
-                compute_output_shape(&operand_subs[result_idx], &size_dict)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
         let mut tree = Self {
             subscripts: subscripts.clone(),
             steps,
             size_dict,
             operand_subs,
-            step_output_shapes,
             step_plans: Vec::new(),
         };
         tree.step_plans = compile_step_plans(&tree).map_err(Error::InvalidArgument)?;
@@ -340,52 +317,6 @@ impl ContractionTree {
             &self.operand_subs[step.right],
             &self.operand_subs[result_idx],
         ))
-    }
-
-    pub(crate) fn linear_chain_plan(&self) -> Option<LinearChainPlan> {
-        if self.steps.is_empty() {
-            return Some(LinearChainPlan {
-                first_pair: (0, 0),
-                attachments: Vec::new(),
-            });
-        }
-
-        let n_inputs = self.subscripts.inputs.len();
-        let first = self.steps.first()?;
-        if first.left >= n_inputs || first.right >= n_inputs {
-            return None;
-        }
-
-        let mut seen_inputs = vec![false; n_inputs];
-        seen_inputs[first.left] = true;
-        seen_inputs[first.right] = true;
-        let mut attachments = Vec::with_capacity(self.steps.len().saturating_sub(1));
-        let mut prev_result_idx = n_inputs;
-
-        for (step_idx, step) in self.steps.iter().enumerate().skip(1) {
-            let (prev_on_left, operand) = if step.left == prev_result_idx && step.right < n_inputs {
-                (true, step.right)
-            } else if step.right == prev_result_idx && step.left < n_inputs {
-                (false, step.left)
-            } else {
-                return None;
-            };
-
-            if seen_inputs[operand] {
-                return None;
-            }
-            seen_inputs[operand] = true;
-            attachments.push(ChainAttachment {
-                prev_on_left,
-                operand,
-            });
-            prev_result_idx = n_inputs + step_idx;
-        }
-
-        Some(LinearChainPlan {
-            first_pair: (first.left, first.right),
-            attachments,
-        })
     }
 }
 
