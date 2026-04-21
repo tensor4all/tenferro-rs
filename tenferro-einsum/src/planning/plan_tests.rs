@@ -1,22 +1,18 @@
-use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
 
-use super::{
-    compile_binary_contraction_plan, compile_pairwise_step_plan,
-    compile_strict_binary_lowering_plan,
-};
+use super::{compile_pairwise_step_plan, compile_strict_binary_lowering_step_plan};
 
-#[test]
-fn binary_plan_matches_fixed_pair_tree_step_plan() {
-    let subs = Subscripts::new(&[&[0, 0, 1], &[0, 2]], &[2]);
-    let shapes = [&[3, 3, 5][..], &[3, 7][..]];
-
-    let direct = compile_binary_contraction_plan(&subs, &shapes, None).unwrap();
-    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
-
-    assert_eq!(direct.size_dict, tree.size_dict);
-    assert_eq!(direct.step_plan, tree.step_plans[0]);
-    assert_eq!(direct.output_shape, vec![7]);
+fn compile_strict_step_plan(
+    subs: &Subscripts,
+    shapes: &[&[usize]],
+) -> tenferro_device::Result<Option<super::StrictBinaryLoweringPlan>> {
+    let size_dict = crate::util::build_size_dict(subs, shapes, None)?;
+    compile_strict_binary_lowering_step_plan(
+        &subs.inputs[0],
+        &subs.inputs[1],
+        &subs.output,
+        &size_dict,
+    )
 }
 
 #[test]
@@ -24,7 +20,7 @@ fn strict_binary_lowering_plan_builds_dense_matmul() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
 
-    let plan = compile_strict_binary_lowering_plan(&subs, &shapes, None)
+    let plan = compile_strict_step_plan(&subs, &shapes)
         .unwrap()
         .expect("simple dense matmul should admit strict lowering");
 
@@ -47,7 +43,7 @@ fn strict_binary_lowering_rejects_repeated_labels() {
     let subs = Subscripts::new(&[&[0, 0, 1], &[1, 2]], &[0, 2]);
     let shapes = [&[2, 2, 3][..], &[3, 4][..]];
 
-    let plan = compile_strict_binary_lowering_plan(&subs, &shapes, None).unwrap();
+    let plan = compile_strict_step_plan(&subs, &shapes).unwrap();
 
     assert!(
         plan.is_none(),
@@ -60,7 +56,7 @@ fn strict_binary_lowering_plan_tracks_non_identity_output_permutation() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[2, 0]);
     let shapes = [&[2, 3][..], &[3, 4][..]];
 
-    let plan = compile_strict_binary_lowering_plan(&subs, &shapes, None)
+    let plan = compile_strict_step_plan(&subs, &shapes)
         .unwrap()
         .expect("output permutations should still admit strict lowering");
 

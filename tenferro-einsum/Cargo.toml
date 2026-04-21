@@ -7,12 +7,18 @@ authors.workspace = true
 publish.workspace = true
 description = "High-level einsum with N-ary contraction tree optimization for the tenferro workspace."
 
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["tenferro-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
+cubecl = ["tenferro-ops/cubecl", "tenferro-tensor/cubecl"]
+
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
-tenferro-ops = { path = "../tenferro-ops" }
-tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-ops = { path = "../tenferro-ops", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true
 omeco.workspace = true
 
 [dev-dependencies]
-tenferro-ops = { path = "../tenferro-ops" }
+tenferro-ops = { path = "../tenferro-ops", default-features = false }

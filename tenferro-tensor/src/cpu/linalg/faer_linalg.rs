@@ -1370,7 +1370,11 @@ pub(crate) fn lu<T: FaerLinalg>(
         let n = input.shape[1];
         let k = m.min(n);
         let batch_shape = &input.shape[2..];
-        let parity_elements: usize = batch_shape.iter().product::<usize>().max(1);
+        let parity_elements = if batch_shape.is_empty() {
+            1
+        } else {
+            batch_shape.iter().product()
+        };
         return vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, m, batch_shape),

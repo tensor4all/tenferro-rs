@@ -9,6 +9,7 @@ use super::backend::{catch_backend_panic, reclaim_typed, unsupported_dtype};
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
 
 pub(crate) struct CpuExecSession<'a> {
+    #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
     pub(crate) ctx: &'a CpuContext,
     pub(crate) buffers: &'a mut BufferPool,
 }
@@ -42,7 +43,7 @@ macro_rules! linalg_single {
     };
 }
 
-/// Unary linalg returning single Tensor — blas path (no inner Result).
+/// Unary linalg returning single Tensor — blas path.
 #[cfg(feature = "cpu-blas")]
 macro_rules! linalg_single {
     ($name:ident) => {
@@ -50,7 +51,13 @@ macro_rules! linalg_single {
             match input {
                 Tensor::F64(t) => {
                     catch_backend_panic(stringify!($name), || linalg::$name(self.buffers, t))
+                        .and_then(|r| r)
                         .map(Tensor::F64)
+                }
+                Tensor::C64(t) => {
+                    catch_backend_panic(stringify!($name), || linalg::$name(self.buffers, t))
+                        .and_then(|r| r)
+                        .map(Tensor::C64)
                 }
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
@@ -92,6 +99,12 @@ macro_rules! linalg_multi {
                     linalg::$name(self.buffers, t)
                         .into_iter()
                         .map(Tensor::F64)
+                        .collect()
+                }),
+                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
+                    linalg::$name(self.buffers, t)
+                        .into_iter()
+                        .map(Tensor::C64)
                         .collect()
                 }),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
@@ -240,6 +253,9 @@ impl TensorExec for CpuExecSession<'_> {
     linalg_multi!(eigh);
 
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        if !matches!(input, Tensor::F64(_) | Tensor::C64(_)) {
+            return Err(unsupported_dtype("eig", input.dtype()));
+        }
         catch_backend_panic("eig", || {
             #[cfg(feature = "cpu-faer")]
             {
@@ -291,6 +307,18 @@ impl TensorExec for CpuExecSession<'_> {
             #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
                 Tensor::F64(linalg::triangular_solve(
+                    self.buffers,
+                    a,
+                    b,
+                    left_side,
+                    lower,
+                    transpose_a,
+                    unit_diagonal,
+                ))
+            }),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
+                Tensor::C64(linalg::triangular_solve(
                     self.buffers,
                     a,
                     b,
