@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro::eager_einsum::{eager_einsum, eager_einsum_ad};
+//! use tenferro::eager_einsum::{eager_einsum, eager_einsum_ad, eager_einsum_owned};
 //! use tenferro::{CpuBackend, EagerTensor, Tensor};
 //!
 //! let mut backend = CpuBackend::new();
@@ -15,6 +15,10 @@
 //! let dot = eager_einsum(&mut backend, &[&a, &b], "i,i->").unwrap();
 //!
 //! assert_eq!(dot.as_slice::<f64>().unwrap(), &[32.0]);
+//!
+//! let owned_dot = eager_einsum_owned(&mut backend, vec![a, b], "i,i->").unwrap();
+//!
+//! assert_eq!(owned_dot.as_slice::<f64>().unwrap(), &[32.0]);
 //!
 //! let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
 //! let y = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
@@ -31,7 +35,7 @@ use tenferro_tensor::TensorBackend;
 use crate::eager::EagerTensor;
 use crate::error::Result;
 
-pub use tenferro_einsum::eager_einsum;
+pub use tenferro_einsum::{eager_einsum, eager_einsum_owned};
 
 /// Execute an einsum eagerly and record it for reverse-mode autodiff.
 ///
