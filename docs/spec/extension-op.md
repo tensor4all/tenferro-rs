@@ -433,9 +433,8 @@ implementer MUST:
    value, `n_inputs()` returns the same value every time.
 
 Variable-arity extensions remain outside `StdTensorOp`'s own variable-arity
-branch (e.g. `StdTensorOp::Concatenate`, which is marked `todo!` in the
-core enum). The core enum's variable-arity handling is a separate open
-item and is not blocked by this contract.
+branch. Core variants with dynamic arity, such as `StdTensorOp::Concatenate`,
+store the arity in their payload and are handled by the core enum directly.
 
 ### Failure signature
 

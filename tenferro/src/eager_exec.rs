@@ -87,7 +87,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
             StdTensorOp::Select => vec![exec.select(inputs[0], inputs[1], inputs[2])?],
             StdTensorOp::Clamp => vec![exec.clamp(inputs[0], inputs[1], inputs[2])?],
-            StdTensorOp::Concatenate { axis } => {
+            StdTensorOp::Concatenate { axis, .. } => {
                 vec![exec.concatenate(inputs, *axis)?]
             }
             StdTensorOp::NaryEinsum { .. } => {

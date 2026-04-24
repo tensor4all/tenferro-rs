@@ -48,7 +48,14 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         ),
         make_instr(StdTensorOp::Slice(slice.clone()), vec![0], vec![6]),
         make_instr(StdTensorOp::Reverse { axes: vec![0] }, vec![1], vec![7]),
-        make_instr(StdTensorOp::Concatenate { axis: 0 }, vec![0, 1], vec![8]),
+        make_instr(
+            StdTensorOp::Concatenate {
+                axis: 0,
+                n_inputs: 2,
+            },
+            vec![0, 1],
+            vec![8],
+        ),
         make_instr(StdTensorOp::Tril { k: -1 }, vec![2], vec![9]),
         make_instr(StdTensorOp::Mul, vec![0, 1], vec![10]),
         make_instr(

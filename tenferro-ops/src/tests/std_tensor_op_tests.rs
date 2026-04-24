@@ -462,15 +462,14 @@ fn test_std_tensor_op_remaining_input_output_counts() {
 }
 
 #[test]
-#[should_panic(expected = "n_inputs not yet implemented for variable-arity op")]
-fn test_std_tensor_op_n_inputs_panics_for_concatenate() {
-    let _ = StdTensorOp::Concatenate { axis: 0 }.n_inputs();
-}
+fn test_std_tensor_op_concatenate_counts_use_recorded_arity() {
+    let op = StdTensorOp::Concatenate {
+        axis: 0,
+        n_inputs: 3,
+    };
 
-#[test]
-#[should_panic(expected = "n_outputs not yet implemented for variable-arity op")]
-fn test_std_tensor_op_n_outputs_panics_for_concatenate() {
-    let _ = StdTensorOp::Concatenate { axis: 0 }.n_outputs();
+    assert_eq!(op.n_inputs(), 3);
+    assert_eq!(op.n_outputs(), 1);
 }
 
 #[test]
@@ -571,7 +570,10 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         StdTensorOp::NaryEinsum {
             subscripts: "ij,jk,kl->il".into(),
         },
-        StdTensorOp::Concatenate { axis: 1 },
+        StdTensorOp::Concatenate {
+            axis: 1,
+            n_inputs: 3,
+        },
         StdTensorOp::Reverse { axes: vec![0] },
         StdTensorOp::ShapeOf { axis: 0 },
         StdTensorOp::DynamicTruncate { axis: 0 },

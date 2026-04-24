@@ -99,6 +99,7 @@ pub enum StdTensorOp {
     },
     Concatenate {
         axis: usize,
+        n_inputs: usize,
     },
     Reverse {
         axes: Vec<usize>,
@@ -320,7 +321,16 @@ impl PartialEq for StdTensorOp {
             }
             (Self::Pad(a), Self::Pad(b)) => a == b,
             (Self::NaryEinsum { subscripts: a }, Self::NaryEinsum { subscripts: b }) => a == b,
-            (Self::Concatenate { axis: a }, Self::Concatenate { axis: b }) => a == b,
+            (
+                Self::Concatenate {
+                    axis: a,
+                    n_inputs: na,
+                },
+                Self::Concatenate {
+                    axis: b,
+                    n_inputs: nb,
+                },
+            ) => a == b && na == nb,
             (Self::ShapeOf { axis: a }, Self::ShapeOf { axis: b })
             | (Self::DynamicTruncate { axis: a }, Self::DynamicTruncate { axis: b })
             | (Self::PadToMatch { axis: a }, Self::PadToMatch { axis: b }) => a == b,
@@ -420,7 +430,10 @@ impl Hash for StdTensorOp {
             Self::NaryEinsum { subscripts } => {
                 subscripts.hash(state);
             }
-            Self::Concatenate { axis } => axis.hash(state),
+            Self::Concatenate { axis, n_inputs } => {
+                axis.hash(state);
+                n_inputs.hash(state);
+            }
             Self::Reverse { axes } => axes.hash(state),
             Self::ShapeOf { axis } | Self::DynamicTruncate { axis } | Self::PadToMatch { axis } => {
                 axis.hash(state)
@@ -500,12 +513,7 @@ impl GraphOp for StdTensorOp {
             Self::Constant { .. } => 0,
             Self::Scatter(_) => 3,
             Self::NaryEinsum { subscripts } => n_inputs_from_einsum_subscripts(subscripts),
-            Self::Concatenate { .. } => {
-                todo!(
-                    "n_inputs not yet implemented for variable-arity op {:?}",
-                    self
-                )
-            }
+            Self::Concatenate { n_inputs, .. } => *n_inputs,
             Self::Abs
             | Self::Sign
             | Self::Exp
@@ -585,10 +593,7 @@ impl GraphOp for StdTensorOp {
             Self::Qr => 2,          // Q, R
             Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
             Self::Eig { .. } => 2,  // eigenvalues, eigenvectors
-            Self::Concatenate { .. } => todo!(
-                "n_outputs not yet implemented for variable-arity op {:?}",
-                self
-            ),
+            Self::Concatenate { .. } => 1,
             Self::Extension(op) => ExtensionOp::n_outputs(op.as_ref()),
         }
     }

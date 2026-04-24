@@ -30,10 +30,7 @@ fn qr_returns_correct_shapes() {
 
 #[test]
 fn qr_second_output_backward_records_selected_output_slot() {
-    let a = EagerTensor::requires_grad(Tensor::from_vec(
-        vec![2, 2],
-        vec![1.0_f64, 0.0, 0.0, 2.0],
-    ));
+    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]));
     let (_q, r) = a.qr().unwrap();
     let loss = r.reduce_sum(&[0, 1]).unwrap();
 
