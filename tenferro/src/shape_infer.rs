@@ -171,7 +171,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         StdTensorOp::NaryEinsum { subscripts } => {
             vec![einsum_output_shape(subscripts, input_shapes)]
         }
-        StdTensorOp::Concatenate { axis } => vec![concatenate_shape(input_shapes, *axis)],
+        StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)],
         StdTensorOp::ShapeOf { .. } => vec![Vec::new()],
         StdTensorOp::DynamicTruncate { axis } => {
             let shape = require_input(op, input_shapes, 0).to_vec();

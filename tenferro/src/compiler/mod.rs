@@ -194,7 +194,7 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
             slice_sizes: slice_sizes.clone(),
         },
         StdTensorOp::Pad(config) => ExecOp::Pad(config.clone()),
-        StdTensorOp::Concatenate { axis } => ExecOp::Concatenate { axis: *axis },
+        StdTensorOp::Concatenate { axis, .. } => ExecOp::Concatenate { axis: *axis },
         StdTensorOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },
         StdTensorOp::ShapeOf { axis } => ExecOp::ShapeOf { axis: *axis },
         StdTensorOp::DynamicTruncate { axis } => ExecOp::DynamicTruncate { axis: *axis },

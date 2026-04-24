@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use tidu::{GradEdge, GradNode};
-
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
@@ -9,13 +7,9 @@ use tenferro_tensor::{
     TensorBackend,
 };
 
-use crate::eager::{
-    derived_output_key, eager_val_key, exec_single_output, saved_forward_values,
-    saved_forward_values_multi, EagerTensor,
-};
+use crate::eager::{exec_single_output, record_eager_outputs, EagerTensor};
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
-use crate::metadata::{register_value_metadata, tensor_meta_from_tensor};
 
 impl<B: TensorBackend> EagerTensor<B> {
     /// Elementwise addition.
@@ -365,7 +359,13 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     /// ```
     pub fn concatenate(tensors: &[&Self], axis: usize) -> Result<Self> {
-        Self::nary_op(tensors, StdTensorOp::Concatenate { axis })
+        Self::nary_op(
+            tensors,
+            StdTensorOp::Concatenate {
+                axis,
+                n_inputs: tensors.len(),
+            },
+        )
     }
 
     /// Extract the diagonal along two axes.
@@ -491,44 +491,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     }
 
     pub(crate) fn unary_op(&self, op: StdTensorOp) -> Result<Self> {
-        let output = exec_single_output(&op, &[self.data.as_ref()], &self.ctx)?;
-        let result_key = eager_val_key();
-        let input_aliases = vec![eager_val_key()];
-        register_value_metadata(
-            input_aliases[0].clone(),
-            tensor_meta_from_tensor(self.data.as_ref()),
-        );
-        register_value_metadata(result_key.clone(), tensor_meta_from_tensor(&output));
-        register_value_metadata(
-            derived_output_key(&op, &input_aliases, 0),
-            tensor_meta_from_tensor(&output),
-        );
-        let grad_node = self.requires_grad.then(|| {
-            Arc::new(GradNode {
-                op: op.clone(),
-                primal_in_keys: input_aliases.clone(),
-                primal_out_keys: vec![result_key.clone()],
-                saved_data: saved_forward_values(
-                    &op,
-                    &input_aliases,
-                    &[Arc::clone(&self.data)],
-                    Arc::new(output.clone()),
-                ),
-                input_edges: vec![GradEdge {
-                    node: self.grad_node.clone(),
-                    key: self.key.clone(),
-                    requires_grad: self.requires_grad,
-                }],
-                output_idx: 0,
-            })
-        });
-        Ok(Self::new_result(
-            Arc::clone(&self.ctx),
-            result_key,
-            output,
-            self.requires_grad,
-            grad_node,
-        ))
+        Self::nary_op(&[self], op)
     }
 
     pub(crate) fn binary_op(&self, other: &Self, op: StdTensorOp) -> Result<Self> {
@@ -554,52 +517,26 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
 
         let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-        let output_keys: Vec<_> = (0..num_outputs).map(|_| eager_val_key()).collect();
-        let input_aliases = vec![eager_val_key()];
-        register_value_metadata(
-            input_aliases[0].clone(),
-            tensor_meta_from_tensor(self.data.as_ref()),
-        );
-        for (output_key, output) in output_keys.iter().zip(outputs.iter()) {
-            register_value_metadata(output_key.clone(), tensor_meta_from_tensor(output.as_ref()));
+        let traces = record_eager_outputs(&op, &outputs, &[self]);
+        if traces.len() != outputs.len() {
+            return Err(Error::Internal(format!(
+                "expected {} eager traces for {:?}, got {}",
+                outputs.len(),
+                op,
+                traces.len()
+            )));
         }
-        for (slot, output) in outputs.iter().enumerate() {
-            register_value_metadata(
-                derived_output_key(&op, &input_aliases, slot),
-                tensor_meta_from_tensor(output.as_ref()),
-            );
-        }
-        let grad_node = self.requires_grad.then(|| {
-            Arc::new(GradNode {
-                op: op.clone(),
-                primal_in_keys: input_aliases.clone(),
-                primal_out_keys: output_keys.clone(),
-                saved_data: saved_forward_values_multi(
-                    &op,
-                    &input_aliases,
-                    &[Arc::clone(&self.data)],
-                    num_outputs,
-                    &outputs,
-                ),
-                input_edges: vec![GradEdge {
-                    node: self.grad_node.clone(),
-                    key: self.key.clone(),
-                    requires_grad: self.requires_grad,
-                }],
-                output_idx: 0,
-            })
-        });
 
-        Ok(output_keys
+        Ok(traces
             .into_iter()
             .zip(outputs)
-            .map(|(output_key, output)| {
+            .map(|(trace, output)| {
                 Self::new_result(
                     Arc::clone(&self.ctx),
-                    output_key,
+                    trace.key,
                     output.as_ref().clone(),
-                    self.requires_grad,
-                    grad_node.clone(),
+                    trace.requires_grad,
+                    trace.node,
                 )
             })
             .collect())
@@ -624,54 +561,19 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
 
         let inputs: Vec<&Tensor> = tensors.iter().map(|tensor| tensor.data.as_ref()).collect();
-        let output = exec_single_output(&op, &inputs, &ctx)?;
-        let requires_grad = tensors.iter().any(|tensor| tensor.requires_grad);
-        let result_key = eager_val_key();
-        let input_aliases: Vec<_> = tensors.iter().map(|_| eager_val_key()).collect();
-        for (alias_key, tensor) in input_aliases.iter().zip(tensors.iter()) {
-            register_value_metadata(
-                alias_key.clone(),
-                tensor_meta_from_tensor(tensor.data.as_ref()),
-            );
-        }
-        register_value_metadata(result_key.clone(), tensor_meta_from_tensor(&output));
-        register_value_metadata(
-            derived_output_key(&op, &input_aliases, 0),
-            tensor_meta_from_tensor(&output),
-        );
-        let input_data: Vec<_> = tensors
-            .iter()
-            .map(|tensor| Arc::clone(&tensor.data))
-            .collect();
-        let grad_node = requires_grad.then(|| {
-            Arc::new(GradNode {
-                op: op.clone(),
-                primal_in_keys: input_aliases.clone(),
-                primal_out_keys: vec![result_key.clone()],
-                saved_data: saved_forward_values(
-                    &op,
-                    &input_aliases,
-                    &input_data,
-                    Arc::new(output.clone()),
-                ),
-                input_edges: tensors
-                    .iter()
-                    .map(|tensor| GradEdge {
-                        node: tensor.grad_node.clone(),
-                        key: tensor.key.clone(),
-                        requires_grad: tensor.requires_grad,
-                    })
-                    .collect(),
-                output_idx: 0,
-            })
-        });
+        let output = Arc::new(exec_single_output(&op, &inputs, &ctx)?);
+        let outputs = vec![Arc::clone(&output)];
+        let mut traces = record_eager_outputs(&op, &outputs, tensors);
+        let trace = traces.pop().ok_or_else(|| {
+            Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
+        })?;
 
         Ok(Self::new_result(
             ctx,
-            result_key,
-            output,
-            requires_grad,
-            grad_node,
+            trace.key,
+            output.as_ref().clone(),
+            trace.requires_grad,
+            trace.node,
         ))
     }
 }

@@ -2,12 +2,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use computegraph::fragment::Fragment;
-use computegraph::{GlobalOpKey, GlobalValKey, OpMode, ValRef};
+use computegraph::{GlobalValKey, ValRef};
+use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorBackend};
-use tidu::{backward_dag, topo_sort_grad_dag, BackwardCallbacks, GradNode, LinearFragment};
+use tidu::{
+    backward_dag, topo_sort_grad_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
+    LinearFragment,
+};
 
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
@@ -573,53 +577,45 @@ pub(crate) fn eager_val_key() -> GlobalValKey<StdTensorOp> {
     GlobalValKey::Input(next_input_key())
 }
 
-pub(crate) fn saved_forward_values(
-    op: &StdTensorOp,
-    input_keys: &[GlobalValKey<StdTensorOp>],
-    inputs: &[Arc<Tensor>],
-    output: Arc<Tensor>,
-) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
-    let mut saved = HashMap::with_capacity(input_keys.len() + 1);
-    for (key, value) in input_keys.iter().zip(inputs.iter()) {
-        saved.insert(key.clone(), Arc::clone(value));
+pub(crate) struct EagerTensorKeySource;
+
+impl tidu::EagerKeySource<StdTensorOp> for EagerTensorKeySource {
+    fn fresh_input_key(&mut self) -> TensorInputKey {
+        next_input_key()
     }
-    saved.insert(derived_output_key(op, input_keys, 0), output);
-    saved
 }
 
-pub(crate) fn saved_forward_values_multi(
+pub(crate) fn eager_value<B: TensorBackend>(tensor: &EagerTensor<B>) -> EagerValue<StdTensorOp> {
+    EagerValue {
+        key: tensor.key.clone(),
+        node: tensor.grad_node.clone(),
+        requires_grad: tensor.requires_grad,
+        data: Arc::clone(&tensor.data),
+    }
+}
+
+pub(crate) fn record_eager_outputs<B: TensorBackend>(
     op: &StdTensorOp,
-    input_keys: &[GlobalValKey<StdTensorOp>],
-    inputs: &[Arc<Tensor>],
-    num_outputs: usize,
     outputs: &[Arc<Tensor>],
-) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
-    let mut saved = HashMap::with_capacity(input_keys.len() + num_outputs);
-    for (key, value) in input_keys.iter().zip(inputs.iter()) {
-        saved.insert(key.clone(), Arc::clone(value));
-    }
-    for slot in 0..num_outputs {
-        saved.insert(
-            derived_output_key(op, input_keys, slot),
-            Arc::clone(&outputs[slot]),
-        );
-    }
-    saved
-}
+    inputs: &[&EagerTensor<B>],
+) -> Vec<EagerOutput<StdTensorOp>> {
+    let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(*tensor)).collect();
+    let mut key_source = EagerTensorKeySource;
+    let traces = tidu::record_eager_op(&mut key_source, op.clone(), &input_values, outputs);
 
-pub(crate) fn derived_output_key(
-    op: &StdTensorOp,
-    input_keys: &[GlobalValKey<StdTensorOp>],
-    output_slot: usize,
-) -> GlobalValKey<StdTensorOp> {
-    GlobalValKey::Derived {
-        op: GlobalOpKey {
-            primitive: op.clone(),
-            inputs: input_keys.to_vec(),
-            mode: OpMode::Primal,
-        },
-        output_slot: output_slot as u8,
+    for trace in &traces {
+        if let Some(output) = outputs.get(trace.output_slot) {
+            register_value_metadata(trace.key.clone(), tensor_meta_from_tensor(output.as_ref()));
+        }
     }
+
+    if let Some(node) = traces.iter().find_map(|trace| trace.node.as_ref()) {
+        for (key, value) in node.saved_data() {
+            register_value_metadata(key.clone(), tensor_meta_from_tensor(value.as_ref()));
+        }
+    }
+
+    traces
 }
 
 pub(crate) fn exec_single_output<B: TensorBackend>(
