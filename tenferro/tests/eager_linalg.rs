@@ -29,6 +29,21 @@ fn qr_returns_correct_shapes() {
 }
 
 #[test]
+fn qr_second_output_backward_records_selected_output_slot() {
+    let a = EagerTensor::requires_grad(Tensor::from_vec(
+        vec![2, 2],
+        vec![1.0_f64, 0.0, 0.0, 2.0],
+    ));
+    let (_q, r) = a.qr().unwrap();
+    let loss = r.reduce_sum(&[0, 1]).unwrap();
+
+    let _cotangents = loss.backward().unwrap();
+
+    let grad = a.grad().expect("gradient for qr input");
+    assert_eq!(grad.shape(), &[2, 2]);
+}
+
+#[test]
 fn cholesky_of_identity() {
     let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]));
     let l = a.cholesky().unwrap();
