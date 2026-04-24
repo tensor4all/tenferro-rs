@@ -26,6 +26,30 @@ singular_values.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
 assert_eq!(singular_values, vec![1.0, 2.0]);
 ```
 
+### Verifying reconstruction: U · diag(S) · Vt ≈ A
+
+SVD returns a tuple `(U, S, Vt)`. To verify the decomposition reconstructs
+the original matrix, embed `S` as a diagonal matrix and compute
+`U · diag(S) · Vt`.
+
+```rust
+use tenferro::{svd, CpuBackend, Engine, TracedTensor};
+
+let a = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let (mut u, mut s, mut vt) = svd(&a);
+
+// Build the reconstruction graph: U · embed_diag(S, 0, 1) · Vt
+let s_diag = TracedTensor::embed_diag(&s, 0, 1);
+let mut reconstructed = u.matmul(&s_diag, &mut Engine::new(CpuBackend::new())).unwrap();
+reconstructed = reconstructed.matmul(&vt, &mut Engine::new(CpuBackend::new())).unwrap();
+
+let mut engine = Engine::new(CpuBackend::new());
+let result = reconstructed.eval(&mut engine).unwrap();
+// result ≈ a (within numerical tolerance)
+```
+
+`embed_diag` embeds a vector along the diagonal spanning two specified axes.
+
 ## QR decomposition
 
 PyTorch: `torch.linalg.qr(a)`  
