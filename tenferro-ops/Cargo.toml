@@ -6,8 +6,14 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-tensor/cpu-blas"]
+cubecl = ["tenferro-tensor/cubecl"]
+
 [dependencies]
-tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true
 chainrules-core.workspace = true
 num-complex.workspace = true

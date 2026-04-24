@@ -25,6 +25,12 @@ impl TensorValue<'_> {
             Self::Owned(tensor) => tensor,
         }
     }
+
+    fn reclaim_if_owned(self, exec: &mut dyn TensorExec) {
+        if let Self::Owned(tensor) = self {
+            exec.reclaim_buffer(tensor);
+        }
+    }
 }
 
 struct LabeledTensor<'a> {
@@ -40,6 +46,10 @@ impl LabeledTensor<'_> {
     fn shape(&self) -> &[usize] {
         self.tensor().shape()
     }
+
+    fn reclaim_if_owned(self, exec: &mut dyn TensorExec) {
+        self.tensor.reclaim_if_owned(exec);
+    }
 }
 
 fn eager_invalid_config(message: impl Into<String>) -> Error {
@@ -47,6 +57,27 @@ fn eager_invalid_config(message: impl Into<String>) -> Error {
         op: EAGER_EINSUM_OP,
         message: message.into(),
     }
+}
+
+fn parse_and_plan(subscripts: &str, input_shapes: &[&[usize]]) -> Result<ContractionTree> {
+    if input_shapes.is_empty() {
+        return Err(eager_invalid_config(
+            "eager einsum requires at least one input tensor",
+        ));
+    }
+
+    let subs = Subscripts::parse(subscripts)
+        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
+    if subs.inputs.len() != input_shapes.len() {
+        return Err(eager_invalid_config(format!(
+            "eager einsum subscripts expect {} inputs, got {}",
+            subs.inputs.len(),
+            input_shapes.len()
+        )));
+    }
+
+    ContractionTree::optimize(&subs, input_shapes)
+        .map_err(|err| eager_invalid_config(format!("failed to optimize contraction tree: {err}")))
 }
 
 fn take_labeled<'a>(
@@ -112,6 +143,7 @@ fn reduce_tensor<'a>(
         .map(|(_, label)| *label)
         .collect();
     let tensor = exec.reduce_sum(operand.tensor(), &reduce_axes)?;
+    operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),
         labels,
@@ -137,8 +169,9 @@ fn diagonalize_repeated<'a>(
         };
 
         let tensor = exec.extract_diagonal(operand.tensor(), axis_a, axis_b)?;
-        let mut labels = operand.labels;
+        let mut labels = operand.labels.clone();
         labels.remove(axis_b);
+        operand.reclaim_if_owned(exec);
         operand = LabeledTensor {
             tensor: TensorValue::Owned(tensor),
             labels,
@@ -167,8 +200,9 @@ fn embed_repeated<'a>(
                 let axis_a = find_label_axis(&operand.labels, label)?;
                 let axis_b = axis_a + 1;
                 let tensor = exec.embed_diagonal(operand.tensor(), axis_a, axis_b)?;
-                let mut labels = operand.labels;
+                let mut labels = operand.labels.clone();
                 labels.insert(axis_b, label);
+                operand.reclaim_if_owned(exec);
                 operand = LabeledTensor {
                     tensor: TensorValue::Owned(tensor),
                     labels,
@@ -206,6 +240,7 @@ fn transpose_to_labels<'a>(
     }
 
     let tensor = exec.transpose(operand.tensor(), &perm)?;
+    operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),
         labels: target_labels.to_vec(),
@@ -222,9 +257,12 @@ fn outer_product<'a>(
 ) -> Result<LabeledTensor<'a>> {
     if lhs.labels == rhs.labels {
         let tensor = exec.mul(lhs.tensor(), rhs.tensor())?;
+        let labels = lhs.labels.clone();
+        lhs.reclaim_if_owned(exec);
+        rhs.reclaim_if_owned(exec);
         return Ok(LabeledTensor {
             tensor: TensorValue::Owned(tensor),
-            labels: lhs.labels,
+            labels,
         });
     }
 
@@ -252,6 +290,10 @@ fn outer_product<'a>(
     let lhs_tensor = exec.broadcast_in_dim(lhs.tensor(), &combined_shape, &lhs_dims)?;
     let rhs_tensor = exec.broadcast_in_dim(rhs.tensor(), &combined_shape, &rhs_dims)?;
     let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
+    lhs.reclaim_if_owned(exec);
+    rhs.reclaim_if_owned(exec);
+    exec.reclaim_buffer(lhs_tensor);
+    exec.reclaim_buffer(rhs_tensor);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),
         labels: combined_labels,
@@ -352,6 +394,8 @@ fn binary_contract<'a>(
             rhs_batch_dims,
         };
         let tensor = exec.dot_general(lhs.tensor(), rhs.tensor(), &config)?;
+        lhs.reclaim_if_owned(exec);
+        rhs.reclaim_if_owned(exec);
         LabeledTensor {
             tensor: TensorValue::Owned(tensor),
             labels,
@@ -371,21 +415,21 @@ fn binary_contract<'a>(
     transpose_to_labels(exec, result, &target_labels)
 }
 
-fn eager_einsum_exec(
+fn eager_einsum_exec_values<'a>(
     exec: &mut dyn TensorExec,
-    inputs: &[&Tensor],
+    inputs: Vec<TensorValue<'a>>,
     tree: &ContractionTree,
 ) -> Result<Tensor> {
     let subscripts = &tree.subscripts;
     let n_inputs = subscripts.inputs.len();
     let output_labels = &subscripts.output;
 
-    let mut labeled: Vec<Option<LabeledTensor<'_>>> = inputs
-        .iter()
+    let mut labeled: Vec<Option<LabeledTensor<'a>>> = inputs
+        .into_iter()
         .zip(subscripts.inputs.iter())
         .map(|(tensor, labels)| {
             Some(LabeledTensor {
-                tensor: TensorValue::Borrowed(tensor),
+                tensor,
                 labels: labels.clone(),
             })
         })
@@ -446,6 +490,18 @@ fn eager_einsum_exec(
     Ok(reordered.tensor.into_tensor())
 }
 
+fn eager_einsum_exec(
+    exec: &mut dyn TensorExec,
+    inputs: &[&Tensor],
+    tree: &ContractionTree,
+) -> Result<Tensor> {
+    let values = inputs
+        .iter()
+        .map(|tensor| TensorValue::Borrowed(*tensor))
+        .collect();
+    eager_einsum_exec_values(exec, values, tree)
+}
+
 /// Eager N-ary einsum on concrete [`Tensor`] values.
 ///
 /// This applies the same contraction-tree optimization strategy used by the
@@ -471,25 +527,43 @@ pub fn eager_einsum(
     inputs: &[&Tensor],
     subscripts: &str,
 ) -> Result<Tensor> {
-    if inputs.is_empty() {
-        return Err(eager_invalid_config(
-            "eager einsum requires at least one input tensor",
-        ));
-    }
-
-    let subs = Subscripts::parse(subscripts)
-        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
-    if subs.inputs.len() != inputs.len() {
-        return Err(eager_invalid_config(format!(
-            "eager einsum subscripts expect {} inputs, got {}",
-            subs.inputs.len(),
-            inputs.len()
-        )));
-    }
-
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = ContractionTree::optimize(&subs, &shapes).map_err(|err| {
-        eager_invalid_config(format!("failed to optimize contraction tree: {err}"))
-    })?;
+    let tree = parse_and_plan(subscripts, &shapes)?;
     ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+}
+
+/// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.
+///
+/// This has the same parsing, contraction planning, execution semantics, and
+/// output ordering as [`eager_einsum`]. Unlike the borrowed API, inputs are
+/// moved into the executor, so eligible buffers may be reclaimed by the backend
+/// after their last use.
+///
+/// Downstream crates should use this N-ary API even for two-input contractions
+/// instead of depending on binary lowering details.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::eager_einsum_owned;
+/// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend};
+///
+/// let mut ctx = CpuBackend::new();
+/// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+///
+/// let c = eager_einsum_owned(&mut ctx, vec![a, b], "ij,jk->ik").unwrap();
+///
+/// assert_eq!(c.shape(), &[2, 2]);
+/// assert_eq!(c.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+/// ```
+pub fn eager_einsum_owned(
+    ctx: &mut impl TensorBackend,
+    inputs: Vec<Tensor>,
+    subscripts: &str,
+) -> Result<Tensor> {
+    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
+    let tree = parse_and_plan(subscripts, &shapes)?;
+    let values = inputs.into_iter().map(TensorValue::Owned).collect();
+    ctx.with_exec_session(|exec| eager_einsum_exec_values(exec, values, &tree))
 }

@@ -8,42 +8,8 @@ use tenferro_device::Error;
 use crate::syntax::subscripts::Subscripts;
 
 use super::{
-    nested_to_pairs, optimize_self_greedy_pairs, ChainAttachment, ContractionOptimizerOptions,
-    ContractionStep, ContractionTree, LinearChainPlan,
+    nested_to_pairs, optimize_self_greedy_pairs, ContractionOptimizerOptions, ContractionTree,
 };
-
-#[test]
-fn linear_chain_plan_detects_progressive_chain() {
-    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
-    let shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..], &[5, 6][..]];
-    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (2, 4), (3, 5)]).unwrap();
-
-    assert_eq!(
-        tree.linear_chain_plan(),
-        Some(LinearChainPlan {
-            first_pair: (0, 1),
-            attachments: vec![
-                ChainAttachment {
-                    prev_on_left: false,
-                    operand: 2,
-                },
-                ChainAttachment {
-                    prev_on_left: false,
-                    operand: 3,
-                },
-            ],
-        })
-    );
-}
-
-#[test]
-fn linear_chain_plan_rejects_branching_tree() {
-    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
-    let shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..], &[5, 6][..]];
-    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (2, 3), (4, 5)]).unwrap();
-
-    assert_eq!(tree.linear_chain_plan(), None);
-}
 
 #[test]
 fn default_options_build_zero_iter_greedy_initialized_treesa() {
@@ -141,62 +107,13 @@ fn optimize_with_options_rejects_zero_trials() {
 }
 
 #[test]
-fn single_operand_tree_reports_no_steps_and_empty_chain() {
+fn single_operand_tree_reports_no_steps() {
     let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
     let tree = ContractionTree::optimize(&subs, &[&[2, 3][..]]).unwrap();
 
     assert_eq!(tree.step_count(), 0);
     assert_eq!(tree.step_pair(0), None);
     assert_eq!(tree.step_subscripts(0), None);
-    assert_eq!(
-        tree.linear_chain_plan(),
-        Some(LinearChainPlan {
-            first_pair: (0, 0),
-            attachments: Vec::new(),
-        })
-    );
-}
-
-#[test]
-fn linear_chain_plan_rejects_first_step_that_starts_from_intermediate() {
-    let subs = Subscripts::new(&[&[0], &[1], &[2]], &[0, 1, 2]);
-    let tree = ContractionTree {
-        subscripts: subs,
-        steps: vec![ContractionStep { left: 3, right: 1 }],
-        size_dict: HashMap::new(),
-        operand_subs: vec![vec![0], vec![1], vec![2], vec![0, 1]],
-        step_output_shapes: vec![vec![2, 2]],
-        step_plans: Vec::new(),
-    };
-
-    assert_eq!(tree.linear_chain_plan(), None);
-}
-
-#[test]
-fn linear_chain_plan_rejects_reusing_an_input_operand() {
-    let subs = Subscripts::new(&[&[0], &[1], &[2], &[3]], &[0, 1, 2, 3]);
-    let tree = ContractionTree {
-        subscripts: subs,
-        steps: vec![
-            ContractionStep { left: 0, right: 1 },
-            ContractionStep { left: 4, right: 2 },
-            ContractionStep { left: 5, right: 2 },
-        ],
-        size_dict: HashMap::new(),
-        operand_subs: vec![
-            vec![0],
-            vec![1],
-            vec![2],
-            vec![3],
-            vec![0, 1],
-            vec![0, 1, 2],
-            vec![0, 1, 2, 3],
-        ],
-        step_output_shapes: vec![vec![2], vec![2], vec![2]],
-        step_plans: Vec::new(),
-    };
-
-    assert_eq!(tree.linear_chain_plan(), None);
 }
 
 #[test]
@@ -322,18 +239,6 @@ fn step_subscripts_returns_correct_labels_for_each_step() {
     assert_eq!(lhs1, &[0, 1]);
     assert_eq!(rhs1, &[1, 3]);
     assert_eq!(out1, &[0, 3]);
-}
-
-#[test]
-fn linear_chain_plan_accepts_prev_on_right_for_first_attachment() {
-    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
-    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
-    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (2, 3)]).unwrap();
-    let plan = tree.linear_chain_plan().unwrap();
-    assert_eq!(plan.first_pair, (0, 1));
-    assert_eq!(plan.attachments.len(), 1);
-    assert!(!plan.attachments[0].prev_on_left);
-    assert_eq!(plan.attachments[0].operand, 2);
 }
 
 #[test]

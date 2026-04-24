@@ -12,18 +12,33 @@ test = false
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro-tensor/cpu-blas"]
+cpu-faer = [
+    "tenferro-einsum/cpu-faer",
+    "tenferro-ops/cpu-faer",
+    "tenferro-tensor/cpu-faer",
+]
+cpu-blas = [
+    "tenferro-einsum/cpu-blas",
+    "tenferro-ops/cpu-blas",
+    "tenferro-tensor/cpu-blas",
+]
 provider-src = ["cpu-blas", "tenferro-tensor/provider-src"]
 src-openblas = ["provider-src", "tenferro-tensor/src-openblas"]
 src-accelerate = ["provider-src", "tenferro-tensor/src-accelerate"]
-src-intel-mkl-dynamic-parallel = ["provider-src", "tenferro-tensor/src-intel-mkl-dynamic-parallel"]
-cubecl = ["tenferro-tensor/cubecl"]
+src-intel-mkl-dynamic-parallel = [
+    "provider-src",
+    "tenferro-tensor/src-intel-mkl-dynamic-parallel",
+]
+cubecl = [
+    "tenferro-einsum/cubecl",
+    "tenferro-ops/cubecl",
+    "tenferro-tensor/cubecl",
+]
 
 [dependencies]
-tenferro-tensor = { path = "../tenferro-tensor" }
-tenferro-ops = { path = "../tenferro-ops" }
-tenferro-einsum = { path = "../tenferro-einsum" }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-ops = { path = "../tenferro-ops", default-features = false }
+tenferro-einsum = { path = "../tenferro-einsum", default-features = false }
 omeco.workspace = true
 computegraph.workspace = true
 chainrules-core.workspace = true

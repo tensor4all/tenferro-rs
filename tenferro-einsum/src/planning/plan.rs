@@ -1,16 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use tenferro_device::{Error, Result as DeviceResult};
-
 use crate::planning::classify::classify_modes;
-#[cfg(test)]
-pub(crate) use crate::planning::strict_binary::compile_strict_binary_lowering_plan;
 pub(crate) use crate::planning::strict_binary::{
     compile_strict_binary_lowering_step_plan, StrictBinaryLoweringPlan,
 };
 use crate::planning::tree::ContractionTree;
-use crate::syntax::subscripts::Subscripts;
-use crate::util::{build_size_dict, compute_output_shape};
 
 /// Pre-computed information for reducing axes unique to one operand.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,14 +96,6 @@ pub(crate) struct StepPlan {
     pub(crate) strict_binary: Option<StrictBinaryLoweringPlan>,
     /// GEMM decomposition (always present after diagonal extraction).
     pub(crate) gemm: GemmPlan,
-}
-
-/// Direct plan for binary einsum without materializing a full contraction tree.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct BinaryContractionPlan {
-    pub(crate) size_dict: HashMap<u32, usize>,
-    pub(crate) output_shape: Vec<usize>,
-    pub(crate) step_plan: StepPlan,
 }
 
 /// Pre-compute the reduction plan for axes unique to one operand.
@@ -360,35 +346,6 @@ pub(crate) fn compile_pairwise_step_plan(
             a_gemm_shape,
             b_gemm_shape,
         },
-    })
-}
-
-pub(crate) fn compile_binary_contraction_plan(
-    subscripts: &Subscripts,
-    shapes: &[&[usize]],
-    extra: Option<&HashMap<u32, usize>>,
-) -> DeviceResult<BinaryContractionPlan> {
-    if subscripts.inputs.len() != 2 {
-        return Err(Error::InvalidArgument(format!(
-            "binary einsum requires exactly 2 inputs, got {}",
-            subscripts.inputs.len()
-        )));
-    }
-
-    let size_dict = build_size_dict(subscripts, shapes, extra)?;
-    let output_shape = compute_output_shape(&subscripts.output, &size_dict)?;
-    let step_plan = compile_pairwise_step_plan(
-        &subscripts.inputs[0],
-        &subscripts.inputs[1],
-        &subscripts.output,
-        &size_dict,
-    )
-    .map_err(Error::InvalidArgument)?;
-
-    Ok(BinaryContractionPlan {
-        size_dict,
-        output_shape,
-        step_plan,
     })
 }
 
