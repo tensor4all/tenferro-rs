@@ -318,7 +318,7 @@ fn eager_elementwise_forward_surface_smoke() {
 #[test]
 fn eager_elementwise_scatter_forward_updates_operand() {
     let operand = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
-    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1.0_f64, 3.0]));
+    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1_i64, 3]));
     let updates = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![5.0_f64, 4.0]));
     let result = operand
         .scatter(

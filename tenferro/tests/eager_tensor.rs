@@ -435,7 +435,7 @@ fn eager_gather_primal() {
         vec![5],
         vec![10.0_f64, 20.0, 30.0, 40.0, 50.0],
     ));
-    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4.0_f64, 1.0, 0.0]));
+    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4_i64, 1, 0]));
     let y = x
         .gather(
             &indices,
@@ -462,7 +462,7 @@ fn eager_dynamic_slice_primal() {
             16.0,
         ],
     ));
-    let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![2.0_f64, 3.0]));
+    let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![2_i64, 3]));
     let y = x.dynamic_slice(&starts, &[2, 2]).unwrap();
 
     assert_eq!(y.data().shape(), &[2, 2]);

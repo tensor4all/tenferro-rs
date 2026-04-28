@@ -274,7 +274,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     ///     vec![5],
     ///     vec![10.0_f64, 20.0, 30.0, 40.0, 50.0],
     /// ));
-    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4.0_f64, 1.0, 0.0]));
+    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4_i64, 1, 0]));
     /// let y = x
     ///     .gather(
     ///         &indices,
@@ -302,7 +302,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// use tenferro::{EagerTensor, ScatterConfig, Tensor};
     ///
     /// let operand = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]));
-    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1.0_f64, 3.0]));
+    /// let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![1_i64, 3]));
     /// let updates = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![5.0_f64, 7.0]));
     /// let result = operand
     ///     .scatter(
@@ -331,7 +331,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// use tenferro::{EagerTensor, Tensor};
     ///
     /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]));
-    /// let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![1], vec![2.0_f64]));
+    /// let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![1], vec![2_i64]));
     /// let y = x.dynamic_slice(&starts, &[2]).unwrap();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[3.0, 4.0]);

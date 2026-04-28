@@ -38,6 +38,10 @@ fn tensor_f64(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
+fn tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec(shape, data))
+}
+
 fn tensor_c32(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
     Tensor::C32(TypedTensor::from_vec(shape, data))
 }
