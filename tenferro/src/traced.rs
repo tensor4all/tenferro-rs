@@ -1079,6 +1079,7 @@ impl TracedTensor {
         let op = match self.dtype {
             DType::F64 => StdTensorOp::constant_f64(factor),
             DType::F32 => StdTensorOp::constant_f32(factor as f32),
+            DType::I64 => StdTensorOp::constant_i64(factor as i64),
             DType::C64 => StdTensorOp::constant_c64(Complex64::new(factor, 0.0)),
             DType::C32 => StdTensorOp::constant_c32(Complex32::new(factor as f32, 0.0)),
         };
@@ -1103,7 +1104,7 @@ impl TracedTensor {
                 self,
                 StdTensorOp::constant_c32(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
-            DType::F32 | DType::F64 => {
+            DType::F32 | DType::F64 | DType::I64 => {
                 panic!(
                     "scale_complex only supports complex tensors; use scale_real for real tensors"
                 )
@@ -2119,6 +2120,7 @@ fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
         DType::F32 => Tensor::F32(TypedTensor::ones(shape)),
         DType::F64 => Tensor::F64(TypedTensor::ones(shape)),
+        DType::I64 => Tensor::I64(TypedTensor::ones(shape)),
         DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
         DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
     }
@@ -2128,6 +2130,7 @@ fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
         DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
         DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
         DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }

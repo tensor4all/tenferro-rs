@@ -91,6 +91,7 @@ pub fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_transpose(t, perm)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_transpose(t, perm)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_transpose(t, perm)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_transpose(t, perm)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_transpose(t, perm)?)),
     }
@@ -100,6 +101,7 @@ pub fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reshape(t, shape)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_reshape(t, shape)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_reshape(t, shape)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reshape(t, shape)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reshape(t, shape)?)),
     }
@@ -109,6 +111,7 @@ pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crat
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_broadcast_in_dim(t, shape, dims)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_broadcast_in_dim(t, shape, dims)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_broadcast_in_dim(t, shape, dims)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_broadcast_in_dim(t, shape, dims)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_broadcast_in_dim(t, shape, dims)?)),
     }
@@ -118,24 +121,37 @@ pub fn convert(input: &Tensor, to: DType) -> Tensor {
     match (input, to) {
         (Tensor::F32(t), DType::F32) => Tensor::F32(t.clone()),
         (Tensor::F32(t), DType::F64) => Tensor::F64(typed_convert(t, |x| x as f64)),
+        (Tensor::F32(t), DType::I64) => Tensor::I64(typed_convert(t, |x| x as i64)),
         (Tensor::F32(t), DType::C32) => Tensor::C32(typed_convert(t, |x| Complex32::new(x, 0.0))),
         (Tensor::F32(t), DType::C64) => {
             Tensor::C64(typed_convert(t, |x| Complex64::new(x as f64, 0.0)))
         }
         (Tensor::F64(t), DType::F32) => Tensor::F32(typed_convert(t, |x| x as f32)),
         (Tensor::F64(t), DType::F64) => Tensor::F64(t.clone()),
+        (Tensor::F64(t), DType::I64) => Tensor::I64(typed_convert(t, |x| x as i64)),
         (Tensor::F64(t), DType::C32) => {
             Tensor::C32(typed_convert(t, |x| Complex32::new(x as f32, 0.0)))
         }
         (Tensor::F64(t), DType::C64) => Tensor::C64(typed_convert(t, |x| Complex64::new(x, 0.0))),
+        (Tensor::I64(t), DType::F32) => Tensor::F32(typed_convert(t, |x| x as f32)),
+        (Tensor::I64(t), DType::F64) => Tensor::F64(typed_convert(t, |x| x as f64)),
+        (Tensor::I64(t), DType::I64) => Tensor::I64(t.clone()),
+        (Tensor::I64(t), DType::C32) => {
+            Tensor::C32(typed_convert(t, |x| Complex32::new(x as f32, 0.0)))
+        }
+        (Tensor::I64(t), DType::C64) => {
+            Tensor::C64(typed_convert(t, |x| Complex64::new(x as f64, 0.0)))
+        }
         (Tensor::C32(t), DType::F32) => Tensor::F32(typed_convert(t, |z| z.re)),
         (Tensor::C32(t), DType::F64) => Tensor::F64(typed_convert(t, |z| z.re as f64)),
+        (Tensor::C32(t), DType::I64) => Tensor::I64(typed_convert(t, |z| z.re as i64)),
         (Tensor::C32(t), DType::C32) => Tensor::C32(t.clone()),
         (Tensor::C32(t), DType::C64) => Tensor::C64(typed_convert(t, |z| {
             Complex64::new(z.re as f64, z.im as f64)
         })),
         (Tensor::C64(t), DType::F32) => Tensor::F32(typed_convert(t, |z| z.re as f32)),
         (Tensor::C64(t), DType::F64) => Tensor::F64(typed_convert(t, |z| z.re)),
+        (Tensor::C64(t), DType::I64) => Tensor::I64(typed_convert(t, |z| z.re as i64)),
         (Tensor::C64(t), DType::C32) => Tensor::C32(typed_convert(t, |z| {
             Complex32::new(z.re as f32, z.im as f32)
         })),
@@ -147,6 +163,7 @@ pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_extract_diagonal(t, axis_a, axis_b)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_extract_diagonal(t, axis_a, axis_b)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_extract_diagonal(t, axis_a, axis_b)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_extract_diagonal(t, axis_a, axis_b)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_extract_diagonal(t, axis_a, axis_b)?)),
     }
@@ -156,6 +173,7 @@ pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Re
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_embed_diagonal(t, axis_a, axis_b)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_embed_diagonal(t, axis_a, axis_b)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_embed_diagonal(t, axis_a, axis_b)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_embed_diagonal(t, axis_a, axis_b)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_embed_diagonal(t, axis_a, axis_b)?)),
     }
@@ -165,6 +183,7 @@ pub fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_tril(t, k)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_tril(t, k)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_tril(t, k)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_tril(t, k)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_tril(t, k)?)),
     }
@@ -174,6 +193,7 @@ pub fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_triu(t, k)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_triu(t, k)?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_triu(t, k)?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_triu(t, k)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_triu(t, k)?)),
     }

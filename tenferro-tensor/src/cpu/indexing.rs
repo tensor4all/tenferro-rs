@@ -27,6 +27,15 @@ impl TensorAsTyped<f64> for Tensor {
     }
 }
 
+impl TensorAsTyped<i64> for Tensor {
+    fn as_typed(&self) -> Option<&TypedTensor<i64>> {
+        match self {
+            Tensor::I64(tensor) => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
 impl TensorAsTyped<num_complex::Complex<f32>> for Tensor {
     fn as_typed(&self) -> Option<&TypedTensor<num_complex::Complex<f32>>> {
         match self {
@@ -73,6 +82,7 @@ pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> 
     match input {
         Tensor::F32(tensor) => Ok(Tensor::F32(typed_slice(tensor, config)?)),
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_slice(tensor, config)?)),
+        Tensor::I64(tensor) => Ok(Tensor::I64(typed_slice(tensor, config)?)),
         Tensor::C32(tensor) => Ok(Tensor::C32(typed_slice(tensor, config)?)),
         Tensor::C64(tensor) => Ok(Tensor::C64(typed_slice(tensor, config)?)),
     }
@@ -91,6 +101,7 @@ pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(tensor) => Ok(Tensor::F32(typed_pad(tensor, config)?)),
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_pad(tensor, config)?)),
+        Tensor::I64(tensor) => Ok(Tensor::I64(typed_pad(tensor, config)?)),
         Tensor::C32(tensor) => Ok(Tensor::C32(typed_pad(tensor, config)?)),
         Tensor::C64(tensor) => Ok(Tensor::C64(typed_pad(tensor, config)?)),
     }
@@ -113,6 +124,9 @@ pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>
             t, inputs, axis,
         )?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_concatenate_from_dyn_inputs(
+            t, inputs, axis,
+        )?)),
+        Tensor::I64(t) => Ok(Tensor::I64(typed_concatenate_from_dyn_inputs(
             t, inputs, axis,
         )?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_concatenate_from_dyn_inputs(
@@ -353,6 +367,10 @@ struct IndexTensor {
 
 fn index_tensor(tensor: &Tensor) -> IndexTensor {
     match tensor {
+        Tensor::I64(t) => IndexTensor {
+            shape: t.shape.clone(),
+            values: t.host_data().to_vec(),
+        },
         Tensor::F32(t) => IndexTensor {
             shape: t.shape.clone(),
             values: t.host_data().iter().map(|&value| value as i64).collect(),

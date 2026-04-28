@@ -35,6 +35,7 @@ use num_complex::{Complex32, Complex64};
 pub struct BufferPool {
     f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
     f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
+    i64_pool: BTreeMap<usize, Vec<Vec<i64>>>,
     c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
     c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
 }
@@ -99,6 +100,7 @@ mod private {
 
     impl Sealed for f64 {}
     impl Sealed for f32 {}
+    impl Sealed for i64 {}
     impl Sealed for num_complex::Complex64 {}
     impl Sealed for num_complex::Complex32 {}
 }
@@ -149,6 +151,7 @@ macro_rules! impl_pool_scalar {
 
 impl_pool_scalar!(f64, f64_pool);
 impl_pool_scalar!(f32, f32_pool);
+impl_pool_scalar!(i64, i64_pool);
 impl_pool_scalar!(Complex64, c64_pool);
 impl_pool_scalar!(Complex32, c32_pool);
 
@@ -167,6 +170,7 @@ impl BufferPool {
         Self {
             f64_pool: BTreeMap::new(),
             f32_pool: BTreeMap::new(),
+            i64_pool: BTreeMap::new(),
             c64_pool: BTreeMap::new(),
             c32_pool: BTreeMap::new(),
         }
@@ -186,6 +190,7 @@ impl BufferPool {
     pub fn len(&self) -> usize {
         self.f64_pool.values().map(Vec::len).sum::<usize>()
             + self.f32_pool.values().map(Vec::len).sum::<usize>()
+            + self.i64_pool.values().map(Vec::len).sum::<usize>()
             + self.c64_pool.values().map(Vec::len).sum::<usize>()
             + self.c32_pool.values().map(Vec::len).sum::<usize>()
     }
@@ -231,6 +236,7 @@ impl BufferPool {
     pub fn is_empty(&self) -> bool {
         self.f64_pool.is_empty()
             && self.f32_pool.is_empty()
+            && self.i64_pool.is_empty()
             && self.c64_pool.is_empty()
             && self.c32_pool.is_empty()
     }

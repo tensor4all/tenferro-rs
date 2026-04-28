@@ -80,7 +80,7 @@ use crate::backend::TensorBackend;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Tensor, TypedTensor};
+use crate::{Buffer, Tensor, TypedTensor};
 
 mod dispatch;
 mod ffi;
@@ -101,6 +101,13 @@ use kernels::{diagonal, elementwise, indexing, reduction, structural};
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CubeclRuntime};
+
+fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: format!("unsupported dtype {dtype:?}"),
+    }
+}
 
 /// CubeCL-based GPU backend.
 ///
@@ -146,6 +153,39 @@ impl CubeclBackend {
     /// ```
     pub fn runtime(&self) -> &CubeclRuntime {
         &self.rt
+    }
+
+    fn i64_indices_as_f64(&self, indices: &TypedTensor<i64>) -> crate::Result<TypedTensor<f64>> {
+        let host_values = match &indices.buffer {
+            Buffer::Host(data) => data.clone(),
+            Buffer::Cubecl(_) => {
+                let downloaded = download_tensor(self.runtime(), &Tensor::I64(indices.clone()))?;
+                downloaded
+                    .as_slice::<i64>()
+                    .expect("downloaded I64 tensor")
+                    .to_vec()
+            }
+            Buffer::Backend(_) => {
+                return Err(crate::Error::BackendFailure {
+                    op: "index_tensor",
+                    message: "backend buffers are not supported for CubeCL index conversion".into(),
+                })
+            }
+        };
+        let converted = Tensor::F64(TypedTensor::from_vec(
+            indices.shape.clone(),
+            host_values.into_iter().map(|value| value as f64).collect(),
+        ));
+        match &indices.buffer {
+            Buffer::Cubecl(_) => match upload_tensor(self.runtime(), &converted)? {
+                Tensor::F64(tensor) => Ok(tensor),
+                _ => unreachable!("upload preserves dtype"),
+            },
+            _ => match converted {
+                Tensor::F64(tensor) => Ok(tensor),
+                _ => unreachable!("constructed F64 tensor"),
+            },
+        }
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
@@ -1309,6 +1349,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::C64),
+            Tensor::I64(_) => Err(unsupported_dtype("neg", input.dtype())),
         }
     }
 
@@ -1316,6 +1357,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(tensor) => Ok(Tensor::F32(tensor.clone())),
             Tensor::F64(tensor) => Ok(Tensor::F64(tensor.clone())),
+            Tensor::I64(_) => Err(unsupported_dtype("conj", input.dtype())),
             Tensor::C32(tensor) => launch_unary(
                 self.runtime(),
                 tensor,
@@ -1439,7 +1481,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "abs",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1472,7 +1514,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "sign",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1752,7 +1794,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "exp",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1785,7 +1827,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "log",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1818,7 +1860,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "sin",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1851,7 +1893,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "cos",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1884,7 +1926,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "tanh",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1917,7 +1959,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "sqrt",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -1950,7 +1992,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "rsqrt",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -2027,7 +2069,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "expm1",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -2060,7 +2102,7 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "log1p",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -2071,6 +2113,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.transpose_typed(t, perm).map(Tensor::F32),
             Tensor::F64(t) => self.transpose_typed(t, perm).map(Tensor::F64),
+            Tensor::I64(t) => self.transpose_typed(t, perm).map(Tensor::I64),
             Tensor::C32(t) => self.transpose_typed(t, perm).map(Tensor::C32),
             Tensor::C64(t) => self.transpose_typed(t, perm).map(Tensor::C64),
         }
@@ -2097,6 +2140,11 @@ impl TensorBackend for CubeclBackend {
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
             })),
+            Tensor::I64(t) => Ok(Tensor::I64(TypedTensor {
+                buffer: t.buffer.clone(),
+                shape: shape.to_vec(),
+                placement: t.placement.clone(),
+            })),
             Tensor::C32(t) => Ok(Tensor::C32(TypedTensor {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
@@ -2119,6 +2167,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::F32),
             Tensor::F64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::F64),
+            Tensor::I64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::I64),
             Tensor::C32(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C32),
             Tensor::C64(t) => self.broadcast_typed(t, shape, dims).map(Tensor::C64),
         }
@@ -2130,22 +2179,28 @@ impl TensorBackend for CubeclBackend {
             (Tensor::F32(t), crate::DType::F64) => {
                 self.convert_float_to_float::<f32, f64>(t).map(Tensor::F64)
             }
+            (Tensor::F32(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
             (Tensor::F32(t), crate::DType::C32) => self.convert_f32_to_c32(t).map(Tensor::C32),
             (Tensor::F32(t), crate::DType::C64) => self.convert_f32_to_c64(t).map(Tensor::C64),
             (Tensor::F64(t), crate::DType::F32) => {
                 self.convert_float_to_float::<f64, f32>(t).map(Tensor::F32)
             }
             (Tensor::F64(t), crate::DType::F64) => Ok(Tensor::F64(t.clone())),
+            (Tensor::F64(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
             (Tensor::F64(t), crate::DType::C32) => self.convert_f64_to_c32(t).map(Tensor::C32),
             (Tensor::F64(t), crate::DType::C64) => self.convert_f64_to_c64(t).map(Tensor::C64),
+            (Tensor::I64(_), crate::DType::I64) => Ok(input.clone()),
+            (Tensor::I64(_), _) => Err(unsupported_dtype("convert", input.dtype())),
             (Tensor::C32(t), crate::DType::F32) => self.convert_c32_to_f32(t).map(Tensor::F32),
             (Tensor::C32(t), crate::DType::F64) => self.convert_c32_to_f64(t).map(Tensor::F64),
+            (Tensor::C32(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
             (Tensor::C32(t), crate::DType::C32) => Ok(Tensor::C32(t.clone())),
             (Tensor::C32(t), crate::DType::C64) => self
                 .convert_complex_to_complex::<Complex32, Complex64>(t)
                 .map(Tensor::C64),
             (Tensor::C64(t), crate::DType::F32) => self.convert_c64_to_f32(t).map(Tensor::F32),
             (Tensor::C64(t), crate::DType::F64) => self.convert_c64_to_f64(t).map(Tensor::F64),
+            (Tensor::C64(_), crate::DType::I64) => Err(unsupported_dtype("convert", to)),
             (Tensor::C64(t), crate::DType::C32) => self
                 .convert_complex_to_complex::<Complex64, Complex32>(t)
                 .map(Tensor::C32),
@@ -2166,6 +2221,9 @@ impl TensorBackend for CubeclBackend {
             Tensor::F64(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::F64),
+            Tensor::I64(t) => self
+                .extract_diagonal_typed(t, axis_a, axis_b)
+                .map(Tensor::I64),
             Tensor::C32(t) => self
                 .extract_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -2188,6 +2246,9 @@ impl TensorBackend for CubeclBackend {
             Tensor::F64(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::F64),
+            Tensor::I64(t) => self
+                .embed_diagonal_typed(t, axis_a, axis_b)
+                .map(Tensor::I64),
             Tensor::C32(t) => self
                 .embed_diagonal_typed(t, axis_a, axis_b)
                 .map(Tensor::C32),
@@ -2201,6 +2262,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.tril_typed(t, k).map(Tensor::F32),
             Tensor::F64(t) => self.tril_typed(t, k).map(Tensor::F64),
+            Tensor::I64(t) => self.tril_typed(t, k).map(Tensor::I64),
             Tensor::C32(t) => self.tril_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.tril_typed(t, k).map(Tensor::C64),
         }
@@ -2210,6 +2272,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.triu_typed(t, k).map(Tensor::F32),
             Tensor::F64(t) => self.triu_typed(t, k).map(Tensor::F64),
+            Tensor::I64(t) => self.triu_typed(t, k).map(Tensor::I64),
             Tensor::C32(t) => self.triu_typed(t, k).map(Tensor::C32),
             Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
         }
@@ -2219,6 +2282,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I64(_) => Err(unsupported_dtype("reduce_sum", input.dtype())),
             Tensor::C32(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C64),
         }
@@ -2228,6 +2292,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F64),
+            Tensor::I64(_) => Err(unsupported_dtype("reduce_prod", input.dtype())),
             Tensor::C32(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C64),
         }
@@ -2237,7 +2302,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_max_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_max_typed(t, axes).map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "reduce_max",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -2248,7 +2313,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_min_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_min_typed(t, axes).map(Tensor::F64),
-            Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
+            Tensor::I64(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::BackendFailure {
                 op: "reduce_min",
                 message: format!("unsupported dtype {:?}", input.dtype()),
             }),
@@ -2295,10 +2360,31 @@ impl TensorBackend for CubeclBackend {
             (Tensor::C64(operand), Tensor::F64(indices)) => {
                 self.gather_typed(operand, indices, config).map(Tensor::C64)
             }
+            (Tensor::F32(operand), Tensor::I64(indices)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.gather_typed(operand, &indices, config)
+                    .map(Tensor::F32)
+            }
+            (Tensor::F64(operand), Tensor::I64(indices)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.gather_typed(operand, &indices, config)
+                    .map(Tensor::F64)
+            }
+            (Tensor::C32(operand), Tensor::I64(indices)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.gather_typed(operand, &indices, config)
+                    .map(Tensor::C32)
+            }
+            (Tensor::C64(operand), Tensor::I64(indices)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.gather_typed(operand, &indices, config)
+                    .map(Tensor::C64)
+            }
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
                 op: "gather",
                 message: "complex index tensors are not supported".into(),
             }),
+            (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
         }
     }
 
@@ -2334,6 +2420,26 @@ impl TensorBackend for CubeclBackend {
             (Tensor::C64(operand), Tensor::F64(indices), Tensor::C64(updates)) => self
                 .scatter_complex_typed(operand, indices, updates, config)
                 .map(Tensor::C64),
+            (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.scatter_float_typed(operand, &indices, updates, config)
+                    .map(Tensor::F32)
+            }
+            (Tensor::F64(operand), Tensor::I64(indices), Tensor::F64(updates)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.scatter_float_typed(operand, &indices, updates, config)
+                    .map(Tensor::F64)
+            }
+            (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.scatter_complex_typed(operand, &indices, updates, config)
+                    .map(Tensor::C32)
+            }
+            (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => {
+                let indices = self.i64_indices_as_f64(indices)?;
+                self.scatter_complex_typed(operand, &indices, updates, config)
+                    .map(Tensor::C64)
+            }
             (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::BackendFailure {
                 op: "scatter",
                 message: "complex index tensors are not supported".into(),
@@ -2351,6 +2457,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.slice_typed(t, config).map(Tensor::F32),
             Tensor::F64(t) => self.slice_typed(t, config).map(Tensor::F64),
+            Tensor::I64(t) => self.slice_typed(t, config).map(Tensor::I64),
             Tensor::C32(t) => self.slice_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.slice_typed(t, config).map(Tensor::C64),
         }
@@ -2387,10 +2494,31 @@ impl TensorBackend for CubeclBackend {
             (Tensor::C64(input), Tensor::F64(starts)) => self
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::C64),
+            (Tensor::F32(input), Tensor::I64(starts)) => {
+                let starts = self.i64_indices_as_f64(starts)?;
+                self.dynamic_slice_typed(input, &starts, slice_sizes)
+                    .map(Tensor::F32)
+            }
+            (Tensor::F64(input), Tensor::I64(starts)) => {
+                let starts = self.i64_indices_as_f64(starts)?;
+                self.dynamic_slice_typed(input, &starts, slice_sizes)
+                    .map(Tensor::F64)
+            }
+            (Tensor::C32(input), Tensor::I64(starts)) => {
+                let starts = self.i64_indices_as_f64(starts)?;
+                self.dynamic_slice_typed(input, &starts, slice_sizes)
+                    .map(Tensor::C32)
+            }
+            (Tensor::C64(input), Tensor::I64(starts)) => {
+                let starts = self.i64_indices_as_f64(starts)?;
+                self.dynamic_slice_typed(input, &starts, slice_sizes)
+                    .map(Tensor::C64)
+            }
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
                 op: "dynamic_slice",
                 message: "complex index tensors are not supported".into(),
             }),
+            (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
         }
     }
 
@@ -2398,6 +2526,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.pad_typed(t, config).map(Tensor::F32),
             Tensor::F64(t) => self.pad_typed(t, config).map(Tensor::F64),
+            Tensor::I64(t) => self.pad_typed(t, config).map(Tensor::I64),
             Tensor::C32(t) => self.pad_typed(t, config).map(Tensor::C32),
             Tensor::C64(t) => self.pad_typed(t, config).map(Tensor::C64),
         }
@@ -2432,6 +2561,16 @@ impl TensorBackend for CubeclBackend {
                     .collect();
                 self.concatenate_typed(&typed?, axis).map(Tensor::F64)
             }
+            Tensor::I64(_) => {
+                let typed: crate::Result<Vec<&TypedTensor<i64>>> = inputs
+                    .iter()
+                    .map(|tensor| match tensor {
+                        Tensor::I64(t) => Ok(t),
+                        _ => Err(dtype_mismatch("concatenate", first, tensor)),
+                    })
+                    .collect();
+                self.concatenate_typed(&typed?, axis).map(Tensor::I64)
+            }
             Tensor::C32(_) => {
                 let typed: crate::Result<Vec<&TypedTensor<Complex32>>> = inputs
                     .iter()
@@ -2459,6 +2598,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reverse_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reverse_typed(t, axes).map(Tensor::F64),
+            Tensor::I64(t) => self.reverse_typed(t, axes).map(Tensor::I64),
             Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
         }

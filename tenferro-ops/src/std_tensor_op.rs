@@ -187,6 +187,22 @@ impl StdTensorOp {
         }
     }
 
+    /// Create an `i64` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_i64(7);
+    /// ```
+    pub fn constant_i64(value: i64) -> Self {
+        Self::Constant {
+            dtype: DType::I64,
+            bytes: value.to_le_bytes().to_vec(),
+        }
+    }
+
     /// Create a `Complex64` scalar constant op.
     ///
     /// # Examples

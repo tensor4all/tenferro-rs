@@ -179,6 +179,7 @@ pub fn linearize_eig(
             },
         )[0],
         DType::C64 | DType::C32 => da,
+        DType::I64 => return vec![None, None],
     };
 
     let dav = matmul_linear(

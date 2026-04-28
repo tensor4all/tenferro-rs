@@ -238,6 +238,10 @@ pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_neg(t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg(t)?)),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "neg",
+            message: "unsupported dtype I64".into(),
+        }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_neg(t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_neg(t)?)),
     }
@@ -247,6 +251,10 @@ pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj(t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj(t)?)),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "conj",
+            message: "unsupported dtype I64".into(),
+        }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_conj(t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_conj(t)?)),
     }
@@ -256,6 +264,10 @@ pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_abs(t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs(t)?)),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "abs",
+            message: "unsupported dtype I64".into(),
+        }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_abs(t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_abs(t)?)),
     }
@@ -265,6 +277,10 @@ pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_sign(t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign(t)?)),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "sign",
+            message: "unsupported dtype I64".into(),
+        }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_sign(t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_sign(t)?)),
     }
