@@ -210,6 +210,17 @@ macro_rules! impl_stub_backend {
             fn lu(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
                 todo!(concat!($label, " lu"))
             }
+            fn full_piv_lu(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
+                todo!(concat!($label, " full_piv_lu"))
+            }
+            fn full_piv_lu_solve(
+                &mut self,
+                _a: &Tensor,
+                _b: &Tensor,
+                _transpose_a: bool,
+            ) -> crate::Result<Tensor> {
+                todo!(concat!($label, " full_piv_lu_solve"))
+            }
             fn svd(&mut self, _input: &Tensor) -> crate::Result<Vec<Tensor>> {
                 todo!(concat!($label, " svd"))
             }

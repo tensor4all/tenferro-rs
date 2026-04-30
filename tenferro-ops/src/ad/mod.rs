@@ -130,6 +130,15 @@ pub fn linearize(
 
         // Linalg family.
         StdTensorOp::Lu => linalg::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
+        StdTensorOp::FullPivLu => vec![None, None, None, None, None],
+        StdTensorOp::FullPivLuSolve { transpose_a } => linalg::linearize_full_piv_lu_solve(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            *transpose_a,
+            ctx,
+        ),
         StdTensorOp::TriangularSolve {
             left_side,
             lower,
@@ -289,6 +298,9 @@ pub fn transpose_rule(
             *transpose_a,
             *unit_diagonal,
         ),
+        StdTensorOp::FullPivLuSolve { transpose_a } => {
+            linalg::transpose_full_piv_lu_solve(emitter, cotangent_out, inputs, mode, *transpose_a)
+        }
         StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
 
         // Extension substrate.

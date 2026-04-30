@@ -64,6 +64,8 @@ impl TensorBackend for WrongDTypeBackend {
         cholesky(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         triangular_solve(a: &Tensor, b: &Tensor, left_side: bool, lower: bool, transpose_a: bool, unit_diagonal: bool) -> tenferro_tensor::Result<Tensor>;
         lu(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
+        full_piv_lu(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
+        full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> tenferro_tensor::Result<Tensor>;
         svd(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
         qr(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
         eigh(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;

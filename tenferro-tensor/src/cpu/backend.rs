@@ -551,6 +551,104 @@ impl TensorBackend for CpuBackend {
         })
     }
 
+    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        #[cfg(feature = "cpu-faer")]
+        let ctx = Arc::clone(&self.ctx);
+        self.install_with_pool(|buffers| match input {
+            #[cfg(feature = "cpu-faer")]
+            Tensor::F64(t) => catch_backend_panic("full_piv_lu", || {
+                linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F64(t) => catch_backend_panic("full_piv_lu", || {
+                linalg::full_piv_lu(buffers, t)
+                    .into_iter()
+                    .map(Tensor::F64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::C64(t) => catch_backend_panic("full_piv_lu", || {
+                linalg::full_piv_lu(buffers, t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
+            }),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C64(t) => catch_backend_panic("full_piv_lu", || {
+                linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                    .into_iter()
+                    .map(Tensor::C64)
+                    .collect()
+            }),
+            _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
+        })
+    }
+
+    fn full_piv_lu_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+    ) -> crate::Result<Tensor> {
+        if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+            return Ok(zeros_like_tensor(b));
+        }
+
+        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
+            (
+                self.reshape(b, &matrix_rhs_shape)?,
+                Some(b.shape().to_vec()),
+            )
+        } else {
+            (b.clone(), None)
+        };
+
+        #[cfg(feature = "cpu-faer")]
+        let ctx = Arc::clone(&self.ctx);
+        let result = self.install_with_pool(|buffers| match (a, &rhs) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::C64)
+            })
+            .and_then(|result| result),
+            _ => {
+                if a.dtype() != rhs.dtype() {
+                    Err(crate::Error::DTypeMismatch {
+                        op: "full_piv_lu_solve",
+                        lhs: a.dtype(),
+                        rhs: rhs.dtype(),
+                    })
+                } else {
+                    Err(unsupported_dtype("full_piv_lu_solve", a.dtype()))
+                }
+            }
+        })?;
+
+        if let Some(shape) = restore_shape {
+            self.reshape(&result, &shape)
+        } else {
+            Ok(result)
+        }
+    }
+
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);

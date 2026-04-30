@@ -12,7 +12,7 @@ default = ["cpu-faer"]
 cpu-faer = ["dep:faer"]
 cpu-blas = ["dep:cblas-sys", "dep:lapack"]
 provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
-provider-inject = ["cpu-blas", "dep:cblas-inject"]
+provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
 src-openblas = ["provider-src", "blas-src/openblas"]
 src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
@@ -30,6 +30,7 @@ thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }
 cblas-inject = { workspace = true, optional = true }
+lapack-inject = { workspace = true, optional = true }
 cblas-src = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }

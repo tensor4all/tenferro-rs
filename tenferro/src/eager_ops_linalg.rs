@@ -90,6 +90,58 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
     }
 
+    /// LU decomposition with complete pivoting: `P A Q^T = L U`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{EagerTensor, Tensor};
+    ///
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
+    /// let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
+    ///
+    /// assert_eq!(p.data().shape(), &[2, 2]);
+    /// assert_eq!(l.data().shape(), &[2, 2]);
+    /// assert_eq!(u.data().shape(), &[2, 2]);
+    /// assert_eq!(q.data().shape(), &[2, 2]);
+    /// assert_eq!(parity.data().shape(), &[] as &[usize]);
+    /// ```
+    pub fn full_piv_lu(&self) -> Result<(Self, Self, Self, Self, Self)> {
+        let mut outputs = self
+            .multi_output_unary_op(StdTensorOp::FullPivLu, 5)?
+            .into_iter();
+        match (
+            outputs.next(),
+            outputs.next(),
+            outputs.next(),
+            outputs.next(),
+            outputs.next(),
+            outputs.next(),
+        ) {
+            (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => Ok((p, l, u, q, parity)),
+            _ => Err(Error::Internal(
+                "full_piv_lu eager op returned an unexpected number of outputs".to_string(),
+            )),
+        }
+    }
+
+    /// Solve `A x = b` using complete-pivoting LU factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{EagerTensor, Tensor};
+    ///
+    /// let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
+    /// let b = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]));
+    /// let x = a.full_piv_lu_solve(&b).unwrap();
+    ///
+    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[4.0, -1.0]);
+    /// ```
+    pub fn full_piv_lu_solve(&self, b: &Self) -> Result<Self> {
+        self.binary_op(b, StdTensorOp::FullPivLuSolve { transpose_a: false })
+    }
+
     /// Cholesky factorization: `A = L L^T` for real inputs.
     ///
     /// # Examples

@@ -153,6 +153,28 @@ pub(super) fn lu(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<V
     }
 }
 
+pub(super) fn full_piv_lu(
+    _backend: &mut CubeclBackend,
+    _input: &Tensor,
+) -> crate::Result<Vec<Tensor>> {
+    Err(crate::Error::BackendFailure {
+        op: "full_piv_lu",
+        message: "complete-pivoting LU is not implemented for the CubeCL backend".into(),
+    })
+}
+
+pub(super) fn full_piv_lu_solve(
+    _backend: &mut CubeclBackend,
+    _a: &Tensor,
+    _b: &Tensor,
+    _transpose_a: bool,
+) -> crate::Result<Tensor> {
+    Err(crate::Error::BackendFailure {
+        op: "full_piv_lu_solve",
+        message: "complete-pivoting LU solve is not implemented for the CubeCL backend".into(),
+    })
+}
+
 pub(super) fn svd(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<Vec<Tensor>> {
     match input {
         Tensor::F32(t) => svd_typed(backend, t)
