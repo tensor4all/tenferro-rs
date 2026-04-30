@@ -79,6 +79,28 @@ fn lu_returns_expected_factors_for_swap_matrix() {
 }
 
 #[test]
+fn full_piv_lu_returns_expected_shapes() {
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
+    let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
+
+    assert_eq!(p.data().shape(), &[2, 2]);
+    assert_eq!(l.data().shape(), &[2, 2]);
+    assert_eq!(u.data().shape(), &[2, 2]);
+    assert_eq!(q.data().shape(), &[2, 2]);
+    assert_eq!(parity.data().shape(), &[] as &[usize]);
+}
+
+#[test]
+fn full_piv_lu_solve_returns_expected_solution() {
+    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]));
+    let b = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]));
+    let x = a.full_piv_lu_solve(&b).unwrap();
+
+    assert_eq!(x.data().shape(), &[2, 1]);
+    assert_eq!(f64_data(x.data()), &[4.0, -1.0]);
+}
+
+#[test]
 fn eigh_returns_expected_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
     let (values, vectors) = a.eigh().unwrap();

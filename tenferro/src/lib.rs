@@ -41,8 +41,9 @@ pub mod traced;
 pub use eager::{EagerContext, EagerTensor};
 pub use engine::Engine;
 pub use linalg_api::{
-    cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, inv, lu, norm, pinv,
-    pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps, triangular_solve,
+    cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu,
+    full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,
+    triangular_solve,
 };
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::cpu::CpuBackend;

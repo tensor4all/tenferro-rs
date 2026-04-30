@@ -2,8 +2,8 @@ use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::{eval_all, TracedTensor};
 use tenferro::{
-    cholesky, det, eig, eigh, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd,
-    triangular_solve,
+    cholesky, det, eig, eigh, full_piv_lu, full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol,
+    qr, slogdet, solve, svd, triangular_solve,
 };
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 
@@ -103,6 +103,39 @@ fn lu_free_function_returns_four_outputs() {
     assert_eq!(results[2].shape(), &[2, 2]);
     assert_eq!(results[3].shape(), &[] as &[usize]);
     assert_eq!(get_f64_data(&results[3]), &[-1.0]);
+}
+
+#[test]
+fn full_piv_lu_free_function_returns_five_outputs() {
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
+    let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
+    let mut engine = Engine::new(CpuBackend::new());
+    let results = eval_all(
+        &mut engine,
+        &mut [&mut p, &mut l, &mut u, &mut q, &mut parity],
+    )
+    .unwrap();
+
+    assert_eq!(results[0].shape(), &[2, 2]);
+    assert_eq!(results[1].shape(), &[2, 2]);
+    assert_eq!(results[2].shape(), &[2, 2]);
+    assert_eq!(results[3].shape(), &[2, 2]);
+    assert_eq!(results[4].shape(), &[] as &[usize]);
+}
+
+#[test]
+fn full_piv_lu_solve_free_function_eval() {
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]));
+    let mut x = full_piv_lu_solve(&a, &b);
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let out = x.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2, 1]);
+    assert_eq!(get_f64_data(out), &[4.0, -1.0]);
 }
 
 #[test]

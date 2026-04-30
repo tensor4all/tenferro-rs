@@ -120,6 +120,10 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Svd { .. } => exec.svd(inputs[0])?,
             StdTensorOp::Qr { .. } => exec.qr(inputs[0])?,
             StdTensorOp::Lu { .. } => exec.lu(inputs[0])?,
+            StdTensorOp::FullPivLu { .. } => exec.full_piv_lu(inputs[0])?,
+            StdTensorOp::FullPivLuSolve { transpose_a } => {
+                vec![exec.full_piv_lu_solve(inputs[0], inputs[1], *transpose_a)?]
+            }
             StdTensorOp::Eigh { .. } => exec.eigh(inputs[0])?,
             StdTensorOp::Eig { .. } => exec.eig(inputs[0])?,
             StdTensorOp::ShapeOf { axis } => {

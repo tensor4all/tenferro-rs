@@ -2624,6 +2624,19 @@ impl TensorBackend for CubeclBackend {
         linalg::lu(self, input)
     }
 
+    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        linalg::full_piv_lu(self, input)
+    }
+
+    fn full_piv_lu_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+    ) -> crate::Result<Tensor> {
+        linalg::full_piv_lu_solve(self, a, b, transpose_a)
+    }
+
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
         linalg::svd(self, input)
     }

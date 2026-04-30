@@ -201,6 +201,10 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::PadToMatch { axis } => ExecOp::PadToMatch { axis: *axis },
         StdTensorOp::Cholesky { .. } => ExecOp::Cholesky,
         StdTensorOp::Lu { .. } => ExecOp::Lu,
+        StdTensorOp::FullPivLu { .. } => ExecOp::FullPivLu,
+        StdTensorOp::FullPivLuSolve { transpose_a } => ExecOp::FullPivLuSolve {
+            transpose_a: *transpose_a,
+        },
         StdTensorOp::Svd { eps, .. } => ExecOp::Svd { eps: *eps },
         StdTensorOp::Qr { .. } => ExecOp::Qr,
         StdTensorOp::Eigh { eps, .. } => ExecOp::Eigh { eps: *eps },

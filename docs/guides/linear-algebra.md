@@ -130,3 +130,30 @@ let result = x.eval(&mut engine).unwrap();
 assert_eq!(result.shape(), &[2, 1]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ```
+
+## Complete-pivot LU solve
+
+`full_piv_lu_solve` solves `A x = b` using LU factorization with complete
+pivoting. This path is useful when the selected CPU backend provides complete
+pivoting and you want the solve primitive to stay backend-dispatched.
+
+```rust
+use tenferro::{full_piv_lu, full_piv_lu_solve, CpuBackend, Engine, TracedTensor};
+
+let a = TracedTensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+let b = TracedTensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]);
+
+let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
+let mut x = full_piv_lu_solve(&a, &b);
+
+let mut engine = Engine::new(CpuBackend::new());
+let factors =
+    tenferro::traced::eval_all(&mut engine, &mut [&mut p, &mut l, &mut u, &mut q, &mut parity])
+        .unwrap();
+let result = x.eval(&mut engine).unwrap();
+
+assert_eq!(factors[0].shape(), &[2, 2]);
+assert_eq!(factors[4].shape(), &[] as &[usize]);
+assert_eq!(result.shape(), &[2, 1]);
+assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, -1.0]);
+```

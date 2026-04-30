@@ -912,6 +912,32 @@ impl Tensor {
         ctx.with_exec_session(|exec| unpack_four("lu", exec.lu(self)?))
     }
 
+    /// LU decomposition with complete pivoting: `P A Q^T = L U`.
+    ///
+    /// Returns `(P, L, U, Q, parity)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    /// let (p, l, u, q, parity) = a.full_piv_lu(&mut ctx).unwrap();
+    ///
+    /// assert_eq!(p.shape(), &[2, 2]);
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// assert_eq!(u.shape(), &[2, 2]);
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
+    /// ```
+    pub fn full_piv_lu(
+        &self,
+        ctx: &mut impl TensorBackend,
+    ) -> crate::Result<(Self, Self, Self, Self, Self)> {
+        ctx.with_exec_session(|exec| unpack_five("full_piv_lu", exec.full_piv_lu(self)?))
+    }
+
     /// Cholesky decomposition: `A = L L^T` or `A = L L^H` for complex inputs.
     ///
     /// Returns the lower-triangular factor `L`.
@@ -987,6 +1013,25 @@ impl Tensor {
     /// ```
     pub fn solve(&self, b: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
         ctx.solve(self, b)
+    }
+
+    /// Solve `A x = b` using complete-pivoting LU factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+    ///
+    /// let mut ctx = CpuBackend::new();
+    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    /// let b = Tensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]);
+    /// let x = a.full_piv_lu_solve(&b, &mut ctx).unwrap();
+    ///
+    /// assert_eq!(x.shape(), &[2, 1]);
+    /// assert_eq!(x.as_slice::<f64>().unwrap(), &[4.0, -1.0]);
+    /// ```
+    pub fn full_piv_lu_solve(&self, b: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
+        ctx.full_piv_lu_solve(self, b, false)
     }
 
     /// Solve a triangular system.
@@ -1201,5 +1246,24 @@ fn unpack_four(
     ) {
         (Some(a), Some(b), Some(c), Some(d), None) => Ok((a, b, c, d)),
         _ => Err(invalid_output_count(op, 4, actual)),
+    }
+}
+
+fn unpack_five(
+    op: &'static str,
+    results: Vec<Tensor>,
+) -> crate::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    let actual = results.len();
+    let mut iter = results.into_iter();
+    match (
+        iter.next(),
+        iter.next(),
+        iter.next(),
+        iter.next(),
+        iter.next(),
+        iter.next(),
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e), None) => Ok((a, b, c, d, e)),
+        _ => Err(invalid_output_count(op, 5, actual)),
     }
 }

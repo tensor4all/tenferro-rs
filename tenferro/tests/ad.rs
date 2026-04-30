@@ -294,6 +294,10 @@ fn triangular_solve_op(_lhs_shape: Vec<usize>, _rhs_shape: Vec<usize>) -> StdTen
     }
 }
 
+fn full_piv_lu_solve_op(_lhs_shape: Vec<usize>, _rhs_shape: Vec<usize>) -> StdTensorOp {
+    StdTensorOp::FullPivLuSolve { transpose_a: false }
+}
+
 fn solve_dot_general_config(rank: usize) -> DotGeneralConfig {
     let batch_dims: Vec<usize> = (2..rank).collect();
     DotGeneralConfig {
@@ -791,6 +795,32 @@ fn build_triangular_solve_sum_fragment() -> (
     (Arc::new(builder.build()), a_key, b_key, loss_key)
 }
 
+fn build_full_piv_lu_solve_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let a_key = tensor_input_key(38_000);
+    let b_key = tensor_input_key(38_001);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(a_key.clone());
+    let b = builder.add_input(b_key.clone());
+    let solve = builder.add_op(
+        full_piv_lu_solve_op(vec![2, 2], vec![2, 1]),
+        vec![ValRef::Local(a), ValRef::Local(b)],
+        OpMode::Primal,
+    );
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
+        vec![ValRef::Local(solve[0])],
+        OpMode::Primal,
+    );
+    let loss_key = builder.global_key(loss[0]).clone();
+    builder.set_outputs(vec![loss[0]]);
+    (Arc::new(builder.build()), a_key, b_key, loss_key)
+}
+
 fn build_solve_real_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -1246,6 +1276,14 @@ fn sum_triangular_solve(a: &[f64], b: &[f64]) -> f64 {
         false,
     )
     .unwrap();
+    get_f64_data(&out).iter().sum()
+}
+
+fn sum_full_piv_lu_solve(a: &[f64], b: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let a_tensor = f64_tensor(vec![2, 2], a.to_vec());
+    let b_tensor = f64_tensor(vec![2, 1], b.to_vec());
+    let out = TensorBackend::full_piv_lu_solve(&mut backend, &a_tensor, &b_tensor, false).unwrap();
     get_f64_data(&out).iter().sum()
 }
 
@@ -2581,6 +2619,32 @@ fn grad_solve_matches_finite_diff() {
 
     assert_grad_matches_finite_diff_lhs(grad_a_data, &a_data, &b_data, &sum_solve);
     assert_grad_matches_finite_diff_rhs(grad_b_data, &a_data, &b_data, &sum_solve);
+}
+
+#[test]
+fn grad_full_piv_lu_solve_matches_finite_diff() {
+    let a_data = vec![0.2, 2.0, 1.0, 3.0];
+    let b_data = vec![-1.0, 5.0];
+    let (fragment, a_key, b_key, loss_key) = build_full_piv_lu_solve_sum_fragment();
+
+    let mut a_inputs = HashMap::new();
+    a_inputs.insert(a_key.clone(), f64_tensor(vec![2, 2], a_data.clone()));
+    a_inputs.insert(b_key.clone(), f64_tensor(vec![2, 1], b_data.clone()));
+    let grad_a =
+        grad_from_fragment_with_inputs(fragment.clone(), loss_key.clone(), a_key, a_inputs);
+    let grad_a_data = get_f64_data(&grad_a);
+
+    let mut b_inputs = HashMap::new();
+    b_inputs.insert(
+        tensor_input_key(38_000),
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+    b_inputs.insert(b_key.clone(), f64_tensor(vec![2, 1], b_data.clone()));
+    let grad_b = grad_from_fragment_with_inputs(fragment, loss_key, b_key, b_inputs);
+    let grad_b_data = get_f64_data(&grad_b);
+
+    assert_grad_matches_finite_diff_lhs(grad_a_data, &a_data, &b_data, &sum_full_piv_lu_solve);
+    assert_grad_matches_finite_diff_rhs(grad_b_data, &a_data, &b_data, &sum_full_piv_lu_solve);
 }
 
 #[test]

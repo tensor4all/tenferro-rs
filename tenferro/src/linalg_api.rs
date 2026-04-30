@@ -197,6 +197,77 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
     }
 }
 
+/// LU decomposition with complete pivoting.
+///
+/// Returns `(P, L, U, Q, parity)` where `P @ A @ Q.T = L @ U`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{full_piv_lu, CpuBackend, Engine, Tensor, TracedTensor};
+///
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+///     vec![2, 2],
+///     vec![0.0_f64, 2.0, 1.0, 3.0],
+/// ));
+/// let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
+///
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let outputs = tenferro::traced::eval_all(
+///     &mut engine,
+///     &mut [&mut p, &mut l, &mut u, &mut q, &mut parity],
+/// )
+/// .unwrap();
+///
+/// assert_eq!(outputs[0].shape(), &[2, 2]);
+/// assert_eq!(outputs[4].shape(), &[] as &[usize]);
+/// ```
+pub fn full_piv_lu(
+    a: &TracedTensor,
+) -> (
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+) {
+    let shape = concrete_shape(a);
+    let n = shape[0];
+    let batch = &shape[2..];
+    let mut p_shape = vec![n, n];
+    p_shape.extend_from_slice(batch);
+    let mut l_shape = vec![n, n];
+    l_shape.extend_from_slice(batch);
+    let mut u_shape = vec![n, n];
+    u_shape.extend_from_slice(batch);
+    let mut q_shape = vec![n, n];
+    q_shape.extend_from_slice(batch);
+    let parity_shape = batch.to_vec();
+    let mut results = apply_multi_output(
+        StdTensorOp::FullPivLu,
+        a,
+        vec![
+            sym_shape(&p_shape),
+            sym_shape(&l_shape),
+            sym_shape(&u_shape),
+            sym_shape(&q_shape),
+            sym_shape(&parity_shape),
+        ],
+    )
+    .into_iter();
+    match (
+        results.next(),
+        results.next(),
+        results.next(),
+        results.next(),
+        results.next(),
+        results.next(),
+    ) {
+        (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => (p, l, u, q, parity),
+        _ => unreachable!("full_piv_lu must produce exactly five outputs"),
+    }
+}
+
 /// Non-symmetric eigendecomposition.
 ///
 /// For real `f64` input, both outputs are `Complex64`.
@@ -270,6 +341,57 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
         x2d.reshape(&b_shape)
     } else {
         do_solve(a, b)
+    }
+}
+
+/// Solve a linear system using complete-pivoting LU factorization.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{full_piv_lu_solve, CpuBackend, Engine, Tensor, TracedTensor};
+///
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+///     vec![2, 2],
+///     vec![0.0_f64, 2.0, 1.0, 3.0],
+/// ));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+///     vec![2, 1],
+///     vec![-1.0_f64, 5.0],
+/// ));
+/// let mut x = full_piv_lu_solve(&a, &b);
+///
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let out = x.eval(&mut engine).unwrap();
+///
+/// assert_eq!(out.shape(), &[2, 1]);
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, -1.0]);
+/// ```
+pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+    let a_shape = concrete_shape(a);
+    let b_shape = concrete_shape(b);
+    if has_zero_dim(&a_shape) || has_zero_dim(&b_shape) {
+        return zeros_like(b);
+    }
+
+    if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
+        let b2d = b.reshape(&matrix_rhs_shape);
+        let x2d = apply_binary(
+            StdTensorOp::FullPivLuSolve { transpose_a: false },
+            a,
+            &b2d,
+            matrix_rhs_shape.len(),
+            Some(sym_shape(&matrix_rhs_shape)),
+        );
+        x2d.reshape(&b_shape)
+    } else {
+        apply_binary(
+            StdTensorOp::FullPivLuSolve { transpose_a: false },
+            a,
+            b,
+            b.rank,
+            b.shape_hint.clone(),
+        )
     }
 }
 
