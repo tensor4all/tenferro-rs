@@ -193,6 +193,13 @@ pub trait TensorExec {
         unit_diagonal: bool,
     ) -> crate::Result<Tensor>;
     fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn full_piv_lu_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+    ) -> crate::Result<Tensor>;
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
@@ -283,6 +290,8 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
             unit_diagonal: bool
         ) -> crate::Result<Tensor>;
         lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+        full_piv_lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+        full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> crate::Result<Tensor>;
         svd(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         qr(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         eigh(input: &Tensor) -> crate::Result<Vec<Tensor>>;
@@ -427,6 +436,13 @@ pub trait TensorBackend {
         unit_diagonal: bool,
     ) -> crate::Result<Tensor>;
     fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
+    fn full_piv_lu_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+    ) -> crate::Result<Tensor>;
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
     fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;

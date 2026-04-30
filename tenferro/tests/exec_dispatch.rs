@@ -309,6 +309,24 @@ impl TensorBackend for FakeTensorBackend {
             scalar_tensor(41.5),
         ])
     }
+    fn full_piv_lu(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        self.calls.push("full_piv_lu");
+        Ok(vec![
+            scalar_tensor(41.75),
+            scalar_tensor(42.0),
+            scalar_tensor(42.25),
+            scalar_tensor(42.5),
+            scalar_tensor(42.75),
+        ])
+    }
+    fn full_piv_lu_solve(
+        &mut self,
+        _a: &Tensor,
+        _b: &Tensor,
+        _transpose_a: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.result("full_piv_lu_solve", 41.625)
+    }
     fn svd(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("svd");
         Ok(vec![scalar_tensor(42.0), scalar_tensor(42.5)])
@@ -456,6 +474,12 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             2,
             "triangular_solve",
             40.5,
+        ),
+        (
+            ExecOp::FullPivLuSolve { transpose_a: false },
+            2,
+            "full_piv_lu_solve",
+            41.625,
         ),
     ];
 
@@ -629,6 +653,16 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     assert_eq!(scalar_value(&outputs[1]), 41.0);
     assert_eq!(scalar_value(&outputs[2]), 41.25);
     assert_eq!(scalar_value(&outputs[3]), 41.5);
+
+    backend.calls.clear();
+
+    // Full-pivot LU: 1 input, 5 outputs
+    let program = multi_output_program(ExecOp::FullPivLu, 1, 5);
+    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
+    assert_eq!(backend.calls, vec!["full_piv_lu"]);
+    assert_eq!(outputs.len(), 5);
+    assert_eq!(scalar_value(&outputs[0]), 41.75);
+    assert_eq!(scalar_value(&outputs[4]), 42.75);
 
     backend.calls.clear();
 

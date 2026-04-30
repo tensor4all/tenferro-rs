@@ -256,6 +256,59 @@ pub fn linearize_triangular_solve(
     vec![Some(out[0])]
 }
 
+pub fn linearize_full_piv_lu_solve(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let lhs_rank = ctx.shape_of(&ValRef::External(primal_in[0].clone())).len();
+    let rhs_rank = ctx.shape_of(&ValRef::External(primal_in[1].clone())).len();
+    assert!(
+        lhs_rank >= 2 && rhs_rank >= 2,
+        "linearize_full_piv_lu_solve: expected matrix operands"
+    );
+    assert_eq!(
+        lhs_rank, rhs_rank,
+        "linearize_full_piv_lu_solve: rank mismatch between lhs and rhs"
+    );
+    let rank = lhs_rank;
+    let mut rhs_tangent = tangent_in[1];
+
+    if let Some(da) = tangent_in[0] {
+        let d_op_a = if transpose_a {
+            transpose_matrix_linear(builder, da, rank)
+        } else {
+            da
+        };
+        let x = ValRef::External(primal_out[0].clone());
+        let correction = matmul_linear(builder, ValRef::Local(d_op_a), x, vec![true, false], rank);
+        let neg_correction = linear_neg(builder, correction);
+        rhs_tangent = Some(match rhs_tangent {
+            Some(db) => linear_add(builder, db, neg_correction),
+            None => neg_correction,
+        });
+    }
+
+    let Some(rhs_tangent) = rhs_tangent else {
+        return vec![None];
+    };
+
+    let out = builder.add_op(
+        StdTensorOp::FullPivLuSolve { transpose_a },
+        vec![
+            ValRef::External(primal_in[0].clone()),
+            ValRef::Local(rhs_tangent),
+        ],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
 fn triangular_solve_rhs_tangent(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_out: &[GlobalValKey<StdTensorOp>],
@@ -838,6 +891,39 @@ pub fn transpose_triangular_solve(
                 lower,
                 transpose_a: !transpose_a,
                 unit_diagonal,
+            },
+            vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
+            OpMode::Linear {
+                active_mask: vec![false, true],
+            },
+        );
+        result[1] = Some(out[0]);
+    }
+
+    result
+}
+
+pub fn transpose_full_piv_lu_solve(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    transpose_a: bool,
+) -> Vec<Option<LocalValId>> {
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None, None];
+    };
+    let OpMode::Linear { active_mask } = mode else {
+        return vec![None, None];
+    };
+
+    let mut result = vec![None, None];
+    if active_mask[1] {
+        let conjugated_a =
+            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let out = emitter.add_op(
+            StdTensorOp::FullPivLuSolve {
+                transpose_a: !transpose_a,
             },
             vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
             OpMode::Linear {

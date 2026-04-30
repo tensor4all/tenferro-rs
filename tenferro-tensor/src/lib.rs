@@ -52,6 +52,8 @@ extern crate blas_src as _;
 extern crate cblas_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
+#[cfg(feature = "provider-inject")]
+extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 

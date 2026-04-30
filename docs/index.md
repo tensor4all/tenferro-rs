@@ -9,7 +9,7 @@ PyTorch and JAX. It provides:
 - **Lazy traced execution** — `TracedTensor` with graph optimization and
   transform-oriented automatic differentiation (`grad`, `vjp`, `jvp`, HVP)
 - **Einsum** — with automatic contraction-tree planning
-- **Linear algebra** — SVD, QR, Cholesky, eigh, solve
+- **Linear algebra** — SVD, QR, Cholesky, eigh, LU, solve
 
 CPU execution is fully supported; GPU support is planned.
 

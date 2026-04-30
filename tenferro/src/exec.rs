@@ -119,6 +119,10 @@ pub enum ExecOp {
     },
     Qr,
     Lu,
+    FullPivLu,
+    FullPivLuSolve {
+        transpose_a: bool,
+    },
     Eigh {
         eps: f64,
     },
@@ -218,6 +222,8 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
             | ExecOp::Svd { .. }
             | ExecOp::Qr
             | ExecOp::Lu
+            | ExecOp::FullPivLu
+            | ExecOp::FullPivLuSolve { .. }
             | ExecOp::Eigh { .. }
             | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
@@ -554,6 +560,18 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         ExecOp::Lu => {
             let results = backend.lu(get(slots, &inst.input_slots, 0)?)?;
             assign_multi_output(slots, inst, results, "lu")?;
+        }
+        ExecOp::FullPivLu => {
+            let results = backend.full_piv_lu(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "full_piv_lu")?;
+        }
+        ExecOp::FullPivLuSolve { transpose_a } => {
+            let result = backend.full_piv_lu_solve(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                *transpose_a,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
         }
         ExecOp::Eigh { .. } => {
             let results = backend.eigh(get(slots, &inst.input_slots, 0)?)?;

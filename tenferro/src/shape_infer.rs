@@ -71,6 +71,8 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::NaryEinsum { .. }
         | StdTensorOp::Cholesky { .. }
         | StdTensorOp::Lu { .. }
+        | StdTensorOp::FullPivLu { .. }
+        | StdTensorOp::FullPivLuSolve { .. }
         | StdTensorOp::Svd { .. }
         | StdTensorOp::Qr { .. }
         | StdTensorOp::Eigh { .. }
@@ -188,12 +190,15 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             *axis,
         )],
         StdTensorOp::Lu { .. } => lu_shapes(require_input(op, input_shapes, 0)),
+        StdTensorOp::FullPivLu { .. } => full_piv_lu_shapes(require_input(op, input_shapes, 0)),
         StdTensorOp::Svd { .. } => svd_shapes(require_input(op, input_shapes, 0)),
         StdTensorOp::Qr { .. } => qr_shapes(require_input(op, input_shapes, 0)),
         StdTensorOp::Eigh { .. } | StdTensorOp::Eig { .. } => {
             eig_like_shapes(require_input(op, input_shapes, 0))
         }
-        StdTensorOp::TriangularSolve { .. } => vec![require_input(op, input_shapes, 1).to_vec()],
+        StdTensorOp::TriangularSolve { .. } | StdTensorOp::FullPivLuSolve { .. } => {
+            vec![require_input(op, input_shapes, 1).to_vec()]
+        }
         StdTensorOp::Extension(ext) => {
             let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes);
             metas.into_iter().map(|(_dtype, shape)| shape).collect()
@@ -637,6 +642,19 @@ fn lu_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
     let mut u_shape = vec![k, n.clone()];
     u_shape.extend_from_slice(batch);
     vec![p_shape, l_shape, u_shape, batch.to_vec()]
+}
+
+fn full_piv_lu_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
+    let (n, _, batch) = matrix_parts(input_shape);
+    let mut p_shape = vec![n.clone(), n.clone()];
+    p_shape.extend_from_slice(batch);
+    let mut l_shape = vec![n.clone(), n.clone()];
+    l_shape.extend_from_slice(batch);
+    let mut u_shape = vec![n.clone(), n.clone()];
+    u_shape.extend_from_slice(batch);
+    let mut q_shape = vec![n.clone(), n.clone()];
+    q_shape.extend_from_slice(batch);
+    vec![p_shape, l_shape, u_shape, q_shape, batch.to_vec()]
 }
 
 fn eig_like_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {

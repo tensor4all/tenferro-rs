@@ -1,6 +1,7 @@
 mod cholesky;
 mod eig;
 mod eigh;
+mod full_piv_lu;
 mod helpers;
 mod lu;
 mod qr;
@@ -10,6 +11,7 @@ mod triangular_solve;
 pub(crate) use cholesky::cholesky;
 pub(crate) use eig::eig;
 pub(crate) use eigh::eigh;
+pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
 pub(crate) use lu::lu;
 pub(crate) use qr::qr;
 pub(crate) use svd::svd;

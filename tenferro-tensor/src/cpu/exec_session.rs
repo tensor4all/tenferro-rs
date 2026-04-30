@@ -248,6 +248,7 @@ impl TensorExec for CpuExecSession<'_> {
     // Linalg — macro-generated dtype dispatch
     linalg_single!(cholesky);
     linalg_multi!(lu);
+    linalg_multi!(full_piv_lu);
     linalg_multi!(svd);
     linalg_multi!(qr);
     linalg_multi!(eigh);
@@ -337,6 +338,49 @@ impl TensorExec for CpuExecSession<'_> {
                     })
                 } else {
                     Err(unsupported_dtype("triangular_solve", a.dtype()))
+                }
+            }
+        }
+    }
+
+    fn full_piv_lu_solve(
+        &mut self,
+        a: &Tensor,
+        b: &Tensor,
+        transpose_a: bool,
+    ) -> crate::Result<Tensor> {
+        match (a, b) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
+                    .map(Tensor::F64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
+                    .map(Tensor::C64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::F64)
+            })
+            .and_then(|result| result),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+                linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::C64)
+            })
+            .and_then(|result| result),
+            _ => {
+                if a.dtype() != b.dtype() {
+                    Err(crate::Error::DTypeMismatch {
+                        op: "full_piv_lu_solve",
+                        lhs: a.dtype(),
+                        rhs: b.dtype(),
+                    })
+                } else {
+                    Err(unsupported_dtype("full_piv_lu_solve", a.dtype()))
                 }
             }
         }
