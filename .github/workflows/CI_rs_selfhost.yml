@@ -27,11 +27,13 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --workspace --release
 
-  # PRs from the same repository: run heavy CI on self-hosted runner
+  # PRs from the same repository: normally run heavy CI on self-hosted runner.
+  # Temporarily use GitHub-hosted runners while the self-hosted pool is down.
   ci-maintainer:
     name: CI (same-repo PR / self-hosted heavy / ${{ matrix.backend }})
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64]
+    # runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +52,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      # Note: Disable this step when runs-on is self-hosted.
+      - name: Install BLAS/LAPACK runtime libraries
+        if: matrix.backend == 'cpu-blas'
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev liblapack-dev
       - name: Install cargo-nextest
         run: |
           set -euo pipefail
