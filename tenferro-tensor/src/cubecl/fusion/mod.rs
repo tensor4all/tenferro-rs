@@ -42,5 +42,6 @@ pub(crate) fn execute_elementwise_fusion(
             let outputs = launch::launch(backend.runtime(), classified)?;
             Ok(Some(outputs.into_iter().map(Tensor::C64).collect()))
         }
+        crate::DType::I64 => Ok(None),
     }
 }

@@ -227,6 +227,10 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
         )),
+        DType::I64 => Tensor::I64(TypedTensor::from_vec(
+            vec![],
+            vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
+        )),
         DType::C64 => {
             let data = exact_bytes::<16>(dtype, bytes);
             let mut re_bytes = [0u8; 8];

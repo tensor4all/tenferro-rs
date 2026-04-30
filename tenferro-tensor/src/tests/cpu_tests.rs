@@ -2312,10 +2312,28 @@ fn test_gather_1d_indices() {
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![3, 1], vec![0.0, 2.0, 4.0]));
+    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
 
     let out = gather(&operand, &start_indices, &simple_gather_config());
 
+    assert_eq!(out.shape(), &[3]);
+    assert_eq!(get_f64(&out, &[0]), 10.0);
+    assert_eq!(get_f64(&out, &[1]), 30.0);
+    assert_eq!(get_f64(&out, &[2]), 50.0);
+}
+
+#[test]
+fn test_gather_accepts_i64_indices() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
+
+    let out = gather(&operand, &start_indices, &simple_gather_config());
+
+    assert_eq!(start_indices.dtype(), DType::I64);
+    assert_eq!(start_indices.as_slice::<i64>(), Some([0, 2, 4].as_slice()));
     assert_eq!(out.shape(), &[3]);
     assert_eq!(get_f64(&out, &[0]), 10.0);
     assert_eq!(get_f64(&out, &[1]), 30.0);
@@ -2328,7 +2346,7 @@ fn test_gather_with_implicit_index_vector_dim() {
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![3], vec![4.0, 1.0, 0.0]));
+    let start_indices = Tensor::from_vec(vec![3], vec![4_i64, 1, 0]);
     let config = GatherConfig {
         offset_dims: vec![],
         collapsed_slice_dims: vec![0],
@@ -2345,12 +2363,29 @@ fn test_gather_with_implicit_index_vector_dim() {
 }
 
 #[test]
+fn test_scatter_accepts_i64_indices() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+
+    let out = scatter(
+        &operand,
+        &scatter_indices,
+        &updates,
+        &diagonal_scatter_config(),
+    );
+
+    assert_eq!(scatter_indices.dtype(), DType::I64);
+    assert_eq!(out.shape(), &[3, 3]);
+    assert_eq!(get_f64(&out, &[0, 0]), 5.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 6.0);
+    assert_eq!(get_f64(&out, &[2, 2]), 7.0);
+}
+
+#[test]
 fn test_scatter_to_diagonal() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
-    let scatter_indices = Tensor::F64(TypedTensor::from_vec(
-        vec![3, 2],
-        vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
-    ));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
     let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
 
     let out = scatter(
@@ -2371,7 +2406,7 @@ fn test_scatter_to_diagonal() {
 #[test]
 fn test_scatter_skips_negative_and_out_of_bounds_windows() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![4]));
-    let scatter_indices = Tensor::F64(TypedTensor::from_vec(vec![3, 1], vec![-1.0, 2.0, 4.0]));
+    let scatter_indices = Tensor::from_vec(vec![3, 1], vec![-1_i64, 2, 4]);
     let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
     let config = ScatterConfig {
         update_window_dims: vec![],
@@ -2437,10 +2472,30 @@ fn test_dynamic_slice_clamps_starts() {
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let starts = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 3.0]));
+    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
 
     let out = dynamic_slice(&input, &starts, &[2, 2]);
 
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(get_f64(&out, &[0, 0]), 11.0);
+    assert_eq!(get_f64(&out, &[1, 0]), 12.0);
+    assert_eq!(get_f64(&out, &[0, 1]), 15.0);
+    assert_eq!(get_f64(&out, &[1, 1]), 16.0);
+}
+
+#[test]
+fn test_dynamic_slice_accepts_i64_starts() {
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![4, 4],
+        vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
+        ],
+    ));
+    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
+
+    let out = dynamic_slice(&input, &starts, &[2, 2]);
+
+    assert_eq!(starts.dtype(), DType::I64);
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(get_f64(&out, &[0, 0]), 11.0);
     assert_eq!(get_f64(&out, &[1, 0]), 12.0);
@@ -2489,6 +2544,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
     let mut backend = CpuBackend::new();
     let f32_input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
     let f64_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.25_f64, -2.5_f64]));
+    let i64_input = Tensor::I64(TypedTensor::from_vec(vec![2], vec![1_i64, -2_i64]));
     let c32_input = Tensor::C32(TypedTensor::from_vec(
         vec![2],
         vec![Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)],
@@ -2501,18 +2557,27 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
     let cases = [
         (&f32_input, DType::F32),
         (&f32_input, DType::F64),
+        (&f32_input, DType::I64),
         (&f32_input, DType::C32),
         (&f32_input, DType::C64),
         (&f64_input, DType::F32),
         (&f64_input, DType::F64),
+        (&f64_input, DType::I64),
         (&f64_input, DType::C32),
         (&f64_input, DType::C64),
+        (&i64_input, DType::F32),
+        (&i64_input, DType::F64),
+        (&i64_input, DType::I64),
+        (&i64_input, DType::C32),
+        (&i64_input, DType::C64),
         (&c32_input, DType::F32),
         (&c32_input, DType::F64),
+        (&c32_input, DType::I64),
         (&c32_input, DType::C32),
         (&c32_input, DType::C64),
         (&c64_input, DType::F32),
         (&c64_input, DType::F64),
+        (&c64_input, DType::I64),
         (&c64_input, DType::C32),
         (&c64_input, DType::C64),
     ];
@@ -2525,6 +2590,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
         match (input.dtype(), &output) {
             (DType::F32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
             (DType::F32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F32, Tensor::I64(inner)) => assert_eq!(inner.host_data(), &[1, -2]),
             (DType::F32, Tensor::C32(inner)) => assert_eq!(
                 inner.host_data(),
                 &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
@@ -2535,6 +2601,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
             ),
             (DType::F64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
             (DType::F64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::F64, Tensor::I64(inner)) => assert_eq!(inner.host_data(), &[1, -2]),
             (DType::F64, Tensor::C32(inner)) => assert_eq!(
                 inner.host_data(),
                 &[Complex32::new(1.25, 0.0), Complex32::new(-2.5, 0.0)]
@@ -2543,8 +2610,20 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
                 inner.host_data(),
                 &[Complex64::new(1.25, 0.0), Complex64::new(-2.5, 0.0)]
             ),
+            (DType::I64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.0, -2.0]),
+            (DType::I64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.0, -2.0]),
+            (DType::I64, Tensor::I64(inner)) => assert_eq!(inner.host_data(), &[1, -2]),
+            (DType::I64, Tensor::C32(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex32::new(1.0, 0.0), Complex32::new(-2.0, 0.0)]
+            ),
+            (DType::I64, Tensor::C64(inner)) => assert_eq!(
+                inner.host_data(),
+                &[Complex64::new(1.0, 0.0), Complex64::new(-2.0, 0.0)]
+            ),
             (DType::C32, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
             (DType::C32, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C32, Tensor::I64(inner)) => assert_eq!(inner.host_data(), &[1, -2]),
             (DType::C32, Tensor::C32(inner)) => assert_eq!(
                 inner.host_data(),
                 &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
@@ -2555,6 +2634,7 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
             ),
             (DType::C64, Tensor::F32(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
             (DType::C64, Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[1.25, -2.5]),
+            (DType::C64, Tensor::I64(inner)) => assert_eq!(inner.host_data(), &[1, -2]),
             (DType::C64, Tensor::C32(inner)) => assert_eq!(
                 inner.host_data(),
                 &[Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)]
@@ -2709,7 +2789,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![3, 1], vec![0.0, 2.0, 4.0]));
+    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
     let gathered = backend
         .gather(&operand, &start_indices, &simple_gather_config())
         .unwrap();
@@ -2718,10 +2798,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&gathered, &[2]), 50.0);
 
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
-    let scatter_indices = Tensor::F64(TypedTensor::from_vec(
-        vec![3, 2],
-        vec![0.0, 1.0, 2.0, 0.0, 1.0, 2.0],
-    ));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
     let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
     let scattered = backend
         .scatter(
@@ -2741,7 +2818,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let starts = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 3.0]));
+    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
     let ds = backend.dynamic_slice(&input, &starts, &[2, 2]).unwrap();
     assert_eq!(ds.shape(), &[2, 2]);
     assert_eq!(get_f64(&ds, &[0, 0]), 11.0);

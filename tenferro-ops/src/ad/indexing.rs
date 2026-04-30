@@ -353,6 +353,7 @@ fn zero_bytes(dtype: DType) -> Vec<u8> {
     match dtype {
         DType::F32 => 0.0_f32.to_le_bytes().to_vec(),
         DType::F64 => 0.0_f64.to_le_bytes().to_vec(),
+        DType::I64 => 0_i64.to_le_bytes().to_vec(),
         DType::C32 => {
             let mut bytes = Vec::with_capacity(8);
             bytes.extend_from_slice(&0.0_f32.to_le_bytes());

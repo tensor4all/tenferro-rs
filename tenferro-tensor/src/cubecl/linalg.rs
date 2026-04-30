@@ -75,6 +75,10 @@ pub(super) fn cholesky(backend: &mut CubeclBackend, input: &Tensor) -> crate::Re
         Tensor::F64(t) => cholesky_typed(backend, t).map(Tensor::F64),
         Tensor::C32(t) => cholesky_typed(backend, t).map(Tensor::C32),
         Tensor::C64(t) => cholesky_typed(backend, t).map(Tensor::C64),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "cholesky",
+            message: "unsupported dtype I64".into(),
+        }),
     }
 }
 
@@ -150,6 +154,10 @@ pub(super) fn lu(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<V
                 Tensor::C64(parity),
             ]
         }),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "lu",
+            message: "unsupported dtype I64".into(),
+        }),
     }
 }
 
@@ -185,6 +193,10 @@ pub(super) fn svd(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<
             .map(|(u, s, vt)| vec![Tensor::C32(u), Tensor::F32(s), Tensor::C32(vt)]),
         Tensor::C64(t) => svd_typed(backend, t)
             .map(|(u, s, vt)| vec![Tensor::C64(u), Tensor::F64(s), Tensor::C64(vt)]),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "svd",
+            message: "unsupported dtype I64".into(),
+        }),
     }
 }
 
@@ -194,6 +206,10 @@ pub(super) fn qr(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result<V
         Tensor::F64(t) => qr_typed(backend, t).map(|(q, r)| vec![Tensor::F64(q), Tensor::F64(r)]),
         Tensor::C32(t) => qr_typed(backend, t).map(|(q, r)| vec![Tensor::C32(q), Tensor::C32(r)]),
         Tensor::C64(t) => qr_typed(backend, t).map(|(q, r)| vec![Tensor::C64(q), Tensor::C64(r)]),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "qr",
+            message: "unsupported dtype I64".into(),
+        }),
     }
 }
 
@@ -203,6 +219,10 @@ pub(super) fn eigh(backend: &mut CubeclBackend, input: &Tensor) -> crate::Result
         Tensor::F64(t) => eigh_typed(backend, t).map(|(w, v)| vec![Tensor::F64(w), Tensor::F64(v)]),
         Tensor::C32(t) => eigh_typed(backend, t).map(|(w, v)| vec![Tensor::F32(w), Tensor::C32(v)]),
         Tensor::C64(t) => eigh_typed(backend, t).map(|(w, v)| vec![Tensor::F64(w), Tensor::C64(v)]),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "eigh",
+            message: "unsupported dtype I64".into(),
+        }),
     }
 }
 
@@ -1183,6 +1203,7 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
     match input {
         Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
         Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
         Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
         Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
     }

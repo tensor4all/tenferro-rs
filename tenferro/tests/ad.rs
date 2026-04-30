@@ -163,6 +163,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
+fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec(shape, data))
+}
+
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec(shape, data))
 }
@@ -1024,6 +1028,7 @@ fn zeros_by_dtype(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
         DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
         DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
         DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }
@@ -3069,13 +3074,13 @@ fn grad_gather_reduce_sum_accumulates_indices_correctly() {
         build_gather_reduce_sum_fragment(operand_key.clone(), indices_key.clone(), config, vec![0]);
 
     let operand_data = vec![10.0_f64, 20.0, 30.0, 40.0, 50.0];
-    let indices_data = vec![2.0_f64, 4.0, 0.0, 2.0, 2.0];
+    let indices_data = vec![2_i64, 4, 0, 2, 2];
     let mut inputs_map = HashMap::new();
     inputs_map.insert(
         operand_key.clone(),
         f64_tensor(vec![5], operand_data.clone()),
     );
-    inputs_map.insert(indices_key, f64_tensor(vec![5, 1], indices_data));
+    inputs_map.insert(indices_key, i64_tensor(vec![5, 1], indices_data));
 
     let grad = grad_from_fragment_with_inputs(fragment, loss_key, operand_key, inputs_map);
     assert_eq!(grad.shape(), &[5]);
@@ -3138,11 +3143,11 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
     );
 
     let operand_data = vec![0.0_f64, 0.0, 0.0, 0.0];
-    let indices_data = vec![1.0_f64, 3.0, 0.0];
+    let indices_data = vec![1_i64, 3, 0];
     let updates_data = vec![5.0_f64, 7.0, 9.0];
     let mut inputs_map = HashMap::new();
     inputs_map.insert(operand_key, f64_tensor(vec![4], operand_data));
-    inputs_map.insert(indices_key, f64_tensor(vec![3, 1], indices_data));
+    inputs_map.insert(indices_key, i64_tensor(vec![3, 1], indices_data));
     inputs_map.insert(
         updates_key.clone(),
         f64_tensor(vec![3], updates_data.clone()),

@@ -173,13 +173,14 @@ pub struct TypedTensor<T> {
 pub enum DType {
     F32,
     F64,
+    I64,
     C32,
     C64,
 }
 
 /// Sealed trait for scalar types that can be stored in a [`Tensor`].
 ///
-/// This trait is implemented for `f64`, `f32`, [`Complex64`], and
+/// This trait is implemented for `f64`, `f32`, `i64`, [`Complex64`], and
 /// [`Complex32`].
 ///
 /// # Examples
@@ -234,6 +235,7 @@ mod private {
 
     impl Sealed for f64 {}
     impl Sealed for f32 {}
+    impl Sealed for i64 {}
     impl Sealed for num_complex::Complex64 {}
     impl Sealed for num_complex::Complex32 {}
 }
@@ -285,6 +287,32 @@ impl TensorScalar for f32 {
     fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
         match tensor {
             Tensor::F32(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
+impl TensorScalar for i64 {
+    type Real = i64;
+
+    fn dtype() -> DType {
+        DType::I64
+    }
+
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::I64(TypedTensor::from_vec(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::I64(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::I64(inner) => Some(inner),
             _ => None,
         }
     }
@@ -356,6 +384,7 @@ impl TensorScalar for Complex32 {
 pub enum Tensor {
     F32(TypedTensor<f32>),
     F64(TypedTensor<f64>),
+    I64(TypedTensor<i64>),
     C32(TypedTensor<Complex<f32>>),
     C64(TypedTensor<Complex<f64>>),
 }
@@ -391,6 +420,24 @@ impl From<TypedTensor<f64>> for Tensor {
 impl From<TypedTensor<f32>> for Tensor {
     fn from(t: TypedTensor<f32>) -> Self {
         Tensor::F32(t)
+    }
+}
+
+/// Wrap an `i64` [`TypedTensor`] into the corresponding [`Tensor`] variant.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec(vec![2], vec![1_i64, 2]);
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.dtype(), DType::I64);
+/// assert_eq!(tensor.shape(), &[2]);
+/// ```
+impl From<TypedTensor<i64>> for Tensor {
+    fn from(t: TypedTensor<i64>) -> Self {
+        Tensor::I64(t)
     }
 }
 
@@ -702,6 +749,7 @@ macro_rules! dispatch_tensor {
         match $self {
             Tensor::F32($inner) => Tensor::F32($body),
             Tensor::F64($inner) => Tensor::F64($body),
+            Tensor::I64(_) => panic!("I64 data tensors are not supported by this operation"),
             Tensor::C32($inner) => Tensor::C32($body),
             Tensor::C64($inner) => Tensor::C64($body),
         }
@@ -713,6 +761,9 @@ macro_rules! dispatch_binary {
         match ($lhs, $rhs) {
             (Tensor::F32($a), Tensor::F32($b)) => Tensor::F32($body),
             (Tensor::F64($a), Tensor::F64($b)) => Tensor::F64($body),
+            (Tensor::I64(_), Tensor::I64(_)) => {
+                panic!("I64 data tensors are not supported by this operation")
+            }
             (Tensor::C32($a), Tensor::C32($b)) => Tensor::C32($body),
             (Tensor::C64($a), Tensor::C64($b)) => Tensor::C64($body),
             _ => panic!("dtype mismatch in binary op"),
@@ -755,6 +806,7 @@ impl Tensor {
         match self {
             Tensor::F32(t) => &t.shape,
             Tensor::F64(t) => &t.shape,
+            Tensor::I64(t) => &t.shape,
             Tensor::C32(t) => &t.shape,
             Tensor::C64(t) => &t.shape,
         }
@@ -774,6 +826,7 @@ impl Tensor {
         match self {
             Tensor::F32(_) => DType::F32,
             Tensor::F64(_) => DType::F64,
+            Tensor::I64(_) => DType::I64,
             Tensor::C32(_) => DType::C32,
             Tensor::C64(_) => DType::C64,
         }

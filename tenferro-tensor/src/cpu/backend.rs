@@ -825,6 +825,7 @@ impl TensorBackend for CpuBackend {
         match tensor {
             Tensor::F32(t) => reclaim_typed(&mut self.buffers, t),
             Tensor::F64(t) => reclaim_typed(&mut self.buffers, t),
+            Tensor::I64(t) => reclaim_typed(&mut self.buffers, t),
             Tensor::C32(t) => reclaim_typed(&mut self.buffers, t),
             Tensor::C64(t) => reclaim_typed(&mut self.buffers, t),
         }
@@ -885,6 +886,7 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
     match input {
         Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
         Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
         Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
         Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
     }

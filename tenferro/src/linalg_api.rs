@@ -607,6 +607,7 @@ fn eig_output_dtype(dtype: DType) -> DType {
     match dtype {
         DType::F64 | DType::C64 => DType::C64,
         DType::F32 | DType::C32 => DType::C32,
+        DType::I64 => DType::I64,
     }
 }
 
@@ -622,6 +623,12 @@ fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
             StdTensorOp::constant_f32(value as f32),
             0,
             DType::F32,
+            Some(vec![]),
+        ),
+        DType::I64 => apply_nullary(
+            StdTensorOp::constant_i64(value as i64),
+            0,
+            DType::I64,
             Some(vec![]),
         ),
         DType::C64 => apply_nullary(
@@ -683,6 +690,7 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
     let eps = match dtype {
         DType::F32 | DType::C32 => f32::EPSILON as f64,
         DType::F64 | DType::C64 => f64::EPSILON,
+        DType::I64 => 0.0,
     };
     eps * max_dim as f64
 }

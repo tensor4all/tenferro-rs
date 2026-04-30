@@ -25,6 +25,7 @@ pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tenso
     match tensor {
         Tensor::F64(t) => upload_typed::<f64>(client, rt.device_ordinal(), t).map(Tensor::F64),
         Tensor::F32(t) => upload_typed::<f32>(client, rt.device_ordinal(), t).map(Tensor::F32),
+        Tensor::I64(t) => upload_typed::<i64>(client, rt.device_ordinal(), t).map(Tensor::I64),
         Tensor::C64(t) => {
             upload_typed::<Complex64>(client, rt.device_ordinal(), t).map(Tensor::C64)
         }
@@ -49,6 +50,7 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
     match tensor {
         Tensor::F64(t) => download_typed::<f64>(client, t).map(Tensor::F64),
         Tensor::F32(t) => download_typed::<f32>(client, t).map(Tensor::F32),
+        Tensor::I64(t) => download_typed::<i64>(client, t).map(Tensor::I64),
         Tensor::C64(t) => download_typed::<Complex64>(client, t).map(Tensor::C64),
         Tensor::C32(t) => download_typed::<Complex32>(client, t).map(Tensor::C32),
     }
@@ -145,6 +147,7 @@ fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl::server::Handle> {
     match tensor {
         Tensor::F64(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::F32(t) => cubecl_handle_from_buffer(&t.buffer),
+        Tensor::I64(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::C64(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::C32(t) => cubecl_handle_from_buffer(&t.buffer),
     }

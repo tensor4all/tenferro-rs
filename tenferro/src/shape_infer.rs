@@ -26,6 +26,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         StdTensorOp::Eig { input_dtype, .. } => match input_dtype {
             DType::F32 | DType::C32 => DType::C32,
             DType::F64 | DType::C64 => DType::C64,
+            DType::I64 => DType::I64,
         },
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
         StdTensorOp::Add
