@@ -2,7 +2,7 @@
 
 use std::ffi::c_char;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::inject::{
@@ -12,6 +12,7 @@ use tenferro_tensor::inject::{
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 static DGEMM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -110,6 +111,9 @@ unsafe extern "C" fn test_dgesc2(
 
 #[test]
 fn provider_inject_dot_general_uses_registered_blas() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
@@ -136,7 +140,40 @@ fn provider_inject_dot_general_uses_registered_blas() {
 }
 
 #[test]
+fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
+    register_test_ptrs_once();
+    DGEMM_CALLS.store(0, Ordering::SeqCst);
+
+    let a = Tensor::F64(TypedTensor::from_vec(vec![1, 2], vec![1.0, 2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(vec![1, 2], vec![3.0, 4.0]));
+
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![0],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+    );
+
+    assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
+    match c {
+        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[3.0, 6.0, 4.0, 8.0]),
+        _ => panic!("expected f64 tensor"),
+    }
+}
+
+#[test]
 fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
     register_test_ptrs_once();
     DGETC2_CALLS.store(0, Ordering::SeqCst);
     DGESC2_CALLS.store(0, Ordering::SeqCst);
