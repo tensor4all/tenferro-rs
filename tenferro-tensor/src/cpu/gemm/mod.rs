@@ -506,9 +506,9 @@ where
         });
     }
 
-    let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, 1);
+    let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
     let a_cs = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
-    let b_rs = normalize_singleton_stride(dims.b_rs, dims.k, 1);
+    let b_rs = normalize_singleton_stride(dims.b_rs, dims.k, dims.n);
     let b_cs = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
     let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
     let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);

@@ -32,8 +32,8 @@ fn register_test_ptrs_once() {
 }
 
 unsafe extern "C" fn test_dgemm(
-    _transa: *const c_char,
-    _transb: *const c_char,
+    transa: *const c_char,
+    transb: *const c_char,
     m: *const cblas_inject::blasint,
     n: *const cblas_inject::blasint,
     k: *const cblas_inject::blasint,
@@ -55,13 +55,23 @@ unsafe extern "C" fn test_dgemm(
     let lda = unsafe { *lda as usize };
     let ldb = unsafe { *ldb as usize };
     let ldc = unsafe { *ldc as usize };
+    let transa = unsafe { *transa as u8 as char };
+    let transb = unsafe { *transb as u8 as char };
 
     for j in 0..n {
         for i in 0..m {
             let mut sum = 0.0;
             for p in 0..k {
-                let av = unsafe { *a.add(i + p * lda) };
-                let bv = unsafe { *b.add(p + j * ldb) };
+                let av = match transa {
+                    'N' | 'n' => unsafe { *a.add(i + p * lda) },
+                    'T' | 't' | 'C' | 'c' => unsafe { *a.add(p + i * lda) },
+                    _ => panic!("unexpected transa flag {transa}"),
+                };
+                let bv = match transb {
+                    'N' | 'n' => unsafe { *b.add(p + j * ldb) },
+                    'T' | 't' | 'C' | 'c' => unsafe { *b.add(j + p * ldb) },
+                    _ => panic!("unexpected transb flag {transb}"),
+                };
                 sum += av * bv;
             }
             let c_ptr = unsafe { c.add(i + j * ldc) };
@@ -165,6 +175,39 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
         Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[3.0, 6.0, 4.0, 8.0]),
+        _ => panic!("expected f64 tensor"),
+    }
+}
+
+#[test]
+fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
+    register_test_ptrs_once();
+    DGEMM_CALLS.store(0, Ordering::SeqCst);
+
+    let a = Tensor::F64(TypedTensor::from_vec(vec![1], vec![2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 1, 2],
+        vec![3.0, 4.0, 5.0, 6.0],
+    ));
+
+    let mut backend = CpuBackend::new();
+    let c = backend.dot_general(
+        &a,
+        &b,
+        &DotGeneralConfig {
+            lhs_contracting_dims: vec![0],
+            rhs_contracting_dims: vec![1],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+    );
+
+    assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
+    match c {
+        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[6.0, 8.0, 10.0, 12.0]),
         _ => panic!("expected f64 tensor"),
     }
 }
