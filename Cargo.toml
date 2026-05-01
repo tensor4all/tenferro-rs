@@ -45,11 +45,11 @@ libloading = "0.8"
 faer = "0.24"
 cblas-sys = "0.1"
 cblas-src = "0.1.3"
-cblas-inject = "0.1.0"
+cblas-inject = { git = "https://github.com/shinaoka/cblas-inject", rev = "e150b3d2ccc5af7635e3d13e0f35aa5acdfffca3" }
 blas-src = { version = "0.14", default-features = false }
 lapack = "0.20"
 lapack-src = "0.13"
-lapack-inject = "0.1.1"
+lapack-inject = { git = "https://github.com/shinaoka/lapack-inject.git", rev = "059d520fc8715cd40270fe42e70c18682671516d" }
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12000"] }
 cubecl = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96", features = ["cuda"] }
 cubecl-cuda = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
