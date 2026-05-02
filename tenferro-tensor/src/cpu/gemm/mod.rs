@@ -154,11 +154,17 @@ fn validate_dot_general<T>(
     Ok(())
 }
 
+fn checked_product(dims: &[usize]) -> Option<usize> {
+    dims.iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+}
+
 fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> {
     if shapes.is_empty() {
         return Some((1, 0));
     }
     if shapes.len() == 1 {
+        isize::try_from(shapes[0]).ok()?;
         return Some((shapes[0], strides[0]));
     }
     let mut dims: SmallVec<[(usize, isize); 8]> = shapes
@@ -173,9 +179,15 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Option<(usize, isize)> 
         if stride != expected {
             return None;
         }
-        expected = stride.checked_mul(shape as isize)?;
+        let shape = isize::try_from(shape).ok()?;
+        expected = stride.checked_mul(shape)?;
     }
-    Some((shapes.iter().product(), base_stride))
+    Some((checked_product(shapes)?, base_stride))
+}
+
+fn checked_batch_offset(batch: usize, stride: isize) -> Option<isize> {
+    let batch = isize::try_from(batch).ok()?;
+    batch.checked_mul(stride)
 }
 
 fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
@@ -257,7 +269,7 @@ fn analyse_gemm<T>(
         .iter()
         .map(|&d| lhs.shape[d])
         .collect();
-    let batch_total: usize = batch_shapes.iter().product();
+    let batch_total = checked_product(&batch_shapes)?;
 
     let lhs_free_shapes: SmallVec<[usize; 8]> = lhs_free.iter().map(|&d| lhs.shape[d]).collect();
     let rhs_free_shapes: SmallVec<[usize; 8]> = rhs_free.iter().map(|&d| rhs.shape[d]).collect();
@@ -267,9 +279,9 @@ fn analyse_gemm<T>(
         .map(|&d| lhs.shape[d])
         .collect();
 
-    let m: usize = lhs_free_shapes.iter().product();
-    let n: usize = rhs_free_shapes.iter().product();
-    let k: usize = contract_shapes.iter().product();
+    let m = checked_product(&lhs_free_shapes)?;
+    let n = checked_product(&rhs_free_shapes)?;
+    let k = checked_product(&contract_shapes)?;
 
     let lhs_free_strides: SmallVec<[isize; 8]> = lhs_free.iter().map(|&d| lhs_strides[d]).collect();
     let rhs_free_strides: SmallVec<[isize; 8]> = rhs_free.iter().map(|&d| rhs_strides[d]).collect();
@@ -394,7 +406,7 @@ where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
-    let out_n: usize = dims.out_shape.iter().product();
+    let out_n = checked_product(&dims.out_shape)?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         return Some(TypedTensor {
             buffer: Buffer::Host(vec![T::zero(); out_n]),
@@ -421,9 +433,9 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = batch as isize * dims.a_bs;
-        let b_off = batch as isize * dims.b_bs;
-        let c_off = batch as isize * dims.c_bs;
+        let a_off = checked_batch_offset(batch, dims.a_bs)?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             T::strided_gemm(
                 ctx,
@@ -497,7 +509,7 @@ where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
     let dims = analyse_gemm(lhs, rhs, config)?;
-    let out_n: usize = dims.out_shape.iter().product();
+    let out_n = checked_product(&dims.out_shape)?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         return Some(TypedTensor {
             buffer: Buffer::Host(vec![T::zero(); out_n]),
@@ -538,9 +550,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = batch as isize * dims.a_bs;
-        let b_off = batch as isize * dims.b_bs;
-        let c_off = batch as isize * dims.c_bs;
+        let a_off = checked_batch_offset(batch, dims.a_bs)?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)?;
         unsafe {
             T::strided_gemm(
                 T::one(),

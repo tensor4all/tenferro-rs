@@ -1203,6 +1203,47 @@ fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
 }
 
 #[test]
+fn test_tril_triu_extreme_offsets_do_not_overflow() {
+    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+
+    let lower_min = tril(&t, i64::MIN).unwrap();
+    assert_eq!(
+        match &lower_min {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[0.0, 0.0, 0.0, 0.0]
+    );
+
+    let upper_min = triu(&t, i64::MIN).unwrap();
+    assert_eq!(
+        match &upper_min {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+
+    let lower_max = tril(&t, i64::MAX).unwrap();
+    assert_eq!(
+        match &lower_max {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+
+    let upper_max = triu(&t, i64::MAX).unwrap();
+    assert_eq!(
+        match &upper_max {
+            Tensor::F64(inner) => inner.host_data(),
+            _ => panic!("expected f64 tensor"),
+        },
+        &[0.0, 0.0, 0.0, 0.0]
+    );
+}
+
+#[test]
 fn test_neg_and_conj() {
     let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, -7.0]));
     let n = neg(&t).unwrap();

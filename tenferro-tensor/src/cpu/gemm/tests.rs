@@ -1,4 +1,4 @@
-use super::try_fuse_dims;
+use super::{checked_product, try_fuse_dims};
 
 #[cfg(feature = "cpu-blas")]
 use super::dot_general;
@@ -36,6 +36,26 @@ fn try_fuse_dims_single_dim() {
 #[test]
 fn try_fuse_dims_empty() {
     assert_eq!(try_fuse_dims(&[], &[]), Some((1, 0)));
+}
+
+#[test]
+fn try_fuse_dims_rejects_extent_that_does_not_fit_isize() {
+    let too_large = (isize::MAX as usize).saturating_add(1);
+
+    assert_eq!(try_fuse_dims(&[too_large], &[1]), None);
+}
+
+#[test]
+fn try_fuse_dims_rejects_fused_stride_overflow() {
+    assert_eq!(
+        try_fuse_dims(&[isize::MAX as usize, 2], &[1, isize::MAX]),
+        None
+    );
+}
+
+#[test]
+fn checked_product_rejects_product_overflow() {
+    assert_eq!(checked_product(&[usize::MAX, 2]), None);
 }
 
 #[cfg(feature = "cpu-blas")]

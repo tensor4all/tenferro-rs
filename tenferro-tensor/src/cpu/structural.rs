@@ -422,15 +422,16 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     for batch_idx in 0..batch_count {
         let base = batch_idx * block_size;
         for col in 0..cols {
-            let boundary = col as i64 - k;
+            let boundary = col as i128 - k as i128;
             for row in 0..rows {
+                let row = row as i128;
                 let keep = if upper {
-                    (row as i64) <= boundary
+                    row <= boundary
                 } else {
-                    (row as i64) >= boundary
+                    row >= boundary
                 };
                 if !keep {
-                    data[base + row + col * rows] = T::zero();
+                    data[base + row as usize + col * rows] = T::zero();
                 }
             }
         }

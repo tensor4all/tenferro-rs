@@ -4,6 +4,7 @@ use faer::{
     Conj, Mat, MatMut, MatRef,
 };
 use num_complex::Complex64;
+use std::ops::Range;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::cpu::CpuContext;
@@ -20,12 +21,12 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>>;
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
     fn full_piv_lu_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>>;
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
     fn full_piv_lu_solve_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -42,7 +43,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    ) -> TypedTensor<Self>;
+    ) -> crate::Result<TypedTensor<Self>>;
     fn svd_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -52,7 +53,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>>;
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
     fn eigh_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -60,15 +61,27 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     ) -> crate::Result<Vec<TypedTensor<Self>>>;
 }
 
-fn matrix_dims<T>(input: &TypedTensor<T>, op: &str) -> (usize, usize) {
-    assert_eq!(input.shape.len(), 2, "{op}: expected a 2D matrix");
-    (input.shape[0], input.shape[1])
+fn matrix_dims<T>(input: &TypedTensor<T>, op: &'static str) -> crate::Result<(usize, usize)> {
+    if input.shape.len() != 2 {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: input.shape.len(),
+        });
+    }
+    Ok((input.shape[0], input.shape[1]))
 }
 
-fn square_matrix_dim<T>(input: &TypedTensor<T>, op: &str) -> usize {
-    let (rows, cols) = matrix_dims(input, op);
-    assert_eq!(rows, cols, "{op}: expected a square matrix");
-    rows
+fn square_matrix_dim<T>(input: &TypedTensor<T>, op: &'static str) -> crate::Result<usize> {
+    let (rows, cols) = matrix_dims(input, op)?;
+    if rows != cols {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: vec![rows],
+            rhs: vec![cols],
+        });
+    }
+    Ok(rows)
 }
 
 fn tensor_from_vec_with_template<T: Clone, U>(
@@ -141,6 +154,45 @@ fn decomposition_failed(op: &'static str) -> crate::Error {
         op,
         message: "decomposition failed".into(),
     }
+}
+
+fn invalid_config(op: &'static str, message: impl Into<String>) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op,
+        message: message.into(),
+    }
+}
+
+fn checked_product(op: &'static str, role: &'static str, shape: &[usize]) -> crate::Result<usize> {
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| invalid_config(op, format!("{role} element count overflows usize")))
+}
+
+fn checked_repeated_len(
+    op: &'static str,
+    role: &'static str,
+    per_batch: usize,
+    batch_count: usize,
+) -> crate::Result<usize> {
+    per_batch
+        .checked_mul(batch_count)
+        .ok_or_else(|| invalid_config(op, format!("{role} repeated batch length overflows usize")))
+}
+
+fn checked_slice_range(
+    op: &'static str,
+    batch_idx: usize,
+    slice_size: usize,
+) -> crate::Result<Range<usize>> {
+    let start = batch_idx
+        .checked_mul(slice_size)
+        .ok_or_else(|| invalid_config(op, "batch slice start overflows usize"))?;
+    let end = start
+        .checked_add(slice_size)
+        .ok_or_else(|| invalid_config(op, "batch slice end overflows usize"))?;
+    Ok(start..end)
 }
 
 fn complex_vec_from_real_diag(
@@ -262,16 +314,27 @@ fn real_eig_to_complex_outputs(
     (u, s)
 }
 
+fn split_shape_core_and_batch<'a>(
+    shape: &'a [usize],
+    core_rank: usize,
+    op: &'static str,
+) -> crate::Result<(&'a [usize], &'a [usize])> {
+    if shape.len() < core_rank {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: core_rank,
+            actual: shape.len(),
+        });
+    }
+    Ok(shape.split_at(core_rank))
+}
+
 fn split_core_and_batch<'a, T>(
     input: &'a TypedTensor<T>,
     core_rank: usize,
-    op: &str,
-) -> (&'a [usize], &'a [usize]) {
-    assert!(
-        input.shape.len() >= core_rank,
-        "{op}: expected rank >= {core_rank}"
-    );
-    input.shape.split_at(core_rank)
+    op: &'static str,
+) -> crate::Result<(&'a [usize], &'a [usize])> {
+    split_shape_core_and_batch(&input.shape, core_rank, op)
 }
 
 fn transpose_col_major_data<T: Copy + PoolScalar>(
@@ -290,6 +353,7 @@ fn transpose_col_major_data<T: Copy + PoolScalar>(
 }
 
 fn batched_single<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     core_rank: usize,
@@ -299,133 +363,69 @@ where
     T: Clone + PoolScalar,
     F: Fn(&mut BufferPool, &TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_single");
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_single: zero-sized batch dims are unsupported"
-    );
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = checked_product(op_name, "batch shape", batch_shape)?;
+    if batch_count == 0 {
+        return Err(invalid_config(
+            op_name,
+            "zero-sized batch dims must be handled by the caller",
+        ));
+    }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
     for batch_idx in 0..batch_count {
-        let start = batch_idx * slice_size;
-        let end = start + slice_size;
+        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
+            input.host_data()[range].to_vec(),
             input,
         );
         let batch_output = op(buffers, &batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_single: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: expected_shape.clone(),
+                });
+            }
         } else {
-            out_data =
-                Some(buffers.acquire_with_capacity::<T>(batch_output.n_elements() * batch_count));
+            let output_elements =
+                checked_product(op_name, "output core shape", &batch_output.shape)?;
+            let capacity =
+                checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
+            out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
             out_core_shape = Some(batch_output.shape.clone());
         }
 
-        out_data
-            .as_mut()
-            .expect("batched_single: missing output buffer")
-            .extend_from_slice(batch_output.host_data());
-    }
-
-    let mut out_shape = out_core_shape.expect("batched_single: missing output shape");
-    out_shape.extend_from_slice(batch_shape);
-    Ok(tensor_from_vec_with_template(
-        out_shape,
-        out_data.expect("batched_single: missing output data"),
-        input,
-    ))
-}
-
-fn batched_multi<T, F>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    core_rank: usize,
-    op: F,
-) -> Vec<TypedTensor<T>>
-where
-    T: Clone + PoolScalar,
-    F: Fn(&mut BufferPool, &TypedTensor<T>) -> Vec<TypedTensor<T>>,
-{
-    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
-    if batch_shape.is_empty() {
-        return op(buffers, input);
-    }
-
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_multi: zero-sized batch dims are unsupported"
-    );
-
-    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
-    let mut out_data: Vec<Vec<T>> = Vec::new();
-
-    for batch_idx in 0..batch_count {
-        let start = batch_idx * slice_size;
-        let end = start + slice_size;
-        let batch_input = tensor_from_vec_with_template(
-            core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
-            input,
-        );
-        let batch_outputs = op(buffers, &batch_input);
-
-        if out_shapes.is_empty() {
-            out_shapes = batch_outputs
-                .iter()
-                .map(|tensor| tensor.shape.clone())
-                .collect();
-            let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
-            for tensor in &batch_outputs {
-                pooled_outputs
-                    .push(buffers.acquire_with_capacity::<T>(tensor.n_elements() * batch_count));
+        match &mut out_data {
+            Some(data) => data.extend_from_slice(batch_output.host_data()),
+            None => {
+                return Err(invalid_config(
+                    op_name,
+                    "missing output buffer after first batch",
+                ));
             }
-            out_data = pooled_outputs;
-        } else {
-            assert_eq!(
-                batch_outputs.len(),
-                out_shapes.len(),
-                "batched_multi: output count mismatch across batches"
-            );
-        }
-
-        for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                out_shapes[idx].as_slice(),
-                "batched_multi: output core shape mismatch across batches"
-            );
-            out_data[idx].extend_from_slice(batch_output.host_data());
         }
     }
 
-    out_shapes
-        .into_iter()
-        .zip(out_data)
-        .map(|(mut out_shape, out_data)| {
-            out_shape.extend_from_slice(batch_shape);
-            tensor_from_vec_with_template(out_shape, out_data, input)
-        })
-        .collect()
+    let mut out_shape =
+        out_core_shape.ok_or_else(|| invalid_config(op_name, "missing output shape"))?;
+    out_shape.extend_from_slice(batch_shape);
+    let out_data = out_data.ok_or_else(|| invalid_config(op_name, "missing output data"))?;
+    Ok(tensor_from_vec_with_template(out_shape, out_data, input))
 }
 
 fn batched_multi_result<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     core_rank: usize,
@@ -435,27 +435,28 @@ where
     T: Clone + PoolScalar,
     F: Fn(&mut BufferPool, &TypedTensor<T>) -> crate::Result<Vec<TypedTensor<T>>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_multi: zero-sized batch dims are unsupported"
-    );
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = checked_product(op_name, "batch shape", batch_shape)?;
+    if batch_count == 0 {
+        return Err(invalid_config(
+            op_name,
+            "zero-sized batch dims must be handled by the caller",
+        ));
+    }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<T>> = Vec::new();
 
     for batch_idx in 0..batch_count {
-        let start = batch_idx * slice_size;
-        let end = start + slice_size;
+        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
+            input.host_data()[range].to_vec(),
             input,
         );
         let batch_outputs = op(buffers, &batch_input)?;
@@ -467,24 +468,30 @@ where
                 .collect();
             let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
             for tensor in &batch_outputs {
-                pooled_outputs
-                    .push(buffers.acquire_with_capacity::<T>(tensor.n_elements() * batch_count));
+                let output_elements = checked_product(op_name, "output core shape", &tensor.shape)?;
+                let capacity =
+                    checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
+                pooled_outputs.push(buffers.acquire_with_capacity::<T>(capacity));
             }
             out_data = pooled_outputs;
         } else {
-            assert_eq!(
-                batch_outputs.len(),
-                out_shapes.len(),
-                "batched_multi: output count mismatch across batches"
-            );
+            if batch_outputs.len() != out_shapes.len() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: vec![batch_outputs.len()],
+                    rhs: vec![out_shapes.len()],
+                });
+            }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                out_shapes[idx].as_slice(),
-                "batched_multi: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: out_shapes[idx].clone(),
+                });
+            }
             out_data[idx].extend_from_slice(batch_output.host_data());
         }
     }
@@ -500,6 +507,7 @@ where
 }
 
 fn batched_multi_convert_result<InT, OutT, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<InT>,
     core_rank: usize,
@@ -510,27 +518,28 @@ where
     OutT: Clone + PoolScalar,
     F: Fn(&mut BufferPool, &TypedTensor<InT>) -> crate::Result<Vec<TypedTensor<OutT>>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
-    let slice_size: usize = core_shape.iter().product();
-    let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_multi: zero-sized batch dims are unsupported"
-    );
+    let slice_size = checked_product(op_name, "core shape", core_shape)?;
+    let batch_count = checked_product(op_name, "batch shape", batch_shape)?;
+    if batch_count == 0 {
+        return Err(invalid_config(
+            op_name,
+            "zero-sized batch dims must be handled by the caller",
+        ));
+    }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<OutT>> = Vec::new();
 
     for batch_idx in 0..batch_count {
-        let start = batch_idx * slice_size;
-        let end = start + slice_size;
+        let range = checked_slice_range(op_name, batch_idx, slice_size)?;
         let batch_input = tensor_from_vec_with_template(
             core_shape.to_vec(),
-            input.host_data()[start..end].to_vec(),
+            input.host_data()[range].to_vec(),
             input,
         );
         let batch_outputs = op(buffers, &batch_input)?;
@@ -542,24 +551,30 @@ where
                 .collect();
             let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
             for tensor in &batch_outputs {
-                pooled_outputs
-                    .push(buffers.acquire_with_capacity::<OutT>(tensor.n_elements() * batch_count));
+                let output_elements = checked_product(op_name, "output core shape", &tensor.shape)?;
+                let capacity =
+                    checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
+                pooled_outputs.push(buffers.acquire_with_capacity::<OutT>(capacity));
             }
             out_data = pooled_outputs;
         } else {
-            assert_eq!(
-                batch_outputs.len(),
-                out_shapes.len(),
-                "batched_multi: output count mismatch across batches"
-            );
+            if batch_outputs.len() != out_shapes.len() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: vec![batch_outputs.len()],
+                    rhs: vec![out_shapes.len()],
+                });
+            }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                out_shapes[idx].as_slice(),
-                "batched_multi: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: out_shapes[idx].clone(),
+                });
+            }
             out_data[idx].extend_from_slice(batch_output.host_data());
         }
     }
@@ -574,86 +589,8 @@ where
         .collect())
 }
 
-fn batched_binary<T, F>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    core_rank_a: usize,
-    core_rank_b: usize,
-    op: F,
-) -> TypedTensor<T>
-where
-    T: Clone + PoolScalar,
-    F: Fn(&mut BufferPool, &TypedTensor<T>, &TypedTensor<T>) -> TypedTensor<T>,
-{
-    let (a_core_shape, a_batch_shape) = split_core_and_batch(a, core_rank_a, "batched_binary");
-    let (b_core_shape, b_batch_shape) = split_core_and_batch(b, core_rank_b, "batched_binary");
-    assert_eq!(
-        a_batch_shape, b_batch_shape,
-        "batched_binary: batch shape mismatch"
-    );
-
-    if a_batch_shape.is_empty() {
-        return op(buffers, a, b);
-    }
-
-    let a_slice_size: usize = a_core_shape.iter().product();
-    let b_slice_size: usize = b_core_shape.iter().product();
-    let batch_count: usize = a_batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_binary: zero-sized batch dims are unsupported"
-    );
-
-    let mut out_core_shape: Option<Vec<usize>> = None;
-    let mut out_data: Option<Vec<T>> = None;
-
-    for batch_idx in 0..batch_count {
-        let a_start = batch_idx * a_slice_size;
-        let a_end = a_start + a_slice_size;
-        let b_start = batch_idx * b_slice_size;
-        let b_end = b_start + b_slice_size;
-
-        let batch_a = tensor_from_vec_with_template(
-            a_core_shape.to_vec(),
-            a.host_data()[a_start..a_end].to_vec(),
-            a,
-        );
-        let batch_b = tensor_from_vec_with_template(
-            b_core_shape.to_vec(),
-            b.host_data()[b_start..b_end].to_vec(),
-            b,
-        );
-        let batch_output = op(buffers, &batch_a, &batch_b);
-
-        if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_binary: output core shape mismatch across batches"
-            );
-        } else {
-            out_data =
-                Some(buffers.acquire_with_capacity::<T>(batch_output.n_elements() * batch_count));
-            out_core_shape = Some(batch_output.shape.clone());
-        }
-
-        out_data
-            .as_mut()
-            .expect("batched_binary: missing output buffer")
-            .extend_from_slice(batch_output.host_data());
-    }
-
-    let mut out_shape = out_core_shape.expect("batched_binary: missing output shape");
-    out_shape.extend_from_slice(a_batch_shape);
-    tensor_from_vec_with_template(
-        out_shape,
-        out_data.expect("batched_binary: missing output data"),
-        b,
-    )
-}
-
 fn batched_binary_result<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -665,75 +602,81 @@ where
     T: Clone + PoolScalar,
     F: Fn(&mut BufferPool, &TypedTensor<T>, &TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
 {
-    let (a_core_shape, a_batch_shape) =
-        split_core_and_batch(a, core_rank_a, "batched_binary_result");
-    let (b_core_shape, b_batch_shape) =
-        split_core_and_batch(b, core_rank_b, "batched_binary_result");
-    assert_eq!(
-        a_batch_shape, b_batch_shape,
-        "batched_binary_result: batch shape mismatch"
-    );
+    let (a_core_shape, a_batch_shape) = split_core_and_batch(a, core_rank_a, op_name)?;
+    let (b_core_shape, b_batch_shape) = split_core_and_batch(b, core_rank_b, op_name)?;
+    if a_batch_shape != b_batch_shape {
+        return Err(crate::Error::ShapeMismatch {
+            op: op_name,
+            lhs: a_batch_shape.to_vec(),
+            rhs: b_batch_shape.to_vec(),
+        });
+    }
 
     if a_batch_shape.is_empty() {
         return op(buffers, a, b);
     }
 
-    let a_slice_size: usize = a_core_shape.iter().product();
-    let b_slice_size: usize = b_core_shape.iter().product();
-    let batch_count: usize = a_batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_binary_result: zero-sized batch dims are unsupported"
-    );
+    let a_slice_size = checked_product(op_name, "lhs core shape", a_core_shape)?;
+    let b_slice_size = checked_product(op_name, "rhs core shape", b_core_shape)?;
+    let batch_count = checked_product(op_name, "batch shape", a_batch_shape)?;
+    if batch_count == 0 {
+        return Err(invalid_config(
+            op_name,
+            "zero-sized batch dims must be handled by the caller",
+        ));
+    }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
 
     for batch_idx in 0..batch_count {
-        let a_start = batch_idx * a_slice_size;
-        let a_end = a_start + a_slice_size;
-        let b_start = batch_idx * b_slice_size;
-        let b_end = b_start + b_slice_size;
+        let a_range = checked_slice_range(op_name, batch_idx, a_slice_size)?;
+        let b_range = checked_slice_range(op_name, batch_idx, b_slice_size)?;
 
         let batch_a = tensor_from_vec_with_template(
             a_core_shape.to_vec(),
-            a.host_data()[a_start..a_end].to_vec(),
+            a.host_data()[a_range].to_vec(),
             a,
         );
         let batch_b = tensor_from_vec_with_template(
             b_core_shape.to_vec(),
-            b.host_data()[b_start..b_end].to_vec(),
+            b.host_data()[b_range].to_vec(),
             b,
         );
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_binary_result: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: expected_shape.clone(),
+                });
+            }
         } else {
-            out_data =
-                Some(buffers.acquire_with_capacity::<T>(batch_output.n_elements() * batch_count));
+            let output_elements =
+                checked_product(op_name, "output core shape", &batch_output.shape)?;
+            let capacity =
+                checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
+            out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
             out_core_shape = Some(batch_output.shape.clone());
         }
 
         match &mut out_data {
             Some(data) => data.extend_from_slice(batch_output.host_data()),
-            None => panic!("batched_binary_result: missing output buffer"),
+            None => {
+                return Err(invalid_config(
+                    op_name,
+                    "missing output buffer after first batch",
+                ));
+            }
         }
     }
 
-    let mut out_shape = match out_core_shape {
-        Some(shape) => shape,
-        None => panic!("batched_binary_result: missing output shape"),
-    };
+    let mut out_shape =
+        out_core_shape.ok_or_else(|| invalid_config(op_name, "missing output shape"))?;
     out_shape.extend_from_slice(a_batch_shape);
-    let out_data = match out_data {
-        Some(data) => data,
-        None => panic!("batched_binary_result: missing output data"),
-    };
+    let out_data = out_data.ok_or_else(|| invalid_config(op_name, "missing output data"))?;
     Ok(tensor_from_vec_with_template(out_shape, out_data, b))
 }
 
@@ -747,7 +690,7 @@ impl FaerLinalg for f64 {
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "cholesky");
+        let n = square_matrix_dim(input, "cholesky")?;
         let mut l = Mat::zeros(n, n);
         l.copy_from(MatRef::from_column_major_slice(input.host_data(), n, n));
         let mut mem = MemBuffer::new(
@@ -780,8 +723,8 @@ impl FaerLinalg for f64 {
         ctx: &CpuContext,
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "lu");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "lu")?;
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
         lu.copy_from(MatRef::from_column_major_slice(input.host_data(), m, n));
@@ -822,20 +765,20 @@ impl FaerLinalg for f64 {
         }
         let u_data = upper_triangle_vec_from_mat(lu.as_ref().get(..k, ..));
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![m, m], p_data, input),
             tensor_from_vec_with_template(vec![m, k], l_data, input),
             tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
-        ]
+        ])
     }
 
     fn full_piv_lu_2d(
         ctx: &CpuContext,
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "full_piv_lu");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let n = square_matrix_dim(input, "full_piv_lu")?;
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(input.host_data(), n, n));
         let mut row_perm = vec![0usize; n];
@@ -874,13 +817,13 @@ impl FaerLinalg for f64 {
             -1.0
         };
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, 1.0), input),
             tensor_from_vec_with_template(vec![n, n], l_data, input),
             tensor_from_vec_with_template(vec![n, n], u_data, input),
             tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, 1.0), input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
-        ]
+        ])
     }
 
     fn full_piv_lu_solve_2d(
@@ -890,9 +833,15 @@ impl FaerLinalg for f64 {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> crate::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(a, "full_piv_lu_solve");
-        let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve");
-        assert_eq!(b_rows, n, "full_piv_lu_solve: rhs row count mismatch");
+        let n = square_matrix_dim(a, "full_piv_lu_solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
 
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(a.host_data(), n, n));
@@ -972,13 +921,19 @@ impl FaerLinalg for f64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    ) -> TypedTensor<Self> {
-        let n = square_matrix_dim(a, "triangular_solve");
-        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+    ) -> crate::Result<TypedTensor<Self>> {
+        let n = square_matrix_dim(a, "triangular_solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
         let a_mat = MatRef::from_column_major_slice(a.host_data(), n, n);
 
         if left_side {
-            assert_eq!(b_rows, n, "triangular_solve: rhs row count mismatch");
+            if b_rows != n {
+                return Err(crate::Error::ShapeMismatch {
+                    op: "triangular_solve",
+                    lhs: vec![n],
+                    rhs: vec![b_rows],
+                });
+            }
             let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
             rhs_data.extend_from_slice(b.host_data());
             let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
@@ -1040,9 +995,15 @@ impl FaerLinalg for f64 {
                     );
                 }
             }
-            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b)
+            Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
         } else {
-            assert_eq!(b_cols, n, "triangular_solve: rhs column count mismatch");
+            if b_cols != n {
+                return Err(crate::Error::ShapeMismatch {
+                    op: "triangular_solve",
+                    lhs: vec![n],
+                    rhs: vec![b_cols],
+                });
+            }
             let nrhs = b_rows;
             let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data(), nrhs, n);
             let rhs = MatMut::from_column_major_slice_mut(&mut rhs_transposed, n, nrhs);
@@ -1106,7 +1067,7 @@ impl FaerLinalg for f64 {
             }
             let result = transpose_col_major_data(buffers, &rhs_transposed, n, nrhs);
             <Self as PoolScalar>::pool_release(buffers, rhs_transposed);
-            tensor_from_vec_with_template(vec![nrhs, n], result, b)
+            Ok(tensor_from_vec_with_template(vec![nrhs, n], result, b))
         }
     }
 
@@ -1115,7 +1076,7 @@ impl FaerLinalg for f64 {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
-        let (m, n) = matrix_dims(input, "svd");
+        let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
         let mut u = Mat::zeros(m, k);
@@ -1162,8 +1123,8 @@ impl FaerLinalg for f64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "qr");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "qr")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
         let block_size =
@@ -1216,7 +1177,7 @@ impl FaerLinalg for f64 {
             input,
         );
 
-        vec![q, r]
+        Ok(vec![q, r])
     }
 
     fn eigh_2d(
@@ -1224,7 +1185,7 @@ impl FaerLinalg for f64 {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
-        let n = square_matrix_dim(input, "eigh");
+        let n = square_matrix_dim(input, "eigh")?;
         let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
         let mut values = Diag::zeros(n);
         let mut vectors = Mat::zeros(n, n);
@@ -1267,7 +1228,7 @@ impl FaerLinalg for Complex64 {
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "cholesky");
+        let n = square_matrix_dim(input, "cholesky")?;
         let mut l = Mat::zeros(n, n);
         l.copy_from(MatRef::from_column_major_slice(
             complex64_to_faer_slice(input.host_data()),
@@ -1304,8 +1265,8 @@ impl FaerLinalg for Complex64 {
         ctx: &CpuContext,
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "lu");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "lu")?;
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
         lu.copy_from(MatRef::from_column_major_slice(
@@ -1349,20 +1310,20 @@ impl FaerLinalg for Complex64 {
         }
         let u_data = complex_matrix_from_predicate(lu.as_ref(), k, n, |row, col| row <= col);
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![m, m], p_data, input),
             tensor_from_vec_with_template(vec![m, k], l_data, input),
             tensor_from_vec_with_template(vec![k, n], u_data, input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
-        ]
+        ])
     }
 
     fn full_piv_lu_2d(
         ctx: &CpuContext,
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "full_piv_lu");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let n = square_matrix_dim(input, "full_piv_lu")?;
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
             complex64_to_faer_slice(input.host_data()),
@@ -1406,13 +1367,13 @@ impl FaerLinalg for Complex64 {
             Complex64::new(-1.0, 0.0)
         };
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![n, n], permutation_matrix(&row_perm, one), input),
             tensor_from_vec_with_template(vec![n, n], l_data, input),
             tensor_from_vec_with_template(vec![n, n], u_data, input),
             tensor_from_vec_with_template(vec![n, n], permutation_matrix(&col_perm, one), input),
             tensor_from_vec_with_template(vec![], vec![parity], input),
-        ]
+        ])
     }
 
     fn full_piv_lu_solve_2d(
@@ -1422,9 +1383,15 @@ impl FaerLinalg for Complex64 {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> crate::Result<TypedTensor<Self>> {
-        let n = square_matrix_dim(a, "full_piv_lu_solve");
-        let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve");
-        assert_eq!(b_rows, n, "full_piv_lu_solve: rhs row count mismatch");
+        let n = square_matrix_dim(a, "full_piv_lu_solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
 
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
@@ -1513,13 +1480,19 @@ impl FaerLinalg for Complex64 {
         lower: bool,
         transpose_a: bool,
         unit_diagonal: bool,
-    ) -> TypedTensor<Self> {
-        let n = square_matrix_dim(a, "triangular_solve");
-        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+    ) -> crate::Result<TypedTensor<Self>> {
+        let n = square_matrix_dim(a, "triangular_solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
         let a_mat = MatRef::from_column_major_slice(complex64_to_faer_slice(a.host_data()), n, n);
 
         if left_side {
-            assert_eq!(b_rows, n, "triangular_solve: rhs row count mismatch");
+            if b_rows != n {
+                return Err(crate::Error::ShapeMismatch {
+                    op: "triangular_solve",
+                    lhs: vec![n],
+                    rhs: vec![b_rows],
+                });
+            }
             let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
             rhs_data.extend_from_slice(b.host_data());
             let rhs = MatMut::from_column_major_slice_mut(
@@ -1585,9 +1558,15 @@ impl FaerLinalg for Complex64 {
                     );
                 }
             }
-            tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b)
+            Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
         } else {
-            assert_eq!(b_cols, n, "triangular_solve: rhs column count mismatch");
+            if b_cols != n {
+                return Err(crate::Error::ShapeMismatch {
+                    op: "triangular_solve",
+                    lhs: vec![n],
+                    rhs: vec![b_cols],
+                });
+            }
             let nrhs = b_rows;
             let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data(), nrhs, n);
             let rhs = MatMut::from_column_major_slice_mut(
@@ -1655,7 +1634,7 @@ impl FaerLinalg for Complex64 {
             }
             let result = transpose_col_major_data(buffers, &rhs_transposed, n, nrhs);
             <Self as PoolScalar>::pool_release(buffers, rhs_transposed);
-            tensor_from_vec_with_template(vec![nrhs, n], result, b)
+            Ok(tensor_from_vec_with_template(vec![nrhs, n], result, b))
         }
     }
 
@@ -1664,7 +1643,7 @@ impl FaerLinalg for Complex64 {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
-        let (m, n) = matrix_dims(input, "svd");
+        let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
         let mut u = Mat::zeros(m, k);
@@ -1715,8 +1694,8 @@ impl FaerLinalg for Complex64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "qr");
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "qr")?;
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
         let block_size =
@@ -1769,7 +1748,7 @@ impl FaerLinalg for Complex64 {
             input,
         );
 
-        vec![q, r]
+        Ok(vec![q, r])
     }
 
     fn eigh_2d(
@@ -1777,7 +1756,7 @@ impl FaerLinalg for Complex64 {
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
-        let n = square_matrix_dim(input, "eigh");
+        let n = square_matrix_dim(input, "eigh")?;
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
         let mut values = Diag::zeros(n);
         let mut vectors = Mat::zeros(n, n);
@@ -1825,7 +1804,7 @@ pub(crate) fn cholesky<T: FaerLinalg>(
             input,
         ));
     }
-    batched_single(buffers, input, 2, |buffers, batch| {
+    batched_single("cholesky", buffers, input, 2, |buffers, batch| {
         T::cholesky_2d(ctx, buffers, batch)
     })
 }
@@ -1834,18 +1813,14 @@ pub(crate) fn lu<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let m = input.shape[0];
-        let n = input.shape[1];
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "lu")?;
+        let m = matrix_shape[0];
+        let n = matrix_shape[1];
         let k = m.min(n);
-        let batch_shape = &input.shape[2..];
-        let parity_elements = if batch_shape.is_empty() {
-            1
-        } else {
-            batch_shape.iter().product()
-        };
-        return vec![
+        let parity_elements = checked_product("lu", "batch shape", batch_shape)?;
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, m, batch_shape),
                 Vec::new(),
@@ -1866,9 +1841,9 @@ pub(crate) fn lu<T: FaerLinalg>(
                 vec![T::parity_one(); parity_elements],
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, 2, |buffers, batch| {
+    batched_multi_result("lu", buffers, input, 2, |buffers, batch| {
         T::lu_2d(ctx, buffers, batch)
     })
 }
@@ -1877,16 +1852,19 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let n = input.shape[0];
-        let batch_shape = &input.shape[2..];
-        let parity_elements = if batch_shape.is_empty() {
-            1
-        } else {
-            batch_shape.iter().product()
-        };
-        return vec![
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "full_piv_lu")?;
+        let n = matrix_shape[0];
+        if matrix_shape[1] != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu",
+                lhs: vec![n],
+                rhs: vec![matrix_shape[1]],
+            });
+        }
+        let parity_elements = checked_product("full_piv_lu", "batch shape", batch_shape)?;
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
@@ -1912,9 +1890,9 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
                 vec![T::parity_one(); parity_elements],
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, 2, |buffers, batch| {
+    batched_multi_result("full_piv_lu", buffers, input, 2, |buffers, batch| {
         T::full_piv_lu_2d(ctx, buffers, batch)
     })
 }
@@ -1927,13 +1905,22 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        let (_, a_batch_shape) = split_core_and_batch(a, 2, "full_piv_lu_solve")?;
+        let (_, b_batch_shape) = split_core_and_batch(b, 2, "full_piv_lu_solve")?;
+        if a_batch_shape != b_batch_shape {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
         return Ok(tensor_from_vec_with_template(
             b.shape.clone(),
             Vec::new(),
             b,
         ));
     }
-    batched_binary_result(buffers, a, b, 2, 2, |buffers, a, b| {
+    batched_binary_result("full_piv_lu_solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::full_piv_lu_solve_2d(ctx, buffers, a, b, transpose_a)
     })
 }
@@ -1947,11 +1934,24 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+        let (_, a_batch_shape) = split_core_and_batch(a, 2, "triangular_solve")?;
+        let (_, b_batch_shape) = split_core_and_batch(b, 2, "triangular_solve")?;
+        if a_batch_shape != b_batch_shape {
+            return Err(crate::Error::ShapeMismatch {
+                op: "triangular_solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
+        return Ok(tensor_from_vec_with_template(
+            b.shape.clone(),
+            Vec::new(),
+            b,
+        ));
     }
-    batched_binary(buffers, a, b, 2, 2, |buffers, a, b| {
+    batched_binary_result("triangular_solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::triangular_solve_2d(
             ctx,
             buffers,
@@ -1971,7 +1971,7 @@ pub(crate) fn svd<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd")?;
         let m = matrix_shape[0];
         let n = matrix_shape[1];
         let k = m.min(n);
@@ -1993,7 +1993,7 @@ pub(crate) fn svd<T: FaerLinalg>(
             ),
         ]);
     }
-    batched_multi_result(buffers, input, 2, |buffers, batch| {
+    batched_multi_result("svd", buffers, input, 2, |buffers, batch| {
         T::svd_2d(ctx, buffers, batch)
     })
 }
@@ -2002,13 +2002,13 @@ pub(crate) fn qr<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr");
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr")?;
         let m = matrix_shape[0];
         let n = matrix_shape[1];
         let k = m.min(n);
-        return vec![
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
@@ -2019,9 +2019,9 @@ pub(crate) fn qr<T: FaerLinalg>(
                 Vec::new(),
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, 2, |buffers, batch| {
+    batched_multi_result("qr", buffers, input, 2, |buffers, batch| {
         T::qr_2d(ctx, buffers, batch)
     })
 }
@@ -2032,8 +2032,15 @@ pub(crate) fn eigh<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let n = input.shape[0];
-        let batch_shape = &input.shape[2..];
+        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "eigh")?;
+        let n = matrix_shape[0];
+        if matrix_shape[1] != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "eigh",
+                lhs: vec![n],
+                rhs: vec![matrix_shape[1]],
+            });
+        }
         return Ok(vec![
             tensor_from_vec_with_template(
                 vector_with_batch_shape(n, batch_shape),
@@ -2047,7 +2054,7 @@ pub(crate) fn eigh<T: FaerLinalg>(
             ),
         ]);
     }
-    batched_multi_result(buffers, input, 2, |buffers, batch| {
+    batched_multi_result("eigh", buffers, input, 2, |buffers, batch| {
         T::eigh_2d(ctx, buffers, batch)
     })
 }
@@ -2057,7 +2064,7 @@ fn eig_real_2d(
     buffers: &mut BufferPool,
     input: &TypedTensor<f64>,
 ) -> crate::Result<Vec<TypedTensor<Complex64>>> {
-    let n = square_matrix_dim(input, "eig");
+    let n = square_matrix_dim(input, "eig")?;
     let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
     let mut u_real = Mat::zeros(n, n);
     let mut s_re = Diag::zeros(n);
@@ -2095,7 +2102,7 @@ fn eig_complex_2d(
     buffers: &mut BufferPool,
     input: &TypedTensor<Complex64>,
 ) -> crate::Result<Vec<TypedTensor<Complex64>>> {
-    let n = square_matrix_dim(input, "eig");
+    let n = square_matrix_dim(input, "eig")?;
     let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
     let mut u = Mat::zeros(n, n);
     let mut s = Diag::zeros(n);
@@ -2130,8 +2137,15 @@ pub(crate) fn eig(
     input: &Tensor,
 ) -> crate::Result<Vec<Tensor>> {
     if has_zero_dim(input.shape()) {
-        let n = input.shape()[0];
-        let batch_shape = &input.shape()[2..];
+        let (matrix_shape, batch_shape) = split_shape_core_and_batch(input.shape(), 2, "eig")?;
+        let n = matrix_shape[0];
+        if matrix_shape[1] != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "eig",
+                lhs: vec![n],
+                rhs: vec![matrix_shape[1]],
+            });
+        }
         return Ok(vec![
             Tensor::C64(TypedTensor::from_vec(
                 vector_with_batch_shape(n, batch_shape),
@@ -2145,22 +2159,26 @@ pub(crate) fn eig(
     }
 
     match input {
-        Tensor::F64(t) => Ok(
-            batched_multi_convert_result(buffers, t, 2, |buffers, batch| {
-                eig_real_2d(ctx, buffers, batch)
-            })?
-            .into_iter()
-            .map(Tensor::C64)
-            .collect(),
-        ),
-        Tensor::C64(t) => Ok(
-            batched_multi_convert_result(buffers, t, 2, |buffers, batch| {
-                eig_complex_2d(ctx, buffers, batch)
-            })?
-            .into_iter()
-            .map(Tensor::C64)
-            .collect(),
-        ),
+        Tensor::F64(t) => {
+            Ok(
+                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
+                    eig_real_2d(ctx, buffers, batch)
+                })?
+                .into_iter()
+                .map(Tensor::C64)
+                .collect(),
+            )
+        }
+        Tensor::C64(t) => {
+            Ok(
+                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
+                    eig_complex_2d(ctx, buffers, batch)
+                })?
+                .into_iter()
+                .map(Tensor::C64)
+                .collect(),
+            )
+        }
         _ => todo!("eig: unsupported dtype"),
     }
 }

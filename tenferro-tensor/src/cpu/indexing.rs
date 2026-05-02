@@ -486,18 +486,40 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     }
 }
 
-fn linear_offset(shape: &[usize], indices: &[usize]) -> usize {
+fn checked_product(op: &'static str, role: &'static str, shape: &[usize]) -> crate::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("{role} element count overflows usize"),
+            })
+    })
+}
+
+fn linear_offset(op: &'static str, shape: &[usize], indices: &[usize]) -> crate::Result<usize> {
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (axis, &index) in indices.iter().enumerate() {
-        offset += index * stride;
-        stride *= shape[axis];
+        let scaled = index
+            .checked_mul(stride)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("linear index component overflows usize on axis {axis}"),
+            })?;
+        offset = offset
+            .checked_add(scaled)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("linear offset overflows usize on axis {axis}"),
+            })?;
+        stride = stride
+            .checked_mul(shape[axis])
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: format!("linear stride overflows usize after axis {axis}"),
+            })?;
     }
-    offset
-}
-
-fn product(shape: &[usize]) -> usize {
-    shape.iter().product()
+    Ok(offset)
 }
 
 fn try_index_vector_size(
@@ -555,7 +577,7 @@ fn index_component(
                 message: "implicit index_vector_dim only supports scalar index vectors".into(),
             });
         }
-        return Ok(indices.values[linear_offset(&indices.shape, batch_idx)]);
+        return Ok(indices.values[linear_offset(op, &indices.shape, batch_idx)?]);
     }
 
     let mut full_idx = vec![0usize; indices.shape.len()];
@@ -568,7 +590,7 @@ fn index_component(
             batch_axis += 1;
         }
     }
-    Ok(indices.values[linear_offset(&indices.shape, &full_idx)])
+    Ok(indices.values[linear_offset(op, &indices.shape, &full_idx)?])
 }
 
 fn clamp_window_start(
@@ -937,8 +959,9 @@ where
         window_shape[window_dims[pos]] = dim;
     }
 
-    let batch_elems = product(&batch_shape).max(1);
-    let window_elems = product(&window_shape_updates).max(1);
+    let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?.max(1);
+    let window_elems =
+        checked_product("scatter", "window update shape", &window_shape_updates)?.max(1);
     let mut out = operand.clone();
 
     let mut batch_idx = vec![0usize; batch_shape.len()];

@@ -300,3 +300,51 @@ fn concatenate_accepts_valid_inputs() {
     let out = result.unwrap();
     assert_eq!(out.shape(), &[4, 2]);
 }
+
+#[test]
+fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
+    let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.triangular_solve(&a, &b, true, true, false, false)
+    }));
+
+    assert!(
+        result.is_ok(),
+        "triangular_solve should return Err on batch mismatch, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ShapeMismatch {
+            op: "triangular_solve",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
+    let mut backend = CpuBackend::new();
+    let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
+    let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend.full_piv_lu_solve(&a, &b, false)
+    }));
+
+    assert!(
+        result.is_ok(),
+        "full_piv_lu_solve should return Err on batch mismatch, not panic"
+    );
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::ShapeMismatch {
+            op: "full_piv_lu_solve",
+            ..
+        }
+    ));
+}
