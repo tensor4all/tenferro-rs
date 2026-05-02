@@ -1,6 +1,9 @@
 pub(crate) mod cusolver;
 pub(crate) mod cutensor;
 
+#[cfg(test)]
+mod tests;
+
 /// Build the library search path list for a CUDA FFI library.
 ///
 /// If the environment variable `env_var` is set, its value is used as the

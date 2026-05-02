@@ -49,6 +49,42 @@ pub(crate) fn cubecl_buffer<'a, T>(
     }
 }
 
+pub(crate) fn ensure_resident_on_runtime<T>(
+    rt: &CubeclRuntime,
+    tensor: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<()> {
+    cubecl_buffer(tensor, op)?;
+    if !matches!(&tensor.placement.memory_kind, MemoryKind::Device) {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "expected GPU tensor placement, got {:?}",
+                tensor.placement.memory_kind
+            ),
+        });
+    }
+    match &tensor.placement.resident_device {
+        Some(device) if device.kind == "cuda" && device.ordinal == rt.device_ordinal() => Ok(()),
+        Some(device) => Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "expected GPU tensor resident on cuda:{}, got {}:{}",
+                rt.device_ordinal(),
+                device.kind,
+                device.ordinal
+            ),
+        }),
+        None => Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "expected GPU tensor resident on cuda:{}, got missing resident_device metadata",
+                rt.device_ordinal()
+            ),
+        }),
+    }
+}
+
 pub(crate) fn typed_from_cubecl<T>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
@@ -560,8 +596,22 @@ macro_rules! dispatch_unary_float_only {
 macro_rules! dispatch_unary_complex_or_clone {
     ($backend:expr, $input:expr, $op:literal, $complex_launch:path) => {{
         match $input {
-            $crate::Tensor::F32(tensor) => Ok($crate::Tensor::F32(tensor.clone())),
-            $crate::Tensor::F64(tensor) => Ok($crate::Tensor::F64(tensor.clone())),
+            $crate::Tensor::F32(tensor) => {
+                $crate::cubecl::dispatch::ensure_resident_on_runtime(
+                    $backend.runtime(),
+                    tensor,
+                    $op,
+                )?;
+                Ok($crate::Tensor::F32(tensor.clone()))
+            }
+            $crate::Tensor::F64(tensor) => {
+                $crate::cubecl::dispatch::ensure_resident_on_runtime(
+                    $backend.runtime(),
+                    tensor,
+                    $op,
+                )?;
+                Ok($crate::Tensor::F64(tensor.clone()))
+            }
             $crate::Tensor::C32(tensor) => $crate::cubecl::dispatch::launch_unary(
                 $backend.runtime(),
                 tensor,
