@@ -1030,6 +1030,82 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert!(triu_result[0].is_some());
     assert_eq!(triu_fragment.ops()[0].op, StdTensorOp::Triu { k: 2 });
 
+    let slice = StdTensorOp::Slice(tenferro_tensor::SliceConfig {
+        starts: vec![1],
+        limits: vec![5],
+        strides: vec![2],
+    });
+    let (slice_result, slice_fragment) = run_linearize_case(slice.clone(), 0, 0, &[true]);
+    assert!(slice_result[0].is_some());
+    assert_eq!(slice_fragment.ops()[0].op, slice.clone());
+
+    let (transpose_slice_result, _, transpose_slice_fragment) =
+        run_transpose_case_with_input_shapes(slice, 1, &[true], true, &[&[5]]);
+    assert!(transpose_slice_result[0].is_some());
+    assert_eq!(transpose_slice_fragment.ops().len(), 1);
+    assert_eq!(
+        transpose_slice_fragment.ops()[0].op,
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![1],
+        })
+    );
+
+    let pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![2],
+        interior_padding: vec![1],
+    });
+    let (transpose_pad_result, _, transpose_pad_fragment) =
+        run_transpose_case_with_input_shapes(pad, 1, &[true], true, &[&[3]]);
+    assert!(transpose_pad_result[0].is_some());
+    assert_eq!(transpose_pad_fragment.ops().len(), 1);
+    assert_eq!(
+        transpose_pad_fragment.ops()[0].op,
+        StdTensorOp::Slice(tenferro_tensor::SliceConfig {
+            starts: vec![1],
+            limits: vec![6],
+            strides: vec![2],
+        })
+    );
+
+    let cropped_pad = StdTensorOp::Pad(PadConfig {
+        edge_padding_low: vec![-1],
+        edge_padding_high: vec![0],
+        interior_padding: vec![0],
+    });
+    let (cropped_pad_result, _, cropped_pad_fragment) =
+        run_transpose_case_with_input_shapes(cropped_pad, 1, &[true], true, &[&[4]]);
+    assert!(cropped_pad_result[0].is_some());
+    assert_eq!(cropped_pad_fragment.ops().len(), 2);
+    assert_eq!(
+        cropped_pad_fragment.ops()[0].op,
+        StdTensorOp::Slice(tenferro_tensor::SliceConfig {
+            starts: vec![0],
+            limits: vec![3],
+            strides: vec![1],
+        })
+    );
+    assert_eq!(
+        cropped_pad_fragment.ops()[1].op,
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![0],
+            interior_padding: vec![0],
+        })
+    );
+
+    let reverse = StdTensorOp::Reverse { axes: vec![0, 2] };
+    let (reverse_result, reverse_fragment) = run_linearize_case(reverse.clone(), 0, 0, &[true]);
+    assert!(reverse_result[0].is_some());
+    assert_eq!(reverse_fragment.ops()[0].op, reverse.clone());
+
+    let (transpose_reverse_result, _, transpose_reverse_fragment) =
+        run_transpose_case(reverse.clone(), 1, &[true], true);
+    assert!(transpose_reverse_result[0].is_some());
+    assert_eq!(transpose_reverse_fragment.ops()[0].op, reverse);
+
     let (transpose_tril_result, _, transpose_tril_fragment) =
         run_transpose_case(StdTensorOp::Tril { k: 0 }, 1, &[true], true);
     assert!(transpose_tril_result[0].is_some());
