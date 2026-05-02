@@ -116,16 +116,16 @@ impl NestedEinsum {
 
                 // Compute what this sub-group needs to output:
                 // labels in this group that appear in outer_needed or in sibling items
-                let group_labels = Self::collect_labels(inner)?;
+                let group_labels = Self::collect_labels_in_order(inner)?;
                 let sibling_labels = Self::collect_sibling_labels(&items, idx)?;
                 let mut needed: HashSet<u32> = HashSet::new();
-                for &label in &group_labels {
+                let mut sub_output = Vec::new();
+                for label in group_labels {
                     if outer_needed.contains(&label) || sibling_labels.contains(&label) {
                         needed.insert(label);
+                        sub_output.push(label);
                     }
                 }
-                let mut sub_output: Vec<u32> = needed.iter().copied().collect();
-                sub_output.sort();
 
                 let child = Self::parse_group(inner, &needed, &sub_output, leaf_counter)?;
                 child_subscript_inputs.push(sub_output);
@@ -196,6 +196,25 @@ impl NestedEinsum {
         Ok(labels)
     }
 
+    /// Collect unique labels in first-appearance order, ignoring
+    /// parentheses and commas.
+    fn collect_labels_in_order(s: &str) -> Result<Vec<u32>> {
+        let mut seen = HashSet::new();
+        let mut labels = Vec::new();
+        for c in s.chars() {
+            match c {
+                '(' | ')' | ',' => continue,
+                _ => {
+                    let label = char_to_label(c)?;
+                    if seen.insert(label) {
+                        labels.push(label);
+                    }
+                }
+            }
+        }
+        Ok(labels)
+    }
+
     /// Collect all labels from sibling items (all items except the one at `current_idx`).
     fn collect_sibling_labels(items: &[&str], current_idx: usize) -> Result<HashSet<u32>> {
         let mut labels = HashSet::new();
@@ -210,3 +229,6 @@ impl NestedEinsum {
         Ok(labels)
     }
 }
+
+#[cfg(test)]
+mod tests;

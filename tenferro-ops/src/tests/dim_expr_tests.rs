@@ -35,6 +35,13 @@ fn test_arithmetic() {
 }
 
 #[test]
+#[should_panic(expected = "DimExpr::Sub underflow")]
+fn test_sub_underflow_panics_instead_of_wrapping() {
+    let expr = DimExpr::sub(DimExpr::Const(2), DimExpr::Const(5));
+    let _ = expr.eval(&[]);
+}
+
+#[test]
 fn test_min_max() {
     let shapes: &[&[usize]] = &[&[3, 7]];
     let e_min = DimExpr::min(

@@ -344,6 +344,27 @@ complex_singular_tests!(c32_tests, Complex32, f32);
 complex_singular_tests!(c64_tests, Complex64, f64);
 
 #[test]
+fn rank_less_than_two_returns_error_instead_of_panicking() {
+    for shape in [Vec::new(), vec![3]] {
+        let data = if shape.is_empty() {
+            vec![1.0]
+        } else {
+            vec![1.0, 2.0, 3.0]
+        };
+        let t = TypedTensor::<f64>::from_vec(shape.clone(), data);
+        let err = check_singular_diagonal(&t).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::RankMismatch {
+                op: "solve",
+                expected: 2,
+                actual
+            } if actual == shape.len()
+        ));
+    }
+}
+
+#[test]
 fn f64_batched_error_includes_batch_index_and_position() {
     let t =
         TypedTensor::<f64>::from_vec(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 0.0]);

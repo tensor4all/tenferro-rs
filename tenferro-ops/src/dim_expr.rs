@@ -47,8 +47,8 @@ impl DimExpr {
     /// # Panics
     ///
     /// Panics if an `InputDim` node references an `input_idx` that is
-    /// out of bounds for `input_shapes`, or an `axis` that is out of
-    /// bounds for the corresponding shape slice.
+    /// out of bounds for `input_shapes`, an `axis` that is out of bounds
+    /// for the corresponding shape slice, or a subtraction would underflow.
     ///
     /// # Examples
     ///
@@ -69,7 +69,13 @@ impl DimExpr {
             Self::Const(v) => *v,
             Self::InputDim { input_idx, axis } => input_shapes[*input_idx][*axis],
             Self::Add(a, b) => a.eval(input_shapes) + b.eval(input_shapes),
-            Self::Sub(a, b) => a.eval(input_shapes) - b.eval(input_shapes),
+            Self::Sub(a, b) => {
+                let lhs = a.eval(input_shapes);
+                let rhs = b.eval(input_shapes);
+                lhs.checked_sub(rhs).unwrap_or_else(|| {
+                    panic!("DimExpr::Sub underflow: left operand {lhs} is smaller than {rhs}")
+                })
+            }
             Self::Mul(a, b) => a.eval(input_shapes) * b.eval(input_shapes),
             Self::FloorDiv(a, b) => a.eval(input_shapes) / b.eval(input_shapes),
             Self::Min(a, b) => a.eval(input_shapes).min(b.eval(input_shapes)),
