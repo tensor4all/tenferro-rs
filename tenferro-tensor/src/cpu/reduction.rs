@@ -1,8 +1,9 @@
 use std::ops::{Add, Mul};
 
 use num_traits::{Float, One, Zero};
-use strided_kernel::{col_major_strides, reduce_axis, StridedArray};
+use strided_kernel::reduce_axis;
 
+use super::typed_view;
 use crate::types::{Tensor, TypedTensor};
 
 fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
@@ -106,14 +107,17 @@ where
         .map(|(_, &dim)| dim)
         .collect();
 
-    let strides = col_major_strides(&input.shape);
-    let mut current =
-        StridedArray::from_parts(input.host_data().to_vec(), &input.shape, &strides, 0)
-            .map_err(|err| backend_failure(label, err))?;
-
     let mut sorted_axes = axes.to_vec();
     sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
-    for axis in sorted_axes {
+    let Some((&first_axis, remaining_axes)) = sorted_axes.split_first() else {
+        return Ok(input.clone());
+    };
+
+    let input_view = typed_view(input);
+    let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
+        .map_err(|err| backend_failure(label, err))?;
+
+    for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
             .map_err(|err| backend_failure(label, err))?;
     }
