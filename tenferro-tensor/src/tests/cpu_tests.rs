@@ -5,10 +5,14 @@ use std::{ffi::OsString, sync::MutexGuard};
 use num_complex::{Complex32, Complex64};
 
 use crate::backend::TensorBackend;
+#[cfg(feature = "cpu-faer")]
+use crate::buffer_pool::BufferPool;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::cpu::backend;
+#[cfg(feature = "cpu-faer")]
+use crate::cpu::linalg::faer_linalg;
 use crate::cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, embed_diagonal,
     extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
@@ -41,6 +45,13 @@ fn get_c32(t: &Tensor, idx: &[usize]) -> Complex32 {
     match t {
         Tensor::C32(inner) => *inner.get(idx),
         _ => panic!("expected C32 tensor"),
+    }
+}
+
+fn get_i64(t: &Tensor, idx: &[usize]) -> i64 {
+    match t {
+        Tensor::I64(inner) => *inner.get(idx),
+        _ => panic!("expected I64 tensor"),
     }
 }
 
@@ -462,6 +473,24 @@ fn test_add_mul() {
 }
 
 #[test]
+fn test_add_mul_i64() {
+    let a = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1, 2, 3, 4]));
+    let b = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![10, 20, 30, 40]));
+    let sum = add(&a, &b).unwrap();
+    let prod = mul(&a, &b).unwrap();
+
+    assert_eq!(get_i64(&sum, &[0, 0]), 11);
+    assert_eq!(get_i64(&sum, &[1, 0]), 22);
+    assert_eq!(get_i64(&sum, &[0, 1]), 33);
+    assert_eq!(get_i64(&sum, &[1, 1]), 44);
+
+    assert_eq!(get_i64(&prod, &[0, 0]), 10);
+    assert_eq!(get_i64(&prod, &[1, 0]), 40);
+    assert_eq!(get_i64(&prod, &[0, 1]), 90);
+    assert_eq!(get_i64(&prod, &[1, 1]), 160);
+}
+
+#[test]
 fn test_add_mul_rank0_broadcast() {
     let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
     let tensor = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
@@ -672,6 +701,237 @@ fn test_reverse_axis_zero() {
     assert_eq!(get_f64(&out, &[1, 1]), 3.0);
     assert_eq!(get_f64(&out, &[0, 2]), 6.0);
     assert_eq!(get_f64(&out, &[1, 2]), 5.0);
+}
+
+#[test]
+fn test_reverse_accepts_i64_data_tensor() {
+    let input = Tensor::from_vec(vec![3], vec![1_i64, 2, 3]);
+    let mut backend = CpuBackend::new();
+
+    let out = backend.reverse(&input, &[0]).unwrap();
+
+    assert_eq!(out.dtype(), DType::I64);
+    assert_eq!(out.shape(), &[3]);
+    assert_eq!(out.as_slice::<i64>(), Some([3, 2, 1].as_slice()));
+}
+
+#[test]
+fn test_reverse_axis_out_of_bounds_returns_error() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend.reverse(&input, &[1]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "reverse",
+            axis: 1,
+            rank: 1,
+        }
+    ));
+}
+
+#[test]
+fn test_gather_rejects_fractional_float_indices() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![1.5]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .gather(&operand, &start_indices, &simple_gather_config())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "index_tensor",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_gather_rejects_complex_indices() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::C64(TypedTensor::from_vec(
+        vec![1, 1],
+        vec![Complex64::new(1.0, 0.0)],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .gather(&operand, &start_indices, &simple_gather_config())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "index_tensor",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_dynamic_slice_rejects_oversized_window() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let starts = Tensor::from_vec(vec![1], vec![0_i64]);
+    let mut backend = CpuBackend::new();
+
+    let err = backend.dynamic_slice(&input, &starts, &[3]).unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "dynamic_slice",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_large_float_index_outside_exact_integer_range_returns_error() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::F64(TypedTensor::from_vec(
+        vec![1, 1],
+        vec![9_007_199_254_740_995.0f64],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .gather(&operand, &start_indices, &simple_gather_config())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "index_tensor",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_invalid_slice_config_returns_error() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .slice(
+            &input,
+            &SliceConfig {
+                starts: vec![0, 0, 0],
+                limits: vec![2, 2],
+                strides: vec![1, 1],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::RankMismatch { op: "slice", .. }
+    ));
+}
+
+#[test]
+fn test_invalid_pad_config_returns_error() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .pad(
+            &input,
+            &PadConfig {
+                edge_padding_low: vec![0],
+                edge_padding_high: vec![0, 0],
+                interior_padding: vec![0],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::RankMismatch { op: "pad", .. }));
+}
+
+#[test]
+fn test_gather_rejects_malformed_offset_dims() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 2],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 1, 2]);
+    let mut backend = CpuBackend::new();
+    let config = GatherConfig {
+        offset_dims: vec![2],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+
+    let err = backend
+        .gather(&operand, &start_indices, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds { op: "gather", .. }
+    ));
+}
+
+#[test]
+fn test_scatter_rejects_update_window_dim_out_of_bounds() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3, 3, 3], vec![0.0; 27]));
+    let mut backend = CpuBackend::new();
+    let config = ScatterConfig {
+        update_window_dims: vec![0, 3],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![1, 2],
+        index_vector_dim: 1,
+    };
+
+    let err = backend
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "scatter",
+            axis: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_scatter_rejects_too_many_update_window_dims() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![0.0; 3]));
+    let mut backend = CpuBackend::new();
+    let config = ScatterConfig {
+        update_window_dims: vec![0, 1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![1, 2],
+        index_vector_dim: 1,
+    };
+
+    let err = backend
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig { op: "scatter", ref message }
+        if message.contains("exceeds update rank")
+    ));
 }
 
 #[test]
@@ -2314,7 +2574,7 @@ fn test_gather_1d_indices() {
     ));
     let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
 
-    let out = gather(&operand, &start_indices, &simple_gather_config());
+    let out = gather(&operand, &start_indices, &simple_gather_config()).unwrap();
 
     assert_eq!(out.shape(), &[3]);
     assert_eq!(get_f64(&out, &[0]), 10.0);
@@ -2330,7 +2590,7 @@ fn test_gather_accepts_i64_indices() {
     ));
     let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
 
-    let out = gather(&operand, &start_indices, &simple_gather_config());
+    let out = gather(&operand, &start_indices, &simple_gather_config()).unwrap();
 
     assert_eq!(start_indices.dtype(), DType::I64);
     assert_eq!(start_indices.as_slice::<i64>(), Some([0, 2, 4].as_slice()));
@@ -2355,7 +2615,7 @@ fn test_gather_with_implicit_index_vector_dim() {
         slice_sizes: vec![1],
     };
 
-    let out = gather(&operand, &start_indices, &config);
+    let out = gather(&operand, &start_indices, &config).unwrap();
     assert_eq!(out.shape(), &[3]);
     assert_eq!(get_f64(&out, &[0]), 50.0);
     assert_eq!(get_f64(&out, &[1]), 20.0);
@@ -2373,7 +2633,8 @@ fn test_scatter_accepts_i64_indices() {
         &scatter_indices,
         &updates,
         &diagonal_scatter_config(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(scatter_indices.dtype(), DType::I64);
     assert_eq!(out.shape(), &[3, 3]);
@@ -2393,7 +2654,8 @@ fn test_scatter_to_diagonal() {
         &scatter_indices,
         &updates,
         &diagonal_scatter_config(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(out.shape(), &[3, 3]);
     assert_eq!(get_f64(&out, &[0, 0]), 5.0);
@@ -2415,7 +2677,7 @@ fn test_scatter_skips_negative_and_out_of_bounds_windows() {
         index_vector_dim: 1,
     };
 
-    let out = scatter(&operand, &scatter_indices, &updates, &config);
+    let out = scatter(&operand, &scatter_indices, &updates, &config).unwrap();
     assert_eq!(out.shape(), &[4]);
     assert_eq!(get_f64(&out, &[0]), 0.0);
     assert_eq!(get_f64(&out, &[1]), 0.0);
@@ -2435,7 +2697,7 @@ fn test_pad_adds_zero_edges() {
         interior_padding: vec![0, 0],
     };
 
-    let out = pad(&input, &config);
+    let out = pad(&input, &config).unwrap();
 
     assert_eq!(out.shape(), &[4, 5]);
     assert_eq!(get_f64(&out, &[1, 1]), 1.0);
@@ -2455,7 +2717,7 @@ fn test_pad_with_interior_spacing() {
         interior_padding: vec![1],
     };
 
-    let out = pad(&input, &config);
+    let out = pad(&input, &config).unwrap();
     assert_eq!(out.shape(), &[5]);
     assert_eq!(get_f64(&out, &[0]), 0.0);
     assert_eq!(get_f64(&out, &[1]), 1.0);
@@ -2474,7 +2736,7 @@ fn test_dynamic_slice_clamps_starts() {
     ));
     let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
 
-    let out = dynamic_slice(&input, &starts, &[2, 2]);
+    let out = dynamic_slice(&input, &starts, &[2, 2]).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(get_f64(&out, &[0, 0]), 11.0);
@@ -2493,7 +2755,7 @@ fn test_dynamic_slice_accepts_i64_starts() {
     ));
     let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
 
-    let out = dynamic_slice(&input, &starts, &[2, 2]);
+    let out = dynamic_slice(&input, &starts, &[2, 2]).unwrap();
 
     assert_eq!(starts.dtype(), DType::I64);
     assert_eq!(out.shape(), &[2, 2]);
@@ -3046,6 +3308,33 @@ fn test_svd_unsupported_dtype_returns_error() {
     ));
     let mut backend = CpuBackend::new();
     assert!(backend.svd(&input).is_err());
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_svd_decomposition_failure_returns_error() {
+    let ctx = CpuContext::with_threads(1);
+    let mut buffers = BufferPool::new();
+    let input = TypedTensor::from_vec(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]);
+
+    let err = faer_linalg::svd(&ctx, &mut buffers, &input).unwrap_err();
+
+    assert!(err.to_string().contains("svd"), "unexpected error: {err}");
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_eig_decomposition_failure_returns_error() {
+    let ctx = CpuContext::with_threads(1);
+    let mut buffers = BufferPool::new();
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![f64::NAN, 0.0, 0.0, 1.0],
+    ));
+
+    let err = faer_linalg::eig(&ctx, &mut buffers, &input).unwrap_err();
+
+    assert!(err.to_string().contains("eig"), "unexpected error: {err}");
 }
 
 #[test]

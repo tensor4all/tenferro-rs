@@ -71,10 +71,7 @@ impl SymDim {
 
     #[doc(hidden)]
     pub fn constant_value(&self) -> Option<usize> {
-        match &self.0 {
-            RawSymDim::Const(value) => Some(*value),
-            _ => None,
-        }
+        raw_constant_value(&self.0)
     }
 
     #[doc(hidden)]
@@ -150,6 +147,26 @@ fn collect_tensor_ids(raw: &RawSymDim, ids: &mut Vec<u64>) {
             collect_tensor_ids(lhs, ids);
             collect_tensor_ids(rhs, ids);
         }
+    }
+}
+
+fn raw_constant_value(raw: &RawSymDim) -> Option<usize> {
+    match raw {
+        RawSymDim::Const(value) => Some(*value),
+        RawSymDim::TensorAxis { .. } => None,
+        RawSymDim::Add(lhs, rhs) => raw_constant_value(lhs)?.checked_add(raw_constant_value(rhs)?),
+        RawSymDim::Sub(lhs, rhs) => raw_constant_value(lhs)?.checked_sub(raw_constant_value(rhs)?),
+        RawSymDim::Mul(lhs, rhs) => raw_constant_value(lhs)?.checked_mul(raw_constant_value(rhs)?),
+        RawSymDim::FloorDiv(lhs, rhs) => {
+            let rhs = raw_constant_value(rhs)?;
+            if rhs == 0 {
+                None
+            } else {
+                Some(raw_constant_value(lhs)? / rhs)
+            }
+        }
+        RawSymDim::Min(lhs, rhs) => Some(raw_constant_value(lhs)?.min(raw_constant_value(rhs)?)),
+        RawSymDim::Max(lhs, rhs) => Some(raw_constant_value(lhs)?.max(raw_constant_value(rhs)?)),
     }
 }
 

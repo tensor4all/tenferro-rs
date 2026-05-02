@@ -185,6 +185,11 @@ impl ShapeGuardContext {
         &self.metadata_of(val).shape
     }
 
+    #[doc(hidden)]
+    pub fn try_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<&[SymDim]> {
+        self.try_metadata_of(val).map(|meta| meta.shape.as_slice())
+    }
+
     /// Return the dtype metadata for a value reference.
     ///
     /// # Examples
@@ -213,6 +218,17 @@ impl ShapeGuardContext {
         self.metadata
             .get(&key)
             .unwrap_or_else(|| panic!("ShapeGuardContext: missing TensorMeta for {:?}", key))
+    }
+
+    #[doc(hidden)]
+    pub fn try_metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<&TensorMeta> {
+        let key = self.resolve_key(val).clone();
+        if !self.metadata.contains_key(&key) && self.use_global_registry {
+            if let Some(meta) = lookup_global_metadata(&key) {
+                self.metadata.insert(key.clone(), meta);
+            }
+        }
+        self.metadata.get(&key)
     }
 
     #[doc(hidden)]

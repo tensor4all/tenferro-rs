@@ -33,6 +33,7 @@ pub mod exec;
 pub mod extension;
 mod linalg_api;
 mod metadata;
+mod scalar_semantics;
 pub mod segment;
 pub mod shape_infer;
 pub mod sym_dim;

@@ -1,11 +1,12 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro_tensor::PadConfig;
+use tenferro_tensor::{PadConfig, SliceConfig};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
+use crate::sym_dim::SymDim;
 
 pub fn linearize_transpose(
     builder: &mut FragmentBuilder<StdTensorOp>,
@@ -155,6 +156,26 @@ pub fn linearize_triu(
     }
 }
 
+pub fn linearize_slice(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    config: &SliceConfig,
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::Slice(config.clone()),
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
 pub fn linearize_pad(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
@@ -164,6 +185,28 @@ pub fn linearize_pad(
         Some(dx) => {
             let out = builder.add_op(
                 StdTensorOp::Pad(config.clone()),
+                vec![ValRef::Local(dx)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+pub fn linearize_reverse(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    tangent_in: &[Option<LocalValId>],
+    axes: &[usize],
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let out = builder.add_op(
+                StdTensorOp::Reverse {
+                    axes: axes.to_vec(),
+                },
                 vec![ValRef::Local(dx)],
                 OpMode::Linear {
                     active_mask: vec![true],
@@ -345,4 +388,273 @@ pub fn transpose_triu(
         }
         None => vec![None],
     }
+}
+
+pub fn transpose_slice(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    config: &SliceConfig,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None];
+    };
+    if !first_input_active(mode) {
+        return vec![None];
+    }
+
+    let input_shape = ctx.shape_of(&inputs[0]);
+    let rank = input_shape.len();
+    assert_eq!(
+        config.starts.len(),
+        rank,
+        "transpose_slice: starts rank mismatch"
+    );
+    assert_eq!(
+        config.limits.len(),
+        rank,
+        "transpose_slice: limits rank mismatch"
+    );
+    assert_eq!(
+        config.strides.len(),
+        rank,
+        "transpose_slice: strides rank mismatch"
+    );
+
+    let mut edge_padding_low = Vec::with_capacity(rank);
+    let mut edge_padding_high = Vec::with_capacity(rank);
+    let mut interior_padding = Vec::with_capacity(rank);
+
+    for axis in 0..rank {
+        let input_extent = static_dim(input_shape, axis, "transpose_slice");
+        let start = config.starts[axis];
+        let limit = config.limits[axis];
+        let stride = config.strides[axis];
+        assert!(
+            stride > 0,
+            "transpose_slice: stride must be positive on axis {axis}"
+        );
+        assert!(
+            start <= limit && limit <= input_extent,
+            "transpose_slice: invalid start/limit on axis {axis}"
+        );
+
+        let selected_len = if limit == start {
+            0
+        } else {
+            (limit - start + stride - 1) / stride
+        };
+        let covered = if selected_len == 0 {
+            0
+        } else {
+            (selected_len - 1) * stride + 1
+        };
+        let high = input_extent - start - covered;
+
+        edge_padding_low.push(usize_to_i64(start, "transpose_slice"));
+        edge_padding_high.push(usize_to_i64(high, "transpose_slice"));
+        interior_padding.push(usize_to_i64(stride - 1, "transpose_slice"));
+    }
+
+    let out = emitter.add_op(
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low,
+            edge_padding_high,
+            interior_padding,
+        }),
+        vec![ValRef::Local(ct)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
+pub fn transpose_pad(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    config: &PadConfig,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None];
+    };
+    if !first_input_active(mode) {
+        return vec![None];
+    }
+
+    let input_shape = ctx.shape_of(&inputs[0]);
+    let rank = input_shape.len();
+    assert_eq!(
+        config.edge_padding_low.len(),
+        rank,
+        "transpose_pad: edge_padding_low rank mismatch"
+    );
+    assert_eq!(
+        config.edge_padding_high.len(),
+        rank,
+        "transpose_pad: edge_padding_high rank mismatch"
+    );
+    assert_eq!(
+        config.interior_padding.len(),
+        rank,
+        "transpose_pad: interior_padding rank mismatch"
+    );
+
+    let mut starts = Vec::with_capacity(rank);
+    let mut limits = Vec::with_capacity(rank);
+    let mut strides = Vec::with_capacity(rank);
+    let mut edge_padding_low = Vec::with_capacity(rank);
+    let mut edge_padding_high = Vec::with_capacity(rank);
+
+    for axis in 0..rank {
+        let input_extent = static_dim(input_shape, axis, "transpose_pad");
+        let input_extent_i = input_extent as i128;
+        let low = i128::from(config.edge_padding_low[axis]);
+        let high = i128::from(config.edge_padding_high[axis]);
+        let interior = i128::from(config.interior_padding[axis]);
+        assert!(
+            interior >= 0,
+            "transpose_pad: interior padding must be non-negative on axis {axis}"
+        );
+        let stride = interior + 1;
+        let base = if input_extent == 0 {
+            0
+        } else {
+            (input_extent_i - 1) * stride + 1
+        };
+        let output_extent = low + high + base;
+        assert!(
+            output_extent >= 0,
+            "transpose_pad: negative output extent on axis {axis}"
+        );
+
+        let first_kept = if low < 0 {
+            ceil_div_i128(-low, stride)
+        } else {
+            0
+        };
+        let first_dropped_after = ceil_div_i128(output_extent - low, stride);
+        let j_start = clamp_i128(first_kept, 0, input_extent_i);
+        let mut j_end = clamp_i128(first_dropped_after, 0, input_extent_i);
+        if j_end < j_start {
+            j_end = j_start;
+        }
+
+        let (slice_start, slice_limit) = if j_end > j_start {
+            let start = low + j_start * stride;
+            let limit = low + (j_end - 1) * stride + 1;
+            (start, limit)
+        } else {
+            let empty = clamp_i128(low + j_start * stride, 0, output_extent);
+            (empty, empty)
+        };
+        assert!(
+            0 <= slice_start && slice_start <= slice_limit && slice_limit <= output_extent,
+            "transpose_pad: invalid inverse slice on axis {axis}"
+        );
+
+        starts.push(i128_to_usize(slice_start, "transpose_pad"));
+        limits.push(i128_to_usize(slice_limit, "transpose_pad"));
+        strides.push(i128_to_usize(stride, "transpose_pad"));
+        edge_padding_low.push(i128_to_i64(j_start, "transpose_pad"));
+        edge_padding_high.push(i128_to_i64(input_extent_i - j_end, "transpose_pad"));
+    }
+
+    let sliced = emitter.add_op(
+        StdTensorOp::Slice(SliceConfig {
+            starts,
+            limits,
+            strides,
+        }),
+        vec![ValRef::Local(ct)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    )[0];
+
+    if edge_padding_low.iter().all(|&pad| pad == 0) && edge_padding_high.iter().all(|&pad| pad == 0)
+    {
+        return vec![Some(sliced)];
+    }
+
+    let out = emitter.add_op(
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low,
+            edge_padding_high,
+            interior_padding: vec![0; rank],
+        }),
+        vec![ValRef::Local(sliced)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
+pub fn transpose_reverse(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    mode: &OpMode,
+    axes: &[usize],
+) -> Vec<Option<LocalValId>> {
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None];
+    };
+    if !first_input_active(mode) {
+        return vec![None];
+    }
+
+    let out = emitter.add_op(
+        StdTensorOp::Reverse {
+            axes: axes.to_vec(),
+        },
+        vec![ValRef::Local(ct)],
+        OpMode::Linear {
+            active_mask: vec![true],
+        },
+    );
+    vec![Some(out[0])]
+}
+
+fn first_input_active(mode: &OpMode) -> bool {
+    matches!(
+        mode,
+        OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
+    )
+}
+
+fn static_dim(shape: &[SymDim], axis: usize, op: &str) -> usize {
+    shape[axis]
+        .constant_value()
+        .unwrap_or_else(|| panic!("{op}: symbolic input dim {axis} is unsupported"))
+}
+
+fn ceil_div_i128(numer: i128, denom: i128) -> i128 {
+    assert!(denom > 0, "ceil_div_i128: denominator must be positive");
+    if numer >= 0 {
+        (numer + denom - 1) / denom
+    } else {
+        numer / denom
+    }
+}
+
+fn clamp_i128(value: i128, min: i128, max: i128) -> i128 {
+    value.max(min).min(max)
+}
+
+fn usize_to_i64(value: usize, op: &str) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| panic!("{op}: usize value does not fit in i64"))
+}
+
+fn i128_to_usize(value: i128, op: &str) -> usize {
+    usize::try_from(value).unwrap_or_else(|_| panic!("{op}: i128 value does not fit in usize"))
+}
+
+fn i128_to_i64(value: i128, op: &str) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| panic!("{op}: i128 value does not fit in i64"))
 }

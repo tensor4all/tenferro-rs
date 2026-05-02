@@ -58,6 +58,25 @@ fn eager_einsum_handles_outer_products_and_diagonal_patterns() {
 }
 
 #[test]
+fn eager_einsum_handles_higher_rank_repeated_labels() {
+    let mut ctx = CpuBackend::new();
+    let tensor = Tensor::from_vec(
+        vec![2, 2, 3],
+        vec![
+            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+    );
+
+    let diagonal = eager_einsum(&mut ctx, &[&tensor], "iij->ij").unwrap();
+
+    assert_eq!(diagonal.shape(), &[2, 3]);
+    assert_eq!(
+        diagonal.as_slice::<f64>(),
+        Some([1.0, 4.0, 5.0, 8.0, 9.0, 12.0].as_slice())
+    );
+}
+
+#[test]
 fn eager_einsum_rejects_empty_inputs_and_operand_count_mismatch() {
     let mut ctx = CpuBackend::new();
     let tensor = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);

@@ -2,6 +2,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
+use crate::scalar_semantics::round_real_to_i64;
 use crate::sym_dim::SymDim;
 use crate::traced::{
     apply_binary, apply_multi_output, apply_nullary, apply_unary, concrete_shape, TracedTensor,
@@ -607,7 +608,7 @@ fn eig_output_dtype(dtype: DType) -> DType {
     match dtype {
         DType::F64 | DType::C64 => DType::C64,
         DType::F32 | DType::C32 => DType::C32,
-        DType::I64 => DType::I64,
+        DType::I64 => DType::C64,
     }
 }
 
@@ -626,7 +627,7 @@ fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
             Some(vec![]),
         ),
         DType::I64 => apply_nullary(
-            StdTensorOp::constant_i64(value as i64),
+            StdTensorOp::constant_i64(round_real_to_i64(value)),
             0,
             DType::I64,
             Some(vec![]),

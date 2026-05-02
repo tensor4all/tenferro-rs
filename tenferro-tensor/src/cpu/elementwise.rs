@@ -164,6 +164,7 @@ pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_add(a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_add(a, b)?)),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add(a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add(a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add(a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
@@ -194,6 +195,7 @@ pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_mul(a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_mul(a, b)?)),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul(a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul(a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul(a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {

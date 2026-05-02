@@ -1,4 +1,5 @@
 use tenferro::shape_infer::infer_output_dtype;
+use tenferro::{eig, Tensor, TracedTensor, TypedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
@@ -52,6 +53,23 @@ fn test_eig_f64_produces_c64() {
         input_dtype: DType::F64,
     };
     assert_eq!(infer_output_dtype(&op, &[DType::F64]), DType::C64);
+}
+
+#[test]
+fn test_eig_i64_produces_c64() {
+    let op = StdTensorOp::Eig {
+        input_dtype: DType::I64,
+    };
+    assert_eq!(infer_output_dtype(&op, &[DType::I64]), DType::C64);
+}
+
+#[test]
+fn test_traced_eig_i64_outputs_c64_metadata() {
+    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1, 0, 0, 2]));
+    let x = TracedTensor::from_tensor_concrete_shape(input);
+    let (values, vectors) = eig(&x);
+    assert_eq!(values.dtype, DType::C64);
+    assert_eq!(vectors.dtype, DType::C64);
 }
 
 #[test]

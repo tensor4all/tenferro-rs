@@ -5,8 +5,10 @@ use crate::syntax::notation::{char_to_label, split_and_validate_notation};
 /// Einsum subscripts using integer labels (omeinsum-rs compatible).
 ///
 /// Each dimension is represented by a `u32` label. Labels shared across
-/// multiple input tensors are contracted (summed over). Labels present
-/// only in the output are free indices.
+/// multiple input tensors are contracted (summed over). Repeated labels within
+/// one input select a diagonal before any reduction; if the repeated label is
+/// absent from the output, the diagonal is reduced. Repeated labels in the
+/// output embed the input on a diagonal.
 ///
 /// # Examples
 ///
@@ -19,12 +21,26 @@ use crate::syntax::notation::{char_to_label, split_and_validate_notation};
 /// assert_eq!(subs.output, vec![0, 2]);
 /// ```
 ///
-/// ```ignore
+/// ```
 /// use tenferro_einsum::Subscripts;
 ///
 /// // Parse from string notation
 /// let subs = Subscripts::parse("ij,jk->ik").unwrap();
 /// assert_eq!(subs.inputs.len(), 2);
+/// ```
+///
+/// ```
+/// use tenferro_einsum::Subscripts;
+///
+/// let trace = Subscripts::parse("ii->").unwrap();
+/// let diagonal = Subscripts::parse("ii->i").unwrap();
+/// let embed = Subscripts::parse("i->ii").unwrap();
+/// let higher_rank = Subscripts::parse("iij->ij").unwrap();
+///
+/// assert!(trace.output.is_empty());
+/// assert_eq!(diagonal.output, vec![b'i' as u32]);
+/// assert_eq!(embed.output, vec![b'i' as u32, b'i' as u32]);
+/// assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct Subscripts {
@@ -63,7 +79,10 @@ impl Subscripts {
     /// # Examples
     ///
     /// - `"ij,jk->ik"` — matrix multiplication
+    /// - `"ii->"` — diagonal extraction followed by reduction (trace)
     /// - `"ii->i"` — diagonal extraction
+    /// - `"i->ii"` — diagonal embedding
+    /// - `"iij->ij"` — higher-rank diagonal extraction
     /// - `"ijk->"` — full contraction (scalar result)
     /// - `"ij,(jk,kl)->il"` — contract B and C first, then with A
     ///

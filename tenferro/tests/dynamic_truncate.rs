@@ -11,6 +11,10 @@ fn f64_scalar(value: f64) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
 }
 
+fn i64_scalar(value: i64) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec(vec![], vec![value]))
+}
+
 fn get_f64_data(tensor: &Tensor) -> Vec<f64> {
     match tensor {
         Tensor::F64(inner) => inner.host_data().to_vec(),
@@ -56,6 +60,18 @@ fn dynamic_truncate_clamps_oversize() {
     let mut result = x.dynamic_truncate(&size, 0);
     let data = get_f64_data(result.eval(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn dynamic_truncate_accepts_i64_size() {
+    let mut engine = Engine::new(CpuBackend::new());
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+    let size = TracedTensor::from_tensor_concrete_shape(i64_scalar(2));
+
+    let mut result = x.dynamic_truncate(&size, 0);
+    let out = result.eval(&mut engine).unwrap();
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(get_f64_data(out), vec![1.0, 2.0]);
 }
 
 #[test]

@@ -744,36 +744,6 @@ impl ConjElem for Complex<f64> {
     }
 }
 
-macro_rules! dispatch_tensor {
-    ($self:expr, $inner:ident => $body:expr) => {
-        match $self {
-            Tensor::F32($inner) => Tensor::F32($body),
-            Tensor::F64($inner) => Tensor::F64($body),
-            Tensor::I64(_) => panic!("I64 data tensors are not supported by this operation"),
-            Tensor::C32($inner) => Tensor::C32($body),
-            Tensor::C64($inner) => Tensor::C64($body),
-        }
-    };
-}
-
-macro_rules! dispatch_binary {
-    ($lhs:expr, $rhs:expr, |$a:ident, $b:ident| $body:expr) => {
-        match ($lhs, $rhs) {
-            (Tensor::F32($a), Tensor::F32($b)) => Tensor::F32($body),
-            (Tensor::F64($a), Tensor::F64($b)) => Tensor::F64($body),
-            (Tensor::I64(_), Tensor::I64(_)) => {
-                panic!("I64 data tensors are not supported by this operation")
-            }
-            (Tensor::C32($a), Tensor::C32($b)) => Tensor::C32($body),
-            (Tensor::C64($a), Tensor::C64($b)) => Tensor::C64($body),
-            _ => panic!("dtype mismatch in binary op"),
-        }
-    };
-}
-
-pub(crate) use dispatch_binary;
-pub(crate) use dispatch_tensor;
-
 impl Tensor {
     /// Create a tensor from a shape and flat data.
     ///

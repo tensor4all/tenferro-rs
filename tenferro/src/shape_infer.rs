@@ -26,7 +26,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         StdTensorOp::Eig { input_dtype, .. } => match input_dtype {
             DType::F32 | DType::C32 => DType::C32,
             DType::F64 | DType::C64 => DType::C64,
-            DType::I64 => DType::I64,
+            DType::I64 => DType::C64,
         },
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
         StdTensorOp::Add
@@ -323,15 +323,35 @@ fn reduced_shape(input_shape: &[DimExpr], axes: &[usize]) -> Vec<DimExpr> {
 }
 
 fn same_or_scalar_broadcast_shape(lhs_shape: &[DimExpr], rhs_shape: &[DimExpr]) -> Vec<DimExpr> {
-    if lhs_shape.is_empty() {
-        rhs_shape.to_vec()
-    } else if rhs_shape.is_empty() {
-        lhs_shape.to_vec()
+    let rank = lhs_shape.len().max(rhs_shape.len());
+    let mut out = Vec::with_capacity(rank);
+    for axis in 0..rank {
+        let lhs_dim = broadcast_aligned_dim(lhs_shape, rank, axis);
+        let rhs_dim = broadcast_aligned_dim(rhs_shape, rank, axis);
+        out.push(broadcast_dim(lhs_dim, rhs_dim));
+    }
+    out
+}
+
+fn broadcast_aligned_dim(shape: &[DimExpr], output_rank: usize, output_axis: usize) -> DimExpr {
+    if output_axis < output_rank - shape.len() {
+        DimExpr::Const(1)
     } else {
-        // Dynamic shape ops such as DynamicTruncate can only be inferred
-        // approximately here, so for non-scalar inputs we preserve the
-        // historical "follow lhs" behavior.
-        lhs_shape.to_vec()
+        shape[output_axis - (output_rank - shape.len())].clone()
+    }
+}
+
+fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
+    if lhs == rhs {
+        return lhs;
+    }
+    match (&lhs, &rhs) {
+        (DimExpr::Const(1), _) => rhs,
+        (_, DimExpr::Const(1)) => lhs,
+        (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => {
+            panic!("incompatible Add/Mul broadcast dimensions: {lhs_value} and {rhs_value}")
+        }
+        _ => dim_max(lhs, rhs),
     }
 }
 

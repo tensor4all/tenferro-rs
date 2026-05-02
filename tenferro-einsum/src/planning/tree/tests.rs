@@ -139,11 +139,23 @@ fn self_greedy_pair_optimizer_returns_valid_sequence() {
     let shapes = [&[2, 3][..], &[3, 5][..], &[5, 7][..]];
     let size_dict = crate::util::build_size_dict(&subs, &shapes, None).unwrap();
 
-    let pairs = optimize_self_greedy_pairs(&subs, &size_dict);
+    let pairs = optimize_self_greedy_pairs(&subs, &size_dict).unwrap();
 
     assert_eq!(pairs.len(), 2);
     assert_eq!(pairs[0], (0, 1));
     assert_eq!(pairs[1], (2, 3));
+}
+
+#[test]
+fn self_greedy_pair_optimizer_rejects_missing_needed_label() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 4], &[4, 2]], &[0, 2]);
+    let size_dict: HashMap<u32, usize> = [(0, 2), (1, 3), (2, 5)].into_iter().collect();
+
+    let err = optimize_self_greedy_pairs(&subs, &size_dict).unwrap_err();
+
+    assert!(
+        matches!(err, Error::InvalidArgument(message) if message.contains("unknown size for label 4"))
+    );
 }
 
 #[test]
@@ -248,7 +260,7 @@ fn self_greedy_with_four_operands_chooses_cheapest_pairs() {
         .iter()
         .cloned()
         .collect();
-    let pairs = optimize_self_greedy_pairs(&subs, &size_dict);
+    let pairs = optimize_self_greedy_pairs(&subs, &size_dict).unwrap();
     assert_eq!(pairs.len(), 3);
     let mut live: Vec<usize> = (0..4).collect();
     let mut next = 4;

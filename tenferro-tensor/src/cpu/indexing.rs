@@ -3,7 +3,7 @@ use std::ops::Add;
 use num_traits::Zero;
 
 use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
-use crate::types::{dispatch_binary, dispatch_tensor, flat_to_multi, Tensor, TypedTensor};
+use crate::types::{flat_to_multi, Tensor, TypedTensor};
 
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
@@ -54,9 +54,22 @@ impl TensorAsTyped<num_complex::Complex<f64>> for Tensor {
     }
 }
 
-pub fn gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> Tensor {
-    let start_indices = index_tensor(start_indices);
-    dispatch_tensor!(operand, t => typed_gather(t, &start_indices, config))
+pub fn gather(
+    operand: &Tensor,
+    start_indices: &Tensor,
+    config: &GatherConfig,
+) -> crate::Result<Tensor> {
+    let start_indices = try_index_tensor(start_indices)?;
+    match operand {
+        Tensor::F32(t) => typed_gather(t, &start_indices, config).map(Tensor::F32),
+        Tensor::F64(t) => typed_gather(t, &start_indices, config).map(Tensor::F64),
+        Tensor::C32(t) => typed_gather(t, &start_indices, config).map(Tensor::C32),
+        Tensor::C64(t) => typed_gather(t, &start_indices, config).map(Tensor::C64),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "gather",
+            message: "I64 data tensors are not supported by this operation".into(),
+        }),
+    }
 }
 
 pub fn scatter(
@@ -64,18 +77,35 @@ pub fn scatter(
     scatter_indices: &Tensor,
     updates: &Tensor,
     config: &ScatterConfig,
-) -> Tensor {
-    let scatter_indices = index_tensor(scatter_indices);
-    dispatch_binary!(operand, updates, |op, upd| typed_scatter(
-        op,
-        &scatter_indices,
-        upd,
-        config
-    ))
+) -> crate::Result<Tensor> {
+    let scatter_indices = try_index_tensor(scatter_indices)?;
+    match (operand, updates) {
+        (Tensor::F32(op), Tensor::F32(upd)) => {
+            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::F32)
+        }
+        (Tensor::F64(op), Tensor::F64(upd)) => {
+            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::F64)
+        }
+        (Tensor::C32(op), Tensor::C32(upd)) => {
+            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::C32)
+        }
+        (Tensor::C64(op), Tensor::C64(upd)) => {
+            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::C64)
+        }
+        (Tensor::I64(_), Tensor::I64(_)) => Err(crate::Error::BackendFailure {
+            op: "scatter",
+            message: "I64 data tensors are not supported by this operation".into(),
+        }),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "scatter",
+            lhs: operand.dtype(),
+            rhs: updates.dtype(),
+        }),
+    }
 }
 
-pub fn slice(input: &Tensor, config: &SliceConfig) -> Tensor {
-    try_slice(input, config).expect("slice")
+pub fn slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
+    try_slice(input, config)
 }
 
 pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
@@ -88,13 +118,26 @@ pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> 
     }
 }
 
-pub fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> Tensor {
-    let starts = index_tensor(starts);
-    dispatch_tensor!(input, t => typed_dynamic_slice(t, &starts, slice_sizes))
+pub fn dynamic_slice(
+    input: &Tensor,
+    starts: &Tensor,
+    slice_sizes: &[usize],
+) -> crate::Result<Tensor> {
+    let starts = try_index_tensor(starts)?;
+    match input {
+        Tensor::F32(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::F32),
+        Tensor::F64(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::F64),
+        Tensor::C32(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::C32),
+        Tensor::C64(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::C64),
+        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+            op: "dynamic_slice",
+            message: "I64 data tensors are not supported by this operation".into(),
+        }),
+    }
 }
 
-pub fn pad(input: &Tensor, config: &PadConfig) -> Tensor {
-    try_pad(input, config).expect("pad")
+pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+    try_pad(input, config)
 }
 
 pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
@@ -138,8 +181,14 @@ pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>
     }
 }
 
-pub fn reverse(input: &Tensor, axes: &[usize]) -> Tensor {
-    dispatch_tensor!(input, tensor => typed_reverse(tensor, axes))
+pub fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    match input {
+        Tensor::F32(t) => typed_reverse(t, axes).map(Tensor::F32),
+        Tensor::F64(t) => typed_reverse(t, axes).map(Tensor::F64),
+        Tensor::I64(t) => typed_reverse(t, axes).map(Tensor::I64),
+        Tensor::C32(t) => typed_reverse(t, axes).map(Tensor::C32),
+        Tensor::C64(t) => typed_reverse(t, axes).map(Tensor::C64),
+    }
 }
 
 #[allow(clippy::uninit_vec)]
@@ -317,7 +366,10 @@ fn typed_concatenate<T: Copy + Clone>(
         let input_pos = segment_ends
             .iter()
             .position(|&end| concat_idx < end)
-            .expect("concatenate: output index must map to an input");
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "concatenate",
+                message: "output index must map to an input".to_string(),
+            })?;
         let axis_base = if input_pos == 0 {
             0
         } else {
@@ -332,11 +384,20 @@ fn typed_concatenate<T: Copy + Clone>(
     Ok(TypedTensor::from_vec(out_shape, out_data))
 }
 
-fn typed_reverse<T: Copy + Clone>(input: &TypedTensor<T>, axes: &[usize]) -> TypedTensor<T> {
+fn typed_reverse<T: Copy + Clone>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+) -> crate::Result<TypedTensor<T>> {
     let rank = input.shape.len();
     let mut reverse_axis = vec![false; rank];
     for &axis in axes {
-        assert!(axis < rank, "reverse: axis out of bounds");
+        if axis >= rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "reverse",
+                axis,
+                rank,
+            });
+        }
         reverse_axis[axis] = true;
     }
 
@@ -357,7 +418,7 @@ fn typed_reverse<T: Copy + Clone>(input: &TypedTensor<T>, axes: &[usize]) -> Typ
         out_data.push(*input.get(&in_idx));
     }
 
-    TypedTensor::from_vec(input.shape.clone(), out_data)
+    Ok(TypedTensor::from_vec(input.shape.clone(), out_data))
 }
 
 struct IndexTensor {
@@ -365,21 +426,63 @@ struct IndexTensor {
     values: Vec<i64>,
 }
 
-fn index_tensor(tensor: &Tensor) -> IndexTensor {
+/// Maximum exact integer representable by f32 (2^24).
+const F32_MAX_EXACT_INT: f32 = 16_777_216.0;
+/// Maximum exact integer representable by f64 (2^53).
+const F64_MAX_EXACT_INT: f64 = 9_007_199_254_740_992.0;
+
+fn f32_index_to_i64(value: f32) -> crate::Result<i64> {
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() > F32_MAX_EXACT_INT {
+        return Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: format!("index value {value} is not an exactly representable i64"),
+        });
+    }
+    Ok(value as i64)
+}
+
+fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() > F64_MAX_EXACT_INT {
+        return Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: format!("index value {value} is not an exactly representable i64"),
+        });
+    }
+    Ok(value as i64)
+}
+
+fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     match tensor {
-        Tensor::I64(t) => IndexTensor {
+        Tensor::I64(t) => Ok(IndexTensor {
             shape: t.shape.clone(),
             values: t.host_data().to_vec(),
-        },
-        Tensor::F32(t) => IndexTensor {
-            shape: t.shape.clone(),
-            values: t.host_data().iter().map(|&value| value as i64).collect(),
-        },
-        Tensor::F64(t) => IndexTensor {
-            shape: t.shape.clone(),
-            values: t.host_data().iter().map(|&value| value as i64).collect(),
-        },
-        Tensor::C32(_) | Tensor::C64(_) => panic!("complex index tensors are not supported"),
+        }),
+        Tensor::F32(t) => {
+            let values: crate::Result<Vec<i64>> = t
+                .host_data()
+                .iter()
+                .map(|&value| f32_index_to_i64(value))
+                .collect();
+            Ok(IndexTensor {
+                shape: t.shape.clone(),
+                values: values?,
+            })
+        }
+        Tensor::F64(t) => {
+            let values: crate::Result<Vec<i64>> = t
+                .host_data()
+                .iter()
+                .map(|&value| f64_index_to_i64(value))
+                .collect();
+            Ok(IndexTensor {
+                shape: t.shape.clone(),
+                values: values?,
+            })
+        }
+        Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: "complex index tensors are not supported".into(),
+        }),
     }
 }
 
@@ -397,37 +500,62 @@ fn product(shape: &[usize]) -> usize {
     shape.iter().product()
 }
 
-fn index_vector_size(shape: &[usize], index_vector_dim: usize) -> usize {
-    if index_vector_dim == shape.len() {
+fn try_index_vector_size(
+    op: &'static str,
+    shape: &[usize],
+    index_vector_dim: usize,
+) -> crate::Result<usize> {
+    if index_vector_dim > shape.len() {
+        return Err(crate::Error::AxisOutOfBounds {
+            op,
+            axis: index_vector_dim,
+            rank: shape.len(),
+        });
+    }
+    Ok(if index_vector_dim == shape.len() {
         1
     } else {
         shape[index_vector_dim]
-    }
+    })
 }
 
-fn index_batch_shape(shape: &[usize], index_vector_dim: usize) -> Vec<usize> {
-    if index_vector_dim == shape.len() {
-        return shape.to_vec();
+fn try_index_batch_shape(
+    op: &'static str,
+    shape: &[usize],
+    index_vector_dim: usize,
+) -> crate::Result<Vec<usize>> {
+    if index_vector_dim > shape.len() {
+        return Err(crate::Error::AxisOutOfBounds {
+            op,
+            axis: index_vector_dim,
+            rank: shape.len(),
+        });
     }
-    shape
+    if index_vector_dim == shape.len() {
+        return Ok(shape.to_vec());
+    }
+    Ok(shape
         .iter()
         .enumerate()
         .filter_map(|(axis, &dim)| (axis != index_vector_dim).then_some(dim))
-        .collect()
+        .collect())
 }
 
 fn index_component(
+    op: &'static str,
     indices: &IndexTensor,
     batch_idx: &[usize],
     index_vector_dim: usize,
     component: usize,
-) -> i64 {
+) -> crate::Result<i64> {
     if index_vector_dim == indices.shape.len() {
-        assert_eq!(
-            component, 0,
-            "implicit index_vector_dim only supports scalar index vectors"
-        );
-        return indices.values[linear_offset(&indices.shape, batch_idx)];
+        if component != 0 {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "implicit index_vector_dim only supports scalar index vectors".into(),
+            });
+        }
+        return Ok(indices.values[linear_offset(&indices.shape, batch_idx)]);
     }
 
     let mut full_idx = vec![0usize; indices.shape.len()];
@@ -440,16 +568,23 @@ fn index_component(
             batch_axis += 1;
         }
     }
-    indices.values[linear_offset(&indices.shape, &full_idx)]
+    Ok(indices.values[linear_offset(&indices.shape, &full_idx)])
 }
 
-fn clamp_window_start(start: i64, dim_size: usize, window_size: usize) -> usize {
-    assert!(
-        window_size <= dim_size,
-        "window size {window_size} exceeds dimension size {dim_size}"
-    );
+fn clamp_window_start(
+    op: &'static str,
+    start: i64,
+    dim_size: usize,
+    window_size: usize,
+) -> crate::Result<usize> {
+    if window_size > dim_size {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!("window size {window_size} exceeds dimension size {dim_size}"),
+        });
+    }
     let max_start = dim_size.saturating_sub(window_size) as i64;
-    start.clamp(0, max_start) as usize
+    Ok(start.clamp(0, max_start) as usize)
 }
 
 fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usize> {
@@ -462,35 +597,118 @@ fn typed_gather<T: Copy + Clone + Zero>(
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
     config: &GatherConfig,
-) -> TypedTensor<T> {
-    assert_eq!(
-        config.slice_sizes.len(),
-        operand.shape.len(),
-        "gather: slice_sizes rank mismatch"
-    );
+) -> crate::Result<TypedTensor<T>> {
+    let rank = operand.shape.len();
+    if config.slice_sizes.len() != rank {
+        return Err(crate::Error::RankMismatch {
+            op: "gather",
+            expected: rank,
+            actual: config.slice_sizes.len(),
+        });
+    }
 
-    let index_size = index_vector_size(&start_indices.shape, config.index_vector_dim);
-    assert_eq!(
-        index_size,
-        config.start_index_map.len(),
-        "gather: start_index_map length mismatch"
-    );
+    for &dim in &config.collapsed_slice_dims {
+        if dim >= rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "gather",
+                axis: dim,
+                rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; rank];
+        for &dim in &config.collapsed_slice_dims {
+            if seen[dim] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "gather",
+                    axis: dim,
+                    role: "collapsed_slice_dims",
+                });
+            }
+            seen[dim] = true;
+        }
+    }
 
-    let window_dims = operand_window_dims(operand.shape.len(), &config.collapsed_slice_dims);
-    assert_eq!(
-        config.offset_dims.len(),
-        window_dims.len(),
-        "gather: offset_dims length mismatch"
-    );
+    let index_size =
+        try_index_vector_size("gather", &start_indices.shape, config.index_vector_dim)?;
+    if index_size != config.start_index_map.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "gather",
+            message: format!(
+                "start_index_map length {} does not match index vector size {}",
+                config.start_index_map.len(),
+                index_size
+            ),
+        });
+    }
+    for &operand_dim in &config.start_index_map {
+        if operand_dim >= rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "gather",
+                axis: operand_dim,
+                rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; rank];
+        for &operand_dim in &config.start_index_map {
+            if seen[operand_dim] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "gather",
+                    axis: operand_dim,
+                    role: "start_index_map",
+                });
+            }
+            seen[operand_dim] = true;
+        }
+    }
 
-    let batch_shape = index_batch_shape(&start_indices.shape, config.index_vector_dim);
+    let window_dims = operand_window_dims(rank, &config.collapsed_slice_dims);
+    if config.offset_dims.len() != window_dims.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "gather",
+            message: format!(
+                "offset_dims length {} does not match window dims count {}",
+                config.offset_dims.len(),
+                window_dims.len()
+            ),
+        });
+    }
+
+    let batch_shape =
+        try_index_batch_shape("gather", &start_indices.shape, config.index_vector_dim)?;
     let out_rank = batch_shape.len() + config.offset_dims.len();
-    let mut out_shape = vec![0usize; out_rank];
+    for &out_axis in &config.offset_dims {
+        if out_axis >= out_rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "gather",
+                axis: out_axis,
+                rank: out_rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; out_rank];
+        for &out_axis in &config.offset_dims {
+            if seen[out_axis] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "gather",
+                    axis: out_axis,
+                    role: "offset_dims",
+                });
+            }
+            seen[out_axis] = true;
+        }
+    }
+
     let mut out_axis_to_operand_dim = vec![None; out_rank];
     for (offset_axis, &out_axis) in config.offset_dims.iter().enumerate() {
         out_axis_to_operand_dim[out_axis] = Some(window_dims[offset_axis]);
     }
 
+    let mut out_shape = vec![0usize; out_rank];
     let mut batch_axis = 0usize;
     for out_axis in 0..out_rank {
         if let Some(operand_dim) = out_axis_to_operand_dim[out_axis] {
@@ -501,11 +719,21 @@ fn typed_gather<T: Copy + Clone + Zero>(
         }
     }
 
+    for (component, &operand_dim) in config.start_index_map.iter().enumerate() {
+        let _ = clamp_window_start(
+            "gather",
+            0,
+            operand.shape[operand_dim],
+            config.slice_sizes[operand_dim],
+        )?;
+        let _ = component;
+    }
+
     let mut out = typed_tensor_uninit(out_shape.clone());
     let mut out_idx = vec![0usize; out_rank];
     let mut batch_idx = vec![0usize; batch_shape.len()];
-    let mut operand_idx = vec![0usize; operand.shape.len()];
-    let mut window_offsets = vec![0usize; operand.shape.len()];
+    let mut operand_idx = vec![0usize; rank];
+    let mut window_offsets = vec![0usize; rank];
 
     for flat in 0..out.n_elements() {
         flat_to_multi(flat, &out_shape, &mut out_idx);
@@ -524,16 +752,18 @@ fn typed_gather<T: Copy + Clone + Zero>(
         operand_idx.fill(0);
         for (component, &operand_dim) in config.start_index_map.iter().enumerate() {
             let start = index_component(
+                "gather",
                 start_indices,
                 &batch_idx,
                 config.index_vector_dim,
                 component,
-            );
+            )?;
             operand_idx[operand_dim] = clamp_window_start(
+                "gather",
                 start,
                 operand.shape[operand_dim],
                 config.slice_sizes[operand_dim],
-            );
+            )?;
         }
 
         for axis in 0..operand_idx.len() {
@@ -543,7 +773,7 @@ fn typed_gather<T: Copy + Clone + Zero>(
         *out.get_mut(&out_idx) = *operand.get(&operand_idx);
     }
 
-    out
+    Ok(out)
 }
 
 fn typed_scatter<T>(
@@ -551,37 +781,155 @@ fn typed_scatter<T>(
     scatter_indices: &IndexTensor,
     updates: &TypedTensor<T>,
     config: &ScatterConfig,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Zero + Add<Output = T>,
 {
-    let index_size = index_vector_size(&scatter_indices.shape, config.index_vector_dim);
-    assert_eq!(
-        index_size,
-        config.scatter_dims_to_operand_dims.len(),
-        "scatter: scatter_dims_to_operand_dims length mismatch"
-    );
+    let op_rank = operand.shape.len();
+    for &dim in &config.inserted_window_dims {
+        if dim >= op_rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "scatter",
+                axis: dim,
+                rank: op_rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; op_rank];
+        for &dim in &config.inserted_window_dims {
+            if seen[dim] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "scatter",
+                    axis: dim,
+                    role: "inserted_window_dims",
+                });
+            }
+            seen[dim] = true;
+        }
+    }
 
-    let batch_shape = index_batch_shape(&scatter_indices.shape, config.index_vector_dim);
-    let window_dims = operand_window_dims(operand.shape.len(), &config.inserted_window_dims);
-    assert_eq!(
-        config.update_window_dims.len(),
-        window_dims.len(),
-        "scatter: update_window_dims length mismatch"
-    );
+    let index_size =
+        try_index_vector_size("scatter", &scatter_indices.shape, config.index_vector_dim)?;
+    if index_size != config.scatter_dims_to_operand_dims.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "scatter",
+            message: format!(
+                "scatter_dims_to_operand_dims length {} does not match index vector size {}",
+                config.scatter_dims_to_operand_dims.len(),
+                index_size
+            ),
+        });
+    }
+    for &operand_dim in &config.scatter_dims_to_operand_dims {
+        if operand_dim >= op_rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "scatter",
+                axis: operand_dim,
+                rank: op_rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; op_rank];
+        for &operand_dim in &config.scatter_dims_to_operand_dims {
+            if seen[operand_dim] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "scatter",
+                    axis: operand_dim,
+                    role: "scatter_dims_to_operand_dims",
+                });
+            }
+            seen[operand_dim] = true;
+        }
+    }
+
+    let batch_shape =
+        try_index_batch_shape("scatter", &scatter_indices.shape, config.index_vector_dim)?;
+    let window_dims = operand_window_dims(op_rank, &config.inserted_window_dims);
+    if config.update_window_dims.len() != window_dims.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "scatter",
+            message: format!(
+                "update_window_dims length {} does not match window dims count {}",
+                config.update_window_dims.len(),
+                window_dims.len()
+            ),
+        });
+    }
 
     let update_rank = updates.shape.len();
+    let expected_batch_rank = update_rank
+        .checked_sub(config.update_window_dims.len())
+        .ok_or_else(|| crate::Error::InvalidConfig {
+            op: "scatter",
+            message: format!(
+                "update_window_dims length {} exceeds update rank {}",
+                config.update_window_dims.len(),
+                update_rank
+            ),
+        })?;
+    if expected_batch_rank != batch_shape.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "scatter",
+            message: format!(
+                "updates batch rank {} does not match index batch shape length {}",
+                expected_batch_rank,
+                batch_shape.len()
+            ),
+        });
+    }
+
+    for &axis in &config.update_window_dims {
+        if axis >= update_rank {
+            return Err(crate::Error::AxisOutOfBounds {
+                op: "scatter",
+                axis,
+                rank: update_rank,
+            });
+        }
+    }
+    {
+        let mut seen = vec![false; update_rank];
+        for &axis in &config.update_window_dims {
+            if seen[axis] {
+                return Err(crate::Error::DuplicateAxis {
+                    op: "scatter",
+                    axis,
+                    role: "update_window_dims",
+                });
+            }
+            seen[axis] = true;
+        }
+    }
+
     let mut is_update_window_dim = vec![false; update_rank];
     for &axis in &config.update_window_dims {
         is_update_window_dim[axis] = true;
     }
-    assert_eq!(
-        update_rank - config.update_window_dims.len(),
-        batch_shape.len(),
-        "scatter: updates batch rank mismatch"
-    );
 
-    let mut window_shape = vec![1usize; operand.shape.len()];
+    {
+        let mut batch_axis = 0usize;
+        for axis in 0..update_rank {
+            if !is_update_window_dim[axis] {
+                if updates.shape[axis] != batch_shape[batch_axis] {
+                    return Err(crate::Error::InvalidConfig {
+                        op: "scatter",
+                        message: format!(
+                            "updates batch dim {} extent {} does not match index batch dim {} extent {}",
+                            axis,
+                            updates.shape[axis],
+                            batch_axis,
+                            batch_shape[batch_axis]
+                        ),
+                    });
+                }
+                batch_axis += 1;
+            }
+        }
+    }
+
+    let mut window_shape = vec![1usize; op_rank];
     let mut window_shape_updates = vec![0usize; config.update_window_dims.len()];
     for (pos, &update_axis) in config.update_window_dims.iter().enumerate() {
         let dim = updates.shape[update_axis];
@@ -591,16 +939,13 @@ where
 
     let batch_elems = product(&batch_shape).max(1);
     let window_elems = product(&window_shape_updates).max(1);
-    // StableHLO add-scatter: start from a copy of `operand` and accumulate
-    // `updates` additively at the scattered positions. Non-scattered slots
-    // retain the original operand values.
     let mut out = operand.clone();
 
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut window_idx = vec![0usize; window_shape_updates.len()];
-    let mut update_idx = vec![0usize; updates.shape.len()];
-    let mut operand_base = vec![0usize; operand.shape.len()];
-    let mut operand_idx = vec![0usize; operand.shape.len()];
+    let mut update_idx = vec![0usize; update_rank];
+    let mut operand_base = vec![0usize; op_rank];
+    let mut operand_idx = vec![0usize; op_rank];
 
     for batch_flat in 0..batch_elems {
         if !batch_shape.is_empty() {
@@ -611,11 +956,12 @@ where
         operand_base.fill(0);
         for (component, &operand_dim) in config.scatter_dims_to_operand_dims.iter().enumerate() {
             let start = index_component(
+                "scatter",
                 scatter_indices,
                 &batch_idx,
                 config.index_vector_dim,
                 component,
-            );
+            )?;
             if start < 0 {
                 window_fits = false;
                 break;
@@ -626,7 +972,7 @@ where
             continue;
         }
 
-        for axis in 0..operand.shape.len() {
+        for axis in 0..op_rank {
             if operand_base[axis] + window_shape[axis] > operand.shape[axis] {
                 window_fits = false;
                 break;
@@ -643,7 +989,7 @@ where
 
             let mut batch_axis = 0usize;
             let mut window_axis = 0usize;
-            for axis in 0..updates.shape.len() {
+            for axis in 0..update_rank {
                 if is_update_window_dim[axis] {
                     update_idx[axis] = window_idx[window_axis];
                     window_axis += 1;
@@ -664,34 +1010,46 @@ where
         }
     }
 
-    out
+    Ok(out)
 }
 
 fn typed_dynamic_slice<T: Copy + Clone + Zero>(
     input: &TypedTensor<T>,
     starts: &IndexTensor,
     slice_sizes: &[usize],
-) -> TypedTensor<T> {
-    assert_eq!(
-        slice_sizes.len(),
-        input.shape.len(),
-        "dynamic_slice: slice_sizes rank mismatch"
-    );
-    assert_eq!(
-        starts.shape.len(),
-        1,
-        "dynamic_slice: starts must be a rank-1 tensor"
-    );
-    assert_eq!(
-        starts.values.len(),
-        input.shape.len(),
-        "dynamic_slice: starts length must match input rank"
-    );
+) -> crate::Result<TypedTensor<T>> {
+    if slice_sizes.len() != input.shape.len() {
+        return Err(crate::Error::RankMismatch {
+            op: "dynamic_slice",
+            expected: input.shape.len(),
+            actual: slice_sizes.len(),
+        });
+    }
+    if starts.shape.len() != 1 {
+        return Err(crate::Error::InvalidConfig {
+            op: "dynamic_slice",
+            message: "starts must be a rank-1 tensor".into(),
+        });
+    }
+    if starts.values.len() != input.shape.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "dynamic_slice",
+            message: format!(
+                "starts length {} must match input rank {}",
+                starts.values.len(),
+                input.shape.len()
+            ),
+        });
+    }
 
     let mut clamped_starts = vec![0usize; input.shape.len()];
     for axis in 0..input.shape.len() {
-        clamped_starts[axis] =
-            clamp_window_start(starts.values[axis], input.shape[axis], slice_sizes[axis]);
+        clamped_starts[axis] = clamp_window_start(
+            "dynamic_slice",
+            starts.values[axis],
+            input.shape[axis],
+            slice_sizes[axis],
+        )?;
     }
 
     let out_shape = slice_sizes.to_vec();
@@ -707,7 +1065,7 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
         *out.get_mut(&out_idx) = *input.get(&input_idx);
     }
 
-    out
+    Ok(out)
 }
 
 fn typed_pad<T: Copy + Clone + Zero>(

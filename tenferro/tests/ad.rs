@@ -23,7 +23,8 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
-    DType, DotGeneralConfig, GatherConfig, ScatterConfig, Tensor, TensorBackend, TypedTensor,
+    DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
+    TensorBackend, TypedTensor,
 };
 use tidu::{differentiate, transpose, LinearFragment};
 
@@ -3119,6 +3120,31 @@ fn build_scatter_reduce_sum_fragment(
     (Arc::new(builder.build()), loss_key)
 }
 
+fn build_weighted_unary_sum_fragment(
+    input_key: TensorInputKey,
+    weights_key: TensorInputKey,
+    op: StdTensorOp,
+    reduce_axes: Vec<usize>,
+) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let input = builder.add_input(input_key);
+    let weights = builder.add_input(weights_key);
+    let output = builder.add_op(op, vec![ValRef::Local(input)], OpMode::Primal)[0];
+    let weighted = builder.add_op(
+        StdTensorOp::Mul,
+        vec![ValRef::Local(output), ValRef::Local(weights)],
+        OpMode::Primal,
+    )[0];
+    let loss = builder.add_op(
+        StdTensorOp::ReduceSum { axes: reduce_axes },
+        vec![ValRef::Local(weighted)],
+        OpMode::Primal,
+    )[0];
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), loss_key)
+}
+
 #[test]
 fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
     // `y = reduce_sum(scatter(operand, indices, updates, config))`. The
@@ -3158,4 +3184,89 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
     // reduce_sum over the scatter output contributes a 1 to each updated
     // slot; the inverse Gather reads one value for each `indices` entry.
     assert_close_slice(get_f64_data(&grad), &[1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn grad_slice_weighted_sum_matches_finite_diff() {
+    let input_key = tensor_input_key(62_000);
+    let weights_key = tensor_input_key(62_001);
+    let config = SliceConfig {
+        starts: vec![1],
+        limits: vec![5],
+        strides: vec![2],
+    };
+    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+        input_key.clone(),
+        weights_key.clone(),
+        StdTensorOp::Slice(config),
+        vec![0],
+    );
+
+    let input_data = vec![0.5_f64, -1.0, 2.5, 4.0, -3.0];
+    let weights_data = vec![1.25_f64, -0.75];
+    let inputs_map = HashMap::from([
+        (input_key.clone(), f64_tensor(vec![5], input_data.clone())),
+        (weights_key, f64_tensor(vec![2], weights_data.clone())),
+    ]);
+
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
+        xs[1] * weights_data[0] + xs[3] * weights_data[1]
+    });
+}
+
+#[test]
+fn grad_pad_weighted_sum_matches_finite_diff() {
+    let input_key = tensor_input_key(63_000);
+    let weights_key = tensor_input_key(63_001);
+    let config = PadConfig {
+        edge_padding_low: vec![1],
+        edge_padding_high: vec![2],
+        interior_padding: vec![1],
+    };
+    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+        input_key.clone(),
+        weights_key.clone(),
+        StdTensorOp::Pad(config),
+        vec![0],
+    );
+
+    let input_data = vec![2.0_f64, -1.5, 0.25];
+    let weights_data = vec![0.5_f64, 1.25, -0.5, 2.0, 0.75, -1.0, 3.0, -2.5];
+    let inputs_map = HashMap::from([
+        (input_key.clone(), f64_tensor(vec![3], input_data.clone())),
+        (weights_key, f64_tensor(vec![8], weights_data.clone())),
+    ]);
+
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
+        xs[0] * weights_data[1] + xs[1] * weights_data[3] + xs[2] * weights_data[5]
+    });
+}
+
+#[test]
+fn grad_reverse_weighted_sum_matches_finite_diff() {
+    let input_key = tensor_input_key(64_000);
+    let weights_key = tensor_input_key(64_001);
+    let (fragment, loss_key) = build_weighted_unary_sum_fragment(
+        input_key.clone(),
+        weights_key.clone(),
+        StdTensorOp::Reverse { axes: vec![0] },
+        vec![0],
+    );
+
+    let input_data = vec![1.0_f64, -2.0, 3.5, 0.25];
+    let weights_data = vec![0.5_f64, -1.0, 2.0, 1.5];
+    let inputs_map = HashMap::from([
+        (input_key.clone(), f64_tensor(vec![4], input_data.clone())),
+        (weights_key, f64_tensor(vec![4], weights_data.clone())),
+    ]);
+
+    let grad = grad_from_fragment_with_inputs(fragment, loss_key, input_key, inputs_map);
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &input_data, |xs| {
+        xs[0] * weights_data[3]
+            + xs[1] * weights_data[2]
+            + xs[2] * weights_data[1]
+            + xs[3] * weights_data[0]
+    });
 }

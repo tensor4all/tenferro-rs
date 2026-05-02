@@ -101,7 +101,9 @@ pub fn linearize(
         }
         StdTensorOp::Tril { k } => structural::linearize_tril(builder, tangent_in, *k),
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
+        StdTensorOp::Slice(config) => structural::linearize_slice(builder, tangent_in, config),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+        StdTensorOp::Reverse { axes } => structural::linearize_reverse(builder, tangent_in, axes),
 
         // Diagonal family.
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
@@ -120,9 +122,9 @@ pub fn linearize(
         }
 
         // Dynamic family.
-        StdTensorOp::DynamicTruncate { axis } => {
-            dynamic::linearize_dynamic_truncate(builder, primal_in, tangent_in, *axis)
-        }
+        StdTensorOp::DynamicTruncate { axis } => dynamic::linearize_dynamic_truncate(
+            builder, primal_in, primal_out, tangent_in, *axis, ctx,
+        ),
         StdTensorOp::PadToMatch { axis } => {
             dynamic::linearize_pad_to_match(builder, primal_in, tangent_in, *axis)
         }
@@ -256,6 +258,15 @@ pub fn transpose_rule(
         }
         StdTensorOp::Tril { k } => structural::transpose_tril(emitter, cotangent_out, *k),
         StdTensorOp::Triu { k } => structural::transpose_triu(emitter, cotangent_out, *k),
+        StdTensorOp::Slice(config) => {
+            structural::transpose_slice(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+        StdTensorOp::Pad(config) => {
+            structural::transpose_pad(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+        StdTensorOp::Reverse { axes } => {
+            structural::transpose_reverse(emitter, cotangent_out, mode, axes)
+        }
 
         // Diagonal family.
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
@@ -278,7 +289,7 @@ pub fn transpose_rule(
             dynamic::transpose_dynamic_truncate(emitter, cotangent_out, inputs, *axis)
         }
         StdTensorOp::PadToMatch { axis } => {
-            dynamic::transpose_pad_to_match(emitter, cotangent_out, inputs, *axis)
+            dynamic::transpose_pad_to_match(emitter, cotangent_out, inputs, mode, *axis, ctx)
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
 

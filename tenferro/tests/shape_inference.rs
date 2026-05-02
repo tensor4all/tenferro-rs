@@ -42,6 +42,22 @@ fn test_add_and_mul_preserve_tensor_shape_under_scalar_broadcast() {
 }
 
 #[test]
+fn test_add_infers_non_scalar_broadcast_shape() {
+    let lhs = vec![cst(3), cst(1)];
+    let rhs = vec![cst(1), cst(4)];
+    let out = infer_output_shapes(&StdTensorOp::Add, &[&lhs, &rhs]);
+    assert_eq!(out, vec![vec![cst(3), cst(4)]]);
+}
+
+#[test]
+fn test_mul_infers_non_scalar_broadcast_shape() {
+    let lhs = vec![cst(3), cst(1)];
+    let rhs = vec![cst(1), cst(4)];
+    let out = infer_output_shapes(&StdTensorOp::Mul, &[&lhs, &rhs]);
+    assert_eq!(out, vec![vec![cst(3), cst(4)]]);
+}
+
+#[test]
 fn test_transpose_applies_perm() {
     let op = StdTensorOp::Transpose { perm: vec![1, 0] };
     let input = vec![cst(3), cst(4)];

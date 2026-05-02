@@ -1,290 +1,138 @@
-# Supported Operations by Crate
+# Supported Operations By Crate
 
-This page is the deployable reference for what each operation-bearing crate
-currently supports. It is intentionally operational, not aspirational: items
-listed here are implemented today, while unsupported families are called out
-explicitly.
+This page is the implementation-facing inventory for the current workspace. It
+is operational, not aspirational: unsupported families are called out
+explicitly. The public user docs still focus on the `tenferro` facade crate.
 
-Crates such as `tenferro-algebra` and `tenferro-device` define types and
-protocols rather than user-visible operation families, so they are omitted
-here.
+---
 
 ## `tenferro-tensor`
 
-### Structural tensor operations
+`tenferro-tensor` owns dense tensor storage, dtype dispatch, backend traits, CPU
+execution, and the optional CubeCL GPU backend.
 
-- Shape/view: `reshape`, `reshape_owned`, `permute`, `broadcast`
-- Matrix helpers: `transpose_last2`, `diagonal`
-- Indexing/view selection: `slice_axis`, `select_axis`
-- Materialization helpers: `to_tensor`, `to_owned`, contiguous conversion APIs
+### Tensor Values
 
-## `tenferro-prims`
+- `Tensor` dynamic dtype wrapper for `F32`, `F64`, `I64`, `C32`, and `C64`.
+- `TypedTensor<T>` typed dense tensor payload.
+- Host buffers by default; CubeCL device buffers behind the `cubecl` feature.
 
-### Semiring families
+### Backend Surface
 
-- `TensorSemiringCore`: `BatchedGemm`, `ReduceAdd`, `Trace`, `AntiTrace`, `AntiDiag`, `MakeContiguous`
-- `TensorSemiringFastPath`: `Contract`, `ElementwiseBinary::{Add, Mul}`
+`TensorBackend` / `TensorExec` currently cover:
 
-### Scalar family
+- Elementwise: add, multiply, negate, conjugate, divide, abs, sign, maximum,
+  minimum, compare, select, clamp.
+- Analytic: exp, log, sin, cos, tanh, sqrt, rsqrt, pow, expm1, log1p.
+- Structural: transpose, reshape, broadcast, convert, diagonal
+  extraction/embedding, triangular masks.
+- Reductions: sum, product, max, min.
+- Contraction: `dot_general`.
+- Indexing: gather, scatter, slice, dynamic slice, pad, concatenate, reverse.
+- Linalg: Cholesky, triangular solve, LU, full-pivot LU, full-pivot LU solve,
+  SVD, QR, symmetric/Hermitian eigendecomposition, and general eigendecomposition
+  where the backend supports it.
+- Placement: explicit host/device upload and download hooks.
+- Optional backend elementwise fusion.
 
-`TensorScalarPrims` currently exposes:
+### CPU Status
 
-- Unary: `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`
-- Binary: `Add`, `Sub`, `Mul`, `Div`, `Maximum`, `Minimum`, `ClampMin`, `ClampMax`
-- Reductions: `Sum`, `Prod`, `Mean`, `Max`, `Min`
+The CPU backend is the main complete backend. Exactly one CPU feature must be
+enabled:
 
-Predicate/select-style tensor ops are intentionally absent here today. `Where`
-and the AD surface for branch-select families need a dedicated boolean/predicate
-substrate before they can be added cleanly.
+- `cpu-faer` for faer-backed GEMM/linalg,
+- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
 
-### Analytic family
+Elementwise, reductions, structural operations, indexing, `dot_general`, and
+dense linalg are implemented on CPU for the supported dtype subset of each op.
 
-`TensorAnalyticPrims` currently exposes:
+### CubeCL/CUDA Status
 
-- Unary: `Sqrt`, `Rsqrt`, `Exp`, `Expm1`, `Log`, `Log1p`, `Sin`, `Cos`, `Tan`, `Tanh`, `Asin`, `Acos`, `Atan`, `Sinh`, `Cosh`, `Asinh`, `Acosh`, `Atanh`
-- Binary: `Pow`, `Atan2`, `Hypot`, `Xlogy`
-- Reductions: `Var`, `Std`
+The `cubecl` feature enables `cubecl::CubeclBackend`, backed by CubeCL/CubeCL-CUDA
+and runtime-loaded cuTENSOR, cuSOLVER, and cuBLAS.
 
-### Runtime status
+Implemented GPU coverage is partial:
 
-- CPU: semiring/scalar/analytic families are implemented.
-- CUDA: semiring core/fast path are implemented. Scalar/analytic families execute GPU-resident on real `f32`/`f64`, plus the complex subset listed below on `Complex32`/`Complex64`.
-- ROCm: backend symbols exist as truthful stubs; support predicates remain false and planning/execution return unsupported errors.
+- explicit upload/download and device pointer bridge,
+- many elementwise operations on real dtypes and selected complex operations,
+- reductions including sum/product for real and complex and min/max for real,
+- structural operations including transpose, reshape, broadcast, reverse,
+  concatenate, diagonal extraction/embedding, and triangular masks,
+- selected indexing operations,
+- selected cuTENSOR/cuBLAS contraction paths,
+- selected cuSOLVER/cuBLAS linalg paths.
 
-CUDA scalar-family subset:
+Unsupported GPU operations and unsupported dtypes return `BackendFailure`.
+`eig` is not provided by cuSOLVER and permanently returns `BackendFailure` on
+CubeCL. ROCm is only a feature stub.
 
-- real `f32`/`f64`: full scalar inventory
-- complex `Complex32`/`Complex64`: unary `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`; binary `Add`, `Sub`, `Mul`, `Div`; reductions `Sum`, `Prod`, `Mean`
-- real-only on CUDA: `Maximum`, `Minimum`, `ClampMin`, `ClampMax`, `Max`, `Min`
-  Phase-1 does not define an ordering for complex tensors, so ordered scalar
-  ops stay real-only.
+## `tenferro-ops`
 
-CUDA analytic-family subset:
+`tenferro-ops` owns the graph operation vocabulary and graph-level AD rules.
 
-- real `f32`/`f64`: full analytic inventory
-- complex `Complex32`/`Complex64`: all analytic unary ops plus binary `Pow` and `Xlogy`
-- real-only on CUDA: `Atan2`, `Hypot`, `Var`, `Std`
-  Complex `Var`/`Std` are intentionally unsupported in phase-1 because the
-  runtime does not commit to a canonical real-valued complex reduction
-  contract; callers must compose their chosen statistic explicitly.
-
-## `tenferro-linalg-prims`
-
-### Backend-facing kernel families
-
-`TensorLinalgPrims` currently covers the low-level factorization and solve
-contracts used by `tenferro-linalg`:
-
-- `qr`
-- `svd`
-- `lu`
-- `eigen`
-- `eig`
-- `lstsq`
-- `cholesky`
-- `solve`
-- `solve_triangular`
-
-The backend-facing dtype contract is `KernelLinalgScalar`, with LAPACK-specific
-eig helpers isolated behind `LapackEigScalar`.
+- `StdTensorOp` is the mainline operation vocabulary.
+- `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` are the semantic
+  source of truth for AD rules.
+- The `ExtensionOp` boundary exists for registered extension operations.
+- Non-mainline semiring/algebra graph surfaces remain transitional and should
+  not be extended by new work.
 
 ## `tenferro-einsum`
 
-### Primal
+`tenferro-einsum` owns subscript parsing, contraction planning, graph-fragment
+lowering, and eager concrete execution.
 
-- `einsum`
-- `einsum_with_subscripts`
-- `einsum_with_plan`
-- corresponding `_into`, `_owned`, and plan-based variants
+Implemented:
 
-### AD
+- `Subscripts::parse` and integer-label `Subscripts::new`.
+- `NestedEinsum::parse` for parenthesized contraction order.
+- `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`.
+- `build_einsum_fragment` for traced graph lowering.
+- `eager_einsum` and `eager_einsum_owned` for concrete `Tensor` execution.
+- Repeated-label semantics:
+  - `ii->` trace,
+  - `ii->i` diagonal extraction,
+  - `iij->ij` higher-rank diagonal extraction,
+  - `i->ii` diagonal embedding.
 
-- `einsum_rrule`
-- `einsum_frule`
-- `einsum_hvp`
-
-## `tenferro-linalg`
-
-### Primal
-
-- Decompositions: `svd`, `qr`, `lu`, `lu_factor`, `lu_factor_ex`, `cholesky`, `cholesky_ex`, `eigen`, `eig`
-- Solvers: `solve`, `solve_ex`, `solve_triangular`, `lu_solve`, `lstsq`
-- Matrix utilities: `inv`, `inv_ex`, `det`, `slogdet`, `pinv`, `matrix_exp`, `matrix_power`, `norm`, `cond`
-- Tensorized helpers: `cross`, `householder_product`, `vander`, `tensorinv`, `tensorsolve`
-
-### Stateless AD rules
-
-`_rrule` and `_frule` are implemented for:
-
-- `svd`
-- `qr`
-- `lu`
-- `eigen`
-- `lstsq`
-- `cholesky`
-- `solve`
-- `solve_triangular`
-- `inv`
-- `det`
-- `slogdet`
-- `eig`
-- `pinv`
-- `matrix_exp`
-- `norm`
-
-### AD gaps
-
-The following public primal ops do not yet have stateless linalg AD rules:
-
-- `*_ex` result-struct variants
-- `lu_factor`
-- `lu_factor_ex`
-- `lu_solve`
-- `matrix_power`
-- `cond`
-- `cross`
-- `householder_product`
-- `vander`
-- `tensorinv`
-- `tensorsolve`
+Strict binary lowering is an optimization only. It rejects repeated-label
+patterns and lets the general path handle diagonalization.
 
 ## `tenferro`
 
-### Structured tensor helpers
+`tenferro` is the user-facing facade.
 
-- `StructuredTensor::to_dense`
-- `StructuredTensor::einsum_with_subscripts`
+Implemented public surfaces include:
 
-### Eager AD tensor entrypoints
+- `TracedTensor` graph construction and evaluation through `Engine`.
+- `EagerTensor` / `EagerContext` for eager scalar-loss reverse-mode workflows.
+- Lazy traced `einsum` and `einsum_with`.
+- Public linalg free functions such as `svd`, `qr`, `cholesky`, `solve`,
+  `triangular_solve`, `lu`, `full_piv_lu`, `eig`, `eigh`, `pinv`, `det`,
+  `slogdet`, and `norm`.
+- Public AD transforms such as VJP/JVP/HVP over supported traced dense numeric
+  paths.
+- Compiled execution through `ExecProgram` / `eval_exec_ir`.
 
-`tenferro::Tensor` currently exposes these eager methods:
+The facade is CPU-first. It can evaluate through `CubeclBackend` when the
+program uses GPU-supported operations and tensors are placed explicitly by the
+execution pipeline or caller. Unsupported GPU ops return errors rather than
+silently falling back to CPU.
 
-- Einsum: `einsum`
-- Reductions: `sum`, `mean`, `var`, `std`
-- Scalar pointwise:
-  `add`, `atan2`, `pow`, `hypot`,
-  `sqrt`, `exp`, `expm1`, `log`, `log1p`,
-  `sin`, `cos`, `tanh`,
-  `asin`, `acos`, `atan`,
-  `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
-- Linalg: `svd`, `qr`, `lu`, `eigen`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `eig`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
+## `tenferro-device`
 
-### Builder-based AD surface
+`tenferro-device` owns shared device and error infrastructure:
 
-Internal builder APIs are implemented for:
+- logical memory spaces,
+- compute device metadata,
+- common `Error` and `Result` types,
+- conversions from lower-level strided errors.
 
-- Einsum: `einsum_ad`
-- Scalar/reduction:
-  `add_ad`, `atan2_ad`, `pow_ad`, `hypot_ad`,
-  `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`,
-  `sin_ad`, `cos_ad`, `tanh_ad`,
-  `asin_ad`, `acos_ad`, `atan_ad`,
-  `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`,
-  `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
-- Linalg: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
-  - `eig_ad` is real-input-only at the public frontend; forward mode is supported, but reverse mode is intentionally rejected because the output becomes complex while the frontend tape stays homogeneous
+## AD Support Notes
 
-### Complex linalg AD coverage
+Current mainline AD coverage is intentionally narrower than primal execution.
+Rules must live in `tenferro-ops/src/ad/` and must have corresponding
+oracle/finite-difference coverage before being treated as supported mainline AD.
 
-For current public `tenferro::Tensor` behavior, complex linalg support splits
-into three buckets: full AD for a small subset, primal-only complex execution
-for several ops whose stateless rules are still real-only, and some entrypoints
-that remain real-input-only today.
-
-| Operation | `tenferro::Tensor` with complex input | `tenferro-linalg` stateless AD | Notes |
-| --- | --- | --- | --- |
-| `svd` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | singular values remain real |
-| `solve`, `solve_triangular` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | operands must share dtype |
-| `qr`, `lu` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | follows the real-loss/Wirtinger reverse convention used elsewhere |
-| `eigen`, `cholesky`, `inv`, `matrix_exp` | primal only | current `_frule` / `_rrule` are real-only | the dynamic wrapper rejects non-primal complex tensors |
-| `det`, `slogdet`, `pinv`, `norm`, `lstsq` | complex input unsupported | current `_frule` / `_rrule` are real-only | use real tensors only today |
-| `eig` | complex input unsupported; real-input eager reverse is also unsupported | `eig_frule` / `eig_rrule` exist for real inputs | the frontend still lacks a mixed real-to-complex reverse bridge |
-
-### Runtime status
-
-- API contract: runtime-generic across CPU, CUDA, and ROCm
-- internal tidu-backed einsum helpers remain backend-parametric over `tenferro-einsum::EinsumBackend`; runtime selection still happens through the frontend runtime context type
-- Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
-- Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping stays on one homogeneous runtime-typed graph
-- `Tensor` is the canonical public payload for downstream tensor algebra; implicit result-type promotion happens inside mixed-dtype tensor ops (`complex` beats `real`, 64-bit beats 32-bit), explicit numeric casts use `to_scalar_type(...)`, and `detach()` drops AD metadata without switching to a second public tensor type
-- Actual execution today:
-  - CPU paths are implemented for the operations listed above
-  - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution
-  - mixed-dtype reverse propagation is supported when operands share one reverse graph; pullbacks cast gradients back to each input dtype
-  - linalg entry points are dense-only at the `tenferro` frontend layer; non-dense structured inputs return a runtime error instead of silently materializing dense fallbacks
-
-## `tenferro-capi`
-
-### C-API surface
-
-The exported C surface currently focuses on a narrow, stable subset:
-
-- Einsum entrypoints
-- SVD entrypoints
-- AD rule entrypoints for the supported FFI tensor/value wrappers
-
-## `tenferro-ext-burn`
-
-### Burn bridge surface
-
-- Checked helpers: `try_einsum`, `try_burn_to_tenferro`, `try_tenferro_to_burn`
-- Convenience wrappers: `einsum`, `burn_to_tenferro`, `tenferro_to_burn`
-- Backend extension trait: `TensorNetworkOps`
-
-### Runtime status
-
-- Current execution lowers through CPU tenferro tensors after checked conversion.
-- `NdArray<f64>` forward execution and `Autodiff<B, C>` backward execution are implemented.
-- Invalid subscripts, malformed nested einsum trees, and conversion failures now flow through checked helpers before any public panic-wrapper boundary.
-
-## `tenferro-ext-mdarray`
-
-### mdarray bridge surface
-
-- Checked helpers: `try_mdarray_to_tensor`, `try_tensor_to_mdarray`
-- Convenience wrappers: `mdarray_to_tensor`, `tensor_to_mdarray`
-
-### Runtime status
-
-- Both conversion directions are eager copy paths.
-- Zero-copy interoperability is intentionally unsupported.
-- Conversion helpers are CPU-buffer oriented and reject non-owned/non-CPU materialization through checked errors.
-
-## Non-mainline substrates (scheduled for Stage 6 removal)
-
-Per design_v3, the following graph/backend surfaces are **non-mainline** and
-are retained only for Stage 2-6 compatibility. They are not the architectural
-source of truth for the traced AD substrate — the mainline op vocabulary is
-`StdTensorOp` in `tenferro-ops`. These surfaces are scheduled for removal when
-the `ExtensionOp` mechanism lands in Stage 6.
-
-| Item | Crate | Role | Removal |
-| --- | --- | --- | --- |
-| `SemiringOp<Alg>` | `tenferro-ops` | Algebra-generic traced graph op with its own compile path, separate from `StdTensorOp` | Stage 6 |
-| `SemiringOps` (trait) | `tenferro-ops` | Shared constructor vocabulary kept so `SemiringOp` and `StdTensorOp` look symmetric | Stage 6 |
-| `SemiringBackend<Alg>` | `tenferro-tensor` | Algebra-generic backend that executes `SemiringOp` over typed tensors | Stage 6 |
-
-New code must not extend these surfaces. Lower tropical / semiring use cases
-through compositions of core `StdTensorOp` primitives (e.g. max-plus via
-`BroadcastInDim + Add + ReduceMax`) today, and through the `ExtensionOp`
-mechanism once Stage 6 lands. See
-[`design_v3/30-algebra-and-tropical.md`](./design_v3/30-algebra-and-tropical.md)
-("Recommended Fate Of `SemiringOp`") and
-[`design_v3/90-migration-plan.md`](./design_v3/90-migration-plan.md) Stage 6
-for the normative retirement plan.
-
-## `chainrules`
-
-This external crate provides the scalar formula basis reused by
-`tenferro` tensor-level wrappers.
-
-- Arithmetic: `add`, `sub`, `mul`, `div` with matching `*_rrule` / `*_frule`
-- Unary analytic/scalar: `conj`, `sqrt`, `exp`, `log`
-- Binary analytic: `atan2`
-- Power helpers: `powf`, `powi`
-
-The broader tensor-level analytic families in `tenferro` are built
-from these scalar formulas plus runtime-generic tensor primitives. They are not
-all exported directly from `chainrules`.
-
-For formula details, see [AD Formula Notes](../AD/index.md).
+Linalg AD for new matrix rules is separate work from the structural/einsum and
+CubeCL documentation updates covered here.

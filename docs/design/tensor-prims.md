@@ -1,178 +1,133 @@
-# Tensor Prims Protocol Families
+# Tensor Backend Protocol
 
-`tenferro-prims` is the execution substrate for tensor operations that are
-valid over a semiring or over standard scalar arithmetic. The primitive layer
-now uses smaller protocol families directly so `einsum`, tropical algebra,
-scalar math, and linalg can depend on only the capabilities they actually
-need.
+This file keeps the historical `tensor-prims.md` name, but the current
+implementation no longer has a separate `tenferro-prims` crate or the old
+`TensorPrims` protocol families. Dense tensor execution is owned by
+`tenferro-tensor`.
+
+The current backend protocol is:
+
+- `TensorBackend`: standalone dense tensor operations plus long-lived backend
+  state,
+- `TensorExec`: execution-session surface used by compiled-program evaluation,
+- `ElementwiseFusionPlan`: optional fused elementwise execution plan shared by
+  segmentation and GPU fusion.
+
+---
 
 ## Layering
 
-```
-TensorStructural (tenferro-tensor views)
-    permute, reshape, broadcast, diagonal, narrow
+```text
+tenferro / tenferro-ops
+    traced graph, shape inference, AD rules, ExecProgram
         │
         ▼
-TensorSemiringCore<Alg>
-    BatchedGemm, ReduceAdd, Trace, AntiTrace, AntiDiag, MakeContiguous
+tenferro-einsum
+    Subscripts, ContractionTree, build_einsum_fragment, eager_einsum
         │
-        ├── required by tenferro-einsum
-        └── sufficient for tropical + minimal AD support
-
-TensorSemiringFastPath<Alg>
-    Contract, ElementwiseBinary { Add, Mul }
+        ▼
+tenferro-tensor
+    Tensor, TypedTensor, TensorBackend, TensorExec
         │
-        └── optional performance paths, never required for correctness
-
-TensorScalarPrims<Alg>
-    pointwise unary/binary ops and scalar reductions for standard arithmetic
-
-TensorAnalyticPrims<Alg>
-    exp/log/trig/pow/variance-style vocabulary
+        ├── cpu::CpuBackend
+        └── cubecl::CubeclBackend (feature = "cubecl")
 ```
 
-The key design rule is:
+There is exactly one dense runtime tensor type family (`Tensor` /
+`TypedTensor`) and one backend trait surface. Higher layers should depend on
+`TensorBackend`/`TensorExec`, not on a backend-specific context or deleted
+primitive-family traits.
 
-- `tenferro-einsum` may depend on `TensorSemiringCore` only.
-- `TensorSemiringFastPath` is optional and must not change semantics.
-- Structural view operations stay in `tenferro-tensor`, not in prims.
-- Scalar and analytic vocabulary must not leak into semiring-only backends.
+## Backend Operation Surface
 
-## Execute Contract
+`TensorBackend` and `TensorExec` expose the operations needed by the compiled
+execution pipeline:
 
-All prim families keep the BLAS/cuTENSOR-style contract:
+| Category | Examples |
+| --- | --- |
+| Elementwise | `add`, `mul`, `neg`, `div`, `abs`, `maximum`, `minimum`, `compare`, `select`, `clamp` |
+| Analytic | `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `pow`, `expm1`, `log1p` |
+| Structural | `transpose`, `reshape`, `broadcast_in_dim`, `convert`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` |
+| Reductions | `reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min` |
+| Contraction | `dot_general` |
+| Indexing | `gather`, `scatter`, `slice`, `dynamic_slice`, `pad`, `concatenate`, `reverse` |
+| Linalg | `cholesky`, `triangular_solve`, `lu`, `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, `eig` |
+| Placement | `upload_host_tensor`, `download_to_host` |
+| Memory reuse | `reclaim_buffer` |
+
+Each backend may return a typed unsupported error for operations or dtypes it
+does not support. Higher layers must not silently fall back across devices.
+
+## CPU Backend
+
+`cpu::CpuBackend` is always present when exactly one CPU feature is enabled:
+
+- `cpu-faer` for faer-backed GEMM/linalg,
+- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
+
+CPU execution uses strided-kernel for elementwise/reduction/structural work and
+faer or BLAS/LAPACK for GEMM and linalg. `CpuContext` owns the rayon policy and
+is the single source of truth for faer parallelism.
+
+`CpuBackend::with_exec_session` installs the owned rayon pool once and runs the
+whole compiled program through `CpuExecSession`, avoiding per-op pool entry.
+
+## CubeCL Backend
+
+`cubecl::CubeclBackend` is the current GPU backend under the `cubecl` feature.
+It targets NVIDIA CUDA through CubeCL/CubeCL-CUDA and uses runtime-loaded
+cuTENSOR, cuSOLVER, and cuBLAS where needed.
+
+Important design points:
+
+- GPU tensors must be explicitly uploaded with `upload_tensor`.
+- Host access must explicitly download with `download_tensor`.
+- `upload_host_tensor` and `download_to_host` are used by the compiled
+  execution pipeline for placement-aware execution.
+- GPU operations receiving CPU tensors return `BackendFailure` with an upload
+  hint.
+- CPU operations receiving GPU tensors panic because that is a programming
+  error at the backend boundary.
+- ROCm is only a feature stub today.
+
+See [gpu-backend-design.md](./gpu-backend-design.md) for the CubeCL-specific
+module layout and test command.
+
+## Elementwise Fusion
+
+`ElementwiseFusionPlan` is the canonical backend-neutral description of fused
+elementwise work. Backends opt in by overriding
+`execute_elementwise_fusion`; the default implementation returns `Ok(None)`,
+allowing the segmented execution pipeline to run individual ops.
+
+CubeCL implements this hook through `tenferro-tensor/src/cubecl/fusion/` for
+eligible GPU-resident plans. CPU currently relies on the ordinary op sequence.
+
+## Einsum And DotGeneral
+
+Einsum lowering produces graph operations and ultimately `dot_general`,
+reductions, broadcasts, transposes, and diagonal operations over the same
+`TensorBackend` surface. The old semiring fast-path/core split is not part of
+the current mainline implementation.
+
+For column-major layout, contraction lowering keeps compute dimensions on the
+left and batch dimensions on the right:
 
 ```text
-output <- alpha * op(inputs) + beta * output
+lhs: [lhs_free..., contract..., batch...]
+rhs: [contract..., rhs_free..., batch...]
+out: [lhs_free..., rhs_free..., batch...]
 ```
 
-This contract is preserved even for the new family traits so existing high
-performance lowering strategies remain valid.
+This convention preserves contiguous per-batch slices for the GEMM-like backend
+path.
 
-## Why `Permute` Leaves Prims
+## Linalg
 
-`Tensor::permute()` is already a zero-copy structural view. Keeping an eager
-`Permute` execution primitive in the required core would force semiring-only
-backends to implement a materializing reorder that is not needed for
-correctness. The redesign therefore treats:
+Linalg is not a separate backend crate today. Dense linalg operations are part
+of `TensorBackend`, with CPU implementations under `tenferro-tensor/src/cpu`
+and CubeCL/CUDA implementations under `tenferro-tensor/src/cubecl/linalg.rs`.
 
-- `permute` as a `tenferro-tensor` view operation
-- `MakeContiguous` as the execution primitive that materializes a view when
-  needed
-
-This is especially important for `einsum`, where the intended lowering is:
-
-```text
-permute view -> MakeContiguous -> BatchedGemm
-```
-
-## Minimal Semiring Core
-
-`TensorSemiringCore<Alg>` is intentionally small:
-
-| Operation | Why it is in core |
-|-----------|-------------------|
-| `BatchedGemm` | fundamental contraction primitive |
-| `ReduceAdd` | semiring addition reduction needed by einsum lowering |
-| `Trace` | semiring-valid diagonal contraction |
-| `AntiTrace` | AD adjoint of trace |
-| `AntiDiag` | AD adjoint of diagonal extraction/embedding |
-| `MakeContiguous` | explicit view materialization boundary |
-
-Notably absent from core:
-
-- `Contract`
-- `ElementwiseBinary { Add, Mul }`
-- `ReduceMul`
-- `Maximum`, `Minimum`, `Div`, `Exp`, `Log`, and other ordered/analytic ops
-- linalg factorizations and solves
-
-Those belong in `TensorSemiringFastPath`, `TensorScalarPrims`,
-`TensorAnalyticPrims`, or `tenferro-linalg-prims`.
-
-## Fast Paths
-
-`TensorSemiringFastPath<Alg>` holds operations that are semiring-valid but
-optional:
-
-- `Contract`
-- `ElementwiseBinary { Add, Mul }`
-
-The public descriptor is generalized, but backend implementations are expected
-to re-specialize at `plan()` time so hot loops stay as efficient as the old
-specialized kernels.
-
-## Current Implementation Status
-
-`tenferro-prims` now exposes only the family-native protocol surface:
-
-- `TensorSemiringCore`
-- `TensorSemiringFastPath`
-- `TensorScalarPrims`
-- `TensorAnalyticPrims`
-
-Current state by family:
-
-- `TensorSemiringCore` and `TensorSemiringFastPath` are the sole semiring
-  execution contracts for CPU/CUDA/ROCm backends.
-- `TensorSemiringContextFor<Alg>` is the context-side bridge higher layers use
-  when they need semiring execution without naming a concrete backend type.
-- `TensorScalarPrims` has explicit CPU planning/execution for the phase-1
-  unary, binary, and reduction inventory, and explicit CUDA execution for the
-  real `f32`/`f64` inventory plus the supported complex subset on
-  `Complex32`/`Complex64`.
-- `TensorAnalyticPrims` has explicit CPU planning/execution for the phase-1
-  unary, binary, and reduction inventory, and explicit CUDA execution for the
-  real `f32`/`f64` inventory plus the supported complex subset on
-  `Complex32`/`Complex64`.
-- ROCm remains a truthful stub backend for scalar and analytic families in this
-  phase.
-
-The backend code is also split by concern instead of a single dispatcher file:
-
-- CPU keeps `mod.rs` for public backend/context types and shared tensor-view
-  helpers, `planning.rs` for semiring planning, `execution.rs` for family
-  dispatch, `batched_gemm.rs` and `contract.rs` for the heavier GEMM paths,
-  `reduction.rs` for reduce/trace kernels, `gemm_support.rs` for dtype-specific
-  GEMM helpers, and `scratch.rs` for BLAS scratch-pool reuse.
-- CUDA keeps `mod.rs` for backend/context types and runtime loading,
-  `planning.rs` for cuTENSOR descriptor/plan construction,
-  `execution.rs` for semiring dispatch, `scalar_family.rs` and
-  `analytic_family.rs` for family-specific planning/execution,
-  `diagonal.rs` for semiring diagonal kernels, `pointwise_ops.rs` for shared
-  pointwise helpers, `runtime.rs` for GPU-resident scratch/workspace helpers,
-  `custom/` for NVRTC-backed custom kernel compilation and caching,
-  `scalar_type.rs` for dtype mapping, and `wrappers.rs` for RAII handle
-  management.
-- Einsum keeps eager API entrypoints and AD rules in separate module trees so
-  new execution APIs do not accumulate AD-specific wiring in the same file.
-
-The public scalar and analytic vocabularies remain intentionally broader than
-the currently executed subset so later GPU and reduction work can land without
-descriptor churn.
-
-The legacy eager `Permute` primitive has been removed. Structural reordering now stays in
-`tenferro-tensor`, and prims only expose `MakeContiguous` as the explicit
-materialization boundary.
-
-## Relationship to Linalg
-
-`tenferro-prims` is not responsible for structured factorizations like QR, SVD,
-LU, Cholesky, or eigendecomposition. Those live in
-[linalg-prims.md](./linalg-prims.md).
-
-The split is intentional:
-
-- `tenferro-prims` owns semiring/scalar execution substrate
-- `tenferro-linalg-prims` owns backend-facing linalg kernel contracts
-- `tenferro-linalg` owns public APIs and composite lowering
-
-## Performance Invariants
-
-The redesign keeps three invariants:
-
-1. `einsum` keeps its existing lowering shape: structural views plus explicit
-   materialization and GEMM.
-2. Generalized descriptors must specialize during planning, not per element.
-3. Optional fast paths are never required for correctness and may be absent on
-   semiring-only or tropical backends.
+General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
+`CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly
+download to CPU if they want CPU `eig`.
