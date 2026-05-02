@@ -73,16 +73,14 @@ macro_rules! linalg_multi {
             match input {
                 Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
-                        .into_iter()
-                        .map(Tensor::F64)
-                        .collect()
-                }),
+                })
+                .and_then(|r| r)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
                 Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
                     linalg::$name(self.ctx, self.buffers, t)
-                        .into_iter()
-                        .map(Tensor::C64)
-                        .collect()
-                }),
+                })
+                .and_then(|r| r)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -280,7 +278,7 @@ impl TensorExec for CpuExecSession<'_> {
         match (a, b) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                Tensor::F64(linalg::triangular_solve(
+                linalg::triangular_solve(
                     self.ctx,
                     self.buffers,
                     a,
@@ -289,11 +287,13 @@ impl TensorExec for CpuExecSession<'_> {
                     lower,
                     transpose_a,
                     unit_diagonal,
-                ))
-            }),
+                )
+                .map(Tensor::F64)
+            })
+            .and_then(|r| r),
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                Tensor::C64(linalg::triangular_solve(
+                linalg::triangular_solve(
                     self.ctx,
                     self.buffers,
                     a,
@@ -302,11 +302,13 @@ impl TensorExec for CpuExecSession<'_> {
                     lower,
                     transpose_a,
                     unit_diagonal,
-                ))
-            }),
+                )
+                .map(Tensor::C64)
+            })
+            .and_then(|r| r),
             #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                Tensor::F64(linalg::triangular_solve(
+                linalg::triangular_solve(
                     self.buffers,
                     a,
                     b,
@@ -314,11 +316,13 @@ impl TensorExec for CpuExecSession<'_> {
                     lower,
                     transpose_a,
                     unit_diagonal,
-                ))
-            }),
+                )
+                .map(Tensor::F64)
+            })
+            .and_then(|r| r),
             #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                Tensor::C64(linalg::triangular_solve(
+                linalg::triangular_solve(
                     self.buffers,
                     a,
                     b,
@@ -326,8 +330,10 @@ impl TensorExec for CpuExecSession<'_> {
                     lower,
                     transpose_a,
                     unit_diagonal,
-                ))
-            }),
+                )
+                .map(Tensor::C64)
+            })
+            .and_then(|r| r),
             _ => {
                 if a.dtype() != b.dtype() {
                     Err(crate::Error::DTypeMismatch {

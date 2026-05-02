@@ -4,9 +4,9 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    dim_i32, has_zero_dim, leading_upper_triangle_from_lapack, lower_triangle_from_lapack,
-    matrix_dims, matrix_with_batch_shape, panic_on_lapack_error, square_matrix_dim,
-    tensor_from_vec_with_template, transpose_col_major_data,
+    batched_binary_result, dim_i32, has_zero_dim, leading_upper_triangle_from_lapack,
+    lower_triangle_from_lapack, matrix_dims, matrix_with_batch_shape, panic_on_lapack_error,
+    square_matrix_dim, tensor_from_vec_with_template, transpose_col_major_data,
 };
 
 extern "C" {
@@ -331,90 +331,6 @@ fn solve_2d<T: LapackFullPivLu>(
     Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
 }
 
-fn batched_binary_result<T, F>(
-    buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
-    op: F,
-) -> crate::Result<TypedTensor<T>>
-where
-    T: Clone,
-    F: Fn(&mut BufferPool, &TypedTensor<T>, &TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
-{
-    let (a_core_shape, a_batch_shape) =
-        super::helpers::split_core_and_batch(a, 2, "batched_binary_result");
-    let (b_core_shape, b_batch_shape) =
-        super::helpers::split_core_and_batch(b, 2, "batched_binary_result");
-    assert_eq!(
-        a_batch_shape, b_batch_shape,
-        "batched_binary_result: batch shape mismatch"
-    );
-
-    if a_batch_shape.is_empty() {
-        return op(buffers, a, b);
-    }
-
-    let a_slice_size: usize = a_core_shape.iter().product();
-    let b_slice_size: usize = b_core_shape.iter().product();
-    let batch_count: usize = a_batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_binary_result: zero-sized batch dims are unsupported"
-    );
-
-    let mut out_core_shape: Option<Vec<usize>> = None;
-    let mut out_data: Option<Vec<T>> = None;
-
-    for batch_idx in 0..batch_count {
-        let a_start = batch_idx * a_slice_size;
-        let a_end = a_start + a_slice_size;
-        let b_start = batch_idx * b_slice_size;
-        let b_end = b_start + b_slice_size;
-
-        let batch_a = tensor_from_vec_with_template(
-            a_core_shape.to_vec(),
-            a.host_data()[a_start..a_end].to_vec(),
-            a,
-        );
-        let batch_b = tensor_from_vec_with_template(
-            b_core_shape.to_vec(),
-            b.host_data()[b_start..b_end].to_vec(),
-            b,
-        );
-        let batch_output = op(buffers, &batch_a, &batch_b)?;
-
-        if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_binary_result: output core shape mismatch across batches"
-            );
-        } else {
-            out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
-            out_core_shape = Some(batch_output.shape.clone());
-        }
-
-        match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()),
-            None => panic!("batched_binary_result: missing output buffer"),
-        }
-    }
-
-    let mut out_shape = match out_core_shape {
-        Some(shape) => shape,
-        None => panic!("batched_binary_result: missing output shape"),
-    };
-    out_shape.extend_from_slice(a_batch_shape);
-    Ok(tensor_from_vec_with_template(
-        out_shape,
-        match out_data {
-            Some(data) => data,
-            None => panic!("batched_binary_result: missing output data"),
-        },
-        b,
-    ))
-}
-
 pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -471,7 +387,7 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
             b,
         ));
     }
-    batched_binary_result(buffers, a, b, |buffers, a, b| {
+    batched_binary_result("full_piv_lu_solve", buffers, a, b, |buffers, a, b| {
         solve_2d(buffers, a, b, transpose_a)
     })
 }
