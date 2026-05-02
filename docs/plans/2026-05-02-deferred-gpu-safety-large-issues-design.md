@@ -19,8 +19,6 @@ Large implementation or design issues:
 
 GPU and CubeCL issues:
 
-- #724 and #791: complex CubeCL math/fusion support
-- #728: GPU delegation benchmark matrix
 - #764: inconsistent I64 reduce_sum/reduce_prod CPU vs GPU
 - #765: GPU i64 index conversion roundtrip
 - #770: GPU LU decomposition roundtrip
@@ -44,6 +42,11 @@ Low-level safety and performance issues:
 Infrastructure:
 
 - #586: use self-host runner
+
+Explicitly excluded from this batch:
+
+- #724 and #791: complex CubeCL math/fusion support
+- #728: GPU delegation benchmark matrix
 
 ## Goal
 
@@ -72,16 +75,27 @@ dedicated future PRs unless the user explicitly reprioritizes them.
 
 ### Requires external dependency or upstream readiness
 
-- #724 / #791 CubeCL complex math in fork,
 - #760 provider-inject ABI path,
 - #629 / #797 if faer API support or trait coverage is incomplete.
 - #774 if it is invalidated by the repository's exactly-one-CPU-backend
   compile-time contract rather than a supported feature combination.
 
-### Requires GPU hardware or benchmark data
+### Waiting on CubeCL PR
 
-- #728 GPU delegation benchmark,
+- #724 / #791 are blocked on the in-flight CubeCL repository PR for complex
+  math support. Do not attempt a tenferro-side implementation in this batch.
+  Once that PR lands, the tenferro follow-up should be limited to a fork rev
+  bump plus focused complex GPU fusion/runtime coverage.
+
+### Requires GPU hardware
+
 - #764 / #765 / #770 / #771 / #793 / #796 / #809 / #810 / #819.
+
+### Excluded benchmark work
+
+- #728 is out of scope for this batch. Do not create benchmark harnesses, run
+  performance comparisons, or adjust dispatch strategy based on benchmark goals
+  in the first single PR.
 
 ### Small but safety-sensitive follow-ups
 
@@ -98,6 +112,8 @@ These may become their own dispatches after the first five specs are complete.
 For the first single PR:
 
 - do not implement deferred issues unless explicitly pulled into scope,
+- do not implement #724 / #791 until the CubeCL PR lands,
+- do not implement #728 or any GPU benchmark harness in this batch,
 - mention deferred issues in the PR body if related files were touched,
 - avoid partial fixes that make future dedicated work harder,
 - prefer opening or updating issue comments over speculative code changes.
