@@ -8,7 +8,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use computegraph::fragment::Fragment;
 use computegraph::types::{GlobalValKey, ValRef};
@@ -23,32 +23,18 @@ type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
 /// Global metadata registry.
 ///
 /// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
-/// reads lock briefly. `ShapeGuardContext::metadata_of` reaches into the
-/// registry lazily via [`lookup_global_metadata`] and caches the result
-/// into the context's local map — no up-front full-map snapshot.
+/// and reads lock briefly for targeted key lookups. `ShapeGuardContext::metadata_of`
+/// reaches into the registry lazily via [`lookup_global_metadata`] and caches the
+/// result into the context's local map.
 ///
 /// Earlier designs either cloned the whole map up-front into each AD
-/// `ShapeGuardContext` (quadratic across the monotonically growing
-/// registry) or kept the map in an `Arc` and cloned on every write (also
-/// quadratic, since every traced op triggers at least one
-/// `register_value_metadata` write). Both variants dominated
-/// oracle_replay runtime.
+/// `ShapeGuardContext` or kept the map in an `Arc` and cloned on every write.
+/// Both variants were quadratic across the monotonically growing registry and
+/// dominated oracle_replay runtime.
 static GLOBAL_METADATA: OnceLock<Mutex<MetadataMap>> = OnceLock::new();
 
 fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
     GLOBAL_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn global_metadata_snapshot() -> Arc<MetadataMap> {
-    let guard = global_metadata_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Arc::new(guard.clone())
-}
-
-#[doc(hidden)]
-pub fn snapshot_global_metadata() -> Arc<MetadataMap> {
-    global_metadata_snapshot()
 }
 
 /// Per-value tensor metadata used by AD rules.
@@ -140,8 +126,12 @@ impl ShapeGuardContext {
     }
 
     #[doc(hidden)]
+    /// Keep global-registry lookup enabled after a pass boundary.
+    ///
+    /// This is intentionally a no-op for cached entries: global metadata is
+    /// already read lazily on cache misses, and clearing the local cache would
+    /// also discard metadata inserted directly into this context.
     pub fn refresh_global_metadata(&mut self) {
-        self.metadata.clear();
         self.use_global_registry = true;
     }
 
@@ -284,9 +274,7 @@ pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta
 
 /// Look up a single metadata entry from the global registry.
 ///
-/// Locks the registry briefly for a single `HashMap::get` + clone. Prefer
-/// this over [`snapshot_global_metadata`] for any callsite that only needs
-/// a handful of keys.
+/// Locks the registry briefly for a single `HashMap::get` + clone.
 ///
 /// # Examples
 ///
