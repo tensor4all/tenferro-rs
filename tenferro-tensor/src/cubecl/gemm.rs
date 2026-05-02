@@ -179,7 +179,7 @@ where
     let rhs_ptr = typed_device_ptr(backend.runtime(), rhs)?;
     let output_ptr = typed_device_ptr(backend.runtime(), &output)?;
 
-    let accumulator = zero_alloc::<T>(backend.runtime(), &layout.output_shape);
+    let accumulator = alloc_output::<T>(backend.runtime(), &layout.output_shape);
     let accumulator_ptr = typed_device_ptr(backend.runtime(), &accumulator)?;
 
     let alpha = T::one();
