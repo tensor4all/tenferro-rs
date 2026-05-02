@@ -72,10 +72,9 @@ entrypoints rather than depending on binary lowering internals.
 
 ## Subscripts And Repeated Labels
 
-`Subscripts::parse` accepts NumPy/PyTorch-style labels. Parentheses are
-validated and stripped by `Subscripts::parse`; use `NestedEinsum::parse` or pass
-parenthesized notation through the higher-level traced facade when contraction
-order must be preserved.
+`Subscripts::parse` accepts flat NumPy/PyTorch-style labels and rejects
+parenthesized contraction-order notation. Use `NestedEinsum::parse` when
+contraction order must be preserved.
 
 Repeated-label semantics follow the usual einsum rules:
 

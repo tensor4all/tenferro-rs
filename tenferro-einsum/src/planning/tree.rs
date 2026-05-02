@@ -236,7 +236,7 @@ impl ContractionTree {
             operand_subs,
             step_plans: Vec::new(),
         };
-        tree.step_plans = compile_step_plans(&tree).map_err(Error::InvalidArgument)?;
+        tree.step_plans = compile_step_plans(&tree)?;
         Ok(tree)
     }
 
