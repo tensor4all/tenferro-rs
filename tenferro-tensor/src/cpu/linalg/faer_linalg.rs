@@ -47,7 +47,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>>;
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
     fn qr_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -57,7 +57,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>>;
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
 }
 
 fn matrix_dims<T>(input: &TypedTensor<T>, op: &str) -> (usize, usize) {
@@ -107,29 +107,40 @@ fn vec_from_diag<T: Copy + PoolScalar>(buffers: &mut BufferPool, diag: DiagRef<'
 }
 
 fn complex64_to_faer_slice(data: &[Complex64]) -> &[faer::c64] {
-    debug_assert_eq!(
+    assert_eq!(
         std::mem::size_of::<Complex64>(),
         std::mem::size_of::<faer::c64>()
     );
-    debug_assert_eq!(
+    assert_eq!(
         std::mem::align_of::<Complex64>(),
         std::mem::align_of::<faer::c64>()
     );
 
+    // SAFETY: size and alignment are checked above in release builds, and
+    // both types represent one complex f64 scalar in supported builds.
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<faer::c64>(), data.len()) }
 }
 
 fn complex64_to_faer_slice_mut(data: &mut [Complex64]) -> &mut [faer::c64] {
-    debug_assert_eq!(
+    assert_eq!(
         std::mem::size_of::<Complex64>(),
         std::mem::size_of::<faer::c64>()
     );
-    debug_assert_eq!(
+    assert_eq!(
         std::mem::align_of::<Complex64>(),
         std::mem::align_of::<faer::c64>()
     );
 
+    // SAFETY: size and alignment are checked above in release builds, and
+    // both types represent one complex f64 scalar in supported builds.
     unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<faer::c64>(), data.len()) }
+}
+
+fn decomposition_failed(op: &'static str) -> crate::Error {
+    crate::Error::BackendFailure {
+        op,
+        message: "decomposition failed".into(),
+    }
 }
 
 fn complex_vec_from_real_diag(
@@ -414,16 +425,90 @@ where
         .collect()
 }
 
-fn batched_multi_convert<InT, OutT, F>(
+fn batched_multi_result<T, F>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    core_rank: usize,
+    op: F,
+) -> crate::Result<Vec<TypedTensor<T>>>
+where
+    T: Clone + PoolScalar,
+    F: Fn(&mut BufferPool, &TypedTensor<T>) -> crate::Result<Vec<TypedTensor<T>>>,
+{
+    let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
+    if batch_shape.is_empty() {
+        return op(buffers, input);
+    }
+
+    let slice_size: usize = core_shape.iter().product();
+    let batch_count: usize = batch_shape.iter().product();
+    assert!(
+        batch_count > 0,
+        "batched_multi: zero-sized batch dims are unsupported"
+    );
+
+    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
+    let mut out_data: Vec<Vec<T>> = Vec::new();
+
+    for batch_idx in 0..batch_count {
+        let start = batch_idx * slice_size;
+        let end = start + slice_size;
+        let batch_input = tensor_from_vec_with_template(
+            core_shape.to_vec(),
+            input.host_data()[start..end].to_vec(),
+            input,
+        );
+        let batch_outputs = op(buffers, &batch_input)?;
+
+        if out_shapes.is_empty() {
+            out_shapes = batch_outputs
+                .iter()
+                .map(|tensor| tensor.shape.clone())
+                .collect();
+            let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
+            for tensor in &batch_outputs {
+                pooled_outputs
+                    .push(buffers.acquire_with_capacity::<T>(tensor.n_elements() * batch_count));
+            }
+            out_data = pooled_outputs;
+        } else {
+            assert_eq!(
+                batch_outputs.len(),
+                out_shapes.len(),
+                "batched_multi: output count mismatch across batches"
+            );
+        }
+
+        for (idx, batch_output) in batch_outputs.iter().enumerate() {
+            assert_eq!(
+                batch_output.shape.as_slice(),
+                out_shapes[idx].as_slice(),
+                "batched_multi: output core shape mismatch across batches"
+            );
+            out_data[idx].extend_from_slice(batch_output.host_data());
+        }
+    }
+
+    Ok(out_shapes
+        .into_iter()
+        .zip(out_data)
+        .map(|(mut out_shape, out_data)| {
+            out_shape.extend_from_slice(batch_shape);
+            tensor_from_vec_with_template(out_shape, out_data, input)
+        })
+        .collect())
+}
+
+fn batched_multi_convert_result<InT, OutT, F>(
     buffers: &mut BufferPool,
     input: &TypedTensor<InT>,
     core_rank: usize,
     op: F,
-) -> Vec<TypedTensor<OutT>>
+) -> crate::Result<Vec<TypedTensor<OutT>>>
 where
     InT: Clone,
     OutT: Clone + PoolScalar,
-    F: Fn(&mut BufferPool, &TypedTensor<InT>) -> Vec<TypedTensor<OutT>>,
+    F: Fn(&mut BufferPool, &TypedTensor<InT>) -> crate::Result<Vec<TypedTensor<OutT>>>,
 {
     let (core_shape, batch_shape) = split_core_and_batch(input, core_rank, "batched_multi");
     if batch_shape.is_empty() {
@@ -448,7 +533,7 @@ where
             input.host_data()[start..end].to_vec(),
             input,
         );
-        let batch_outputs = op(buffers, &batch_input);
+        let batch_outputs = op(buffers, &batch_input)?;
 
         if out_shapes.is_empty() {
             out_shapes = batch_outputs
@@ -479,14 +564,14 @@ where
         }
     }
 
-    out_shapes
+    Ok(out_shapes
         .into_iter()
         .zip(out_data)
         .map(|(mut out_shape, out_data)| {
             out_shape.extend_from_slice(batch_shape);
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
-        .collect()
+        .collect())
 }
 
 fn batched_binary<T, F>(
@@ -1029,7 +1114,7 @@ impl FaerLinalg for f64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(input.host_data(), m, n);
@@ -1054,7 +1139,7 @@ impl FaerLinalg for f64 {
             stack,
             Default::default(),
         )
-        .unwrap_or_else(|_| panic!("svd: decomposition failed"));
+        .map_err(|_| decomposition_failed("svd"))?;
 
         let u = tensor_from_vec_with_template(
             vec![m, k],
@@ -1070,7 +1155,7 @@ impl FaerLinalg for f64 {
         }
         let vt = tensor_from_vec_with_template(vec![k, n], vt_data, input);
 
-        vec![u, s, vt]
+        Ok(vec![u, s, vt])
     }
 
     fn qr_2d(
@@ -1138,7 +1223,7 @@ impl FaerLinalg for f64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "eigh");
         let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
         let mut values = Diag::zeros(n);
@@ -1158,7 +1243,7 @@ impl FaerLinalg for f64 {
             stack,
             Default::default(),
         )
-        .unwrap_or_else(|_| panic!("eigh: decomposition failed"));
+        .map_err(|_| decomposition_failed("eigh"))?;
 
         let values =
             tensor_from_vec_with_template(vec![n], vec_from_diag(buffers, values.as_ref()), input);
@@ -1168,7 +1253,7 @@ impl FaerLinalg for f64 {
             input,
         );
 
-        vec![values, vectors]
+        Ok(vec![values, vectors])
     }
 }
 
@@ -1578,7 +1663,7 @@ impl FaerLinalg for Complex64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd");
         let k = m.min(n);
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
@@ -1603,7 +1688,7 @@ impl FaerLinalg for Complex64 {
             stack,
             Default::default(),
         )
-        .unwrap_or_else(|_| panic!("svd: decomposition failed"));
+        .map_err(|_| decomposition_failed("svd"))?;
 
         let u = tensor_from_vec_with_template(
             vec![m, k],
@@ -1623,7 +1708,7 @@ impl FaerLinalg for Complex64 {
         }
         let vt = tensor_from_vec_with_template(vec![k, n], vt_data, input);
 
-        vec![u, s, vt]
+        Ok(vec![u, s, vt])
     }
 
     fn qr_2d(
@@ -1691,7 +1776,7 @@ impl FaerLinalg for Complex64 {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
-    ) -> Vec<TypedTensor<Self>> {
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "eigh");
         let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
         let mut values = Diag::zeros(n);
@@ -1711,7 +1796,7 @@ impl FaerLinalg for Complex64 {
             stack,
             Default::default(),
         )
-        .unwrap_or_else(|_| panic!("eigh: decomposition failed"));
+        .map_err(|_| decomposition_failed("eigh"))?;
 
         let values = tensor_from_vec_with_template(
             vec![n],
@@ -1724,7 +1809,7 @@ impl FaerLinalg for Complex64 {
             input,
         );
 
-        vec![values, vectors]
+        Ok(vec![values, vectors])
     }
 }
 
@@ -1884,13 +1969,13 @@ pub(crate) fn svd<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
         let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
         let m = matrix_shape[0];
         let n = matrix_shape[1];
         let k = m.min(n);
-        return vec![
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
@@ -1906,9 +1991,9 @@ pub(crate) fn svd<T: FaerLinalg>(
                 Vec::new(),
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, 2, |buffers, batch| {
+    batched_multi_result(buffers, input, 2, |buffers, batch| {
         T::svd_2d(ctx, buffers, batch)
     })
 }
@@ -1945,11 +2030,11 @@ pub(crate) fn eigh<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
         let n = input.shape[0];
         let batch_shape = &input.shape[2..];
-        return vec![
+        return Ok(vec![
             tensor_from_vec_with_template(
                 vector_with_batch_shape(n, batch_shape),
                 Vec::new(),
@@ -1960,9 +2045,9 @@ pub(crate) fn eigh<T: FaerLinalg>(
                 Vec::new(),
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, 2, |buffers, batch| {
+    batched_multi_result(buffers, input, 2, |buffers, batch| {
         T::eigh_2d(ctx, buffers, batch)
     })
 }
@@ -1971,7 +2056,7 @@ fn eig_real_2d(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<f64>,
-) -> Vec<TypedTensor<Complex64>> {
+) -> crate::Result<Vec<TypedTensor<Complex64>>> {
     let n = square_matrix_dim(input, "eig");
     let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
     let mut u_real = Mat::zeros(n, n);
@@ -1995,21 +2080,21 @@ fn eig_real_2d(
         stack,
         Default::default(),
     )
-    .unwrap_or_else(|_| panic!("eig: decomposition failed"));
+    .map_err(|_| decomposition_failed("eig"))?;
     let (u, s) =
         real_eig_to_complex_outputs(buffers, u_real.as_ref(), s_re.as_ref(), s_im.as_ref());
 
-    vec![
+    Ok(vec![
         tensor_from_vec_with_template(vec![n], s, input),
         tensor_from_vec_with_template(vec![n, n], u, input),
-    ]
+    ])
 }
 
 fn eig_complex_2d(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
     input: &TypedTensor<Complex64>,
-) -> Vec<TypedTensor<Complex64>> {
+) -> crate::Result<Vec<TypedTensor<Complex64>>> {
     let n = square_matrix_dim(input, "eig");
     let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
     let mut u = Mat::zeros(n, n);
@@ -2031,19 +2116,23 @@ fn eig_complex_2d(
         stack,
         Default::default(),
     )
-    .unwrap_or_else(|_| panic!("eig: decomposition failed"));
+    .map_err(|_| decomposition_failed("eig"))?;
 
-    vec![
+    Ok(vec![
         tensor_from_vec_with_template(vec![n], complex_vec_from_diag(buffers, s.as_ref()), input),
         tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(buffers, u.as_ref()), input),
-    ]
+    ])
 }
 
-pub(crate) fn eig(ctx: &CpuContext, buffers: &mut BufferPool, input: &Tensor) -> Vec<Tensor> {
+pub(crate) fn eig(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> crate::Result<Vec<Tensor>> {
     if has_zero_dim(input.shape()) {
         let n = input.shape()[0];
         let batch_shape = &input.shape()[2..];
-        return vec![
+        return Ok(vec![
             Tensor::C64(TypedTensor::from_vec(
                 vector_with_batch_shape(n, batch_shape),
                 Vec::new(),
@@ -2052,22 +2141,26 @@ pub(crate) fn eig(ctx: &CpuContext, buffers: &mut BufferPool, input: &Tensor) ->
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
             )),
-        ];
+        ]);
     }
 
     match input {
-        Tensor::F64(t) => batched_multi_convert(buffers, t, 2, |buffers, batch| {
-            eig_real_2d(ctx, buffers, batch)
-        })
-        .into_iter()
-        .map(Tensor::C64)
-        .collect(),
-        Tensor::C64(t) => batched_multi_convert(buffers, t, 2, |buffers, batch| {
-            eig_complex_2d(ctx, buffers, batch)
-        })
-        .into_iter()
-        .map(Tensor::C64)
-        .collect(),
+        Tensor::F64(t) => Ok(
+            batched_multi_convert_result(buffers, t, 2, |buffers, batch| {
+                eig_real_2d(ctx, buffers, batch)
+            })?
+            .into_iter()
+            .map(Tensor::C64)
+            .collect(),
+        ),
+        Tensor::C64(t) => Ok(
+            batched_multi_convert_result(buffers, t, 2, |buffers, batch| {
+                eig_complex_2d(ctx, buffers, batch)
+            })?
+            .into_iter()
+            .map(Tensor::C64)
+            .collect(),
+        ),
         _ => todo!("eig: unsupported dtype"),
     }
 }

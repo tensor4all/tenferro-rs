@@ -89,6 +89,28 @@ macro_rules! linalg_multi {
     };
 }
 
+/// Unary linalg returning Vec<Tensor> and internal Result — faer path.
+#[cfg(feature = "cpu-faer")]
+macro_rules! linalg_multi_result {
+    ($name:ident) => {
+        fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+            match input {
+                Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
+                    linalg::$name(self.ctx, self.buffers, t)
+                })
+                .and_then(|r| r)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
+                    linalg::$name(self.ctx, self.buffers, t)
+                })
+                .and_then(|r| r)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
+            }
+        }
+    };
+}
+
 /// Unary linalg returning Vec<Tensor> — blas path.
 #[cfg(feature = "cpu-blas")]
 macro_rules! linalg_multi {
@@ -221,24 +243,29 @@ impl TensorExec for CpuExecSession<'_> {
     linalg_single!(cholesky);
     linalg_multi!(lu);
     linalg_multi!(full_piv_lu);
+    #[cfg(feature = "cpu-faer")]
+    linalg_multi_result!(svd);
+    #[cfg(feature = "cpu-blas")]
     linalg_multi!(svd);
     linalg_multi!(qr);
+    #[cfg(feature = "cpu-faer")]
+    linalg_multi_result!(eigh);
+    #[cfg(feature = "cpu-blas")]
     linalg_multi!(eigh);
 
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
         if !matches!(input, Tensor::F64(_) | Tensor::C64(_)) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
-        catch_backend_panic("eig", || {
-            #[cfg(feature = "cpu-faer")]
-            {
-                linalg::eig(self.ctx, self.buffers, input)
-            }
-            #[cfg(feature = "cpu-blas")]
-            {
-                linalg::eig(self.buffers, input)
-            }
-        })
+        #[cfg(feature = "cpu-faer")]
+        {
+            catch_backend_panic("eig", || linalg::eig(self.ctx, self.buffers, input))
+                .and_then(|r| r)
+        }
+        #[cfg(feature = "cpu-blas")]
+        {
+            catch_backend_panic("eig", || linalg::eig(self.buffers, input))
+        }
     }
 
     fn triangular_solve(

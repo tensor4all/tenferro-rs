@@ -5,10 +5,14 @@ use std::{ffi::OsString, sync::MutexGuard};
 use num_complex::{Complex32, Complex64};
 
 use crate::backend::TensorBackend;
+#[cfg(feature = "cpu-faer")]
+use crate::buffer_pool::BufferPool;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::cpu::backend;
+#[cfg(feature = "cpu-faer")]
+use crate::cpu::linalg::faer_linalg;
 use crate::cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, embed_diagonal,
     extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
@@ -3304,6 +3308,33 @@ fn test_svd_unsupported_dtype_returns_error() {
     ));
     let mut backend = CpuBackend::new();
     assert!(backend.svd(&input).is_err());
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_svd_decomposition_failure_returns_error() {
+    let ctx = CpuContext::with_threads(1);
+    let mut buffers = BufferPool::new();
+    let input = TypedTensor::from_vec(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]);
+
+    let err = faer_linalg::svd(&ctx, &mut buffers, &input).unwrap_err();
+
+    assert!(err.to_string().contains("svd"), "unexpected error: {err}");
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn test_faer_eig_decomposition_failure_returns_error() {
+    let ctx = CpuContext::with_threads(1);
+    let mut buffers = BufferPool::new();
+    let input = Tensor::F64(TypedTensor::from_vec(
+        vec![2, 2],
+        vec![f64::NAN, 0.0, 0.0, 1.0],
+    ));
+
+    let err = faer_linalg::eig(&ctx, &mut buffers, &input).unwrap_err();
+
+    assert!(err.to_string().contains("eig"), "unexpected error: {err}");
 }
 
 #[test]
