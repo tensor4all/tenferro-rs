@@ -228,6 +228,22 @@ pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div(a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div(a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div(a, b)?)),
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Ok(Tensor::C32(typed_div(&scalar, b)?))
+        }
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Ok(Tensor::C32(typed_div(a, &scalar)?))
+        }
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            Ok(Tensor::C64(typed_div(&scalar, b)?))
+        }
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            Ok(Tensor::C64(typed_div(a, &scalar)?))
+        }
         _ => Err(crate::Error::DTypeMismatch {
             op: "div",
             lhs: lhs.dtype(),
@@ -433,23 +449,38 @@ pub fn typed_div<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result
 where
     T: Copy + Clone + Zero + Div<Output = T>,
 {
-    if lhs.shape != rhs.shape {
-        return Err(crate::Error::ShapeMismatch {
+    if lhs.shape == rhs.shape {
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view(lhs),
+            &typed_view(rhs),
+            |x, y| x / y,
+        )
+        .map_err(|err| backend_failure("div", err))?;
+        Ok(tensor_from_array(out))
+    } else if lhs.shape.is_empty() {
+        let scalar = lhs.host_data()[0];
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
+        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar / x)
+            .map_err(|err| backend_failure("div", err))?;
+        Ok(tensor_from_array(out))
+    } else if rhs.shape.is_empty() {
+        let scalar = rhs.host_data()[0];
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x / scalar)
+            .map_err(|err| backend_failure("div", err))?;
+        Ok(tensor_from_array(out))
+    } else {
+        Err(crate::Error::ShapeMismatch {
             op: "div",
             lhs: lhs.shape.clone(),
             rhs: rhs.shape.clone(),
-        });
+        })
     }
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
-    zip_map2_into(
-        &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
-        |x, y| x / y,
-    )
-    .map_err(|err| backend_failure("div", err))?;
-    Ok(tensor_from_array(out))
 }
 
 pub fn typed_neg<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>

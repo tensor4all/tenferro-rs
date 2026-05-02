@@ -117,8 +117,8 @@ pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crat
     }
 }
 
-pub fn convert(input: &Tensor, to: DType) -> Tensor {
-    match (input, to) {
+pub fn convert(input: &Tensor, to: DType) -> crate::Result<Tensor> {
+    let converted = match (input, to) {
         (Tensor::F32(t), DType::F32) => Tensor::F32(t.clone()),
         (Tensor::F32(t), DType::F64) => Tensor::F64(typed_convert(t, |x| x as f64)),
         (Tensor::F32(t), DType::I64) => Tensor::I64(typed_convert(t, |x| x as i64)),
@@ -156,7 +156,8 @@ pub fn convert(input: &Tensor, to: DType) -> Tensor {
             Complex32::new(z.re as f32, z.im as f32)
         })),
         (Tensor::C64(t), DType::C64) => Tensor::C64(t.clone()),
-    }
+    };
+    Ok(converted)
 }
 
 pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
