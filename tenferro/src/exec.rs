@@ -725,7 +725,8 @@ fn execute_nary_einsum<B: TensorBackend>(
         input_vals.push(ValRef::Local(local));
     }
 
-    let result_ref = build_einsum_fragment(&mut builder, &tree, &input_vals, &shapes);
+    let result_ref = build_einsum_fragment(&mut builder, &tree, &input_vals, &shapes)
+        .map_err(|err| Error::ContractionError(err.to_string()))?;
     let result_local = match result_ref {
         ValRef::Local(local) => local,
         ValRef::External(_) => {

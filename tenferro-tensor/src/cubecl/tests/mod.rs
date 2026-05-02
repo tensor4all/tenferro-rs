@@ -75,6 +75,11 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
                 );
             }
         }
+        (Tensor::I64(_), Tensor::I64(_)) => {
+            let actual = actual.as_slice::<i64>().unwrap();
+            let expected = expected.as_slice::<i64>().unwrap();
+            assert_eq!(actual, expected);
+        }
         (Tensor::C32(_), Tensor::C32(_)) => {
             let actual = actual.as_slice::<Complex32>().unwrap();
             let expected = expected.as_slice::<Complex32>().unwrap();

@@ -568,7 +568,6 @@ where
     })
 }
 
-#[cfg(feature = "cpu-blas")]
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
     if extent == 1 {
         let fallback = fallback.max(1) as isize;

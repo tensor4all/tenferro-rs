@@ -39,6 +39,7 @@ use std::collections::{HashMap, HashSet};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
 
+use tenferro_device::{Error, Result};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DotGeneralConfig;
@@ -54,6 +55,40 @@ struct LabeledVal {
 
 fn label_size_map(labels: &[u32], shape: &[usize]) -> Vec<(u32, usize)> {
     labels.iter().copied().zip(shape.iter().copied()).collect()
+}
+
+fn builder_invalid_argument(message: impl Into<String>) -> Error {
+    Error::InvalidArgument(format!("einsum builder: {}", message.into()))
+}
+
+fn find_label_axis(labels: &[u32], label: u32) -> Result<usize> {
+    labels
+        .iter()
+        .position(|candidate| *candidate == label)
+        .ok_or_else(|| builder_invalid_argument(format!("missing label {label} in {labels:?}")))
+}
+
+fn find_label_size(label: u32, label_sizes: &[&[(u32, usize)]]) -> Result<usize> {
+    for sizes in label_sizes {
+        for &(candidate, size) in *sizes {
+            if candidate == label {
+                return Ok(size);
+            }
+        }
+    }
+    Err(builder_invalid_argument(format!(
+        "missing size for label {label}"
+    )))
+}
+
+fn labeled_operand<'a>(
+    operands: &'a [LabeledVal],
+    index: usize,
+    role: &'static str,
+) -> Result<&'a LabeledVal> {
+    operands
+        .get(index)
+        .ok_or_else(|| builder_invalid_argument(format!("missing {role} operand at index {index}")))
 }
 
 fn reduce_val(
@@ -108,7 +143,7 @@ fn embed_repeated(
     builder: &mut FragmentBuilder<StdTensorOp>,
     lv: &LabeledVal,
     output_labels: &[u32],
-) -> LabeledVal {
+) -> Result<LabeledVal> {
     // Count how many times each label appears in output vs current labels.
     let mut result = lv.clone();
     for &label in output_labels {
@@ -117,11 +152,7 @@ fn embed_repeated(
         if output_count > current_count {
             // Need to embed: find the existing axis with this label and
             // insert a duplicate axis after it.
-            let axis_a = result
-                .labels
-                .iter()
-                .position(|&l| l == label)
-                .expect("label must exist in current tensor for embedding");
+            let axis_a = find_label_axis(&result.labels, label)?;
             // Insert the new axis right after axis_a.
             let axis_b = axis_a + 1;
             let n = result.shape[axis_a];
@@ -143,7 +174,7 @@ fn embed_repeated(
             return embed_repeated(builder, &result, output_labels);
         }
     }
-    result
+    Ok(result)
 }
 
 fn diagonalize_repeated(builder: &mut FragmentBuilder<StdTensorOp>, lv: &LabeledVal) -> LabeledVal {
@@ -182,7 +213,7 @@ fn binary_contract(
     rhs: &LabeledVal,
     survive_labels: &[u32],
     reorder_result: bool,
-) -> LabeledVal {
+) -> Result<LabeledVal> {
     let survive_set: HashSet<u32> = survive_labels.iter().copied().collect();
     let rhs_label_set: HashSet<u32> = rhs.labels.iter().copied().collect();
     let lhs_label_set: HashSet<u32> = lhs.labels.iter().copied().collect();
@@ -238,38 +269,28 @@ fn binary_contract(
     let lhs_sizes: Vec<(u32, usize)> = label_size_map(&lhs.labels, &lhs.shape);
     let rhs_sizes: Vec<(u32, usize)> = label_size_map(&rhs.labels, &rhs.shape);
 
-    let label_to_size = |l: u32| -> usize {
-        for &(label, size) in &lhs_sizes {
-            if label == l {
-                return size;
-            }
-        }
-        for &(label, size) in &rhs_sizes {
-            if label == l {
-                return size;
-            }
-        }
-        panic!("label {} not found in any operand", l);
+    let label_to_size = |label: u32| -> Result<usize> {
+        find_label_size(label, &[lhs_sizes.as_slice(), rhs_sizes.as_slice()])
     };
 
     let result = if !contracting_labels.is_empty() {
         // Use DotGeneral
         let lhs_contracting_dims: Vec<usize> = contracting_labels
             .iter()
-            .map(|l| lhs.labels.iter().position(|x| x == l).unwrap())
-            .collect();
+            .map(|l| find_label_axis(&lhs.labels, *l))
+            .collect::<Result<_>>()?;
         let rhs_contracting_dims: Vec<usize> = contracting_labels
             .iter()
-            .map(|l| rhs.labels.iter().position(|x| x == l).unwrap())
-            .collect();
+            .map(|l| find_label_axis(&rhs.labels, *l))
+            .collect::<Result<_>>()?;
         let lhs_batch_dims: Vec<usize> = batch_labels
             .iter()
-            .map(|l| lhs.labels.iter().position(|x| x == l).unwrap())
-            .collect();
+            .map(|l| find_label_axis(&lhs.labels, *l))
+            .collect::<Result<_>>()?;
         let rhs_batch_dims: Vec<usize> = batch_labels
             .iter()
-            .map(|l| rhs.labels.iter().position(|x| x == l).unwrap())
-            .collect();
+            .map(|l| find_label_axis(&rhs.labels, *l))
+            .collect::<Result<_>>()?;
 
         let config = DotGeneralConfig {
             lhs_contracting_dims,
@@ -285,7 +306,10 @@ fn binary_contract(
             .chain(batch_labels.iter())
             .copied()
             .collect();
-        let result_shape: Vec<usize> = result_labels.iter().map(|&l| label_to_size(l)).collect();
+        let result_shape: Vec<usize> = result_labels
+            .iter()
+            .map(|&l| label_to_size(l))
+            .collect::<Result<_>>()?;
 
         let outputs = builder.add_op(
             StdTensorOp::DotGeneral { config },
@@ -308,17 +332,17 @@ fn binary_contract(
             &lhs_free_labels,
             &rhs_free_labels,
             &label_to_size,
-        )
+        )?
     };
 
     if !reorder_result {
-        return result;
+        return Ok(result);
     }
 
     // Reorder to match the caller-visible order if needed.
     let current_labels = &result.labels;
     if current_labels.is_empty() {
-        return result;
+        return Ok(result);
     }
 
     // Filter survivor labels to those present in result (to handle final reduction later)
@@ -330,17 +354,17 @@ fn binary_contract(
         .collect();
 
     if current_labels.len() == target_labels.len() && *current_labels == target_labels {
-        return result;
+        return Ok(result);
     }
 
     // Build permutation
     let perm: Vec<usize> = target_labels
         .iter()
-        .map(|l| current_labels.iter().position(|x| x == l).unwrap())
-        .collect();
+        .map(|l| find_label_axis(current_labels, *l))
+        .collect::<Result<_>>()?;
 
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
-        return result;
+        return Ok(result);
     }
 
     let new_shape: Vec<usize> = perm.iter().map(|&p| result.shape[p]).collect();
@@ -350,11 +374,11 @@ fn binary_contract(
         OpMode::Primal,
     );
 
-    LabeledVal {
+    Ok(LabeledVal {
         val: ValRef::Local(outputs[0]),
         labels: target_labels,
         shape: new_shape,
-    }
+    })
 }
 
 fn outer_product(
@@ -364,15 +388,18 @@ fn outer_product(
     batch_labels: &[u32],
     lhs_free_labels: &[u32],
     rhs_free_labels: &[u32],
-    label_to_size: &dyn Fn(u32) -> usize,
-) -> LabeledVal {
+    label_to_size: &dyn Fn(u32) -> Result<usize>,
+) -> Result<LabeledVal> {
     let combined_labels: Vec<u32> = lhs_free_labels
         .iter()
         .chain(rhs_free_labels.iter())
         .chain(batch_labels.iter())
         .copied()
         .collect();
-    let combined_shape: Vec<usize> = combined_labels.iter().map(|&l| label_to_size(l)).collect();
+    let combined_shape: Vec<usize> = combined_labels
+        .iter()
+        .map(|&l| label_to_size(l))
+        .collect::<Result<_>>()?;
 
     if lhs.labels == rhs.labels {
         // Same labels: just Mul
@@ -381,24 +408,24 @@ fn outer_product(
             vec![lhs.val.clone(), rhs.val.clone()],
             OpMode::Primal,
         );
-        return LabeledVal {
+        return Ok(LabeledVal {
             val: ValRef::Local(outputs[0]),
             labels: lhs.labels.clone(),
             shape: lhs.shape.clone(),
-        };
+        });
     }
 
     // Broadcast both to combined shape, then Mul
     let lhs_dims: Vec<usize> = lhs
         .labels
         .iter()
-        .map(|l| combined_labels.iter().position(|x| x == l).unwrap())
-        .collect();
+        .map(|l| find_label_axis(&combined_labels, *l))
+        .collect::<Result<_>>()?;
     let rhs_dims: Vec<usize> = rhs
         .labels
         .iter()
-        .map(|l| combined_labels.iter().position(|x| x == l).unwrap())
-        .collect();
+        .map(|l| find_label_axis(&combined_labels, *l))
+        .collect::<Result<_>>()?;
 
     let lhs_bc = builder.add_op(
         StdTensorOp::BroadcastInDim {
@@ -421,31 +448,64 @@ fn outer_product(
         vec![ValRef::Local(lhs_bc[0]), ValRef::Local(rhs_bc[0])],
         OpMode::Primal,
     );
-    LabeledVal {
+    Ok(LabeledVal {
         val: ValRef::Local(outputs[0]),
         labels: combined_labels,
         shape: combined_shape,
-    }
+    })
 }
 
+/// Lower a planned einsum contraction tree into a compute graph fragment.
+///
+/// # Errors
+///
+/// Returns an error if the supplied tree, input values, or input shapes are
+/// internally inconsistent.
+///
+/// # Examples
+///
+/// ```
+/// use computegraph::fragment::FragmentBuilder;
+/// use computegraph::types::ValRef;
+/// use tenferro_einsum::{build_einsum_fragment, ContractionTree, Subscripts};
+/// use tenferro_ops::input_key::TensorInputKey;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+///
+/// let subs = Subscripts::parse("ij,jk->ik").unwrap();
+/// let shapes: [&[usize]; 2] = [&[2, 3], &[3, 4]];
+/// let tree = ContractionTree::optimize(&subs, &shapes).unwrap();
+/// let mut builder = FragmentBuilder::<StdTensorOp>::new();
+/// let a = builder.add_input(TensorInputKey::User { id: 0 });
+/// let b = builder.add_input(TensorInputKey::User { id: 1 });
+/// let out = build_einsum_fragment(
+///     &mut builder,
+///     &tree,
+///     &[ValRef::Local(a), ValRef::Local(b)],
+///     &[vec![2, 3], vec![3, 4]],
+/// )
+/// .unwrap();
+/// ```
 pub fn build_einsum_fragment(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tree: &ContractionTree,
     input_vals: &[ValRef<StdTensorOp>],
     input_shapes: &[Vec<usize>],
-) -> ValRef<StdTensorOp> {
+) -> Result<ValRef<StdTensorOp>> {
     let subscripts = &tree.subscripts;
     let n_inputs = subscripts.inputs.len();
-    assert_eq!(
-        n_inputs,
-        input_vals.len(),
-        "number of subscripts inputs must match number of input values"
-    );
-    assert_eq!(
-        input_vals.len(),
-        input_shapes.len(),
-        "number of input values must match number of input shapes"
-    );
+    if n_inputs != input_vals.len() {
+        return Err(builder_invalid_argument(format!(
+            "number of subscripts inputs ({n_inputs}) must match number of input values ({})",
+            input_vals.len()
+        )));
+    }
+    if input_vals.len() != input_shapes.len() {
+        return Err(builder_invalid_argument(format!(
+            "number of input values ({}) must match number of input shapes ({})",
+            input_vals.len(),
+            input_shapes.len()
+        )));
+    }
 
     let output_labels = &subscripts.output;
 
@@ -454,18 +514,20 @@ pub fn build_einsum_fragment(
         .zip(subscripts.inputs.iter())
         .zip(input_shapes.iter())
         .map(|((val, labels), shape)| {
-            assert_eq!(
-                labels.len(),
-                shape.len(),
-                "labels length must match shape rank"
-            );
-            LabeledVal {
+            if labels.len() != shape.len() {
+                return Err(builder_invalid_argument(format!(
+                    "labels length ({}) must match shape rank ({})",
+                    labels.len(),
+                    shape.len()
+                )));
+            }
+            Ok(LabeledVal {
                 val: val.clone(),
                 labels: labels.clone(),
                 shape: shape.clone(),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     // Diagonalize repeated indices in each input
     for lv in &mut labeled {
@@ -485,49 +547,55 @@ pub fn build_einsum_fragment(
         let result = reduce_val(builder, lv, &reduce_labels);
 
         // Embed diagonal axes if output needs higher multiplicity
-        let result = embed_repeated(builder, &result, output_labels);
+        let result = embed_repeated(builder, &result, output_labels)?;
 
         // Reorder if needed
         if result.labels == *output_labels {
-            return result.val;
+            return Ok(result.val);
         }
         let perm: Vec<usize> = output_labels
             .iter()
-            .map(|l| result.labels.iter().position(|x| x == l).unwrap())
-            .collect();
+            .map(|l| find_label_axis(&result.labels, *l))
+            .collect::<Result<_>>()?;
         if perm.iter().enumerate().all(|(i, &p)| i == p) {
-            return result.val;
+            return Ok(result.val);
         }
         let outputs = builder.add_op(
             StdTensorOp::Transpose { perm },
             vec![result.val],
             OpMode::Primal,
         );
-        return ValRef::Local(outputs[0]);
+        return Ok(ValRef::Local(outputs[0]));
     }
 
     // N >= 2: use contraction tree from v1
     // Operand indices: 0..n_inputs are originals, n_inputs+step_idx are intermediates
     for step_idx in 0..tree.step_count() {
-        let (left, right) = tree.step_pair(step_idx).unwrap();
+        let (left, right) = tree.step_pair(step_idx).ok_or_else(|| {
+            builder_invalid_argument(format!("missing contraction pair for step {step_idx}"))
+        })?;
         // Use the step's intermediate output subscripts so that labels needed
         // by later contractions are preserved (not pre-reduced away).
-        let (_, _, step_out_labels) = tree.step_subscripts(step_idx).unwrap();
+        let (_, _, step_out_labels) = tree.step_subscripts(step_idx).ok_or_else(|| {
+            builder_invalid_argument(format!(
+                "missing contraction subscripts for step {step_idx}"
+            ))
+        })?;
         let is_last = step_idx + 1 == tree.step_count();
         let result = binary_contract(
             builder,
-            &labeled[left],
-            &labeled[right],
+            labeled_operand(&labeled, left, "left")?,
+            labeled_operand(&labeled, right, "right")?,
             step_out_labels,
             is_last,
-        );
+        )?;
         // Push intermediate as new entry in labeled
         labeled.push(result);
     }
 
     // The final result is the last intermediate: labeled[n_inputs + step_count - 1]
     let final_idx = n_inputs + tree.step_count() - 1;
-    let result = &labeled[final_idx];
+    let result = labeled_operand(&labeled, final_idx, "final result")?;
 
     // Final reduction if result has labels not in output
     let output_set: HashSet<u32> = output_labels.iter().copied().collect();
@@ -541,24 +609,24 @@ pub fn build_einsum_fragment(
 
     // Final reorder if needed
     if result.labels == *output_labels {
-        return result.val;
+        return Ok(result.val);
     }
 
     if result.labels.is_empty() && output_labels.is_empty() {
-        return result.val;
+        return Ok(result.val);
     }
 
     let perm: Vec<usize> = output_labels
         .iter()
-        .map(|l| result.labels.iter().position(|x| x == l).unwrap())
-        .collect();
+        .map(|l| find_label_axis(&result.labels, *l))
+        .collect::<Result<_>>()?;
     if perm.iter().enumerate().all(|(i, &p)| i == p) {
-        return result.val;
+        return Ok(result.val);
     }
     let outputs = builder.add_op(
         StdTensorOp::Transpose { perm },
         vec![result.val.clone()],
         OpMode::Primal,
     );
-    ValRef::Local(outputs[0])
+    Ok(ValRef::Local(outputs[0]))
 }

@@ -285,16 +285,11 @@ pub fn einsum_with<B: TensorBackend>(
                 engine.einsum_cache.put(cache_key, tree.clone());
                 tree
             };
-            Ok(build_traced_from_tree(
-                inputs,
-                &subs,
-                tree.as_ref(),
-                &shapes,
-            ))
+            build_traced_from_tree(inputs, &subs, tree.as_ref(), &shapes)
         }
         optimize => {
             let tree = resolve_strategy(optimize, &subs, &shape_refs)?;
-            Ok(build_traced_from_tree(inputs, &subs, &tree, &shapes))
+            build_traced_from_tree(inputs, &subs, &tree, &shapes)
         }
     }
 }
@@ -465,7 +460,7 @@ fn build_traced_from_tree(
     subscripts: &Subscripts,
     tree: &ContractionTree,
     shapes: &[Vec<usize>],
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let out_shape = compute_einsum_output_shape(subscripts, shapes);
 
     let mut builder = FragmentBuilder::new();
@@ -478,7 +473,8 @@ fn build_traced_from_tree(
         input_vals.push(val_ref);
     }
 
-    let result_ref = build_einsum_fragment(&mut builder, tree, &input_vals, shapes);
+    let result_ref = build_einsum_fragment(&mut builder, tree, &input_vals, shapes)
+        .map_err(|err| Error::ContractionError(err.to_string()))?;
 
     match result_ref {
         ValRef::Local(result_local) => {
@@ -497,7 +493,7 @@ fn build_traced_from_tree(
                 CheckpointNode::merge_chains(acc, input.checkpoint_chain.clone())
             });
 
-            TracedTensor {
+            Ok(TracedTensor {
                 id: next_traced_id(),
                 rank: out_shape.len(),
                 dtype: inputs[0].dtype,
@@ -508,14 +504,14 @@ fn build_traced_from_tree(
                 inputs_map: Arc::new(merged),
                 extra_roots,
                 checkpoint_chain: merged_chain,
-            }
+            })
         }
         ValRef::External(_) => {
             // Identity pass-through: the einsum doesn't add any ops.
             // Find which input was returned and clone its TracedTensor.
             for (i, iv) in input_vals.iter().enumerate() {
                 if *iv == result_ref {
-                    return TracedTensor {
+                    return Ok(TracedTensor {
                         id: next_traced_id(),
                         rank: out_shape.len(),
                         dtype: inputs[i].dtype,
@@ -526,10 +522,12 @@ fn build_traced_from_tree(
                         inputs_map: inputs[i].inputs_map.clone(),
                         extra_roots: inputs[i].extra_roots.clone(),
                         checkpoint_chain: inputs[i].checkpoint_chain.clone(),
-                    };
+                    });
                 }
             }
-            panic!("build_einsum_fragment returned unrecognized external ref");
+            Err(Error::Internal(
+                "einsum builder returned an unrecognized external value".into(),
+            ))
         }
     }
 }

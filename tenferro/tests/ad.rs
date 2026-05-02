@@ -15,7 +15,7 @@ use tenferro::exec::eval_exec_ir;
 use tenferro::shape_infer::{infer_output_dtype, infer_output_shapes};
 use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::ad::context::{
-    register_global_metadata_batch, snapshot_global_metadata, TensorMeta,
+    lookup_global_metadata, register_global_metadata_batch, TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
@@ -198,8 +198,7 @@ fn register_fragment_metadata_for_test(
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 ) {
     let seeded: Vec<_> = seeded.into_iter().collect();
-    let mut known = (*snapshot_global_metadata()).clone();
-    known.extend(seeded.iter().cloned());
+    let mut known: HashMap<_, _> = seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
     for op_node in fragment.ops() {
@@ -211,10 +210,16 @@ fn register_fragment_metadata_for_test(
                     ValRef::Local(local_id) => &fragment.vals()[*local_id].key,
                     ValRef::External(key) => key,
                 };
-                known
-                    .get(key)
-                    .cloned()
-                    .unwrap_or_else(|| panic!("test metadata registration missing input {:?}", key))
+                match known.get(key).cloned() {
+                    Some(meta) => meta,
+                    None => {
+                        let meta = lookup_global_metadata(key).unwrap_or_else(|| {
+                            panic!("test metadata registration missing input {:?}", key)
+                        });
+                        known.insert(key.clone(), meta.clone());
+                        meta
+                    }
+                }
             })
             .collect();
         let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas

@@ -16,6 +16,15 @@ pub(crate) trait BlasGemm: Sized {
     );
 
     #[allow(clippy::too_many_arguments)]
+    /// Run GEMM against raw strided matrix pointers.
+    ///
+    /// # Safety
+    ///
+    /// The caller must pass valid, non-null pointers to matrices whose logical
+    /// `m x k`, `k x n`, and `m x n` elements are addressable through the given
+    /// strides for the duration of the BLAS call. `c_ptr` must be uniquely
+    /// writable for the output elements and must not alias input elements in a
+    /// way forbidden by the linked BLAS implementation.
     unsafe fn strided_gemm(
         alpha: Self,
         a_ptr: *const Self,
@@ -111,6 +120,9 @@ macro_rules! impl_real_blas_gemm {
                 let m_i32 = dim_to_i32("m", m);
                 let n_i32 = dim_to_i32("n", n);
                 let k_i32 = dim_to_i32("k", k);
+                // SAFETY: the slices provide valid contiguous column-major
+                // storage for the BLAS read/write regions implied by m, n,
+                // and k, and dimensions were checked to fit BLAS i32 args.
                 unsafe {
                     $gemm(
                         CBLAS_LAYOUT::CblasColMajor,
@@ -154,6 +166,9 @@ macro_rules! impl_real_blas_gemm {
                 let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs);
                 let ldc = infer_c_layout(m, c_rs, c_cs);
 
+                // SAFETY: `strided_gemm`'s caller guarantees the raw pointers
+                // are valid for the strided matrix regions. Layout inference
+                // above checked the unit-stride axis and BLAS leading dims.
                 $gemm(
                     CBLAS_LAYOUT::CblasColMajor,
                     trans_a,
@@ -193,6 +208,9 @@ macro_rules! impl_complex_blas_gemm {
                 let k_i32 = dim_to_i32("k", k);
                 let alpha_ri = [alpha.re, alpha.im];
                 let beta_ri = [beta.re, beta.im];
+                // SAFETY: the slices provide valid contiguous column-major
+                // storage for the BLAS read/write regions implied by m, n,
+                // and k, and dimensions were checked to fit BLAS i32 args.
                 unsafe {
                     $gemm(
                         CBLAS_LAYOUT::CblasColMajor,
@@ -238,6 +256,9 @@ macro_rules! impl_complex_blas_gemm {
                 let alpha_ri = [alpha.re, alpha.im];
                 let beta_ri = [beta.re, beta.im];
 
+                // SAFETY: `strided_gemm`'s caller guarantees the raw pointers
+                // are valid for the strided matrix regions. Layout inference
+                // above checked the unit-stride axis and BLAS leading dims.
                 $gemm(
                     CBLAS_LAYOUT::CblasColMajor,
                     trans_a,

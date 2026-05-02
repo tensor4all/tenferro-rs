@@ -12,31 +12,6 @@
 //! assert_eq!(c.shape(), &[2]);
 //! ```
 
-pub mod backend;
-pub mod buffer_pool;
-pub mod config;
-pub mod cpu;
-pub mod error;
-#[cfg(feature = "provider-inject")]
-pub mod inject;
-mod typed_linalg;
-pub mod types;
-pub mod validate;
-
-#[cfg(feature = "rocm")]
-pub mod rocm;
-
-#[cfg(feature = "cubecl")]
-pub mod cubecl;
-
-pub use backend::{
-    default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
-    TensorBackend, TensorExec,
-};
-pub use config::*;
-pub use error::*;
-pub use types::*;
-
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
 
@@ -46,16 +21,125 @@ compile_error!("enable exactly one CPU backend: cpu-faer or cpu-blas");
 #[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
 compile_error!("provider-inject requires cpu-blas");
 
-#[cfg(feature = "provider-src")]
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod backend;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod buffer_pool;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod config;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod cpu;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod error;
+#[cfg(all(
+    feature = "provider-inject",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod inject;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+mod typed_linalg;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod types;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod validate;
+
+#[cfg(all(
+    feature = "rocm",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod rocm;
+
+#[cfg(all(
+    feature = "cubecl",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub mod cubecl;
+
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub use backend::{
+    default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
+    TensorBackend, TensorExec,
+};
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub use config::*;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub use error::*;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub use types::*;
+
+#[cfg(all(
+    feature = "provider-src",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 extern crate blas_src as _;
-#[cfg(feature = "provider-inject")]
+#[cfg(all(
+    feature = "provider-inject",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 extern crate cblas_inject as _;
-#[cfg(feature = "provider-src")]
+#[cfg(all(
+    feature = "provider-src",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 extern crate cblas_src as _;
-#[cfg(feature = "provider-inject")]
+#[cfg(all(
+    feature = "provider-inject",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 extern crate lapack_inject as _;
-#[cfg(feature = "provider-src")]
+#[cfg(all(
+    feature = "provider-src",
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 extern crate lapack_src as _;
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 mod tests;
