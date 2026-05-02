@@ -3,7 +3,8 @@ use crate::DType;
 use crate::TensorBackend;
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i64,
+    upload,
 };
 
 #[test]
@@ -68,6 +69,58 @@ fn test_cubecl_structural_ops_match_cpu() {
     let gpu_out = gpu.triu(&gpu_matrix, -1).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_i64_structural_ops_match_cpu() {
+    let input = tensor_i64(vec![2, 3], vec![1, -2, 3, -4, 5, -6]);
+    let scalar = tensor_i64(vec![], vec![7]);
+    let vector = tensor_i64(vec![3], vec![10, -20, 30]);
+    let matrix = tensor_i64(vec![3, 3], vec![1, -2, 3, -4, 5, -6, 7, -8, 9]);
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+    let gpu_scalar = upload(&gpu, &scalar);
+    let gpu_vector = upload(&gpu, &vector);
+
+    let expected = cpu.transpose(&input, &[1, 0]).unwrap();
+    let gpu_out = gpu.transpose(&gpu_input, &[1, 0]).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.reshape(&input, &[3, 2]).unwrap();
+    let gpu_out = gpu.reshape(&gpu_input, &[3, 2]).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.broadcast_in_dim(&scalar, &[2, 3], &[]).unwrap();
+    let gpu_out = gpu.broadcast_in_dim(&gpu_scalar, &[2, 3], &[]).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.reverse(&input, &[1]).unwrap();
+    let gpu_out = gpu.reverse(&gpu_input, &[1]).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.concatenate(&[&input, &input], 1).unwrap();
+    let gpu_out = gpu.concatenate(&[&gpu_input, &gpu_input], 1).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let gpu_matrix = upload(&gpu, &matrix);
+    let expected = cpu.extract_diagonal(&matrix, 0, 1).unwrap();
+    let gpu_out = gpu.extract_diagonal(&gpu_matrix, 0, 1).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.embed_diagonal(&vector, 0, 1).unwrap();
+    let gpu_out = gpu.embed_diagonal(&gpu_vector, 0, 1).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.tril(&matrix, 0).unwrap();
+    let gpu_out = gpu.tril(&gpu_matrix, 0).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
+
+    let expected = cpu.triu(&matrix, -1).unwrap();
+    let gpu_out = gpu.triu(&gpu_matrix, -1).unwrap();
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 0.0);
 }
 
 #[test]
