@@ -4,8 +4,8 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    batched_binary, dim_i32, has_zero_dim, matrix_dims, panic_on_lapack_error, square_matrix_dim,
-    tensor_from_vec_with_template, transpose_col_major_data,
+    batched_binary_result, dim_i32, has_zero_dim, matrix_dims, panic_on_lapack_error,
+    square_matrix_dim, tensor_from_vec_with_template, transpose_col_major_data,
 };
 
 pub(crate) trait LapackTriangularSolve: Clone + Copy {
@@ -67,10 +67,16 @@ fn solve_left<T: LapackTriangularSolve>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     let n = square_matrix_dim(a, "triangular_solve");
     let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
-    assert_eq!(b_rows, n, "triangular_solve: rhs row count mismatch");
+    if b_rows != n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "triangular_solve",
+            lhs: vec![n],
+            rhs: vec![b_rows],
+        });
+    }
 
     let mut rhs = b.host_data().to_vec();
     let mut info = 0;
@@ -87,7 +93,7 @@ fn solve_left<T: LapackTriangularSolve>(
         &mut info,
     );
     panic_on_lapack_error("triangular_solve", "dtrtrs", info);
-    tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
+    Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
 }
 
 fn solve_right<T: LapackTriangularSolve>(
@@ -96,10 +102,16 @@ fn solve_right<T: LapackTriangularSolve>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     let n = square_matrix_dim(a, "triangular_solve");
     let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
-    assert_eq!(b_cols, n, "triangular_solve: rhs column count mismatch");
+    if b_cols != n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "triangular_solve",
+            lhs: vec![n],
+            rhs: vec![b_cols],
+        });
+    }
 
     let mut rhs_t = transpose_col_major_data(b.host_data(), b_rows, n);
     let mut info = 0;
@@ -117,7 +129,7 @@ fn solve_right<T: LapackTriangularSolve>(
     );
     panic_on_lapack_error("triangular_solve", "dtrtrs", info);
     let result = transpose_col_major_data(&rhs_t, n, b_rows);
-    tensor_from_vec_with_template(vec![b_rows, n], result, b)
+    Ok(tensor_from_vec_with_template(vec![b_rows, n], result, b))
 }
 
 fn triangular_solve_2d<T: LapackTriangularSolve>(
@@ -128,7 +140,7 @@ fn triangular_solve_2d<T: LapackTriangularSolve>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     if left_side {
         solve_left(a, b, lower, transpose_a, unit_diagonal)
     } else {
@@ -144,11 +156,15 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TypedTensor<T> {
+) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        return tensor_from_vec_with_template(b.shape.clone(), Vec::new(), b);
+        return Ok(tensor_from_vec_with_template(
+            b.shape.clone(),
+            Vec::new(),
+            b,
+        ));
     }
-    batched_binary(buffers, a, b, |buffers, a, b| {
+    batched_binary_result("triangular_solve", buffers, a, b, |buffers, a, b| {
         triangular_solve_2d(buffers, a, b, left_side, lower, transpose_a, unit_diagonal)
     })
 }

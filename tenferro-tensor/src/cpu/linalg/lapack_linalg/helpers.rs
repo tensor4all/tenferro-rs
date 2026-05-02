@@ -36,6 +36,21 @@ pub(crate) fn split_core_and_batch<'a, T>(
     input.shape.split_at(core_rank)
 }
 
+pub(crate) fn split_core_and_batch_result<'a, T>(
+    input: &'a TypedTensor<T>,
+    core_rank: usize,
+    op: &'static str,
+) -> crate::Result<(&'a [usize], &'a [usize])> {
+    if input.shape.len() < core_rank {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: core_rank,
+            actual: input.shape.len(),
+        });
+    }
+    Ok(input.shape.split_at(core_rank))
+}
+
 pub(crate) fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
@@ -329,22 +344,26 @@ where
         .collect()
 }
 
-pub(crate) fn batched_binary<T, F>(
+pub(crate) fn batched_binary_result<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     op: F,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: Clone,
-    F: Fn(&mut BufferPool, &TypedTensor<T>, &TypedTensor<T>) -> TypedTensor<T>,
+    F: Fn(&mut BufferPool, &TypedTensor<T>, &TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
 {
-    let (a_core_shape, a_batch_shape) = split_core_and_batch(a, 2, "batched_binary");
-    let (b_core_shape, b_batch_shape) = split_core_and_batch(b, 2, "batched_binary");
-    assert_eq!(
-        a_batch_shape, b_batch_shape,
-        "batched_binary: batch shape mismatch"
-    );
+    let (a_core_shape, a_batch_shape) = split_core_and_batch_result(a, 2, op_name)?;
+    let (b_core_shape, b_batch_shape) = split_core_and_batch_result(b, 2, op_name)?;
+    if a_batch_shape != b_batch_shape {
+        return Err(crate::Error::ShapeMismatch {
+            op: op_name,
+            lhs: a_batch_shape.to_vec(),
+            rhs: b_batch_shape.to_vec(),
+        });
+    }
 
     if a_batch_shape.is_empty() {
         return op(buffers, a, b);
@@ -353,10 +372,12 @@ where
     let a_slice_size: usize = a_core_shape.iter().product();
     let b_slice_size: usize = b_core_shape.iter().product();
     let batch_count: usize = a_batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_binary: zero-sized batch dims are unsupported"
-    );
+    if batch_count == 0 {
+        return Err(crate::Error::InvalidConfig {
+            op: op_name,
+            message: "zero-sized batch dims must be handled by the caller".into(),
+        });
+    }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
@@ -377,14 +398,16 @@ where
             b.host_data()[b_start..b_end].to_vec(),
             b,
         );
-        let batch_output = op(buffers, &batch_a, &batch_b);
+        let batch_output = op(buffers, &batch_a, &batch_b)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_binary: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: expected_shape.clone(),
+                });
+            }
         } else {
             out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
             out_core_shape = Some(batch_output.shape.clone());
@@ -392,23 +415,25 @@ where
 
         match &mut out_data {
             Some(data) => data.extend_from_slice(batch_output.host_data()),
-            None => panic!("batched_binary: missing output buffer"),
+            None => {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: "missing output buffer after first batch".into(),
+                });
+            }
         }
     }
 
-    let mut out_shape = match out_core_shape {
-        Some(shape) => shape,
-        None => panic!("batched_binary: missing output shape"),
-    };
+    let mut out_shape = out_core_shape.ok_or_else(|| crate::Error::InvalidConfig {
+        op: op_name,
+        message: "missing output shape".into(),
+    })?;
     out_shape.extend_from_slice(a_batch_shape);
-    tensor_from_vec_with_template(
-        out_shape,
-        match out_data {
-            Some(data) => data,
-            None => panic!("batched_binary: missing output data"),
-        },
-        b,
-    )
+    let out_data = out_data.ok_or_else(|| crate::Error::InvalidConfig {
+        op: op_name,
+        message: "missing output data".into(),
+    })?;
+    Ok(tensor_from_vec_with_template(out_shape, out_data, b))
 }
 
 pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> Vec<Tensor> {
