@@ -132,7 +132,7 @@ impl ContractionTree {
             if let Some(omeco_pairs) = optimize_omeco_pairs(subscripts, &size_dict, options)? {
                 omeco_pairs
             } else {
-                optimize_self_greedy_pairs(subscripts, &size_dict)
+                optimize_self_greedy_pairs(subscripts, &size_dict)?
             };
         Self::from_pairs(subscripts, shapes, &pairs)
     }
@@ -364,7 +364,7 @@ fn nested_to_pairs(
 fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
-) -> Vec<(usize, usize)> {
+) -> Result<Vec<(usize, usize)>> {
     let n_inputs = subscripts.inputs.len();
     let mut available: Vec<usize> = (0..n_inputs).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
@@ -387,7 +387,7 @@ fn optimize_self_greedy_pairs(
                     }
                 }
                 let cost =
-                    contraction_cost(&operand_subs[li], &operand_subs[lj], &needed, size_dict);
+                    contraction_cost(&operand_subs[li], &operand_subs[lj], &needed, size_dict)?;
                 if cost < best_cost {
                     best_cost = cost;
                     best_i = i;
@@ -415,7 +415,7 @@ fn optimize_self_greedy_pairs(
         available.push(new_idx);
     }
 
-    pairs
+    Ok(pairs)
 }
 
 #[cfg(test)]

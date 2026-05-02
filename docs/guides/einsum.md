@@ -26,7 +26,11 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
 ## Trace and diagonal
 
-These match the usual einsum idioms from NumPy, PyTorch, and JAX.
+These match the usual repeated-label einsum idioms from NumPy, PyTorch, and JAX.
+When a label appears more than once in one input, tenferro first selects the
+diagonal for those axes. If that label is absent from the output, the diagonal
+is reduced. If a label appears more than once in the output, tenferro embeds the
+input on that diagonal.
 
 ```rust
 use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
@@ -45,6 +49,27 @@ let diagonal_result = diagonal.eval(&mut engine).unwrap();
 
 assert_eq!(trace_result.as_slice::<f64>().unwrap(), &[15.0]);
 assert_eq!(diagonal_result.as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
+```
+
+Higher-rank repeated labels use the same rule. For `"iij->ij"`, the first two
+axes are diagonalized and the trailing `j` axis is preserved.
+
+```rust
+use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
+
+let x = TracedTensor::from_vec(
+    vec![2, 2, 3],
+    vec![
+        1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+    ],
+);
+
+let mut engine = Engine::new(CpuBackend::new());
+let mut y = einsum(&mut engine, &[&x], "iij->ij").unwrap();
+let result = y.eval(&mut engine).unwrap();
+
+assert_eq!(result.shape(), &[2, 3]);
+assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 4.0, 5.0, 8.0, 9.0, 12.0]);
 ```
 
 ## Outer product
@@ -115,8 +140,7 @@ For N-ary einsum the mode propagates:
 The engine caches optimized contraction trees keyed by `(subscripts, input shapes)`, so the eval-time cost is amortized across repeated calls with the same shapes.
 
 ```rust
-use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor};
-use tenferro_tensor::DType;
+use tenferro::{einsum::einsum, CpuBackend, DType, Engine, Tensor, TracedTensor};
 
 // One symbolic-shape input + one concrete-shape input.
 let a = TracedTensor::input_symbolic_shape(DType::F64, 2);

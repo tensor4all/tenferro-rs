@@ -6,6 +6,8 @@
 //! - **Parenthesized notation**: `"ij,(jk,kl)->il"` respects user-specified
 //!   contraction order via [`NestedEinsum`]
 //! - **Integer label notation**: using `u32` labels
+//! - **Repeated labels**: `"ii->i"` extracts diagonals, `"ii->"` traces, and
+//!   `"i->ii"` embeds a vector on a diagonal
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
 //! - **v2 builder**: [`build_einsum_fragment`] lowers einsum into a compute
@@ -13,26 +15,26 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use computegraph::fragment::FragmentBuilder;
-//! use computegraph::types::ValRef;
-//! use tenferro_ops::input_key::TensorInputKey;
-//! use tenferro_ops::std_tensor_op::StdTensorOp;
-//! use tenferro_einsum::{ContractionTree, Subscripts, build_einsum_fragment};
+//! ```
+//! use tenferro_einsum::{ContractionTree, Subscripts};
 //!
 //! let subs = Subscripts::parse("ij,jk->ik").unwrap();
 //! let tree = ContractionTree::optimize(&subs, &[&[2, 3], &[3, 4]]).unwrap();
+//! assert_eq!(tree.step_count(), 1);
+//! ```
 //!
-//! let mut builder = FragmentBuilder::<StdTensorOp>::new();
-//! let a = builder.add_input(TensorInputKey::User { id: 0 });
-//! let b = builder.add_input(TensorInputKey::User { id: 1 });
+//! ```
+//! use tenferro_einsum::Subscripts;
 //!
-//! let result = build_einsum_fragment(
-//!     &mut builder,
-//!     &tree,
-//!     &[ValRef::Local(a), ValRef::Local(b)],
-//!     &[vec![2, 3], vec![3, 4]],
-//! );
+//! let trace = Subscripts::parse("ii->").unwrap();
+//! let diagonal = Subscripts::parse("ii->i").unwrap();
+//! let embedded = Subscripts::parse("i->ii").unwrap();
+//! let higher_rank = Subscripts::parse("iij->ij").unwrap();
+//!
+//! assert!(trace.output.is_empty());
+//! assert_eq!(diagonal.output, vec![b'i' as u32]);
+//! assert_eq!(embedded.output, vec![b'i' as u32, b'i' as u32]);
+//! assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 //! ```
 
 pub mod builder;

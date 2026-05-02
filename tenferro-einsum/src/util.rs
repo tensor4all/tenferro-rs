@@ -115,17 +115,16 @@ pub(crate) fn contraction_cost(
     subs_b: &[u32],
     needed: &HashSet<u32>,
     size_dict: &HashMap<u32, usize>,
-) -> usize {
+) -> Result<usize> {
     let out_subs = intermediate_subs(subs_a, subs_b, needed);
-    out_subs
-        .iter()
-        .map(|l| {
-            debug_assert!(
-                size_dict.contains_key(l),
-                "contraction_cost: label {l} missing from size_dict"
-            );
-            size_dict.get(l).copied().unwrap_or(1)
-        })
-        .product::<usize>()
-        .max(1)
+    let mut cost = 1usize;
+    for label in out_subs {
+        let size = size_dict.get(&label).copied().ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "unknown size for label {label} in contraction cost"
+            ))
+        })?;
+        cost = cost.saturating_mul(size);
+    }
+    Ok(cost.max(1))
 }

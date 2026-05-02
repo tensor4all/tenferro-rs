@@ -2,9 +2,10 @@
 
 ## Overview
 
-`TensorExec` is the execution-time primitive surface. All ops run within a
-backend-owned execution scope — rayon pool for CPU, CUDA stream for GPU.
-Individual ops must NOT re-enter the backend's execution context.
+`TensorExec` is the execution-time primitive surface. Ops run within a
+backend-owned execution scope when the backend has one, such as the owned rayon
+pool used by CPU execution. Individual ops must not re-enter the same backend
+scope.
 
 `TensorBackend::with_exec_session` creates the scope. `eval_exec_ir` runs
 inside the session.
@@ -61,49 +62,29 @@ impl TensorBackend for CpuBackend {
 `CpuExecSession` implements `TensorExec` by calling kernel functions
 directly — no `install()` or `install_with_pool()` per op.
 
-### CUDA (future)
+### CubeCL/CUDA
 
-The same pattern maps to CUDA execution:
+`CubeclBackend` is the current CUDA GPU backend. It uses CubeCL/CubeCL-CUDA and
+runtime-loaded CUDA libraries from `tenferro-tensor/src/cubecl/`.
 
-| CPU | CUDA |
+Today `CubeclBackend` does not define a separate exec-session struct. It uses
+the default `TensorBackend::with_exec_session` adapter, so each `TensorExec`
+call forwards to the backend method. The backend method launches CubeCL kernels
+or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
+`CubeclRuntime`.
+
+| CPU concept | CubeCL/CUDA concept |
 |---|---|
-| `CpuContext` (rayon ThreadPool) | `CudaContext` (device + stream) |
-| `ctx.install()` | `cudaSetDevice()` + stream selection |
-| `BufferPool` (host `Vec<T>`) | `DeviceBufferPool` (cudaMalloc reuse) |
+| `CpuContext` (rayon ThreadPool) | `CubeclRuntime` (CUDA device/client) |
+| `ctx.install()` | CubeCL launch through the stored runtime |
+| `BufferPool` (host `Vec<T>`) | CubeCL device buffers plus upload/download helpers |
 | `Par::rayon(0)` | kernel launch on stream |
-| per-step `install()` overhead | per-step `cudaSetDevice()` overhead |
+| per-step `install()` overhead | per-kernel launch/runtime dispatch overhead |
 
-```rust
-// Future CUDA implementation (not yet implemented)
-struct CudaExecSession<'a> {
-    stream: &'a CudaStream,
-    device_pool: &'a mut DeviceBufferPool,
-}
-
-impl TensorExec for CudaExecSession<'_> {
-    fn dot_general(&mut self, lhs, rhs, config) -> Result<Tensor> {
-        // cuBLAS handle bound to stream — no per-op stream switch
-        cublas::gemm(self.stream, self.device_pool, lhs, rhs, config)
-    }
-}
-
-impl TensorBackend for CudaBackend {
-    fn with_exec_session<R: Send>(
-        &mut self,
-        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
-    ) -> R {
-        self.device.set_current();
-        let mut pool = std::mem::take(&mut self.device_pool);
-        let mut session = CudaExecSession {
-            stream: &self.stream,
-            device_pool: &mut pool,
-        };
-        let result = f(&mut session);
-        self.device_pool = pool;
-        result
-    }
-}
-```
+Future CubeCL work may introduce a dedicated GPU exec session if there is a
+measurable benefit from binding temporary workspace, stream state, or device
+buffer pooling across an entire compiled program. That should extend
+`CubeclBackend`; it should not add a separate `CudaBackend` type.
 
 ### Default (no-op)
 

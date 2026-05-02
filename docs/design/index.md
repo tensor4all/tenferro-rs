@@ -11,7 +11,7 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [device.md](./device.md) | tenferro-device: memory spaces, compute devices, error types |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
-| [tensor-prims.md](./tensor-prims.md) | Tensor primitive protocol families |
+| [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
 | [algebra.md](./algebra.md) | HasAlgebra, Semiring, tropical and user-defined algebra |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |

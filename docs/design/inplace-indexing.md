@@ -6,7 +6,7 @@ Add safe and backend-portable support for partial in-place tensor updates
 (`x[idx] = value`) in tenferro-rs, aligned with the existing layered design:
 
 - `tenferro-tensor`: views/ownership metadata
-- `tenferro-prims`: backend execution protocol
+- `tenferro-tensor::TensorBackend`: backend execution protocol
 - `chainrules` integration: AD safety rules
 
 ## Reference Behavior (PyTorch C++)
@@ -28,8 +28,8 @@ version counters.
 
 - Zero-copy view ops (`select`, `narrow`, `permute`, `diagonal`, `broadcast`).
 - Shared-buffer ownership model (`Arc<BufferInner<T>>`).
-- Family-based backend protocol (`TensorSemiringCore` / dedicated primitive families).
-- Existing output in-place style API (`einsum_into` family).
+- Backend protocol surface (`TensorBackend` / `TensorExec`).
+- Existing out-parameter and buffer-reuse patterns in backend execution.
 
 ### Missing pieces
 
@@ -60,7 +60,7 @@ impl<T: Scalar> Tensor<T> {
 }
 ```
 
-### Primitive family extension (Phase 2+)
+### Backend extension (Phase 2+)
 
 ```rust
 pub enum IndexingDescriptor {
@@ -69,23 +69,8 @@ pub enum IndexingDescriptor {
     },
 }
 
-pub trait TensorIndexingPrims<Alg: Semiring> {
-    type Plan;
-    type Context;
-
-    fn plan(
-        ctx: &mut Self::Context,
-        desc: &IndexingDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<Self::Plan>;
-
-    fn execute<T: ScalarBase>(
-        ctx: &mut Self::Context,
-        plan: &Self::Plan,
-        inputs: &[&Tensor<T>],
-        output: &mut Tensor<T>,
-    ) -> Result<()>;
-}
+// Future shape: add an index_put-style method to TensorBackend/TensorExec
+// once mutation/version-counter semantics are specified.
 ```
 
 ## Execution Model
@@ -102,7 +87,8 @@ existing view + contiguous/copy logic.
 ### Path B: advanced indexing (Phase 2+)
 
 - Normalize tensor/mask indices.
-- Dispatch to backend `TensorIndexingPrims` if available.
+- Dispatch to a backend `TensorBackend`/`TensorExec` indexing method if
+  available.
 - Fallback behavior:
   - CPU backend: reference implementation.
   - Backends without extension: return explicit `Error::DeviceError` or use
@@ -165,15 +151,15 @@ crate boundaries (`chainrules-core` independent from tensor internals).
 ## GPU Notes
 
 - API should be backend-neutral from day one.
-- CUDA/ROCm kernels for advanced indexing can be added incrementally behind
-  `TensorIndexingPrims`.
+- CubeCL/CUDA kernels for advanced indexing can be added incrementally behind
+  the existing backend traits. ROCm remains a stub until explicitly implemented.
 - Deterministic behavior with duplicate indices should be explicitly specified
   (especially for `accumulate=true`).
 
 ## Rollout Plan
 
 1. Phase 1: `set_item_` basic indexing only (CPU), AD-unsafe cases rejected.
-2. Phase 2: add `TensorIndexingPrims` + `IndexingDescriptor::IndexPut`.
+2. Phase 2: add a backend indexing method and `IndexingDescriptor::IndexPut`.
 3. Phase 3: version counter + view/in-place safety checks for AD.
 4. Phase 4: GPU advanced indexing kernels and deterministic policy completion.
 
