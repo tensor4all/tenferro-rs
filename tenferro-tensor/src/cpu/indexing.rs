@@ -366,7 +366,10 @@ fn typed_concatenate<T: Copy + Clone>(
         let input_pos = segment_ends
             .iter()
             .position(|&end| concat_idx < end)
-            .expect("concatenate: output index must map to an input");
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op: "concatenate",
+                message: "output index must map to an input".to_string(),
+            })?;
         let axis_base = if input_pos == 0 {
             0
         } else {
