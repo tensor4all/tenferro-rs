@@ -57,7 +57,8 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 ///
 /// Iterates over all batch slices and inspects the diagonal entries
 /// `data[i + i * rows]` for `i` in `0..min(rows, cols)`. Returns
-/// [`Error::BackendFailure`] with `op: "solve"` on the first offending entry.
+/// [`Error::BackendFailure`] with `op: "solve"` on the first offending entry,
+/// or [`Error::RankMismatch`] when `t` has rank less than two.
 ///
 /// # Examples
 ///
@@ -71,6 +72,13 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     t: &TypedTensor<T>,
 ) -> Result<()> {
+    if t.shape.len() < 2 {
+        return Err(Error::RankMismatch {
+            op: "solve",
+            expected: 2,
+            actual: t.shape.len(),
+        });
+    }
     let rows = t.shape[0];
     let cols = t.shape[1];
     let n = rows.min(cols);
