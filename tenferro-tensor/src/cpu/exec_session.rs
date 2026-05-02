@@ -166,7 +166,7 @@ impl TensorExec for CpuExecSession<'_> {
     delegate!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose(input, perm));
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     delegate!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim(input, shape, dims));
-    delegate!(convert(input: &Tensor, to: crate::DType) => Ok(structural::convert(input, to)));
+    delegate!(convert(input: &Tensor, to: crate::DType) => structural::convert(input, to));
     delegate!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal(input, axis_a, axis_b));
     delegate!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal(input, axis_a, axis_b));
     delegate!(tril(input: &Tensor, k: i64) => structural::tril(input, k));

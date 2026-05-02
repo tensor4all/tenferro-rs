@@ -261,7 +261,7 @@ impl TensorBackend for CpuBackend {
     }
 
     fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        Ok(self.install(|| structural::convert(input, to)))
+        self.install(|| structural::convert(input, to))
     }
 
     fn extract_diagonal(

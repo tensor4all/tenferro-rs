@@ -1602,6 +1602,14 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let mul_c32 = mul(&scalar_f32, &rhs_c32).unwrap();
     assert_eq!(get_c32(&mul_c32, &[1]), Complex32::new(0.0, 4.0));
 
+    let scalar_div_c32 = div(&scalar_f32, &rhs_c32).unwrap();
+    assert_eq!(get_c32(&scalar_div_c32, &[0]), Complex32::new(2.0, 0.0));
+    assert_eq!(get_c32(&scalar_div_c32, &[1]), Complex32::new(0.0, -1.0));
+
+    let c32_div_scalar = div(&rhs_c32, &scalar_f32).unwrap();
+    assert_eq!(get_c32(&c32_div_scalar, &[0]), Complex32::new(0.5, 0.0));
+    assert_eq!(get_c32(&c32_div_scalar, &[1]), Complex32::new(0.0, 1.0));
+
     assert!(matches!(
         div(
             &lhs_f32,
@@ -1695,6 +1703,14 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     assert_c64_close(get_c64(&mul_left_scalar, &[1]), Complex64::new(0.0, 4.0));
     let mul_right_scalar = mul(&lhs_c64, &scalar_f64).unwrap();
     assert_c64_close(get_c64(&mul_right_scalar, &[0]), Complex64::new(6.0, 8.0));
+
+    let div_left_scalar = div(&scalar_f64, &rhs_c64).unwrap();
+    assert_c64_close(get_c64(&div_left_scalar, &[0]), Complex64::new(2.0, 0.0));
+    assert_c64_close(get_c64(&div_left_scalar, &[1]), Complex64::new(0.0, -1.0));
+
+    let div_right_scalar = div(&lhs_c64, &scalar_f64).unwrap();
+    assert_c64_close(get_c64(&div_right_scalar, &[0]), Complex64::new(1.5, 2.0));
+    assert_c64_close(get_c64(&div_right_scalar, &[1]), Complex64::new(0.5, 0.0));
 
     let div_c64 = div(
         &lhs_c64,
@@ -2799,6 +2815,18 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     assert_eq!(reversed.shape(), &[4, 3]);
     assert_eq!(get_f64(&reversed, &[0, 0]), 12.0);
     assert_eq!(get_f64(&reversed, &[3, 2]), 1.0);
+}
+
+#[test]
+fn test_structural_convert_helper_returns_result() {
+    let input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
+
+    let output = crate::cpu::structural::convert(&input, DType::F64).unwrap();
+
+    assert_eq!(output.shape(), &[2]);
+    assert_eq!(output.dtype(), DType::F64);
+    assert_eq!(get_f64(&output, &[0]), 1.25);
+    assert_eq!(get_f64(&output, &[1]), -2.5);
 }
 
 #[test]
