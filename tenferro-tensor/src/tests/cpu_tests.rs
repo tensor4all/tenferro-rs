@@ -44,6 +44,13 @@ fn get_c32(t: &Tensor, idx: &[usize]) -> Complex32 {
     }
 }
 
+fn get_i64(t: &Tensor, idx: &[usize]) -> i64 {
+    match t {
+        Tensor::I64(inner) => *inner.get(idx),
+        _ => panic!("expected I64 tensor"),
+    }
+}
+
 fn assert_f64_close(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1.0e-12,
@@ -459,6 +466,24 @@ fn test_add_mul() {
     assert_eq!(get_f64(&prod, &[1, 0]), 40.0);
     assert_eq!(get_f64(&prod, &[0, 1]), 90.0);
     assert_eq!(get_f64(&prod, &[1, 1]), 160.0);
+}
+
+#[test]
+fn test_add_mul_i64() {
+    let a = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1, 2, 3, 4]));
+    let b = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![10, 20, 30, 40]));
+    let sum = add(&a, &b).unwrap();
+    let prod = mul(&a, &b).unwrap();
+
+    assert_eq!(get_i64(&sum, &[0, 0]), 11);
+    assert_eq!(get_i64(&sum, &[1, 0]), 22);
+    assert_eq!(get_i64(&sum, &[0, 1]), 33);
+    assert_eq!(get_i64(&sum, &[1, 1]), 44);
+
+    assert_eq!(get_i64(&prod, &[0, 0]), 10);
+    assert_eq!(get_i64(&prod, &[1, 0]), 40);
+    assert_eq!(get_i64(&prod, &[0, 1]), 90);
+    assert_eq!(get_i64(&prod, &[1, 1]), 160);
 }
 
 #[test]

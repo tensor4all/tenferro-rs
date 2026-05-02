@@ -18,12 +18,13 @@ Implement:
 - `DynamicTruncate` rejects non-scalar size tensors with `Err`, not indexing the first element.
 - `scale_real` and linalg scalar helpers round real-to-I64 constants instead of truncating.
 - `eig` metadata maps I64 input to C64, not I64.
-- Add/Mul shape inference stops returning the LHS shape for unsupported non-scalar broadcast shapes.
+- Add/Mul shape inference returns NumPy-style broadcast metadata instead of the LHS shape.
+- CPU I64 Add/Mul is enabled through the existing generic elementwise kernels so I64 `scale_real` can execute.
 
 Defer:
 
 - #775 exact `DynamicTruncate` compiled shape inference. `DimExpr` currently represents dimension expressions only, not scalar tensor values, so the truncated axis cannot be expressed without a scalar-value shape expression or constant propagation.
-- #776 full non-scalar Add/Mul raw-op broadcasting. Public traced Add/Mul already inserts `BroadcastInDim`; raw CPU and CubeCL Add/Mul only support equal shapes plus scalar CPU cases.
+- #776 raw backend parity for non-scalar Add/Mul broadcast. Public traced Add/Mul already inserts `BroadcastInDim`; this step fixes metadata and CPU I64 execution only.
 - #780 conversion overflow/narrowing semantics. This needs a coherent cross-backend conversion policy and test migration.
 - #784 SVD/Eigh `eps` in primal execution. `eps` is currently consumed by AD linearization; plumbing it into primal backend execution requires changing `TensorBackend::svd/eigh`.
 
@@ -75,7 +76,7 @@ Defer:
 
 1. Change `infer_output_dtype(StdTensorOp::Eig { input_dtype: DType::I64 })` to return `DType::C64`.
 2. Change `eig_output_dtype(DType::I64)` to return `DType::C64`.
-3. Replace `same_or_scalar_broadcast_shape` with a helper that returns equal shape or scalar-broadcast shape and panics for unsupported non-scalar broadcast metadata instead of silently returning LHS.
+3. Replace `same_or_scalar_broadcast_shape` with a NumPy-style broadcast shape helper instead of silently returning LHS.
 
 ## Task 4: Verify And Commit
 

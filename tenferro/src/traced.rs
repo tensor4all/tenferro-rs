@@ -25,6 +25,7 @@ use crate::metadata::{
     concrete_tensor_meta, register_fragment_metadata, register_value_metadata, registered_meta,
     symbolic_input_meta, tensor_meta_from_tensor,
 };
+use crate::scalar_semantics::round_real_to_i64;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
@@ -1079,7 +1080,7 @@ impl TracedTensor {
         let op = match self.dtype {
             DType::F64 => StdTensorOp::constant_f64(factor),
             DType::F32 => StdTensorOp::constant_f32(factor as f32),
-            DType::I64 => StdTensorOp::constant_i64(factor as i64),
+            DType::I64 => StdTensorOp::constant_i64(round_real_to_i64(factor)),
             DType::C64 => StdTensorOp::constant_c64(Complex64::new(factor, 0.0)),
             DType::C32 => StdTensorOp::constant_c32(Complex32::new(factor as f32, 0.0)),
         };

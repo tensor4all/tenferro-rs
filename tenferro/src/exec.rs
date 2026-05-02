@@ -20,6 +20,8 @@ use tenferro_tensor::{
     Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
+use crate::scalar_semantics::dynamic_truncate_size;
+
 #[derive(Clone, Debug)]
 pub enum ExecOp {
     Transpose {
@@ -462,13 +464,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
             }
             let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
             let axis_extent = input.shape()[*axis];
-            let size_f64 = scalar_size_value(&size_tensor)?;
-            let rounded_size = if size_f64.is_finite() {
-                size_f64.round()
-            } else {
-                0.0
-            };
-            let size = rounded_size.max(0.0).min(axis_extent as f64) as usize;
+            let size = dynamic_truncate_size(&size_tensor, axis_extent)?;
             let rank = input.shape().len();
             let mut limits = input.shape().to_vec();
             limits[*axis] = size;
@@ -840,16 +836,6 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
     let mut out = [0u8; N];
     out.copy_from_slice(bytes);
     out
-}
-
-fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
-    match size_tensor {
-        Tensor::F64(inner) => Ok(inner.host_data()[0]),
-        Tensor::F32(inner) => Ok(inner.host_data()[0] as f64),
-        _ => Err(Error::Internal(
-            "DynamicTruncate size must be an f32 or f64 scalar".into(),
-        )),
-    }
 }
 
 pub(crate) fn reclaim_last_use_inputs_exec(

@@ -5,6 +5,7 @@ use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::{DType, PadConfig, SliceConfig, Tensor, TensorBackend, TypedTensor};
 
 use crate::error::{Error, Result};
+use crate::scalar_semantics::dynamic_truncate_size;
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.
 ///
@@ -149,21 +150,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 }
                 let size_tensor = inputs[1];
                 let axis_extent = input.shape()[*axis];
-                let size_f64 = match size_tensor {
-                    Tensor::F64(inner) => inner.host_data()[0],
-                    Tensor::F32(inner) => inner.host_data()[0] as f64,
-                    _ => {
-                        return Err(Error::Internal(
-                            "DynamicTruncate size must be an f32 or f64 scalar".into(),
-                        ))
-                    }
-                };
-                let rounded_size = if size_f64.is_finite() {
-                    size_f64.round()
-                } else {
-                    0.0
-                };
-                let size = rounded_size.max(0.0).min(axis_extent as f64) as usize;
+                let size = dynamic_truncate_size(size_tensor, axis_extent)?;
                 let rank = input.shape().len();
                 let mut limits = input.shape().to_vec();
                 limits[*axis] = size;

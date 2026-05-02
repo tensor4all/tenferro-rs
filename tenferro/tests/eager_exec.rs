@@ -18,6 +18,10 @@ fn scalar(v: f64) -> Tensor {
     f64t(vec![], vec![v])
 }
 
+fn i64_scalar(v: i64) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec(vec![], vec![v]))
+}
+
 fn data(t: &Tensor) -> Vec<f64> {
     match t {
         Tensor::F64(inner) => inner.host_data().to_vec(),
@@ -81,6 +85,37 @@ fn dynamic_truncate_nan_gives_empty() {
     )
     .unwrap();
     assert_eq!(result[0].shape(), &[0]);
+}
+
+#[test]
+fn dynamic_truncate_accepts_i64_scalar_size() {
+    let mut b = CpuBackend::new();
+    let x = f64t(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let size = i64_scalar(2);
+    let result = exec_op_on_tensors(
+        &StdTensorOp::DynamicTruncate { axis: 0 },
+        &[&x, &size],
+        &mut b,
+    )
+    .unwrap();
+    assert_eq!(data(&result[0]), vec![1.0, 2.0]);
+}
+
+#[test]
+fn dynamic_truncate_rejects_non_scalar_size() {
+    let mut b = CpuBackend::new();
+    let x = f64t(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let size = f64t(vec![2], vec![1.0, 2.0]);
+    let err = exec_op_on_tensors(
+        &StdTensorOp::DynamicTruncate { axis: 0 },
+        &[&x, &size],
+        &mut b,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("scalar"),
+        "unexpected error: {err}"
+    );
 }
 
 // ── PadToMatch: no-op and padding ──

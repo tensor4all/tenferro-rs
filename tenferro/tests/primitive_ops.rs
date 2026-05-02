@@ -8,10 +8,21 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
+fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
+    Tensor::I64(TypedTensor::from_vec(shape, data))
+}
+
 fn get_f64_data(t: &Tensor) -> &[f64] {
     match t {
         Tensor::F64(inner) => inner.host_data(),
         _ => panic!("expected F64"),
+    }
+}
+
+fn get_i64_data(t: &Tensor) -> &[i64] {
+    match t {
+        Tensor::I64(inner) => inner.host_data(),
+        _ => panic!("expected I64"),
     }
 }
 
@@ -96,6 +107,15 @@ fn test_scale_real_operator_overload() {
     let mut engine = Engine::new(CpuBackend::new());
     let result = y.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[3.0, 6.0, 9.0]);
+}
+
+#[test]
+fn test_scale_real_i64_rounds_factor() {
+    let x = TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![3], vec![1, 2, -3]));
+    let mut y = x.scale_real(2.7);
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = y.eval(&mut engine).unwrap();
+    assert_eq!(get_i64_data(result), &[3, 6, -9]);
 }
 
 #[test]
