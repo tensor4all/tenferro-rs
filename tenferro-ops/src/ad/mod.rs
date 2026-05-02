@@ -122,9 +122,9 @@ pub fn linearize(
         }
 
         // Dynamic family.
-        StdTensorOp::DynamicTruncate { axis } => {
-            dynamic::linearize_dynamic_truncate(builder, primal_in, tangent_in, *axis)
-        }
+        StdTensorOp::DynamicTruncate { axis } => dynamic::linearize_dynamic_truncate(
+            builder, primal_in, primal_out, tangent_in, *axis, ctx,
+        ),
         StdTensorOp::PadToMatch { axis } => {
             dynamic::linearize_pad_to_match(builder, primal_in, tangent_in, *axis)
         }
@@ -289,7 +289,7 @@ pub fn transpose_rule(
             dynamic::transpose_dynamic_truncate(emitter, cotangent_out, inputs, *axis)
         }
         StdTensorOp::PadToMatch { axis } => {
-            dynamic::transpose_pad_to_match(emitter, cotangent_out, inputs, *axis)
+            dynamic::transpose_pad_to_match(emitter, cotangent_out, inputs, mode, *axis, ctx)
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
 

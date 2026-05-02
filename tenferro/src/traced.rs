@@ -727,6 +727,7 @@ impl TracedTensor {
         let old_fragment = self.fragment.clone();
         let old_output_key = old_fragment.vals()[self.val].key.clone();
         let old_inputs = (*self.inputs_map).clone();
+        let concrete_meta = tensor_meta_from_tensor(data.as_ref());
 
         let new_key = next_input_key();
         let mut builder = FragmentBuilder::new();
@@ -735,8 +736,12 @@ impl TracedTensor {
         let new_fragment = Arc::new(builder.build());
         register_value_metadata(
             new_fragment.vals()[leaf_val].key.clone(),
-            tensor_meta_from_tensor(data.as_ref()),
+            concrete_meta.clone(),
         );
+        // Dynamic shape ops may have conservative static metadata on their
+        // graph output. A checkpoint has evaluated the concrete tensor, so AD
+        // alias resolution should see the runtime shape on both sides.
+        register_value_metadata(old_output_key.clone(), concrete_meta);
 
         let node = CheckpointNode {
             fragment: old_fragment,

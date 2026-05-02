@@ -650,6 +650,73 @@ fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
 }
 
 #[test]
+fn test_std_tensor_op_pad_to_match_transpose_uses_static_slice_for_concrete_shape() {
+    let (result, _, fragment) = run_transpose_case_with_input_shapes(
+        StdTensorOp::PadToMatch { axis: 0 },
+        2,
+        &[true, false],
+        true,
+        &[&[2], &[3]],
+    );
+
+    assert!(result[0].is_some());
+    assert_eq!(result[1], None);
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(
+        fragment.ops()[0].op,
+        StdTensorOp::Slice(tenferro_tensor::SliceConfig {
+            starts: vec![0],
+            limits: vec![2],
+            strides: vec![1],
+        })
+    );
+}
+
+#[test]
+fn test_std_tensor_op_dynamic_truncate_linearize_uses_static_slice_for_narrowed_metadata() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let primal_in = add_input_keys(&mut builder, 960, 2);
+    let primal_out = add_input_keys(&mut builder, 970, 1);
+    let tangent = builder.add_input(tensor_input_key(980));
+
+    ad_ctx.insert_metadata(
+        primal_in[0].clone(),
+        TensorMeta {
+            dtype: DType::F64,
+            shape: vec![SymDim::from(3usize)],
+        },
+    );
+    ad_ctx.insert_metadata(
+        primal_out[0].clone(),
+        TensorMeta {
+            dtype: DType::F64,
+            shape: vec![SymDim::from(2usize)],
+        },
+    );
+
+    let result = StdTensorOp::DynamicTruncate { axis: 0 }.linearize(
+        &mut builder,
+        &primal_in,
+        &primal_out,
+        &[Some(tangent), None],
+        &mut ad_ctx,
+    );
+    let fragment = builder.build();
+
+    assert!(result[0].is_some());
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(
+        fragment.ops()[0].op,
+        StdTensorOp::Slice(tenferro_tensor::SliceConfig {
+            starts: vec![0],
+            limits: vec![2],
+            strides: vec![1],
+        })
+    );
+}
+
+#[test]
 fn test_std_tensor_op_constant_constructors_encode_expected_bytes() {
     assert_eq!(
         StdTensorOp::constant_f64(1.25),
