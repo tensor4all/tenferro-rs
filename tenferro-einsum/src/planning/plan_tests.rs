@@ -80,3 +80,16 @@ fn pairwise_step_plan_embeds_strict_binary_lowering_when_available() {
         .expect("dense binary matmul step should cache strict lowering");
     assert_eq!(strict.output_perm, vec![1, 0]);
 }
+
+#[test]
+fn pairwise_step_plan_preserves_strict_lowering_error_type() {
+    let size_dict = [(0, 2), (1, 3)].into_iter().collect();
+
+    let err = compile_pairwise_step_plan(&[0], &[1], &[2], &size_dict).unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_device::Error::InvalidArgument(message)
+            if message.contains("unknown size")
+    ));
+}

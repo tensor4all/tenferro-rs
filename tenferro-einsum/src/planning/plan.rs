@@ -5,6 +5,7 @@ pub(crate) use crate::planning::strict_binary::{
     compile_strict_binary_lowering_step_plan, StrictBinaryLoweringPlan,
 };
 use crate::planning::tree::ContractionTree;
+use tenferro_device::Result as DeviceResult;
 
 /// Pre-computed information for reducing axes unique to one operand.
 #[derive(Debug, PartialEq, Eq)]
@@ -215,7 +216,7 @@ pub(crate) fn compute_diag_plan_for_labels(
     }
 }
 
-pub(crate) fn compute_diag_plan(subs: &[u32]) -> Result<Option<DiagPlan>, String> {
+pub(crate) fn compute_diag_plan(subs: &[u32]) -> Option<DiagPlan> {
     let mut repeated_labels = HashSet::new();
     let mut label_positions: HashMap<u32, Vec<usize>> = HashMap::new();
     for (i, &label) in subs.iter().enumerate() {
@@ -229,7 +230,7 @@ pub(crate) fn compute_diag_plan(subs: &[u32]) -> Result<Option<DiagPlan>, String
             repeated_labels.insert(label);
         }
     }
-    Ok(compute_diag_plan_for_labels(subs, &repeated_labels))
+    compute_diag_plan_for_labels(subs, &repeated_labels)
 }
 
 pub(crate) fn compile_pairwise_step_plan(
@@ -237,10 +238,10 @@ pub(crate) fn compile_pairwise_step_plan(
     subs_b: &[u32],
     subs_c: &[u32],
     size_dict: &HashMap<u32, usize>,
-) -> std::result::Result<StepPlan, String> {
+) -> DeviceResult<StepPlan> {
     // 1. Diagonal extraction for repeated labels
-    let diag_a = compute_diag_plan(subs_a)?;
-    let diag_b = compute_diag_plan(subs_b)?;
+    let diag_a = compute_diag_plan(subs_a);
+    let diag_b = compute_diag_plan(subs_b);
 
     let eff_subs_a = diag_a
         .as_ref()
@@ -318,8 +319,8 @@ pub(crate) fn compile_pairwise_step_plan(
         .collect();
 
     let needs_final_permute = canonical_modes.as_slice() != subs_c;
-    let strict_binary = compile_strict_binary_lowering_step_plan(subs_a, subs_b, subs_c, size_dict)
-        .map_err(|e| e.to_string())?;
+    let strict_binary =
+        compile_strict_binary_lowering_step_plan(subs_a, subs_b, subs_c, size_dict)?;
 
     Ok(StepPlan {
         diag_a,
@@ -355,9 +356,7 @@ pub(crate) fn compile_pairwise_step_plan(
 ///   1. Diagonal extraction (if repeated labels in operand)
 ///   2. Pre-reduction (if unique-only axes)
 ///   3. GEMM (always, after steps 1-2 make all labels unique)
-pub(crate) fn compile_step_plans(
-    tree: &ContractionTree,
-) -> std::result::Result<Vec<StepPlan>, String> {
+pub(crate) fn compile_step_plans(tree: &ContractionTree) -> DeviceResult<Vec<StepPlan>> {
     let n_inputs = tree.subscripts.inputs.len();
     let size_dict = &tree.size_dict;
 

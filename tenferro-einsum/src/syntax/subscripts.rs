@@ -1,4 +1,4 @@
-use tenferro_device::Result;
+use tenferro_device::{Error, Result};
 
 use crate::syntax::notation::{char_to_label, split_and_validate_notation};
 
@@ -71,10 +71,9 @@ impl Subscripts {
     /// Input tensors are separated by commas, and `->` separates inputs
     /// from the output.
     ///
-    /// Parentheses in the notation are accepted but stripped during parsing.
-    /// To respect parenthesized contraction order, use [`crate::NestedEinsum::parse`]
-    /// or pass the parenthesized string to the higher-level
-    /// `tenferro::einsum::einsum_with` helper.
+    /// Parentheses are rejected by this flat parser. Use
+    /// [`crate::NestedEinsum::parse`] when notation specifies a parenthesized
+    /// contraction order.
     ///
     /// # Examples
     ///
@@ -84,23 +83,25 @@ impl Subscripts {
     /// - `"i->ii"` — diagonal embedding
     /// - `"iij->ij"` — higher-rank diagonal extraction
     /// - `"ijk->"` — full contraction (scalar result)
-    /// - `"ij,(jk,kl)->il"` — contract B and C first, then with A
-    ///
     /// # Errors
     ///
-    /// Returns an error if the notation is malformed.
+    /// Returns an error if the notation is malformed or contains
+    /// parenthesized contraction order.
     pub fn parse(notation: &str) -> Result<Self> {
         let (inputs_str, output_str) = split_and_validate_notation(notation)?;
+        if inputs_str.contains(['(', ')']) {
+            return Err(Error::InvalidArgument(
+                "Subscripts::parse does not accept parentheses; use NestedEinsum::parse to preserve parenthesized contraction order"
+                    .into(),
+            ));
+        }
 
         let output: Vec<u32> = output_str
             .chars()
             .map(char_to_label)
             .collect::<Result<_>>()?;
 
-        // Parentheses already validated by split_and_validate_notation() above.
-        // Strip parentheses and parse input labels
-        let clean_inputs = inputs_str.replace(['(', ')'], "");
-        let inputs: Vec<Vec<u32>> = clean_inputs
+        let inputs: Vec<Vec<u32>> = inputs_str
             .split(',')
             .map(|s| s.chars().map(char_to_label).collect::<Result<_>>())
             .collect::<Result<_>>()?;
@@ -108,3 +109,6 @@ impl Subscripts {
         Ok(Self { inputs, output })
     }
 }
+
+#[cfg(test)]
+mod tests;

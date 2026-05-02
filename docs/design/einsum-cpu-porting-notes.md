@@ -279,19 +279,15 @@ implement accordingly when moving out of POC phase. Cache key policy details are
 
 **Status**: Decided
 
-**Decision**: The einsum parser must support a parenthesized contraction-order
-notation (e.g., `"((ij,jk),kl)->il"`) in addition to the flat notation.
-`Subscripts::parse()` returns `Subscripts` + `Option<ContractionTree>`. When
-a parenthesized tree is present, `ContractionTree` is populated directly from
-the notation; otherwise the optimizer (`omeco`) generates the tree.
+**Decision**: Parenthesized contraction-order notation is handled by
+`NestedEinsum::parse`; the flat `Subscripts::parse` API rejects parentheses so
+it does not silently discard user-specified contraction order.
 
-**Next action**: Update `tenferro-einsum/src/parse.rs` (or equivalent)
-to handle parenthesized input. The POC `Subscripts::parse()` stub signature
-must be updated to return or accept an `Option<ContractionTree>` companion.
-
-**Success condition**: Round-trip test passes: `parse("((ij,jk),kl)->il")`
-produces a `ContractionTree` that encodes the `(ij,jk)` contraction before
-`kl`; flat notation `"ij,jk,kl->il"` falls back to optimizer.
+**Success condition**: `NestedEinsum::parse("((ij,jk),kl)->il")` preserves the
+tree that encodes the `(ij,jk)` contraction before `kl`; flat notation
+`"ij,jk,kl->il"` falls back to the optimizer, and
+`Subscripts::parse("((ij,jk),kl)->il")` returns an error that points callers to
+the nested parser.
 
 ---
 
