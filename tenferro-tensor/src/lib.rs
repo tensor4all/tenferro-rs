@@ -8,7 +8,7 @@
 //! let mut backend = CpuBackend::new();
 //! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
 //! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
-//! let c = tenferro_tensor::cpu::add(&a, &b);
+//! let c = tenferro_tensor::cpu::add(&a, &b).unwrap();
 //! assert_eq!(c.shape(), &[2]);
 //! ```
 

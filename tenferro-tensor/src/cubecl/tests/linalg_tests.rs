@@ -322,12 +322,11 @@ fn test_gpu_eig_returns_unsupported_error() {
     let cpu = super::tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let gpu = super::upload(&backend, &cpu);
 
-    let result = backend.eig(&gpu);
-    assert!(
-        matches!(&result, Err(err) if err.to_string().to_lowercase().contains("unsupported")
-            || err.to_string().to_lowercase().contains("not supported")),
-        "expected UnsupportedOp for GPU eig, got {result:?}",
-    );
+    let err = backend.eig(&gpu).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "eig", .. }
+    ));
 }
 
 #[test]

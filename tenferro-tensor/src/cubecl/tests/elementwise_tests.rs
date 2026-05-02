@@ -300,7 +300,59 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
         crate::Error::BackendFailure { op: "clamp", .. }
     ));
 
-    let err = gpu.convert(&gpu_lhs, DType::C64).unwrap();
-    let actual = download(&gpu, &err);
+    let converted = gpu.convert(&gpu_lhs, DType::C64).unwrap();
+    let actual = download(&gpu, &converted);
     assert_tensor_close(&actual, &lhs, 1e-12);
+}
+
+#[test]
+#[ignore = "requires CUDA 12+ GPU"]
+fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
+    if !gpu_available() {
+        eprintln!(
+            "skipping test_cubecl_float_to_complex_convert_preserves_resident_device — no CUDA device found"
+        );
+        return;
+    }
+    let mut gpu = gpu_backend();
+    let input = tensor_f64(vec![2], vec![1.0, -2.0]);
+    let gpu_input = upload(&gpu, &input);
+
+    let converted = gpu.convert(&gpu_input, DType::C64).unwrap();
+
+    let Tensor::C64(tensor) = converted else {
+        panic!("expected C64 output");
+    };
+    let resident = tensor
+        .placement
+        .resident_device
+        .as_ref()
+        .expect("converted tensor should preserve CUDA resident device");
+    assert_eq!(resident.kind, "cuda");
+    assert_eq!(resident.ordinal, gpu.runtime().device_ordinal());
+}
+
+#[test]
+#[ignore = "requires CUDA 12+ GPU"]
+fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
+    if !gpu_available() {
+        eprintln!(
+            "skipping test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata — no CUDA device found"
+        );
+        return;
+    }
+    let mut gpu = gpu_backend();
+    let input = tensor_f64(vec![2], vec![1.0, -2.0]);
+    let mut gpu_input = match upload(&gpu, &input) {
+        Tensor::F64(tensor) => tensor,
+        _ => panic!("expected F64 upload"),
+    };
+    gpu_input.placement.resident_device = None;
+
+    let err = gpu.conj(&Tensor::F64(gpu_input)).unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure { op: "conj", .. }
+    ));
 }

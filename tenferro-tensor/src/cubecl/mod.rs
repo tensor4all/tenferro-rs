@@ -41,6 +41,7 @@
 //! use tenferro_tensor::cubecl::{CubeclBackend, upload_tensor, download_tensor};
 //! use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 //!
+//! fn main() -> tenferro_tensor::Result<()> {
 //! // 1. Create the GPU backend (device ordinal 0)
 //! let mut backend = CubeclBackend::new(0)?;
 //!
@@ -57,6 +58,9 @@
 //!
 //! // 5. Download result back to CPU
 //! let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
+//! assert_eq!(cpu_c.shape(), &[2]);
+//! Ok(())
+//! }
 //! ```
 //!
 //! # Running GPU tests
@@ -93,9 +97,9 @@ mod runtime;
 
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
-    ensure_axes_unique, ensure_axis, ensure_rank, launch_binary, launch_nullary_into,
-    launch_ternary, launch_ternary_with_config, launch_unary, launch_unary_into,
-    single_thread_launch_config, ternary_dtype_mismatch,
+    ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
+    launch_nullary_into, launch_ternary, launch_ternary_with_config, launch_unary,
+    launch_unary_into, single_thread_launch_config, ternary_dtype_mismatch, typed_from_cubecl,
 };
 use kernels::{diagonal, elementwise, indexing, reduction, structural};
 
@@ -412,7 +416,8 @@ impl CubeclBackend {
     /// Generic float-to-complex conversion via raw interleaved kernel.
     ///
     /// The kernel writes `(re, 0, re, 0, ...)` into a raw float buffer that
-    /// is then reinterpreted as complex. `out_float_size` is `size_of::<OutFloat>()`.
+    /// is then reinterpreted as complex. `out_float_size` is the byte size of
+    /// each real output component.
     fn convert_float_to_complex_raw<InFloat, OutComplex>(
         &self,
         input: &TypedTensor<InFloat>,
@@ -441,14 +446,11 @@ impl CubeclBackend {
         };
         let out_handle = client.empty(n * 2 * out_float_size);
         launch(client, out_handle.clone(), input_handle, n);
-        Ok(TypedTensor {
-            buffer: crate::Buffer::Cubecl(crate::CubeclBuffer::new(out_handle, n)),
-            shape: input.shape.clone(),
-            placement: crate::Placement {
-                memory_kind: crate::MemoryKind::Device,
-                resident_device: None,
-            },
-        })
+        Ok(typed_from_cubecl(
+            input.shape.clone(),
+            crate::CubeclBuffer::new(out_handle, n),
+            self.rt.device_ordinal(),
+        ))
     }
 
     fn convert_c32_to_f32(
@@ -1355,8 +1357,14 @@ impl TensorBackend for CubeclBackend {
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         match input {
-            Tensor::F32(tensor) => Ok(Tensor::F32(tensor.clone())),
-            Tensor::F64(tensor) => Ok(Tensor::F64(tensor.clone())),
+            Tensor::F32(tensor) => {
+                ensure_resident_on_runtime(self.runtime(), tensor, "conj")?;
+                Ok(Tensor::F32(tensor.clone()))
+            }
+            Tensor::F64(tensor) => {
+                ensure_resident_on_runtime(self.runtime(), tensor, "conj")?;
+                Ok(Tensor::F64(tensor.clone()))
+            }
             Tensor::I64(_) => Err(unsupported_dtype("conj", input.dtype())),
             Tensor::C32(tensor) => launch_unary(
                 self.runtime(),

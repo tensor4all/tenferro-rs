@@ -29,6 +29,7 @@ type CublasStatus = i32;
 const CUSOLVER_STATUS_SUCCESS: CusolverStatus = 0;
 const CUBLAS_STATUS_SUCCESS: CublasStatus = 0;
 
+#[repr(i32)]
 #[derive(Clone, Copy)]
 pub(crate) enum CudaDataType {
     F32,

@@ -27,8 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify docs-site completeness for workspace library crates.")
     parser.add_argument("--root-dir", default=".", help="Repository root (default: current directory)")
     parser.add_argument("--doc-root", help="Rustdoc output directory (default: <root>/target/doc)")
-    parser.add_argument("--api-index-md", help="Markdown API index (default: <root>/docs/api/index.md if it exists)")
-    parser.add_argument("--site-index", help="Rendered API landing page HTML (default: <root>/target/docs-site/rustdoc/index.html if it exists)")
+    parser.add_argument("--api-index-md", help="Markdown API index (default: <root>/docs/api_index.md if it exists)")
+    parser.add_argument("--site-index", help="Rendered API landing page HTML (default: <root>/target/docs-site/api/index.html if it exists)")
     parser.add_argument("--quiet", action="store_true", help="Suppress success output")
     return parser.parse_args()
 
@@ -53,7 +53,7 @@ def load_workspace_libs(root: pathlib.Path) -> list[tuple[str, str, str]]:
 
 def markdown_links(path: pathlib.Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
-    return set(re.findall(r"\((?:\.\.\/rustdoc\/|\.\.\/\.\.\/api\/|\.\/)?([A-Za-z0-9_\-]+)/index\.html\)", text))
+    return set(re.findall(r"\((?:\./)?([A-Za-z0-9_\-]+)/index\.html\)", text))
 
 
 def html_links(path: pathlib.Path) -> set[str]:
@@ -66,8 +66,8 @@ def main() -> int:
     args = parse_args()
     root = pathlib.Path(args.root_dir).resolve()
     doc_root = pathlib.Path(args.doc_root) if args.doc_root else root / "target" / "doc"
-    api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api" / "index.md"
-    site_index = pathlib.Path(args.site_index) if args.site_index else root / "target" / "docs-site" / "rustdoc" / "index.html"
+    api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api_index.md"
+    site_index = pathlib.Path(args.site_index) if args.site_index else root / "target" / "docs-site" / "api" / "index.html"
 
     crates = load_workspace_libs(root)
     missing_doc = [pkg for _member, pkg, doc_dir in crates if not (doc_root / doc_dir / "index.html").exists()]
