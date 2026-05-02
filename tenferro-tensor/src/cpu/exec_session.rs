@@ -205,44 +205,16 @@ impl TensorExec for CpuExecSession<'_> {
     }
 
     // Indexing
-    fn gather(
-        &mut self,
-        operand: &Tensor,
-        start_indices: &Tensor,
-        config: &GatherConfig,
-    ) -> crate::Result<Tensor> {
-        catch_backend_panic("gather", || {
-            indexing::gather(operand, start_indices, config)
-        })
-    }
-    fn scatter(
-        &mut self,
-        operand: &Tensor,
-        indices: &Tensor,
-        updates: &Tensor,
-        config: &ScatterConfig,
-    ) -> crate::Result<Tensor> {
-        catch_backend_panic("scatter", || {
-            indexing::scatter(operand, indices, updates, config)
-        })
-    }
+    delegate!(gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) => indexing::gather(operand, start_indices, config));
+    delegate!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter(operand, indices, updates, config));
     delegate!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice(input, config));
-    fn dynamic_slice(
-        &mut self,
-        input: &Tensor,
-        starts: &Tensor,
-        slice_sizes: &[usize],
-    ) -> crate::Result<Tensor> {
-        catch_backend_panic("dynamic_slice", || {
-            indexing::dynamic_slice(input, starts, slice_sizes)
-        })
-    }
+    delegate!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice(input, starts, slice_sizes));
     delegate!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad(input, config));
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
         indexing::try_concatenate(inputs, axis)
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        catch_backend_panic("reverse", || indexing::reverse(input, axes))
+        indexing::reverse(input, axes)
     }
 
     // Linalg — macro-generated dtype dispatch

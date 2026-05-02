@@ -361,11 +361,7 @@ impl TensorBackend for CpuBackend {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.install(|| {
-            catch_backend_panic("gather", || {
-                indexing::gather(operand, start_indices, config)
-            })
-        })
+        self.install(|| indexing::gather(operand, start_indices, config))
     }
 
     fn scatter(
@@ -375,11 +371,7 @@ impl TensorBackend for CpuBackend {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.install(|| {
-            catch_backend_panic("scatter", || {
-                indexing::scatter(operand, scatter_indices, updates, config)
-            })
-        })
+        self.install(|| indexing::scatter(operand, scatter_indices, updates, config))
     }
 
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
@@ -392,11 +384,7 @@ impl TensorBackend for CpuBackend {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.install(|| {
-            catch_backend_panic("dynamic_slice", || {
-                indexing::dynamic_slice(input, starts, slice_sizes)
-            })
-        })
+        self.install(|| indexing::dynamic_slice(input, starts, slice_sizes))
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
@@ -408,7 +396,7 @@ impl TensorBackend for CpuBackend {
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| catch_backend_panic("reverse", || indexing::reverse(input, axes)))
+        self.install(|| indexing::reverse(input, axes))
     }
 
     fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
