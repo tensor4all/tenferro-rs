@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use strided_kernel::{map_into, zip_map2_into};
 
-use crate::backend::{tensor_from_array, typed_array, typed_view};
+use super::{tensor_from_array, typed_array_uninit, typed_view};
 use crate::types::{Tensor, TypedTensor};
 
 trait UnaryAnalyticElem: Copy + Clone + One + Zero {
@@ -148,7 +148,7 @@ macro_rules! define_unary_analytic_op {
         where
             T: UnaryAnalyticElem,
         {
-            let mut out = typed_array(&input.shape, T::zero());
+            let mut out = unsafe { typed_array_uninit(&input.shape) };
             map_into(&mut out.view_mut(), &typed_view(input), |x| x.$elem_fn())
                 .map_err(|err| backend_failure(stringify!($typed_fn), err))?;
             Ok(tensor_from_array(out))
@@ -191,7 +191,7 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = typed_array(&lhs.shape, T::zero());
+    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
