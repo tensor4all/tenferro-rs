@@ -768,6 +768,144 @@ fn test_dynamic_slice_rejects_oversized_window() {
 }
 
 #[test]
+fn test_large_float_index_outside_exact_integer_range_returns_error() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 20.0, 30.0, 40.0, 50.0],
+    ));
+    let start_indices = Tensor::F64(TypedTensor::from_vec(
+        vec![1, 1],
+        vec![9_007_199_254_740_995.0f64],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .gather(&operand, &start_indices, &simple_gather_config())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "index_tensor",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_invalid_slice_config_returns_error() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .slice(
+            &input,
+            &SliceConfig {
+                starts: vec![0, 0, 0],
+                limits: vec![2, 2],
+                strides: vec![1, 1],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::RankMismatch { op: "slice", .. }
+    ));
+}
+
+#[test]
+fn test_invalid_pad_config_returns_error() {
+    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .pad(
+            &input,
+            &PadConfig {
+                edge_padding_low: vec![0],
+                edge_padding_high: vec![0, 0],
+                interior_padding: vec![0],
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(err, crate::Error::RankMismatch { op: "pad", .. }));
+}
+
+#[test]
+fn test_gather_rejects_malformed_offset_dims() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![3, 2],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ));
+    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 1, 2]);
+    let mut backend = CpuBackend::new();
+    let config = GatherConfig {
+        offset_dims: vec![2],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+
+    let err = backend
+        .gather(&operand, &start_indices, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds { op: "gather", .. }
+    ));
+}
+
+#[test]
+fn test_scatter_rejects_update_window_dim_out_of_bounds() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3, 3, 3], vec![0.0; 27]));
+    let mut backend = CpuBackend::new();
+    let config = ScatterConfig {
+        update_window_dims: vec![0, 3],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![1, 2],
+        index_vector_dim: 1,
+    };
+
+    let err = backend
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::AxisOutOfBounds {
+            op: "scatter",
+            axis: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_scatter_rejects_too_many_update_window_dims() {
+    let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
+    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![0.0; 3]));
+    let mut backend = CpuBackend::new();
+    let config = ScatterConfig {
+        update_window_dims: vec![0, 1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![1, 2],
+        index_vector_dim: 1,
+    };
+
+    let err = backend
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig { op: "scatter", ref message }
+        if message.contains("exceeds update rank")
+    ));
+}
+
+#[test]
 fn test_concatenate_axis_zero() {
     let lhs = Tensor::F64(TypedTensor::from_vec(
         vec![2, 3],
