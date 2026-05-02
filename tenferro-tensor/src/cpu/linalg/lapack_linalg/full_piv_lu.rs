@@ -93,6 +93,9 @@ impl LapackFullPivLu for f64 {
         jpiv: &mut [i32],
         info: &mut i32,
     ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
         unsafe {
             dgetc2_ffi(
                 &n,
@@ -114,6 +117,9 @@ impl LapackFullPivLu for f64 {
         jpiv: &[i32],
         scale: &mut f64,
     ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
         unsafe {
             dgesc2_ffi(
                 &n,
@@ -153,6 +159,9 @@ impl LapackFullPivLu for Complex64 {
         jpiv: &mut [i32],
         info: &mut i32,
     ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
         unsafe {
             zgetc2_ffi(
                 &n,
@@ -174,6 +183,9 @@ impl LapackFullPivLu for Complex64 {
         jpiv: &[i32],
         scale: &mut f64,
     ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
         unsafe {
             zgesc2_ffi(
                 &n,

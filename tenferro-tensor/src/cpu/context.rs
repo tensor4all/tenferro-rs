@@ -26,9 +26,13 @@ fn shared_pools() -> &'static Mutex<HashMap<usize, Arc<rayon::ThreadPool>>> {
 }
 
 pub(crate) fn get_or_create_pool(num_threads: usize) -> Arc<rayon::ThreadPool> {
-    let mut pools = shared_pools()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut pools = match shared_pools().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("tenferro-tensor: CPU thread-pool cache mutex was poisoned; recovering");
+            poisoned.into_inner()
+        }
+    };
     if let Some(pool) = pools.get(&num_threads) {
         return Arc::clone(pool);
     }

@@ -1191,10 +1191,25 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> crate::Result<
     })
 }
 
+/// Offset a mutable device pointer by `offset` typed elements.
+///
+/// # Safety
+///
+/// `base` must point to a device allocation containing at least `offset`
+/// additional `T` elements, and the resulting pointer must remain within the
+/// same allocation. The caller is responsible for ensuring any later FFI call
+/// observes CUDA aliasing and mutability requirements.
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
     base.cast::<T>().add(offset).cast()
 }
 
+/// Offset an immutable device pointer by `offset` typed elements.
+///
+/// # Safety
+///
+/// `base` must point to a device allocation containing at least `offset`
+/// additional `T` elements, and the resulting pointer must remain within the
+/// same allocation for the lifetime required by the receiving CUDA library.
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
     base.cast::<T>().add(offset).cast()
 }
