@@ -86,6 +86,9 @@ dedicated future PRs unless the user explicitly reprioritizes them.
   math support. Do not attempt a tenferro-side implementation in this batch.
   Once that PR lands, the tenferro follow-up should be limited to a fork rev
   bump plus focused complex GPU fusion/runtime coverage.
+- Keep tenferro depending on the `shinaoka/cubecl` fork. Do not migrate these
+  dependencies back to upstream CubeCL as part of this batch or the follow-up
+  complex-support rev bump.
 
 ### Requires GPU hardware
 
@@ -113,6 +116,7 @@ For the first single PR:
 
 - do not implement deferred issues unless explicitly pulled into scope,
 - do not implement #724 / #791 until the CubeCL PR lands,
+- do not replace the `shinaoka/cubecl` fork dependency with upstream CubeCL,
 - do not implement #728 or any GPU benchmark harness in this batch,
 - mention deferred issues in the PR body if related files were touched,
 - avoid partial fixes that make future dedicated work harder,
