@@ -10,9 +10,12 @@ Primary:
 
 - #772: BUG: TriangularSolve/FullPivLuSolve transpose rule drops A-cotangent
 - #773: BUG: Pad missing transpose_rule, panics on VJP
-- #777: BUG: 7 linalg ops missing transpose_rule, panics on VJP
 - #783: AD: Slice/DynamicSlice/Concatenate/Reverse/Select/Clamp/Maximum/Minimum have no AD rules
 - #787: BUG: transpose_scatter panics on symbolic shapes
+
+Explicitly separate:
+
+- #777: BUG: 7 linalg ops missing transpose_rule, panics on VJP
 
 ## Goal
 
@@ -28,6 +31,8 @@ It does not cover:
 
 - primal CPU/GPU indexing implementation,
 - linalg numerical kernel changes,
+- new linalg AD rule implementation for ops that currently have no
+  `transpose_rule` (#777),
 - dtype promotion policy,
 - broad AD support for every missing op in one patch.
 
@@ -72,12 +77,11 @@ a normal unsupported-AD error or stop before adding a partial rule.
 
 ### Missing linalg transpose rules
 
-Do not implement all seven linalg transpose rules by default. Classify each op:
-
-- implement only rules with clear math and oracle coverage,
-- replace `todo!()` panics with explicit unsupported-rule errors where the
-  runtime can represent that cleanly,
-- otherwise leave a documented stop report.
+Do not implement #777 in this dispatch. New linalg AD rules for Cholesky, LU,
+FullPivLu, SVD, QR, Eigh, or Eig require a dedicated design and implementation
+plan, even when `third_party/tensor-ad-oracles` already contains oracle
+families. That future plan should classify each op separately and use
+oracle-backed coverage where available.
 
 ### Indexing and piecewise ops
 
@@ -105,6 +109,9 @@ Use a two-stage dispatch:
 
 Do not let DeepSeek grow this into a broad AD project. Correctness beats issue
 count here.
+
+The current AD dispatch may fix an existing linalg transpose implementation bug
+such as #772, but it must not add brand-new linalg transpose rules from #777.
 
 ## Testing
 
@@ -135,7 +142,8 @@ Implement the AD rule boundary dispatch from
 docs/plans/2026-05-02-ad-rule-boundaries-design.md.
 
 First reread REPOSITORY_RULES.md. Fix only AD transpose/linearize boundary
-issues where correctness and test coverage are available. Do not add a mainline
+issues where correctness and test coverage are available. Do not implement the
+new linalg transpose-rule set from #777 in this dispatch. Do not add a mainline
 AD rule without finite-difference or oracle coverage. Prefer explicit
 unsupported-rule errors over todo!/panic paths when a correct rule is out of
 scope. Stop and report any rule that needs new oracle families before it can be
@@ -150,6 +158,7 @@ supported.
 - No new AD rule lacks finite-difference or oracle coverage.
 - No `todo!()` is added on a reachable AD path.
 - Linalg rules match existing adjoint/conjugation conventions.
+- #777 remains separate unless a dedicated linalg AD design has been approved.
 
 ## Stop Conditions
 
