@@ -44,6 +44,12 @@ macro_rules! impl_faer_gemm {
                 c_cs: isize,
             ) {
                 use faer::{Accum, MatMut, MatRef};
+                let a_rs = super::normalize_singleton_stride(a_rs, m, k);
+                let a_cs = super::normalize_singleton_stride(a_cs, k, m);
+                let b_rs = super::normalize_singleton_stride(b_rs, k, n);
+                let b_cs = super::normalize_singleton_stride(b_cs, n, k);
+                let c_rs = super::normalize_singleton_stride(c_rs, m, 1);
+                let c_cs = super::normalize_singleton_stride(c_cs, n, m);
                 let a_mat = MatRef::<$ty>::from_raw_parts(a_ptr, m, k, a_rs, a_cs);
                 let b_mat = MatRef::<$ty>::from_raw_parts(b_ptr, k, n, b_rs, b_cs);
                 let zero = <$ty as num_traits::Zero>::zero();

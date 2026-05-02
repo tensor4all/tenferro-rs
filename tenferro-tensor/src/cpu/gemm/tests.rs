@@ -117,3 +117,10 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
 
     assert_eq!(c, [11.0, 22.0, 33.0, 44.0]);
 }
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_singleton_strides_are_normalized_before_raw_gemm() {
+    assert_eq!(super::normalize_singleton_stride(0, 1, 4), 4);
+    assert_eq!(super::normalize_singleton_stride(0, 3, 4), 0);
+}
