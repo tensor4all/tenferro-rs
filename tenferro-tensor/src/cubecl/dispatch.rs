@@ -49,8 +49,6 @@ pub(crate) fn cubecl_buffer<'a, T>(
     }
 }
 
-// Staged for Task 6 CubeCL tensor binding kernels.
-#[allow(dead_code)]
 pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let strides = crate::types::col_major_strides(shape)
         .into_iter()
@@ -59,8 +57,6 @@ pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usiz
     (shape.to_vec(), strides)
 }
 
-// Staged for Task 6 CubeCL tensor binding kernels.
-#[allow(dead_code)]
 pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T>,
     op: &'static str,
