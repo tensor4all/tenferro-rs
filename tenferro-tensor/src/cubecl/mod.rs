@@ -82,6 +82,7 @@ use cubecl::prelude::{Int as CubeInt, TensorBinding};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_cubecl::reduce::{self as cubecl_reduce, ReduceStrategy};
+use tenferro_cubecl::{diagonal, elementwise, indexing, structural};
 
 use crate::backend::TensorBackend;
 use crate::config::{
@@ -93,7 +94,6 @@ mod dispatch;
 mod ffi;
 mod fusion;
 mod gemm;
-mod kernels;
 mod linalg;
 mod memory;
 mod runtime;
@@ -105,7 +105,6 @@ use dispatch::{
     launch_unary_into, single_thread_launch_config, ternary_dtype_mismatch, typed_from_cubecl,
     typed_tensor_binding,
 };
-use kernels::{diagonal, elementwise, indexing, structural};
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CubeclRuntime};

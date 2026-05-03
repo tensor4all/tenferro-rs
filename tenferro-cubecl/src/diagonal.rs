@@ -1,9 +1,9 @@
 use cubecl::prelude::*;
 
-use super::{flat_to_multi_index, multi_to_flat_index, zero_value};
+use crate::helpers::{flat_to_multi_index, multi_to_flat_index, zero_value};
 
 #[cube(launch_unchecked)]
-pub(crate) fn extract_diagonal_kernel<E: CubePrimitive>(
+pub fn extract_diagonal_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] input_shape: Sequence<usize>,
@@ -32,7 +32,7 @@ pub(crate) fn extract_diagonal_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn embed_diagonal_copy_kernel<E: CubePrimitive>(
+pub fn embed_diagonal_copy_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] input_shape: Sequence<usize>,
@@ -61,7 +61,7 @@ pub(crate) fn embed_diagonal_copy_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn tril_kernel<E: CubePrimitive>(
+pub fn tril_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] shape: Sequence<usize>,
@@ -81,7 +81,7 @@ pub(crate) fn tril_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn triu_kernel<E: CubePrimitive>(
+pub fn triu_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] shape: Sequence<usize>,

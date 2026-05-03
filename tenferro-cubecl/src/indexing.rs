@@ -1,6 +1,6 @@
 use cubecl::prelude::*;
 
-use super::{
+use crate::helpers::{
     axis_in_sequence, axis_position_in_sequence, flat_to_multi_index, multi_to_flat_index,
     shape_product, zero_value,
 };
@@ -48,7 +48,7 @@ pub(crate) fn index_component<I: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn slice_kernel<E: CubePrimitive>(
+pub fn slice_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] input_shape: Sequence<usize>,
@@ -70,7 +70,7 @@ pub(crate) fn slice_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn dynamic_slice_kernel<E: CubePrimitive, I: Float>(
+pub fn dynamic_slice_kernel<E: CubePrimitive, I: Float>(
     out: &mut Array<E>,
     input: &Array<E>,
     starts: &Array<I>,
@@ -93,7 +93,7 @@ pub(crate) fn dynamic_slice_kernel<E: CubePrimitive, I: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn pad_kernel<E: CubePrimitive>(
+pub fn pad_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
     input: &Array<E>,
     #[comptime] input_shape: Sequence<usize>,
@@ -131,7 +131,7 @@ pub(crate) fn pad_kernel<E: CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub(crate) fn gather_kernel<E: CubePrimitive, I: Float>(
+pub fn gather_kernel<E: CubePrimitive, I: Float>(
     out: &mut Array<E>,
     operand: &Array<E>,
     start_indices: &Array<I>,
@@ -207,7 +207,7 @@ pub(crate) fn gather_kernel<E: CubePrimitive, I: Float>(
 macro_rules! scatter_kernel {
     ($float_name:ident, $complex_name:ident, $ty:ident) => {
         #[cube(launch_unchecked)]
-        pub(crate) fn $float_name<E: Float, I: Float>(
+        pub fn $float_name<E: Float, I: Float>(
             out: &mut Array<E>,
             operand: &Array<E>,
             scatter_indices: &Array<I>,
@@ -343,7 +343,7 @@ macro_rules! scatter_kernel {
         }
 
         #[cube(launch_unchecked)]
-        pub(crate) fn $complex_name<E: Complex, I: Float>(
+        pub fn $complex_name<E: Complex, I: Float>(
             out: &mut Array<E>,
             operand: &Array<E>,
             scatter_indices: &Array<I>,

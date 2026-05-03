@@ -13,6 +13,8 @@ is still a feature stub and is not a supported execution path.
 See also:
 
 - `tenferro-tensor/src/cubecl/` for the implementation,
+- `tenferro-cubecl/` for static CubeCL kernel definitions and kernel-level
+  validation,
 - `AGENTS.md` for the current GPU status and local test command,
 - [backend-contract.md](../spec/backend-contract.md) for placement rules,
 - [tensor-prims.md](./tensor-prims.md) for tensor operation families.
@@ -22,13 +24,18 @@ See also:
 ## Current Module Structure
 
 ```text
+tenferro-cubecl/src/
+    elementwise.rs         static elementwise CubeCL kernels
+    structural.rs          static structural and conversion CubeCL kernels
+    indexing.rs            static slice/gather/scatter/pad CubeCL kernels
+    diagonal.rs            static diagonal and triangular-mask CubeCL kernels
+    reduce/                reduction validation, launch helpers, and kernels
+
 tenferro-tensor/src/cubecl/
     mod.rs                 CubeclBackend and TensorBackend implementation
     runtime.rs             CubeCL/CUDA runtime initialization and stream access
     memory.rs              upload_tensor, download_tensor, device pointer bridge
     dispatch.rs            shared launch helpers and dtype dispatch
-    kernels/               CubeCL kernels for elementwise, reductions, indexing,
-                            diagonal, and structural ops
     fusion/                fused elementwise classification and code generation
     gemm.rs                cuTENSOR/cuBLAS-backed contraction support
     linalg.rs              cuSOLVER/cuBLAS-backed linalg support
@@ -40,6 +47,18 @@ The backend type is `CubeclBackend`. There are no separate in-tree
 `CudaBackend` and `RocmBackend` implementations. CUDA is selected by enabling
 the `cubecl` feature, which depends on the workspace-pinned CubeCL fork and the
 CubeCL CUDA runtime.
+
+## Kernel Ownership
+
+Static CubeCL kernel definitions live in `tenferro-cubecl`. The tensor backend
+crate must not keep duplicate static kernels once they have been moved. This
+keeps copied/adapted CubeK-derived code, tenferro-specific kernel definitions,
+and third-party notices in one crate.
+
+`tenferro-tensor/src/cubecl/` still owns tensor values, device placement,
+allocation, upload/download, CUDA library FFI, TensorBackend dispatch, and
+runtime-generated fused elementwise code. Those are backend integration
+concerns rather than reusable static kernels.
 
 ## Dependency Source
 
@@ -78,6 +97,46 @@ Local GPU test runs should also set:
 | `CUDA_PATH` | CUDA toolkit root used by CubeCL/NVRTC |
 | `LD_LIBRARY_PATH` | CUDA, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
 | `CUBECL_DEBUG_LOG=0` | Suppress generated-kernel log spam |
+
+## Kernel Metadata Contract
+
+Runtime tensors are dense contiguous column-major tensors. The shape determines
+the logical layout; dense column-major strides are `[1, d_0, d_0 * d_1, ...]`.
+See [backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
+for the runtime layout contract.
+
+CubeCL kernels that perform logical tensor indexing must receive the metadata
+they index with explicitly. There is no hidden row-major fallback and no
+implicit global shape state.
+
+- For kernels that can use CubeCL `TensorBinding`, the dispatch layer builds it
+  from `TypedTensor::shape` via `typed_tensor_binding()`, passing the CubeCL
+  buffer handle plus dense column-major shape and stride metadata.
+- For kernels that use raw `ArrayArg`, operation-specific shapes, axes,
+  permutations, starts, limits, and strides must be passed as explicit
+  compile-time or runtime kernel parameters derived from validated tensor and
+  op metadata.
+- Kernel crates must not invent or cache host-side shape snapshots that can
+  drift from the `TypedTensor` or `ExecInstruction` metadata. Shape validation
+  belongs at the launch/backend boundary before unsafe launch.
+
+The caller owns validation that the buffer length matches the dense shape
+product before creating `TensorBinding` or raw array arguments. Existing helper
+functions in `tenferro-tensor/src/cubecl/dispatch.rs` are the current source of
+truth for this boundary.
+
+## Launch Configuration Contract
+
+Elementwise, structural, indexing, and reduction kernels should launch enough
+parallel work items to cover the output or update domain. Single-thread launch
+is not an acceptable correctness fallback for new or modified kernels.
+
+Scatter currently has a known migration blocker: its static kernel definitions
+have moved to `tenferro-cubecl`, but the launch path still serializes through
+`single_thread_launch_config()` to preserve add-scatter semantics under
+overlapping updates. This draft work must not be merged as complete until that
+path is replaced by a documented parallel strategy, such as supported atomics
+or an explicitly staged reduction/update algorithm.
 
 ## Device Transfer Policy
 

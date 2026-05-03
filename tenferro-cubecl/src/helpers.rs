@@ -1,10 +1,5 @@
 use cubecl::prelude::*;
 
-pub(crate) mod diagonal;
-pub(crate) mod elementwise;
-pub(crate) mod indexing;
-pub(crate) mod structural;
-
 #[cube]
 pub(crate) fn zero_value<E: CubePrimitive>() -> E {
     E::cast_from(0u32)

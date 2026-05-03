@@ -15,4 +15,14 @@
 pub mod error;
 pub mod reduce;
 
+#[doc(hidden)]
+pub mod diagonal;
+#[doc(hidden)]
+pub mod elementwise;
+mod helpers;
+#[doc(hidden)]
+pub mod indexing;
+#[doc(hidden)]
+pub mod structural;
+
 pub use error::{CubeclKernelError, Result};

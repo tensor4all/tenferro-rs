@@ -40,6 +40,15 @@
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
 - Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
 
+## GPU Backend Contract
+
+- Before touching CubeCL/GPU backend code, read
+  [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
+- That document is the developer-facing source for CubeCL kernel ownership,
+  runtime shape/stride metadata conventions, launch configuration rules, and
+  device transfer behavior. Any change to those conventions must update that
+  document in the same PR.
+
 ## Documentation Policy
 
 ### Source of Truth
