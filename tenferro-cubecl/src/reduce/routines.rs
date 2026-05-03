@@ -1,6 +1,9 @@
 // Portions of this file are adapted from cubek-reduce:
 // https://github.com/tracel-ai/cubek/tree/9cf90b797107d46829e1c9d9355ce801c3dd4a7d/crates/cubek-reduce
 //
+// Original copyright:
+// Copyright (c) 2022 Nathaniel Simard & CubeCL Framework Contributors
+//
 // Original source paths:
 // - crates/cubek-reduce/src/launch/base.rs
 // - crates/cubek-reduce/src/launch/strategy.rs
@@ -8,6 +11,7 @@
 // - crates/cubek-reduce/src/routines/blueprint.rs
 //
 // Original license: MIT OR Apache-2.0.
+// See tenferro-cubecl/THIRD_PARTY_NOTICES.md for license notice text.
 // Tenferro changes: narrowed to tenferro reduction ops, current CubeCL fork,
 // single-axis keepdims output, and explicit tenferro column-major bindings.
 

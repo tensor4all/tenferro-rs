@@ -38,3 +38,10 @@ because the CPU backend does not currently expose them either.
 Shape and strides are runtime metadata supplied by the caller through CubeCL
 `TensorBinding`. tenferro passes dense column-major strides such as
 `[1, d_0, d_0 * d_1, ...]`.
+
+## Third-Party Notices
+
+The reduction launch strategy includes code adapted from CubeK Reduce. See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for upstream copyright,
+source commit, source paths, license, and change notices. The adapted portions
+preserve CubeK Reduce's `MIT OR Apache-2.0` dual-license grant.

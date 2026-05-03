@@ -1,3 +1,8 @@
+// This file implements tenferro-specific CubeCL reduction kernels. The launch
+// strategy and reduction split are adapted from cubek-reduce; see
+// tenferro-cubecl/THIRD_PARTY_NOTICES.md for upstream copyright, source paths,
+// commit, and license notice text.
+
 //! CubeCL reduction kernel definitions.
 
 use cubecl::prelude::*;
