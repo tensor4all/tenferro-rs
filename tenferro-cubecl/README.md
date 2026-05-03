@@ -52,7 +52,10 @@ multi-indices `i`, input tensor `x`, and output tensor `y`:
 The scatter definition matches the StableHLO-style add-scatter operation used by
 tenferro. JAX `lax.scatter_add` and PyTorch `scatter_add`/`index_add` are useful
 semantic references, but tenferro's full windowed scatter shape contract is the
-backend contract here.
+backend contract here. GPU scatter initializes the output with a parallel copy
+from `operand`, then applies valid updates in parallel with atomic add for
+overlapping destinations. Complex scatter atomically accumulates the real and
+imaginary scalar parts separately.
 
 ### Reductions
 

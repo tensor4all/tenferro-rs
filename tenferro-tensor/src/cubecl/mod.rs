@@ -77,8 +77,9 @@
 use std::cell::OnceCell;
 
 use cubecl::client::ComputeClient;
+use cubecl::features::AtomicUsage;
 use cubecl::prelude::{Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat};
-use cubecl::prelude::{Int as CubeInt, TensorBinding};
+use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_cubecl::reduce::{self as cubecl_reduce, ReduceStrategy};
@@ -101,9 +102,9 @@ mod runtime;
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
-    launch_binary_tensor, launch_nullary_into, launch_ternary, launch_ternary_tensor_with_config,
-    launch_unary, launch_unary_tensor, launch_unary_tensor_into, single_thread_launch_config,
-    ternary_dtype_mismatch, typed_from_cubecl, typed_tensor_binding,
+    launch_binary_tensor, launch_nullary_into, launch_ternary, launch_unary, launch_unary_tensor,
+    launch_unary_tensor_into, ternary_dtype_mismatch, typed_from_cubecl, typed_tensor_array_arg_as,
+    typed_tensor_binding,
 };
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -114,6 +115,55 @@ fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
         op,
         message: format!("unsupported dtype {dtype:?}"),
     }
+}
+
+fn ensure_atomic_add_supported<T: CubePrimitive>(
+    client: &ComputeClient<CudaRuntime>,
+    op: &'static str,
+) -> crate::Result<()> {
+    let elem = T::as_type_native_unchecked().elem_type();
+    let atomic_ty = Type::new(StorageType::Atomic(elem));
+    if client
+        .properties()
+        .atomic_type_usage(atomic_ty)
+        .contains(AtomicUsage::Add)
+    {
+        Ok(())
+    } else {
+        Err(crate::Error::BackendFailure {
+            op,
+            message: format!("CubeCL runtime does not support atomic add for {elem:?}"),
+        })
+    }
+}
+
+fn checked_dim_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> crate::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::BackendFailure {
+                op,
+                message: format!("{role} product overflow for shape {shape:?}"),
+            })
+    })
+}
+
+fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
+    let batch_len = checked_dim_product("scatter", "batch shape", &meta.batch_shape)?;
+    let window_len =
+        checked_dim_product("scatter", "window update shape", &meta.window_shape_updates)?;
+    batch_len
+        .checked_mul(window_len)
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op: "scatter",
+            message: format!(
+                "scatter update domain product overflow for batch {:?} and window {:?}",
+                meta.batch_shape, meta.window_shape_updates
+            ),
+        })
 }
 
 /// CubeCL-based GPU backend.
@@ -1118,40 +1168,63 @@ impl CubeclBackend {
             &updates.shape,
             config,
         )?;
-        let (count, dim) = single_thread_launch_config();
-        launch_ternary_tensor_with_config(
+        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+
+        launch_unary_tensor_into(
             self.runtime(),
+            &output,
             operand,
-            scatter_indices,
-            updates,
-            &operand.shape,
             "scatter",
-            count,
-            dim,
-            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
-                indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
+            cube_count_for_len(output.n_elements()),
+            cube_dim_1d(),
+            |client, count, dim, out_arg, operand_arg| unsafe {
+                indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
                     client,
                     count,
                     dim,
-                    out.into_tensor_arg(),
+                    out_arg.into_tensor_arg(),
                     operand_arg.into_tensor_arg(),
-                    scatter_arg.into_tensor_arg(),
-                    updates_arg.into_tensor_arg(),
-                    comptime_sequence(&meta.batch_shape),
-                    comptime_sequence(&meta.window_dims),
-                    comptime_sequence(&config.update_window_dims),
-                    comptime_sequence(&config.scatter_dims_to_operand_dims),
-                    config.index_vector_dim,
-                    comptime_sequence(&meta.window_shape_updates),
-                    operand.shape.len(),
-                    updates.shape.len(),
-                    scatter_indices.shape.len(),
                 );
             },
-        )
+        )?;
+
+        let update_len = scatter_update_len(&meta)?;
+        if update_len == 0 {
+            return Ok(output);
+        }
+        let client = self.runtime().client();
+        ensure_atomic_add_supported::<T>(client, "scatter")?;
+        let output_arg = typed_tensor_binding(&output, "scatter")?;
+        let operand_arg = typed_tensor_binding(operand, "scatter")?;
+        let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
+        let updates_arg = typed_tensor_binding(updates, "scatter")?;
+        unsafe {
+            indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
+                client,
+                cube_count_for_len(update_len),
+                cube_dim_1d(),
+                output_arg.into_tensor_arg(),
+                operand_arg.into_tensor_arg(),
+                scatter_arg.into_tensor_arg(),
+                updates_arg.into_tensor_arg(),
+                comptime_sequence(&meta.batch_shape),
+                comptime_sequence(&meta.window_dims),
+                comptime_sequence(&config.update_window_dims),
+                comptime_sequence(&config.scatter_dims_to_operand_dims),
+                config.index_vector_dim,
+                comptime_sequence(&meta.window_shape_updates),
+                operand.shape.len(),
+                updates.shape.len(),
+                scatter_indices.shape.len(),
+            );
+        }
+        Ok(output)
     }
 
-    fn scatter_complex_typed<T, I>(
+    fn scatter_complex_typed<T, F, I>(
         &self,
         operand: &TypedTensor<T>,
         scatter_indices: &TypedTensor<I>,
@@ -1160,6 +1233,7 @@ impl CubeclBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubeComplex + Clone,
+        F: CubeElement + CubeFloat + Clone,
         I: CubeElement + CubeFloat + Clone,
     {
         let meta = scatter_launch_meta(
@@ -1168,37 +1242,80 @@ impl CubeclBackend {
             &updates.shape,
             config,
         )?;
-        let (count, dim) = single_thread_launch_config();
-        launch_ternary_tensor_with_config(
+        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+
+        launch_unary_tensor_into(
             self.runtime(),
+            &output,
             operand,
-            scatter_indices,
-            updates,
-            &operand.shape,
             "scatter",
-            count,
-            dim,
-            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
-                indexing::scatter_complex_kernel::launch_unchecked::<T, I, CudaRuntime>(
+            cube_count_for_len(output.n_elements()),
+            cube_dim_1d(),
+            |client, count, dim, out_arg, operand_arg| unsafe {
+                indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
                     client,
                     count,
                     dim,
-                    out.into_tensor_arg(),
+                    out_arg.into_tensor_arg(),
                     operand_arg.into_tensor_arg(),
-                    scatter_arg.into_tensor_arg(),
-                    updates_arg.into_tensor_arg(),
-                    comptime_sequence(&meta.batch_shape),
-                    comptime_sequence(&meta.window_dims),
-                    comptime_sequence(&config.update_window_dims),
-                    comptime_sequence(&config.scatter_dims_to_operand_dims),
-                    config.index_vector_dim,
-                    comptime_sequence(&meta.window_shape_updates),
-                    operand.shape.len(),
-                    updates.shape.len(),
-                    scatter_indices.shape.len(),
                 );
             },
-        )
+        )?;
+
+        let update_len = scatter_update_len(&meta)?;
+        if update_len == 0 {
+            return Ok(output);
+        }
+        let client = self.runtime().client();
+        ensure_atomic_add_supported::<F>(client, "scatter")?;
+        let output_part_len =
+            output
+                .n_elements()
+                .checked_mul(2)
+                .ok_or_else(|| crate::Error::BackendFailure {
+                    op: "scatter",
+                    message: "complex output part length overflow".into(),
+                })?;
+        let update_part_len =
+            updates
+                .n_elements()
+                .checked_mul(2)
+                .ok_or_else(|| crate::Error::BackendFailure {
+                    op: "scatter",
+                    message: "complex update part length overflow".into(),
+                })?;
+        // num_complex::Complex<T> is repr(C) as { re: T, im: T }, so the
+        // complex buffers can be viewed as real scalar parts for atomic add.
+        let output_parts = typed_tensor_array_arg_as::<T, F>(&output, output_part_len, "scatter")?;
+        let update_parts = typed_tensor_array_arg_as::<T, F>(updates, update_part_len, "scatter")?;
+        let operand_arg = typed_tensor_binding(operand, "scatter")?;
+        let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
+        let updates_arg = typed_tensor_binding(updates, "scatter")?;
+        unsafe {
+            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CudaRuntime>(
+                client,
+                cube_count_for_len(update_len),
+                cube_dim_1d(),
+                output_parts,
+                operand_arg.into_tensor_arg(),
+                scatter_arg.into_tensor_arg(),
+                updates_arg.into_tensor_arg(),
+                update_parts,
+                comptime_sequence(&meta.batch_shape),
+                comptime_sequence(&meta.window_dims),
+                comptime_sequence(&config.update_window_dims),
+                comptime_sequence(&config.scatter_dims_to_operand_dims),
+                config.index_vector_dim,
+                comptime_sequence(&meta.window_shape_updates),
+                operand.shape.len(),
+                updates.shape.len(),
+                scatter_indices.shape.len(),
+            );
+        }
+        Ok(output)
     }
 }
 
@@ -2453,10 +2570,10 @@ impl TensorBackend for CubeclBackend {
                 .scatter_float_typed(operand, indices, updates, config)
                 .map(Tensor::F64),
             (Tensor::C32(operand), Tensor::F32(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
                 .map(Tensor::C32),
             (Tensor::C64(operand), Tensor::F32(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (Tensor::F32(operand), Tensor::F64(indices), Tensor::F32(updates)) => self
                 .scatter_float_typed(operand, indices, updates, config)
@@ -2465,10 +2582,10 @@ impl TensorBackend for CubeclBackend {
                 .scatter_float_typed(operand, indices, updates, config)
                 .map(Tensor::F64),
             (Tensor::C32(operand), Tensor::F64(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
                 .map(Tensor::C32),
             (Tensor::C64(operand), Tensor::F64(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
@@ -2482,12 +2599,12 @@ impl TensorBackend for CubeclBackend {
             }
             (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed(operand, &indices, updates, config)
+                self.scatter_complex_typed::<_, f32, _>(operand, &indices, updates, config)
                     .map(Tensor::C32)
             }
             (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed(operand, &indices, updates, config)
+                self.scatter_complex_typed::<_, f64, _>(operand, &indices, updates, config)
                     .map(Tensor::C64)
             }
             (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::BackendFailure {

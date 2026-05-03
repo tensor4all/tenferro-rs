@@ -1,10 +1,11 @@
 // Run with: cargo test --features cubecl -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use crate::TensorBackend;
+use num_complex::Complex64;
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
-    simple_gather_config, tensor_f64, tensor_i64, upload,
+    simple_gather_config, tensor_c64, tensor_f64, tensor_i64, upload,
 };
 
 #[test]
@@ -105,6 +106,78 @@ fn test_cubecl_scatter_skips_invalid_windows_like_cpu() {
     let operand = tensor_f64(vec![4], vec![9.0, 8.0, 7.0, 6.0]);
     let scatter_indices = tensor_i64(vec![3, 1], vec![-1, 2, 4]);
     let updates = tensor_f64(vec![3], vec![5.0, 6.0, 7.0]);
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_operand = upload(&gpu, &operand);
+    let gpu_indices = upload(&gpu, &scatter_indices);
+    let gpu_updates = upload(&gpu, &updates);
+
+    let expected = cpu
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap();
+    let gpu_out = gpu
+        .scatter(&gpu_operand, &gpu_indices, &gpu_updates, &config)
+        .unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_scatter_accumulates_overlapping_updates_like_cpu() {
+    let operand = tensor_f64(vec![4], vec![1.0, 10.0, 100.0, 1000.0]);
+    let scatter_indices = tensor_i64(vec![4, 1], vec![1, 1, -1, 3]);
+    let updates = tensor_f64(vec![4], vec![2.0, 3.0, 99.0, 5.0]);
+    let config = ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_operand = upload(&gpu, &operand);
+    let gpu_indices = upload(&gpu, &scatter_indices);
+    let gpu_updates = upload(&gpu, &updates);
+
+    let expected = cpu
+        .scatter(&operand, &scatter_indices, &updates, &config)
+        .unwrap();
+    let gpu_out = gpu
+        .scatter(&gpu_operand, &gpu_indices, &gpu_updates, &config)
+        .unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_complex_scatter_accumulates_overlapping_updates_like_cpu() {
+    let operand = tensor_c64(
+        vec![3],
+        vec![
+            Complex64::new(1.0, 10.0),
+            Complex64::new(2.0, 20.0),
+            Complex64::new(3.0, 30.0),
+        ],
+    );
+    let scatter_indices = tensor_i64(vec![3, 1], vec![0, 0, 2]);
+    let updates = tensor_c64(
+        vec![3],
+        vec![
+            Complex64::new(4.0, 1.0),
+            Complex64::new(5.0, 2.0),
+            Complex64::new(6.0, 3.0),
+        ],
+    );
     let config = ScatterConfig {
         update_window_dims: vec![],
         inserted_window_dims: vec![0],

@@ -19,10 +19,6 @@ pub(crate) fn cube_dim_1d() -> CubeDim {
     CubeDim::new_1d(DEFAULT_CUBE_DIM_X)
 }
 
-pub(crate) fn single_thread_launch_config() -> (CubeCount, CubeDim) {
-    (CubeCount::new_single(), CubeDim::new_1d(1))
-}
-
 pub(crate) fn comptime_sequence<T: CubeType>(values: &[T]) -> Sequence<T>
 where
     T: Clone,
@@ -168,6 +164,47 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     let buffer = cubecl_buffer(tensor, op)?;
     // SAFETY: `CubeclBuffer::len` tracks the allocation length in elements.
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+}
+
+pub(crate) fn typed_tensor_array_arg_as<T, U>(
+    tensor: &TypedTensor<T>,
+    len: usize,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CudaRuntime>>
+where
+    T: CubeElement + Clone,
+    U: CubeElement + Clone,
+{
+    let buffer = cubecl_buffer(tensor, op)?;
+    let requested_bytes =
+        len.checked_mul(core::mem::size_of::<U>())
+            .ok_or_else(|| crate::Error::BackendFailure {
+                op,
+                message: format!("reinterpreted CubeCL array length overflow for len {len}"),
+            })?;
+    let available_bytes = buffer
+        .len
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "CubeCL buffer byte length overflow for {} elements",
+                buffer.len
+            ),
+        })?;
+    if requested_bytes > available_bytes {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
+            ),
+        });
+    }
+
+    // SAFETY: The checked byte-size invariant proves the requested view stays
+    // within the same CubeCL allocation. Kernels using this helper are
+    // responsible for using a representation-compatible scalar view.
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), len) })
 }
 
 pub(crate) fn launch_unary<TIn, TOut>(
@@ -409,44 +446,6 @@ where
         b_arg,
         c_arg,
     );
-    Ok(output)
-}
-
-pub(crate) fn launch_ternary_tensor_with_config<TA, TB, TC, TOut>(
-    rt: &CubeclRuntime,
-    a: &TypedTensor<TA>,
-    b: &TypedTensor<TB>,
-    c: &TypedTensor<TC>,
-    out_shape: &[usize],
-    op: &'static str,
-    count: CubeCount,
-    dim: CubeDim,
-    launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
-        CubeCount,
-        CubeDim,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
-        TensorBinding<CudaRuntime>,
-    ),
-) -> crate::Result<TypedTensor<TOut>>
-where
-    TA: CubeElement + Clone,
-    TB: CubeElement + Clone,
-    TC: CubeElement + Clone,
-    TOut: CubeElement + Clone,
-{
-    let output = alloc_output::<TOut>(rt, out_shape);
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let client = rt.client();
-    let output_arg = typed_tensor_binding(&output, op)?;
-    let a_arg = typed_tensor_binding(a, op)?;
-    let b_arg = typed_tensor_binding(b, op)?;
-    let c_arg = typed_tensor_binding(c, op)?;
-    launch(client, count, dim, output_arg, a_arg, b_arg, c_arg);
     Ok(output)
 }
 

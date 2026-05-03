@@ -196,272 +196,243 @@ pub fn gather_kernel<E: CubePrimitive, I: Float>(
     }
 }
 
-macro_rules! scatter_kernel {
-    ($float_name:ident, $complex_name:ident, $ty:ident) => {
-        #[cube(launch_unchecked)]
-        pub fn $float_name<E: Float, I: Float>(
-            out: &mut Tensor<E>,
-            operand: &Tensor<E>,
-            scatter_indices: &Tensor<I>,
-            updates: &Tensor<E>,
-            #[comptime] batch_shape: Sequence<usize>,
-            #[comptime] window_dims: Sequence<usize>,
-            #[comptime] update_window_dims: Sequence<usize>,
-            #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
-            #[comptime] index_vector_dim: usize,
-            #[comptime] window_shape_updates: Sequence<usize>,
-            #[comptime] operand_rank: usize,
-            #[comptime] updates_rank: usize,
-            #[comptime] scatter_indices_rank: usize,
-        ) {
-            if ABSOLUTE_POS == 0 {
-                // StableHLO add-scatter: initialise the output from a copy of
-                // `operand` so non-scattered slots preserve the operand values.
-                for pos in 0..out.len() {
-                    out[pos] = operand[pos];
-                }
-
-                let batch_iters = shape_product(batch_shape.clone());
-                let window_iters = shape_product(window_shape_updates.clone());
-                let batch_rank = batch_shape.len();
-                let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
-                let window_rank = window_shape_updates.len();
-                let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
-                let mut batch_idx = Array::<usize>::new(batch_buf_len);
-                let mut window_idx = Array::<usize>::new(window_buf_len);
-                let mut update_idx = Array::<usize>::new(updates_rank);
-                let mut operand_base = Array::<usize>::new(operand_rank);
-                let mut operand_idx = Array::<usize>::new(operand_rank);
-                let mut window_shape = Array::<usize>::new(operand_rank);
-
-                #[unroll]
-                for axis in 0..operand_rank {
-                    window_shape[axis] = 1;
-                    operand_base[axis] = 0;
-                    operand_idx[axis] = 0;
-                }
-                #[unroll]
-                for pos in 0..window_dims.len() {
-                    let operand_axis = comptime! { *window_dims.index(pos) };
-                    window_shape[operand_axis] = comptime! { *window_shape_updates.index(pos) };
-                }
-
-                for batch_flat in 0..batch_iters {
-                    if batch_rank > 0 {
-                        let next_batch_idx = flat_to_multi_index(batch_flat, batch_shape.clone());
-                        #[unroll]
-                        for axis in 0..batch_rank {
-                            batch_idx[axis] = next_batch_idx[axis];
-                        }
-                    }
-
-                    let mut window_fits = true;
-                    #[unroll]
-                    for axis in 0..operand_rank {
-                        operand_base[axis] = 0;
-                    }
-
-                    #[unroll]
-                    for component in 0..scatter_dims_to_operand_dims.len() {
-                        let operand_dim =
-                            comptime! { *scatter_dims_to_operand_dims.index(component) };
-                        let start = index_component(
-                            scatter_indices,
-                            &batch_idx,
-                            index_vector_dim,
-                            component,
-                            scatter_indices_rank,
-                        );
-                        if start < I::new(0.0) {
-                            window_fits = false;
-                        } else {
-                            operand_base[operand_dim] = usize::cast_from(start);
-                        }
-                    }
-                    if window_fits {
-                        #[unroll]
-                        for axis in 0..operand_rank {
-                            if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
-                                window_fits = false;
-                            }
-                        }
-                    }
-
-                    if window_fits {
-                        for window_flat in 0..window_iters {
-                            if window_rank > 0 {
-                                let next_window_idx =
-                                    flat_to_multi_index(window_flat, window_shape_updates.clone());
-                                #[unroll]
-                                for axis in 0..window_rank {
-                                    window_idx[axis] = next_window_idx[axis];
-                                }
-                            }
-
-                            let mut batch_axis = 0usize;
-                            #[unroll]
-                            for axis in 0..updates_rank {
-                                if axis_in_sequence(update_window_dims.clone(), axis) {
-                                    let pos =
-                                        axis_position_in_sequence(update_window_dims.clone(), axis);
-                                    update_idx[axis] = window_idx[pos];
-                                } else {
-                                    update_idx[axis] = batch_idx[batch_axis];
-                                    batch_axis += 1;
-                                }
-                            }
-
-                            #[unroll]
-                            for axis in 0..operand_rank {
-                                operand_idx[axis] = operand_base[axis];
-                            }
-                            #[unroll]
-                            for pos in 0..window_dims.len() {
-                                let operand_axis = comptime! { *window_dims.index(pos) };
-                                operand_idx[operand_axis] += window_idx[pos];
-                            }
-
-                            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
-                            let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
-                            out[dst] = out[dst] + updates[src];
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cube(launch_unchecked)]
-        pub fn $complex_name<E: Complex, I: Float>(
-            out: &mut Tensor<E>,
-            operand: &Tensor<E>,
-            scatter_indices: &Tensor<I>,
-            updates: &Tensor<E>,
-            #[comptime] batch_shape: Sequence<usize>,
-            #[comptime] window_dims: Sequence<usize>,
-            #[comptime] update_window_dims: Sequence<usize>,
-            #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
-            #[comptime] index_vector_dim: usize,
-            #[comptime] window_shape_updates: Sequence<usize>,
-            #[comptime] operand_rank: usize,
-            #[comptime] updates_rank: usize,
-            #[comptime] scatter_indices_rank: usize,
-        ) {
-            if ABSOLUTE_POS == 0 {
-                // StableHLO add-scatter: initialise the output from a copy of
-                // `operand` so non-scattered slots preserve the operand values.
-                for pos in 0..out.len() {
-                    out[pos] = operand[pos];
-                }
-
-                let batch_iters = shape_product(batch_shape.clone());
-                let window_iters = shape_product(window_shape_updates.clone());
-                let batch_rank = batch_shape.len();
-                let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
-                let window_rank = window_shape_updates.len();
-                let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
-                let mut batch_idx = Array::<usize>::new(batch_buf_len);
-                let mut window_idx = Array::<usize>::new(window_buf_len);
-                let mut update_idx = Array::<usize>::new(updates_rank);
-                let mut operand_base = Array::<usize>::new(operand_rank);
-                let mut operand_idx = Array::<usize>::new(operand_rank);
-                let mut window_shape = Array::<usize>::new(operand_rank);
-
-                #[unroll]
-                for axis in 0..operand_rank {
-                    window_shape[axis] = 1;
-                    operand_base[axis] = 0;
-                    operand_idx[axis] = 0;
-                }
-                #[unroll]
-                for pos in 0..window_dims.len() {
-                    let operand_axis = comptime! { *window_dims.index(pos) };
-                    window_shape[operand_axis] = comptime! { *window_shape_updates.index(pos) };
-                }
-
-                for batch_flat in 0..batch_iters {
-                    if batch_rank > 0 {
-                        let next_batch_idx = flat_to_multi_index(batch_flat, batch_shape.clone());
-                        #[unroll]
-                        for axis in 0..batch_rank {
-                            batch_idx[axis] = next_batch_idx[axis];
-                        }
-                    }
-
-                    let mut window_fits = true;
-                    #[unroll]
-                    for axis in 0..operand_rank {
-                        operand_base[axis] = 0;
-                    }
-
-                    #[unroll]
-                    for component in 0..scatter_dims_to_operand_dims.len() {
-                        let operand_dim =
-                            comptime! { *scatter_dims_to_operand_dims.index(component) };
-                        let start = index_component(
-                            scatter_indices,
-                            &batch_idx,
-                            index_vector_dim,
-                            component,
-                            scatter_indices_rank,
-                        );
-                        if start < I::new(0.0) {
-                            window_fits = false;
-                        } else {
-                            operand_base[operand_dim] = usize::cast_from(start);
-                        }
-                    }
-                    if window_fits {
-                        #[unroll]
-                        for axis in 0..operand_rank {
-                            if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
-                                window_fits = false;
-                            }
-                        }
-                    }
-
-                    if window_fits {
-                        for window_flat in 0..window_iters {
-                            if window_rank > 0 {
-                                let next_window_idx =
-                                    flat_to_multi_index(window_flat, window_shape_updates.clone());
-                                #[unroll]
-                                for axis in 0..window_rank {
-                                    window_idx[axis] = next_window_idx[axis];
-                                }
-                            }
-
-                            let mut batch_axis = 0usize;
-                            #[unroll]
-                            for axis in 0..updates_rank {
-                                if axis_in_sequence(update_window_dims.clone(), axis) {
-                                    let pos =
-                                        axis_position_in_sequence(update_window_dims.clone(), axis);
-                                    update_idx[axis] = window_idx[pos];
-                                } else {
-                                    update_idx[axis] = batch_idx[batch_axis];
-                                    batch_axis += 1;
-                                }
-                            }
-
-                            #[unroll]
-                            for axis in 0..operand_rank {
-                                operand_idx[axis] = operand_base[axis];
-                            }
-                            #[unroll]
-                            for pos in 0..window_dims.len() {
-                                let operand_axis = comptime! { *window_dims.index(pos) };
-                                operand_idx[operand_axis] += window_idx[pos];
-                            }
-
-                            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
-                            let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
-                            out[dst] = out[dst] + updates[src];
-                        }
-                    }
-                }
-            }
-        }
-    };
+#[cube(launch_unchecked)]
+pub fn scatter_copy_kernel<E: CubePrimitive>(out: &mut Tensor<E>, operand: &Tensor<E>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = operand[ABSOLUTE_POS];
+    }
 }
 
-scatter_kernel!(scatter_float_kernel, scatter_complex_kernel, Float);
+#[cube(launch_unchecked)]
+pub fn scatter_float_kernel<E: Float, I: Float>(
+    out: &mut Tensor<Atomic<E>>,
+    operand: &Tensor<E>,
+    scatter_indices: &Tensor<I>,
+    updates: &Tensor<E>,
+    #[comptime] batch_shape: Sequence<usize>,
+    #[comptime] window_dims: Sequence<usize>,
+    #[comptime] update_window_dims: Sequence<usize>,
+    #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
+    #[comptime] index_vector_dim: usize,
+    #[comptime] window_shape_updates: Sequence<usize>,
+    #[comptime] operand_rank: usize,
+    #[comptime] updates_rank: usize,
+    #[comptime] scatter_indices_rank: usize,
+) {
+    let batch_iters = shape_product(batch_shape.clone());
+    let window_iters = shape_product(window_shape_updates.clone());
+    let update_iters = batch_iters * window_iters;
+    if ABSOLUTE_POS < update_iters {
+        let batch_flat = ABSOLUTE_POS / window_iters;
+        let window_flat = ABSOLUTE_POS % window_iters;
+        let batch_rank = batch_shape.len();
+        let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
+        let window_rank = window_shape_updates.len();
+        let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
+        let mut batch_idx = Array::<usize>::new(batch_buf_len);
+        let mut window_idx = Array::<usize>::new(window_buf_len);
+        let mut update_idx = Array::<usize>::new(updates_rank);
+        let mut operand_base = Array::<usize>::new(operand_rank);
+        let mut operand_idx = Array::<usize>::new(operand_rank);
+        let mut window_shape = Array::<usize>::new(operand_rank);
+
+        if batch_rank > 0 {
+            let next_batch_idx = flat_to_multi_index(batch_flat, batch_shape.clone());
+            #[unroll]
+            for axis in 0..batch_rank {
+                batch_idx[axis] = next_batch_idx[axis];
+            }
+        }
+        if window_rank > 0 {
+            let next_window_idx = flat_to_multi_index(window_flat, window_shape_updates.clone());
+            #[unroll]
+            for axis in 0..window_rank {
+                window_idx[axis] = next_window_idx[axis];
+            }
+        }
+
+        #[unroll]
+        for axis in 0..operand_rank {
+            window_shape[axis] = 1;
+            operand_base[axis] = 0;
+            operand_idx[axis] = 0;
+        }
+        #[unroll]
+        for pos in 0..window_dims.len() {
+            let operand_axis = comptime! { *window_dims.index(pos) };
+            window_shape[operand_axis] = comptime! { *window_shape_updates.index(pos) };
+        }
+
+        let mut window_fits = true;
+        #[unroll]
+        for component in 0..scatter_dims_to_operand_dims.len() {
+            let operand_dim = comptime! { *scatter_dims_to_operand_dims.index(component) };
+            let start = index_component(
+                scatter_indices,
+                &batch_idx,
+                index_vector_dim,
+                component,
+                scatter_indices_rank,
+            );
+            if start < I::new(0.0) {
+                window_fits = false;
+            } else {
+                operand_base[operand_dim] = usize::cast_from(start);
+            }
+        }
+        if window_fits {
+            #[unroll]
+            for axis in 0..operand_rank {
+                if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
+                    window_fits = false;
+                }
+            }
+        }
+
+        if window_fits {
+            let mut batch_axis = 0usize;
+            #[unroll]
+            for axis in 0..updates_rank {
+                if axis_in_sequence(update_window_dims.clone(), axis) {
+                    let pos = axis_position_in_sequence(update_window_dims.clone(), axis);
+                    update_idx[axis] = window_idx[pos];
+                } else {
+                    update_idx[axis] = batch_idx[batch_axis];
+                    batch_axis += 1;
+                }
+            }
+
+            #[unroll]
+            for axis in 0..operand_rank {
+                operand_idx[axis] = operand_base[axis];
+            }
+            #[unroll]
+            for pos in 0..window_dims.len() {
+                let operand_axis = comptime! { *window_dims.index(pos) };
+                operand_idx[operand_axis] += window_idx[pos];
+            }
+
+            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
+            let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
+            out[dst].fetch_add(updates[src]);
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn scatter_complex_kernel<E: Complex, F: Float, I: Float>(
+    out_parts: &mut Array<Atomic<F>>,
+    operand: &Tensor<E>,
+    scatter_indices: &Tensor<I>,
+    updates: &Tensor<E>,
+    update_parts: &Array<F>,
+    #[comptime] batch_shape: Sequence<usize>,
+    #[comptime] window_dims: Sequence<usize>,
+    #[comptime] update_window_dims: Sequence<usize>,
+    #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
+    #[comptime] index_vector_dim: usize,
+    #[comptime] window_shape_updates: Sequence<usize>,
+    #[comptime] operand_rank: usize,
+    #[comptime] updates_rank: usize,
+    #[comptime] scatter_indices_rank: usize,
+) {
+    let batch_iters = shape_product(batch_shape.clone());
+    let window_iters = shape_product(window_shape_updates.clone());
+    let update_iters = batch_iters * window_iters;
+    if ABSOLUTE_POS < update_iters {
+        let batch_flat = ABSOLUTE_POS / window_iters;
+        let window_flat = ABSOLUTE_POS % window_iters;
+        let batch_rank = batch_shape.len();
+        let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
+        let window_rank = window_shape_updates.len();
+        let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
+        let mut batch_idx = Array::<usize>::new(batch_buf_len);
+        let mut window_idx = Array::<usize>::new(window_buf_len);
+        let mut update_idx = Array::<usize>::new(updates_rank);
+        let mut operand_base = Array::<usize>::new(operand_rank);
+        let mut operand_idx = Array::<usize>::new(operand_rank);
+        let mut window_shape = Array::<usize>::new(operand_rank);
+
+        if batch_rank > 0 {
+            let next_batch_idx = flat_to_multi_index(batch_flat, batch_shape.clone());
+            #[unroll]
+            for axis in 0..batch_rank {
+                batch_idx[axis] = next_batch_idx[axis];
+            }
+        }
+        if window_rank > 0 {
+            let next_window_idx = flat_to_multi_index(window_flat, window_shape_updates.clone());
+            #[unroll]
+            for axis in 0..window_rank {
+                window_idx[axis] = next_window_idx[axis];
+            }
+        }
+
+        #[unroll]
+        for axis in 0..operand_rank {
+            window_shape[axis] = 1;
+            operand_base[axis] = 0;
+            operand_idx[axis] = 0;
+        }
+        #[unroll]
+        for pos in 0..window_dims.len() {
+            let operand_axis = comptime! { *window_dims.index(pos) };
+            window_shape[operand_axis] = comptime! { *window_shape_updates.index(pos) };
+        }
+
+        let mut window_fits = true;
+        #[unroll]
+        for component in 0..scatter_dims_to_operand_dims.len() {
+            let operand_dim = comptime! { *scatter_dims_to_operand_dims.index(component) };
+            let start = index_component(
+                scatter_indices,
+                &batch_idx,
+                index_vector_dim,
+                component,
+                scatter_indices_rank,
+            );
+            if start < I::new(0.0) {
+                window_fits = false;
+            } else {
+                operand_base[operand_dim] = usize::cast_from(start);
+            }
+        }
+        if window_fits {
+            #[unroll]
+            for axis in 0..operand_rank {
+                if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
+                    window_fits = false;
+                }
+            }
+        }
+
+        if window_fits {
+            let mut batch_axis = 0usize;
+            #[unroll]
+            for axis in 0..updates_rank {
+                if axis_in_sequence(update_window_dims.clone(), axis) {
+                    let pos = axis_position_in_sequence(update_window_dims.clone(), axis);
+                    update_idx[axis] = window_idx[pos];
+                } else {
+                    update_idx[axis] = batch_idx[batch_axis];
+                    batch_axis += 1;
+                }
+            }
+
+            #[unroll]
+            for axis in 0..operand_rank {
+                operand_idx[axis] = operand_base[axis];
+            }
+            #[unroll]
+            for pos in 0..window_dims.len() {
+                let operand_axis = comptime! { *window_dims.index(pos) };
+                operand_idx[operand_axis] += window_idx[pos];
+            }
+
+            let dst = multi_to_tensor_index(&operand_idx, operand, operand_rank) * 2;
+            let src = multi_to_tensor_index(&update_idx, updates, updates_rank) * 2;
+            out_parts[dst].fetch_add(update_parts[src]);
+            out_parts[dst + 1].fetch_add(update_parts[src + 1]);
+        }
+    }
+}

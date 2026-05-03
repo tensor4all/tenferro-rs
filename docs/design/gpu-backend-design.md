@@ -147,12 +147,14 @@ Elementwise, structural, indexing, and reduction kernels should launch enough
 parallel work items to cover the output or update domain. Single-thread launch
 is not an acceptable correctness fallback for new or modified kernels.
 
-Scatter currently has a known migration blocker: its static kernel definitions
-have moved to `tenferro-cubecl`, but the launch path still serializes through
-`single_thread_launch_config()` to preserve add-scatter semantics under
-overlapping updates. This draft work must not be merged as complete until that
-path is replaced by a documented parallel strategy, such as supported atomics
-or an explicitly staged reduction/update algorithm.
+Scatter uses a two-phase launch: first a parallel copy initializes `out` from
+`operand`, then a parallel update kernel covers the scatter update domain.
+Overlapping add-scatter updates use CubeCL atomic add for supported real scalar
+parts. Complex scatter is represented as atomic adds to the real and imaginary
+parts, following the same decomposition used by JAX GPU lowering for complex
+scatter-add. Because floating-point atomic addition does not define a stable
+inter-thread accumulation order, overlapping floating-point scatter updates are
+numerically nondeterministic within normal floating-point roundoff.
 
 ## Device Transfer Policy
 

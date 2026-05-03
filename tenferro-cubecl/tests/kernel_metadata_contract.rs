@@ -34,3 +34,27 @@ fn logical_kernels_do_not_take_tensor_shapes_as_comptime_parameters() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn scatter_kernels_are_not_single_thread_fallbacks() {
+    let indexing_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("indexing.rs"),
+    )
+    .expect("indexing kernel source should be readable");
+    let banned = ["ABSOLUTE_POS == 0", "for pos in 0..out.len()"];
+
+    let mut violations = Vec::new();
+    for needle in banned {
+        if indexing_source.contains(needle) {
+            violations.push(format!("indexing.rs contains {needle}"));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "scatter CubeCL kernels must cover the output or update domain in parallel:\n{}",
+        violations.join("\n")
+    );
+}
