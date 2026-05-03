@@ -105,20 +105,36 @@ the logical layout; dense column-major strides are `[1, d_0, d_0 * d_1, ...]`.
 See [backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
 for the runtime layout contract.
 
-CubeCL kernels that perform logical tensor indexing must receive the metadata
-they index with explicitly. There is no hidden row-major fallback and no
-implicit global shape state.
+CubeCL kernels that perform logical tensor indexing must receive tensor
+metadata through CubeCL tensor metadata. There is no hidden row-major fallback
+and no implicit global shape state.
 
-- For kernels that can use CubeCL `TensorBinding`, the dispatch layer builds it
-  from `TypedTensor::shape` via `typed_tensor_binding()`, passing the CubeCL
-  buffer handle plus dense column-major shape and stride metadata.
-- For kernels that use raw `ArrayArg`, operation-specific shapes, axes,
-  permutations, starts, limits, and strides must be passed as explicit
-  compile-time or runtime kernel parameters derived from validated tensor and
-  op metadata.
-- Kernel crates must not invent or cache host-side shape snapshots that can
-  drift from the `TypedTensor` or `ExecInstruction` metadata. Shape validation
-  belongs at the launch/backend boundary before unsafe launch.
+- Tensor shape extents and strides are runtime tensor metadata. Logical kernels
+  must receive them through `TensorBinding` and access them inside kernels
+  through CubeCL `Tensor` methods such as `shape(axis)`, `stride(axis)`, and
+  `coordinate(index, axis)`.
+- Rank may be passed as a `#[comptime]` loop bound when CubeCL needs fixed-size
+  local index buffers or unrolled axis loops. This rank must be derived from
+  the validated tensor metadata at the launch boundary and must not carry shape
+  extents or strides.
+- `#[comptime]` is reserved for operation attributes and algorithm
+  configuration. This includes attributes such as transpose `perm`,
+  broadcast/gather/scatter dimension-number mappings, static slice strides,
+  axis sets, reduce strategy, and kernel blueprints. Different attribute values
+  may compile as different CubeCL specializations.
+- Permute-like operations should canonicalize their launch attributes where the
+  transformation is mathematically identical. In particular, adjacent axes that
+  stay contiguous in column-major layout should be fused before choosing the
+  effective `perm` and rank when doing so preserves observable shape semantics.
+  This reduces CubeCL JIT specialization patterns without changing the public
+  tensor contract.
+- Raw `ArrayArg` is allowed only for linear-buffer kernels that do not perform
+  logical tensor indexing, such as elementwise kernels and raw dtype conversion
+  helpers. A logical indexing kernel may use raw arrays only with a local comment
+  explaining why `TensorBinding` cannot express the access pattern.
+- Kernel crates must not invent or cache host-side tensor shape snapshots that
+  can drift from the `TypedTensor` or `ExecInstruction` metadata. Shape
+  validation belongs at the launch/backend boundary before unsafe launch.
 
 The caller owns validation that the buffer length matches the dense shape
 product before creating `TensorBinding` or raw array arguments. Existing helper

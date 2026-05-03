@@ -1,7 +1,7 @@
 use cubecl::prelude::*;
 use num_complex::{Complex32, Complex64};
 
-use crate::helpers::{axis_in_sequence, flat_to_multi_index, multi_to_flat_index, zero_value};
+use crate::helpers::{axis_in_sequence, flat_to_tensor_index, multi_to_tensor_index, zero_value};
 
 #[cube(launch_unchecked)]
 pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
@@ -12,47 +12,44 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
 
 #[cube(launch_unchecked)]
 pub fn transpose_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] perm: Sequence<usize>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let rank = output_shape.len();
+        let rank = perm.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
             let src_axis = comptime! { *perm.index(axis) };
             input_idx[src_axis] = out_idx[axis];
         }
-        out[ABSOLUTE_POS] = input[multi_to_flat_index(&input_idx, input_shape)];
+        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 
 #[cube(launch_unchecked)]
 pub fn broadcast_in_dim_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] dims: Sequence<usize>,
+    #[comptime] output_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let rank = input_shape.len();
+        let rank = dims.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, output_rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for src_axis in 0..rank {
             let dst_axis = comptime! { *dims.index(src_axis) };
-            let src_dim = comptime! { *input_shape.index(src_axis) };
+            let src_dim = input.shape(src_axis);
             input_idx[src_axis] = out_idx[dst_axis];
             if src_dim == 1 {
                 input_idx[src_axis] = 0;
             }
         }
-        out[ABSOLUTE_POS] = input[multi_to_flat_index(&input_idx, input_shape)];
+        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 
@@ -143,47 +140,44 @@ pub fn convert_complex_to_complex<Out: Complex, In: Complex>(
 
 #[cube(launch_unchecked)]
 pub fn reverse_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] axes: Sequence<usize>,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, shape.clone());
-        let rank = shape.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
-            let dim = comptime! { *shape.index(axis) };
+            let dim = out.shape(axis);
             input_idx[axis] = if axis_in_sequence(axes.clone(), axis) {
                 dim - 1 - out_idx[axis]
             } else {
                 out_idx[axis]
             };
         }
-        out[ABSOLUTE_POS] = input[multi_to_flat_index(&input_idx, shape)];
+        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 
 #[cube(launch_unchecked)]
 pub fn concatenate_copy_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] axis: usize,
     #[comptime] axis_offset: usize,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < input.len() {
-        let input_idx = flat_to_multi_index(ABSOLUTE_POS, input_shape.clone());
-        let rank = input_shape.len();
+        let input_idx = flat_to_tensor_index(ABSOLUTE_POS, input, rank);
         let mut output_idx = Array::<usize>::new(rank);
         #[unroll]
         for dim in 0..rank {
             output_idx[dim] = input_idx[dim];
         }
         output_idx[axis] += axis_offset;
-        let dst = multi_to_flat_index(&output_idx, output_shape);
+        let dst = multi_to_tensor_index(&output_idx, out, rank);
         out[dst] = input[ABSOLUTE_POS];
     }
 }

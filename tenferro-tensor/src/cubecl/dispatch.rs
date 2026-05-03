@@ -205,6 +205,41 @@ where
     Ok(output)
 }
 
+pub(crate) fn launch_unary_tensor<TIn, TOut>(
+    rt: &CubeclRuntime,
+    input: &TypedTensor<TIn>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TIn: CubeElement + Clone,
+    TOut: CubeElement + Clone,
+{
+    let output = alloc_output::<TOut>(rt, out_shape);
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = typed_tensor_binding(&output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        input_arg,
+    );
+    Ok(output)
+}
+
 pub(crate) fn launch_nullary_into<TOut>(
     rt: &CubeclRuntime,
     output: &TypedTensor<TOut>,
@@ -224,7 +259,7 @@ where
     Ok(())
 }
 
-pub(crate) fn launch_unary_into<TIn, TOut>(
+pub(crate) fn launch_unary_tensor_into<TIn, TOut>(
     rt: &CubeclRuntime,
     output: &TypedTensor<TOut>,
     input: &TypedTensor<TIn>,
@@ -235,8 +270,8 @@ pub(crate) fn launch_unary_into<TIn, TOut>(
         &ComputeClient<CudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
     ),
 ) -> crate::Result<()>
 where
@@ -246,8 +281,8 @@ where
     if output.n_elements() == 0 {
         return Ok(());
     }
-    let output_arg = typed_tensor_array_arg(output, op)?;
-    let input_arg = typed_tensor_array_arg(input, op)?;
+    let output_arg = typed_tensor_binding(output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
     launch(rt.client(), count, dim, output_arg, input_arg);
     Ok(())
 }
@@ -281,6 +316,46 @@ where
     let output_arg = typed_tensor_array_arg(&output, op)?;
     let lhs_arg = typed_tensor_array_arg(lhs, op)?;
     let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
+    rt: &CubeclRuntime,
+    lhs: &TypedTensor<TLhs>,
+    rhs: &TypedTensor<TRhs>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TLhs: CubeElement + Clone,
+    TRhs: CubeElement + Clone,
+    TOut: CubeElement + Clone,
+{
+    let output = alloc_output::<TOut>(rt, out_shape);
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = typed_tensor_binding(&output, op)?;
+    let lhs_arg = typed_tensor_binding(lhs, op)?;
+    let rhs_arg = typed_tensor_binding(rhs, op)?;
     launch(
         client,
         cube_count_for_len(len),
@@ -337,7 +412,7 @@ where
     Ok(output)
 }
 
-pub(crate) fn launch_ternary_with_config<TA, TB, TC, TOut>(
+pub(crate) fn launch_ternary_tensor_with_config<TA, TB, TC, TOut>(
     rt: &CubeclRuntime,
     a: &TypedTensor<TA>,
     b: &TypedTensor<TB>,
@@ -350,10 +425,10 @@ pub(crate) fn launch_ternary_with_config<TA, TB, TC, TOut>(
         &ComputeClient<CudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -367,10 +442,10 @@ where
         return Ok(output);
     }
     let client = rt.client();
-    let output_arg = typed_tensor_array_arg(&output, op)?;
-    let a_arg = typed_tensor_array_arg(a, op)?;
-    let b_arg = typed_tensor_array_arg(b, op)?;
-    let c_arg = typed_tensor_array_arg(c, op)?;
+    let output_arg = typed_tensor_binding(&output, op)?;
+    let a_arg = typed_tensor_binding(a, op)?;
+    let b_arg = typed_tensor_binding(b, op)?;
+    let c_arg = typed_tensor_binding(c, op)?;
     launch(client, count, dim, output_arg, a_arg, b_arg, c_arg);
     Ok(output)
 }

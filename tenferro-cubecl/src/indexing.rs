@@ -1,8 +1,8 @@
 use cubecl::prelude::*;
 
 use crate::helpers::{
-    axis_in_sequence, axis_position_in_sequence, flat_to_multi_index, multi_to_flat_index,
-    shape_product, zero_value,
+    axis_in_sequence, axis_position_in_sequence, flat_to_multi_index, flat_to_tensor_index,
+    multi_to_tensor_index, shape_product, zero_value,
 };
 
 #[cube]
@@ -22,15 +22,14 @@ pub(crate) fn clamp_window_start<I: Float>(start: I, dim_size: usize, window_siz
 
 #[cube]
 pub(crate) fn index_component<I: Float>(
-    indices: &Array<I>,
-    #[comptime] indices_shape: Sequence<usize>,
+    indices: &Tensor<I>,
     batch_idx: &Array<usize>,
     #[comptime] index_vector_dim: usize,
     #[comptime] component: usize,
+    #[comptime] rank: usize,
 ) -> I {
-    let rank = indices_shape.len();
     if index_vector_dim == rank {
-        indices[multi_to_flat_index(batch_idx, indices_shape)]
+        indices[multi_to_tensor_index(batch_idx, indices, rank)]
     } else {
         let mut full_idx = Array::<usize>::new(rank);
         let mut batch_axis = 0usize;
@@ -43,67 +42,62 @@ pub(crate) fn index_component<I: Float>(
                 batch_axis += 1;
             }
         }
-        indices[multi_to_flat_index(&full_idx, indices_shape)]
+        indices[multi_to_tensor_index(&full_idx, indices, rank)]
     }
 }
 
 #[cube(launch_unchecked)]
 pub fn slice_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] starts: Sequence<usize>,
     #[comptime] strides: Sequence<usize>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let rank = output_shape.len();
+        let rank = starts.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
             input_idx[axis] = comptime! { *starts.index(axis) }
                 + out_idx[axis] * comptime! { *strides.index(axis) };
         }
-        out[ABSOLUTE_POS] = input[multi_to_flat_index(&input_idx, input_shape)];
+        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 
 #[cube(launch_unchecked)]
 pub fn dynamic_slice_kernel<E: CubePrimitive, I: Float>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    starts: &Array<I>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
+    starts: &Tensor<I>,
+    #[comptime] slice_sizes: Sequence<usize>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let rank = output_shape.len();
+        let rank = slice_sizes.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
             let start = starts[axis];
-            let dim_size = comptime! { *input_shape.index(axis) };
-            let window_size = comptime! { *output_shape.index(axis) };
+            let dim_size = input.shape(axis);
+            let window_size = comptime! { *slice_sizes.index(axis) };
             input_idx[axis] = clamp_window_start::<I>(start, dim_size, window_size) + out_idx[axis];
         }
-        out[ABSOLUTE_POS] = input[multi_to_flat_index(&input_idx, input_shape)];
+        out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
 }
 
 #[cube(launch_unchecked)]
 pub fn pad_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
-    input: &Array<E>,
-    #[comptime] input_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    input: &Tensor<E>,
     #[comptime] edge_padding_low: Sequence<i64>,
     #[comptime] interior_padding: Sequence<i64>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let rank = input_shape.len();
+        let rank = edge_padding_low.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         let mut in_bounds = true;
         #[unroll]
@@ -115,7 +109,7 @@ pub fn pad_kernel<E: CubePrimitive>(
                 in_bounds = false;
             } else {
                 let candidate = (shifted / spacing) as usize;
-                if candidate >= comptime! { *input_shape.index(axis) } {
+                if candidate >= input.shape(axis) {
                     in_bounds = false;
                 } else {
                     input_idx[axis] = candidate;
@@ -123,7 +117,7 @@ pub fn pad_kernel<E: CubePrimitive>(
             }
         }
         out[ABSOLUTE_POS] = if in_bounds {
-            input[multi_to_flat_index(&input_idx, input_shape)]
+            input[multi_to_tensor_index(&input_idx, input, rank)]
         } else {
             zero_value::<E>()
         };
@@ -132,24 +126,22 @@ pub fn pad_kernel<E: CubePrimitive>(
 
 #[cube(launch_unchecked)]
 pub fn gather_kernel<E: CubePrimitive, I: Float>(
-    out: &mut Array<E>,
-    operand: &Array<E>,
-    start_indices: &Array<I>,
-    #[comptime] operand_shape: Sequence<usize>,
-    #[comptime] output_shape: Sequence<usize>,
+    out: &mut Tensor<E>,
+    operand: &Tensor<E>,
+    start_indices: &Tensor<I>,
     #[comptime] batch_shape: Sequence<usize>,
     #[comptime] window_dims: Sequence<usize>,
     #[comptime] offset_dims: Sequence<usize>,
     #[comptime] start_index_map: Sequence<usize>,
-    #[comptime] start_indices_shape: Sequence<usize>,
     #[comptime] slice_sizes: Sequence<usize>,
     #[comptime] index_vector_dim: usize,
+    #[comptime] operand_rank: usize,
+    #[comptime] out_rank: usize,
+    #[comptime] start_indices_rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let out_idx = flat_to_multi_index(ABSOLUTE_POS, output_shape.clone());
-        let operand_rank = operand_shape.len();
+        let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, out_rank);
         let batch_rank = batch_shape.len();
-        let out_rank = output_shape.len();
         let mut batch_idx = Array::<usize>::new(batch_rank);
         let mut window_offsets = Array::<usize>::new(operand_rank);
         #[unroll]
@@ -186,12 +178,12 @@ pub fn gather_kernel<E: CubePrimitive, I: Float>(
             let operand_dim = comptime! { *start_index_map.index(component) };
             let start = index_component(
                 start_indices,
-                start_indices_shape.clone(),
                 &batch_idx,
                 index_vector_dim,
                 component,
+                start_indices_rank,
             );
-            let dim_size = comptime! { *operand_shape.index(operand_dim) };
+            let dim_size = operand.shape(operand_dim);
             let window_size = comptime! { *slice_sizes.index(operand_dim) };
             operand_idx[operand_dim] = clamp_window_start::<I>(start, dim_size, window_size);
         }
@@ -200,7 +192,7 @@ pub fn gather_kernel<E: CubePrimitive, I: Float>(
         for axis in 0..operand_rank {
             operand_idx[axis] += window_offsets[axis];
         }
-        out[ABSOLUTE_POS] = operand[multi_to_flat_index(&operand_idx, operand_shape)];
+        out[ABSOLUTE_POS] = operand[multi_to_tensor_index(&operand_idx, operand, operand_rank)];
     }
 }
 
@@ -208,19 +200,19 @@ macro_rules! scatter_kernel {
     ($float_name:ident, $complex_name:ident, $ty:ident) => {
         #[cube(launch_unchecked)]
         pub fn $float_name<E: Float, I: Float>(
-            out: &mut Array<E>,
-            operand: &Array<E>,
-            scatter_indices: &Array<I>,
-            updates: &Array<E>,
-            #[comptime] operand_shape: Sequence<usize>,
-            #[comptime] updates_shape: Sequence<usize>,
-            #[comptime] scatter_indices_shape: Sequence<usize>,
+            out: &mut Tensor<E>,
+            operand: &Tensor<E>,
+            scatter_indices: &Tensor<I>,
+            updates: &Tensor<E>,
             #[comptime] batch_shape: Sequence<usize>,
             #[comptime] window_dims: Sequence<usize>,
             #[comptime] update_window_dims: Sequence<usize>,
             #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
             #[comptime] index_vector_dim: usize,
             #[comptime] window_shape_updates: Sequence<usize>,
+            #[comptime] operand_rank: usize,
+            #[comptime] updates_rank: usize,
+            #[comptime] scatter_indices_rank: usize,
         ) {
             if ABSOLUTE_POS == 0 {
                 // StableHLO add-scatter: initialise the output from a copy of
@@ -233,13 +225,11 @@ macro_rules! scatter_kernel {
                 let window_iters = shape_product(window_shape_updates.clone());
                 let batch_rank = batch_shape.len();
                 let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
-                let operand_rank = operand_shape.len();
-                let update_rank = updates_shape.len();
                 let window_rank = window_shape_updates.len();
                 let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
                 let mut batch_idx = Array::<usize>::new(batch_buf_len);
                 let mut window_idx = Array::<usize>::new(window_buf_len);
-                let mut update_idx = Array::<usize>::new(update_rank);
+                let mut update_idx = Array::<usize>::new(updates_rank);
                 let mut operand_base = Array::<usize>::new(operand_rank);
                 let mut operand_idx = Array::<usize>::new(operand_rank);
                 let mut window_shape = Array::<usize>::new(operand_rank);
@@ -277,10 +267,10 @@ macro_rules! scatter_kernel {
                             comptime! { *scatter_dims_to_operand_dims.index(component) };
                         let start = index_component(
                             scatter_indices,
-                            scatter_indices_shape.clone(),
                             &batch_idx,
                             index_vector_dim,
                             component,
+                            scatter_indices_rank,
                         );
                         if start < I::new(0.0) {
                             window_fits = false;
@@ -291,9 +281,7 @@ macro_rules! scatter_kernel {
                     if window_fits {
                         #[unroll]
                         for axis in 0..operand_rank {
-                            if operand_base[axis] + window_shape[axis]
-                                > comptime! { *operand_shape.index(axis) }
-                            {
+                            if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
                                 window_fits = false;
                             }
                         }
@@ -312,7 +300,7 @@ macro_rules! scatter_kernel {
 
                             let mut batch_axis = 0usize;
                             #[unroll]
-                            for axis in 0..update_rank {
+                            for axis in 0..updates_rank {
                                 if axis_in_sequence(update_window_dims.clone(), axis) {
                                     let pos =
                                         axis_position_in_sequence(update_window_dims.clone(), axis);
@@ -333,8 +321,8 @@ macro_rules! scatter_kernel {
                                 operand_idx[operand_axis] += window_idx[pos];
                             }
 
-                            let dst = multi_to_flat_index(&operand_idx, operand_shape.clone());
-                            let src = multi_to_flat_index(&update_idx, updates_shape.clone());
+                            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
+                            let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
                             out[dst] = out[dst] + updates[src];
                         }
                     }
@@ -344,19 +332,19 @@ macro_rules! scatter_kernel {
 
         #[cube(launch_unchecked)]
         pub fn $complex_name<E: Complex, I: Float>(
-            out: &mut Array<E>,
-            operand: &Array<E>,
-            scatter_indices: &Array<I>,
-            updates: &Array<E>,
-            #[comptime] operand_shape: Sequence<usize>,
-            #[comptime] updates_shape: Sequence<usize>,
-            #[comptime] scatter_indices_shape: Sequence<usize>,
+            out: &mut Tensor<E>,
+            operand: &Tensor<E>,
+            scatter_indices: &Tensor<I>,
+            updates: &Tensor<E>,
             #[comptime] batch_shape: Sequence<usize>,
             #[comptime] window_dims: Sequence<usize>,
             #[comptime] update_window_dims: Sequence<usize>,
             #[comptime] scatter_dims_to_operand_dims: Sequence<usize>,
             #[comptime] index_vector_dim: usize,
             #[comptime] window_shape_updates: Sequence<usize>,
+            #[comptime] operand_rank: usize,
+            #[comptime] updates_rank: usize,
+            #[comptime] scatter_indices_rank: usize,
         ) {
             if ABSOLUTE_POS == 0 {
                 // StableHLO add-scatter: initialise the output from a copy of
@@ -369,13 +357,11 @@ macro_rules! scatter_kernel {
                 let window_iters = shape_product(window_shape_updates.clone());
                 let batch_rank = batch_shape.len();
                 let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
-                let operand_rank = operand_shape.len();
-                let update_rank = updates_shape.len();
                 let window_rank = window_shape_updates.len();
                 let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
                 let mut batch_idx = Array::<usize>::new(batch_buf_len);
                 let mut window_idx = Array::<usize>::new(window_buf_len);
-                let mut update_idx = Array::<usize>::new(update_rank);
+                let mut update_idx = Array::<usize>::new(updates_rank);
                 let mut operand_base = Array::<usize>::new(operand_rank);
                 let mut operand_idx = Array::<usize>::new(operand_rank);
                 let mut window_shape = Array::<usize>::new(operand_rank);
@@ -413,10 +399,10 @@ macro_rules! scatter_kernel {
                             comptime! { *scatter_dims_to_operand_dims.index(component) };
                         let start = index_component(
                             scatter_indices,
-                            scatter_indices_shape.clone(),
                             &batch_idx,
                             index_vector_dim,
                             component,
+                            scatter_indices_rank,
                         );
                         if start < I::new(0.0) {
                             window_fits = false;
@@ -427,9 +413,7 @@ macro_rules! scatter_kernel {
                     if window_fits {
                         #[unroll]
                         for axis in 0..operand_rank {
-                            if operand_base[axis] + window_shape[axis]
-                                > comptime! { *operand_shape.index(axis) }
-                            {
+                            if operand_base[axis] + window_shape[axis] > operand.shape(axis) {
                                 window_fits = false;
                             }
                         }
@@ -448,7 +432,7 @@ macro_rules! scatter_kernel {
 
                             let mut batch_axis = 0usize;
                             #[unroll]
-                            for axis in 0..update_rank {
+                            for axis in 0..updates_rank {
                                 if axis_in_sequence(update_window_dims.clone(), axis) {
                                     let pos =
                                         axis_position_in_sequence(update_window_dims.clone(), axis);
@@ -469,8 +453,8 @@ macro_rules! scatter_kernel {
                                 operand_idx[operand_axis] += window_idx[pos];
                             }
 
-                            let dst = multi_to_flat_index(&operand_idx, operand_shape.clone());
-                            let src = multi_to_flat_index(&update_idx, updates_shape.clone());
+                            let dst = multi_to_tensor_index(&operand_idx, out, operand_rank);
+                            let src = multi_to_tensor_index(&update_idx, updates, updates_rank);
                             out[dst] = out[dst] + updates[src];
                         }
                     }

@@ -101,9 +101,9 @@ mod runtime;
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
-    launch_nullary_into, launch_ternary, launch_ternary_with_config, launch_unary,
-    launch_unary_into, single_thread_launch_config, ternary_dtype_mismatch, typed_from_cubecl,
-    typed_tensor_binding,
+    launch_binary_tensor, launch_nullary_into, launch_ternary, launch_ternary_tensor_with_config,
+    launch_unary, launch_unary_tensor, launch_unary_tensor_into, single_thread_launch_config,
+    ternary_dtype_mismatch, typed_from_cubecl, typed_tensor_binding,
 };
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -225,7 +225,7 @@ impl CubeclBackend {
     {
         validate_permutation("transpose", perm, input.shape.len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape[axis]).collect();
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -235,10 +235,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(perm),
                 );
             },
@@ -255,7 +253,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         validate_broadcast_in_dim(input.shape.as_slice(), shape, dims)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             shape,
@@ -265,11 +263,10 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(dims),
+                    shape.len(),
                 );
             },
         )
@@ -284,7 +281,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         ensure_axes_unique("reverse", "axes", axes, input.shape.len())?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -294,10 +291,10 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(axes),
+                    input.shape.len(),
                 );
             },
         )
@@ -556,7 +553,7 @@ impl CubeclBackend {
     {
         let (output_shape, diag_output_axis) =
             extract_diagonal_shape(input.shape.as_slice(), axis_a, axis_b)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -566,13 +563,13 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     axis_a,
                     axis_b,
                     diag_output_axis,
+                    input.shape.len(),
+                    output_shape.len(),
                 );
             },
         )
@@ -601,7 +598,7 @@ impl CubeclBackend {
                 );
             },
         )?;
-        launch_unary_into(
+        launch_unary_tensor_into(
             self.runtime(),
             &output,
             input,
@@ -613,12 +610,12 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     axis_a,
                     axis_b,
+                    input.shape.len(),
+                    output_shape.len(),
                 );
             },
         )?;
@@ -636,7 +633,7 @@ impl CubeclBackend {
                 actual: input.shape.len(),
             });
         }
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -646,9 +643,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     k,
                 );
             },
@@ -666,7 +662,7 @@ impl CubeclBackend {
                 actual: input.shape.len(),
             });
         }
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -676,9 +672,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     k,
                 );
             },
@@ -936,7 +931,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = validate_slice(input.shape.as_slice(), config)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -946,10 +941,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(&config.starts),
                     comptime_sequence(&config.strides),
                 );
@@ -984,7 +977,7 @@ impl CubeclBackend {
                 });
             }
         }
-        launch_binary(
+        launch_binary_tensor(
             self.runtime(),
             input,
             starts,
@@ -995,10 +988,9 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    starts_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    starts_arg.into_tensor_arg(),
                     comptime_sequence(slice_sizes),
                 );
             },
@@ -1014,7 +1006,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = pad_output_shape(input.shape.as_slice(), config)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -1024,10 +1016,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(&config.edge_padding_low),
                     comptime_sequence(&config.interior_padding),
                 );
@@ -1047,7 +1037,7 @@ impl CubeclBackend {
         let output = alloc_output::<T>(self.runtime(), &output_shape);
         let mut offset = 0usize;
         for input in inputs {
-            launch_unary_into(
+            launch_unary_tensor_into(
                 self.runtime(),
                 &output,
                 input,
@@ -1059,12 +1049,11 @@ impl CubeclBackend {
                         client,
                         count,
                         dim,
-                        out,
-                        input_arg,
-                        comptime_sequence(&input.shape),
-                        comptime_sequence(&output_shape),
+                        out.into_tensor_arg(),
+                        input_arg.into_tensor_arg(),
                         axis,
                         offset,
+                        input.shape.len(),
                     );
                 },
             )?;
@@ -1084,7 +1073,7 @@ impl CubeclBackend {
         I: CubeElement + CubeFloat + Clone,
     {
         let meta = gather_launch_meta(&operand.shape, &start_indices.shape, config)?;
-        launch_binary(
+        launch_binary_tensor(
             self.runtime(),
             operand,
             start_indices,
@@ -1095,18 +1084,18 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    indices_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&meta.output_shape),
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    indices_arg.into_tensor_arg(),
                     comptime_sequence(&meta.batch_shape),
                     comptime_sequence(&meta.window_dims),
                     comptime_sequence(&config.offset_dims),
                     comptime_sequence(&config.start_index_map),
-                    comptime_sequence(&start_indices.shape),
                     comptime_sequence(&config.slice_sizes),
                     config.index_vector_dim,
+                    operand.shape.len(),
+                    meta.output_shape.len(),
+                    start_indices.shape.len(),
                 );
             },
         )
@@ -1130,7 +1119,7 @@ impl CubeclBackend {
             config,
         )?;
         let (count, dim) = single_thread_launch_config();
-        launch_ternary_with_config(
+        launch_ternary_tensor_with_config(
             self.runtime(),
             operand,
             scatter_indices,
@@ -1144,19 +1133,19 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    scatter_arg,
-                    updates_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&updates.shape),
-                    comptime_sequence(&scatter_indices.shape),
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    scatter_arg.into_tensor_arg(),
+                    updates_arg.into_tensor_arg(),
                     comptime_sequence(&meta.batch_shape),
                     comptime_sequence(&meta.window_dims),
                     comptime_sequence(&config.update_window_dims),
                     comptime_sequence(&config.scatter_dims_to_operand_dims),
                     config.index_vector_dim,
                     comptime_sequence(&meta.window_shape_updates),
+                    operand.shape.len(),
+                    updates.shape.len(),
+                    scatter_indices.shape.len(),
                 );
             },
         )
@@ -1180,7 +1169,7 @@ impl CubeclBackend {
             config,
         )?;
         let (count, dim) = single_thread_launch_config();
-        launch_ternary_with_config(
+        launch_ternary_tensor_with_config(
             self.runtime(),
             operand,
             scatter_indices,
@@ -1194,19 +1183,19 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    scatter_arg,
-                    updates_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&updates.shape),
-                    comptime_sequence(&scatter_indices.shape),
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    scatter_arg.into_tensor_arg(),
+                    updates_arg.into_tensor_arg(),
                     comptime_sequence(&meta.batch_shape),
                     comptime_sequence(&meta.window_dims),
                     comptime_sequence(&config.update_window_dims),
                     comptime_sequence(&config.scatter_dims_to_operand_dims),
                     config.index_vector_dim,
                     comptime_sequence(&meta.window_shape_updates),
+                    operand.shape.len(),
+                    updates.shape.len(),
+                    scatter_indices.shape.len(),
                 );
             },
         )
