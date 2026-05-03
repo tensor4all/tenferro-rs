@@ -78,3 +78,82 @@ pub fn keepdims_output_shape(input_shape: &[usize], axis: usize) -> Result<Vec<u
     output[axis] = 1;
     Ok(output)
 }
+
+/// Validate that an output shape matches a single-axis keepdims reduction.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cubecl::reduce::validate_keepdims_output_shape;
+///
+/// assert!(validate_keepdims_output_shape(&[2, 3, 4], &[2, 1, 4], 1).is_ok());
+/// assert!(validate_keepdims_output_shape(&[2, 3, 4], &[2, 3, 1], 1).is_err());
+/// ```
+pub fn validate_keepdims_output_shape(
+    input_shape: &[usize],
+    output_shape: &[usize],
+    axis: usize,
+) -> Result<()> {
+    let expected = keepdims_output_shape(input_shape, axis)?;
+    if output_shape != expected {
+        return Err(CubeclKernelError::MismatchOutputShape {
+            expected,
+            actual: output_shape.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+/// Return the length of the axis being reduced.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cubecl::reduce::axis_reduce_len;
+///
+/// assert_eq!(axis_reduce_len(&[2, 3, 4], 1).unwrap(), 3);
+/// assert!(axis_reduce_len(&[2, 3, 4], 3).is_err());
+/// ```
+pub fn axis_reduce_len(input_shape: &[usize], axis: usize) -> Result<usize> {
+    validate_axis(input_shape.len(), axis)?;
+    Ok(input_shape[axis])
+}
+
+/// Return the number of elements produced by a single-axis keepdims reduction.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cubecl::reduce::reduced_output_len;
+///
+/// assert_eq!(reduced_output_len(&[2, 3, 4], 1).unwrap(), 8);
+/// ```
+pub fn reduced_output_len(input_shape: &[usize], axis: usize) -> Result<usize> {
+    Ok(keepdims_output_shape(input_shape, axis)?
+        .iter()
+        .product::<usize>())
+}
+
+/// Return whether a reduction operation supports a scalar dtype.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cubecl::reduce::{supports_dtype, ReduceDType, ReduceOp};
+///
+/// assert!(supports_dtype(ReduceOp::Sum, ReduceDType::I64));
+/// assert!(!supports_dtype(ReduceOp::Max, ReduceDType::Complex64));
+/// ```
+pub fn supports_dtype(op: ReduceOp, dtype: ReduceDType) -> bool {
+    match op {
+        ReduceOp::Sum | ReduceOp::Prod => matches!(
+            dtype,
+            ReduceDType::F32
+                | ReduceDType::F64
+                | ReduceDType::I64
+                | ReduceDType::Complex32
+                | ReduceDType::Complex64
+        ),
+        ReduceOp::Max | ReduceOp::Min => matches!(dtype, ReduceDType::F32 | ReduceDType::F64),
+    }
+}

@@ -24,7 +24,10 @@ pub mod cpu_reference;
 #[cfg(test)]
 mod tests;
 
-pub use definition::{keepdims_output_shape, validate_axis, ReduceDType, ReduceOp};
+pub use definition::{
+    axis_reduce_len, keepdims_output_shape, reduced_output_len, supports_dtype, validate_axis,
+    validate_keepdims_output_shape, ReduceDType, ReduceOp,
+};
 pub use launch::{
     launch_max_float, launch_min_float, launch_prod_complex, launch_prod_float, launch_prod_int,
     launch_sum_complex, launch_sum_float, launch_sum_int, ReduceStrategy,
