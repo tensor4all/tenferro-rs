@@ -308,10 +308,16 @@ pub fn transpose_rule(
             *lower,
             *transpose_a,
             *unit_diagonal,
+            ctx,
         ),
-        StdTensorOp::FullPivLuSolve { transpose_a } => {
-            linalg::transpose_full_piv_lu_solve(emitter, cotangent_out, inputs, mode, *transpose_a)
-        }
+        StdTensorOp::FullPivLuSolve { transpose_a } => linalg::transpose_full_piv_lu_solve(
+            emitter,
+            cotangent_out,
+            inputs,
+            mode,
+            *transpose_a,
+            ctx,
+        ),
         StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
 
         // Extension substrate.

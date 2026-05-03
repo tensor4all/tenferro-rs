@@ -874,6 +874,7 @@ pub fn transpose_triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -883,7 +884,7 @@ pub fn transpose_triangular_solve(
     };
 
     let mut result = vec![None, None];
-    if active_mask[1] {
+    if active_mask[0] || active_mask[1] {
         let conjugated_a =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let out = emitter.add_op(
@@ -898,7 +899,34 @@ pub fn transpose_triangular_solve(
                 active_mask: vec![false, true],
             },
         );
-        result[1] = Some(out[0]);
+        let rhs_cotangent = out[0];
+        if active_mask[0] {
+            let rank = ctx.shape_of(&inputs[0]).len();
+            let solution = emitter.add_op(
+                StdTensorOp::TriangularSolve {
+                    left_side,
+                    lower,
+                    transpose_a,
+                    unit_diagonal,
+                },
+                inputs.to_vec(),
+                OpMode::Primal,
+            )[0];
+            let matrix_cotangent = solve_matrix_cotangent(
+                emitter,
+                rhs_cotangent,
+                ValRef::Local(solution),
+                left_side,
+                transpose_a,
+                rank,
+            );
+            let matrix_cotangent =
+                project_triangular_operand_linear(emitter, matrix_cotangent, lower, unit_diagonal);
+            result[0] = Some(matrix_cotangent);
+        }
+        if active_mask[1] {
+            result[1] = Some(rhs_cotangent);
+        }
     }
 
     result
@@ -910,6 +938,7 @@ pub fn transpose_full_piv_lu_solve(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -919,7 +948,7 @@ pub fn transpose_full_piv_lu_solve(
     };
 
     let mut result = vec![None, None];
-    if active_mask[1] {
+    if active_mask[0] || active_mask[1] {
         let conjugated_a =
             emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
         let out = emitter.add_op(
@@ -931,10 +960,63 @@ pub fn transpose_full_piv_lu_solve(
                 active_mask: vec![false, true],
             },
         );
-        result[1] = Some(out[0]);
+        let rhs_cotangent = out[0];
+        if active_mask[0] {
+            let rank = ctx.shape_of(&inputs[0]).len();
+            let solution = emitter.add_op(
+                StdTensorOp::FullPivLuSolve { transpose_a },
+                inputs.to_vec(),
+                OpMode::Primal,
+            )[0];
+            result[0] = Some(solve_matrix_cotangent(
+                emitter,
+                rhs_cotangent,
+                ValRef::Local(solution),
+                true,
+                transpose_a,
+                rank,
+            ));
+        }
+        if active_mask[1] {
+            result[1] = Some(rhs_cotangent);
+        }
     }
 
     result
+}
+
+fn solve_matrix_cotangent(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    rhs_cotangent: LocalValId,
+    solution: ValRef<StdTensorOp>,
+    left_side: bool,
+    transpose_a: bool,
+    rank: usize,
+) -> LocalValId {
+    let negative_rhs_cotangent = linear_neg(emitter, rhs_cotangent);
+    let solution_h = adjoint_matrix_fixed(emitter, solution, rank);
+    let op_matrix_cotangent = if left_side {
+        matmul_linear(
+            emitter,
+            ValRef::Local(negative_rhs_cotangent),
+            ValRef::Local(solution_h),
+            vec![true, false],
+            rank,
+        )
+    } else {
+        matmul_linear(
+            emitter,
+            ValRef::Local(solution_h),
+            ValRef::Local(negative_rhs_cotangent),
+            vec![false, true],
+            rank,
+        )
+    };
+    if transpose_a {
+        transpose_matrix_linear(emitter, op_matrix_cotangent, rank)
+    } else {
+        op_matrix_cotangent
+    }
 }
 
 fn solve_in_graph(
@@ -992,7 +1074,7 @@ fn fixed_binary(
 }
 
 fn linear_unary(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut impl OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     input: LocalValId,
 ) -> LocalValId {
@@ -1109,7 +1191,7 @@ fn linear_add(
     linear_binary(builder, StdTensorOp::Add, lhs, rhs)
 }
 
-fn linear_neg(builder: &mut FragmentBuilder<StdTensorOp>, input: LocalValId) -> LocalValId {
+fn linear_neg(builder: &mut impl OpEmitter<StdTensorOp>, input: LocalValId) -> LocalValId {
     linear_unary(builder, StdTensorOp::Neg, input)
 }
 
@@ -1231,7 +1313,7 @@ fn transpose_matrix_fixed(
 }
 
 fn adjoint_matrix_fixed(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut impl OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     rank: usize,
 ) -> LocalValId {
@@ -1273,7 +1355,7 @@ fn transpose_matrix_linear(
 }
 
 fn project_triangular_operand_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut impl OpEmitter<StdTensorOp>,
     input: LocalValId,
     lower: bool,
     unit_diagonal: bool,
@@ -1329,7 +1411,7 @@ fn matmul_fixed(
 }
 
 fn matmul_linear(
-    builder: &mut FragmentBuilder<StdTensorOp>,
+    builder: &mut impl OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
     active_mask: Vec<bool>,

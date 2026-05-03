@@ -11,6 +11,7 @@ use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 
 mod indexing_tests;
+mod linalg_tests;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
