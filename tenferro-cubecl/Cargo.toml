@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 description = "CubeCL kernels and launch helpers for tenferro."
+readme = "README.md"
 
 [features]
 default = []
