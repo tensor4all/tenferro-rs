@@ -76,9 +76,14 @@
 
 use std::cell::OnceCell;
 
+use cubecl::client::ComputeClient;
+use cubecl::features::AtomicUsage;
 use cubecl::prelude::{Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat};
+use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
+use tenferro_cubecl::reduce::{self as cubecl_reduce, ReduceStrategy};
+use tenferro_cubecl::{diagonal, elementwise, indexing, structural};
 
 use crate::backend::TensorBackend;
 use crate::config::{
@@ -90,7 +95,6 @@ mod dispatch;
 mod ffi;
 mod fusion;
 mod gemm;
-mod kernels;
 mod linalg;
 mod memory;
 mod runtime;
@@ -98,10 +102,10 @@ mod runtime;
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
-    launch_nullary_into, launch_ternary, launch_ternary_with_config, launch_unary,
-    launch_unary_into, single_thread_launch_config, ternary_dtype_mismatch, typed_from_cubecl,
+    launch_binary_tensor, launch_nullary_into, launch_ternary, launch_unary, launch_unary_tensor,
+    launch_unary_tensor_into, ternary_dtype_mismatch, typed_from_cubecl, typed_tensor_array_arg_as,
+    typed_tensor_binding,
 };
-use kernels::{diagonal, elementwise, indexing, reduction, structural};
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CubeclRuntime};
@@ -111,6 +115,55 @@ fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
         op,
         message: format!("unsupported dtype {dtype:?}"),
     }
+}
+
+fn ensure_atomic_add_supported<T: CubePrimitive>(
+    client: &ComputeClient<CudaRuntime>,
+    op: &'static str,
+) -> crate::Result<()> {
+    let elem = T::as_type_native_unchecked().elem_type();
+    let atomic_ty = Type::new(StorageType::Atomic(elem));
+    if client
+        .properties()
+        .atomic_type_usage(atomic_ty)
+        .contains(AtomicUsage::Add)
+    {
+        Ok(())
+    } else {
+        Err(crate::Error::BackendFailure {
+            op,
+            message: format!("CubeCL runtime does not support atomic add for {elem:?}"),
+        })
+    }
+}
+
+fn checked_dim_product(
+    op: &'static str,
+    role: &'static str,
+    shape: &[usize],
+) -> crate::Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::BackendFailure {
+                op,
+                message: format!("{role} product overflow for shape {shape:?}"),
+            })
+    })
+}
+
+fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
+    let batch_len = checked_dim_product("scatter", "batch shape", &meta.batch_shape)?;
+    let window_len =
+        checked_dim_product("scatter", "window update shape", &meta.window_shape_updates)?;
+    batch_len
+        .checked_mul(window_len)
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op: "scatter",
+            message: format!(
+                "scatter update domain product overflow for batch {:?} and window {:?}",
+                meta.batch_shape, meta.window_shape_updates
+            ),
+        })
 }
 
 /// CubeCL-based GPU backend.
@@ -222,7 +275,7 @@ impl CubeclBackend {
     {
         validate_permutation("transpose", perm, input.shape.len())?;
         let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape[axis]).collect();
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -232,10 +285,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(perm),
                 );
             },
@@ -252,7 +303,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         validate_broadcast_in_dim(input.shape.as_slice(), shape, dims)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             shape,
@@ -262,11 +313,10 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(dims),
+                    shape.len(),
                 );
             },
         )
@@ -281,7 +331,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         ensure_axes_unique("reverse", "axes", axes, input.shape.len())?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -291,10 +341,10 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(axes),
+                    input.shape.len(),
                 );
             },
         )
@@ -553,7 +603,7 @@ impl CubeclBackend {
     {
         let (output_shape, diag_output_axis) =
             extract_diagonal_shape(input.shape.as_slice(), axis_a, axis_b)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -563,13 +613,13 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     axis_a,
                     axis_b,
                     diag_output_axis,
+                    input.shape.len(),
+                    output_shape.len(),
                 );
             },
         )
@@ -598,7 +648,7 @@ impl CubeclBackend {
                 );
             },
         )?;
-        launch_unary_into(
+        launch_unary_tensor_into(
             self.runtime(),
             &output,
             input,
@@ -610,12 +660,12 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     axis_a,
                     axis_b,
+                    input.shape.len(),
+                    output_shape.len(),
                 );
             },
         )?;
@@ -633,7 +683,7 @@ impl CubeclBackend {
                 actual: input.shape.len(),
             });
         }
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -643,9 +693,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     k,
                 );
             },
@@ -663,7 +712,7 @@ impl CubeclBackend {
                 actual: input.shape.len(),
             });
         }
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &input.shape,
@@ -673,13 +722,70 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     k,
                 );
             },
         )
+    }
+
+    fn launch_reduce_axis_typed<T>(
+        &self,
+        input: &TypedTensor<T>,
+        axis: usize,
+        op: &'static str,
+        launch: impl FnOnce(
+            &ComputeClient<CudaRuntime>,
+            TensorBinding<CudaRuntime>,
+            TensorBinding<CudaRuntime>,
+        ) -> tenferro_cubecl::Result<()>,
+    ) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + Clone,
+    {
+        let output_shape = reduction_keepdims_shape(&input.shape, axis);
+        let output = alloc_output::<T>(self.runtime(), &output_shape);
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+
+        let input_binding = typed_tensor_binding(input, op)?;
+        let output_binding = typed_tensor_binding(&output, op)?;
+        launch(self.runtime().client(), input_binding, output_binding).map_err(|err| {
+            crate::Error::BackendFailure {
+                op,
+                message: err.to_string(),
+            }
+        })?;
+        Ok(output)
+    }
+
+    fn reduce_axes_typed<T>(
+        &self,
+        input: &TypedTensor<T>,
+        axes: &[usize],
+        op: &'static str,
+        mut launch_axis: impl FnMut(&Self, &TypedTensor<T>, usize) -> crate::Result<TypedTensor<T>>,
+    ) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + Clone,
+    {
+        ensure_axes_unique(op, "axes", axes, input.shape.len())?;
+        if axes.is_empty() {
+            return Ok(input.clone());
+        }
+
+        let final_shape = reduction_output_shape(input.shape.as_slice(), axes);
+        let mut sorted_axes = axes.to_vec();
+        sorted_axes.sort_unstable();
+
+        let mut current = input.clone();
+        for axis in sorted_axes {
+            current = launch_axis(self, &current, axis)?;
+        }
+
+        cubecl_reshape_metadata(current, final_shape, op)
     }
 
     fn reduce_sum_float_typed<F: CubeElement + CubeFloat + Clone>(
@@ -687,31 +793,22 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        ensure_axes_unique("reduce_sum", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_sum",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_sum_float::launch_unchecked::<F, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_sum",
+                |client, input, output| {
+                    cubecl_reduce::launch_sum_float::<CudaRuntime, F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn reduce_sum_complex_typed<C: CubeElement + CubeComplex + Clone>(
@@ -719,31 +816,45 @@ impl CubeclBackend {
         input: &TypedTensor<C>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<C>> {
-        ensure_axes_unique("reduce_sum", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_sum",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_sum_complex::launch_unchecked::<C, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_sum",
+                |client, input, output| {
+                    cubecl_reduce::launch_sum_complex::<CudaRuntime, C>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
+    }
+
+    fn reduce_sum_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_sum",
+                |client, input, output| {
+                    cubecl_reduce::launch_sum_int::<CudaRuntime, I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn reduce_prod_float_typed<F: CubeElement + CubeFloat + Clone>(
@@ -751,31 +862,22 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        ensure_axes_unique("reduce_prod", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_prod",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_prod_float::launch_unchecked::<F, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_prod",
+                |client, input, output| {
+                    cubecl_reduce::launch_prod_float::<CudaRuntime, F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn reduce_prod_complex_typed<C: CubeElement + CubeComplex + Clone>(
@@ -783,31 +885,45 @@ impl CubeclBackend {
         input: &TypedTensor<C>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<C>> {
-        ensure_axes_unique("reduce_prod", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_prod",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_prod_complex::launch_unchecked::<C, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_prod",
+                |client, input, output| {
+                    cubecl_reduce::launch_prod_complex::<CudaRuntime, C>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
+    }
+
+    fn reduce_prod_int_typed<I: CubeElement + CubeInt + Clone>(
+        &self,
+        input: &TypedTensor<I>,
+        axes: &[usize],
+    ) -> crate::Result<TypedTensor<I>> {
+        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_prod",
+                |client, input, output| {
+                    cubecl_reduce::launch_prod_int::<CudaRuntime, I>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn reduce_max_typed<F: CubeElement + CubeFloat + Clone>(
@@ -815,31 +931,22 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        ensure_axes_unique("reduce_max", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_max",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_max_float::launch_unchecked::<F, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_max", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_max",
+                |client, input, output| {
+                    cubecl_reduce::launch_max_float::<CudaRuntime, F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn reduce_min_typed<F: CubeElement + CubeFloat + Clone>(
@@ -847,31 +954,22 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        ensure_axes_unique("reduce_min", "axes", axes, input.shape.len())?;
-        if axes.is_empty() {
-            return Ok(input.clone());
-        }
-        let output_shape = reduction_output_shape(input.shape.as_slice(), axes);
-        let reduction_shape = reduction_shape(input.shape.as_slice(), axes);
-        launch_unary(
-            self.runtime(),
-            input,
-            &output_shape,
-            "reduce_min",
-            |client, count, dim, out, input_arg| unsafe {
-                reduction::reduce_min_float::launch_unchecked::<F, CudaRuntime>(
-                    client,
-                    count,
-                    dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
-                    comptime_sequence(axes),
-                    comptime_sequence(&reduction_shape),
-                );
-            },
-        )
+        self.reduce_axes_typed(input, axes, "reduce_min", |backend, current, axis| {
+            backend.launch_reduce_axis_typed(
+                current,
+                axis,
+                "reduce_min",
+                |client, input, output| {
+                    cubecl_reduce::launch_min_float::<CudaRuntime, F>(
+                        client,
+                        input,
+                        output,
+                        axis,
+                        ReduceStrategy::Auto,
+                    )
+                },
+            )
+        })
     }
 
     fn slice_typed<T>(
@@ -883,7 +981,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = validate_slice(input.shape.as_slice(), config)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -893,10 +991,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(&config.starts),
                     comptime_sequence(&config.strides),
                 );
@@ -931,7 +1027,7 @@ impl CubeclBackend {
                 });
             }
         }
-        launch_binary(
+        launch_binary_tensor(
             self.runtime(),
             input,
             starts,
@@ -942,10 +1038,9 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    starts_arg,
-                    comptime_sequence(&input.shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
+                    starts_arg.into_tensor_arg(),
                     comptime_sequence(slice_sizes),
                 );
             },
@@ -961,7 +1056,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let output_shape = pad_output_shape(input.shape.as_slice(), config)?;
-        launch_unary(
+        launch_unary_tensor(
             self.runtime(),
             input,
             &output_shape,
@@ -971,10 +1066,8 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    input_arg,
-                    comptime_sequence(&input.shape),
-                    comptime_sequence(&output_shape),
+                    out.into_tensor_arg(),
+                    input_arg.into_tensor_arg(),
                     comptime_sequence(&config.edge_padding_low),
                     comptime_sequence(&config.interior_padding),
                 );
@@ -994,7 +1087,7 @@ impl CubeclBackend {
         let output = alloc_output::<T>(self.runtime(), &output_shape);
         let mut offset = 0usize;
         for input in inputs {
-            launch_unary_into(
+            launch_unary_tensor_into(
                 self.runtime(),
                 &output,
                 input,
@@ -1006,12 +1099,11 @@ impl CubeclBackend {
                         client,
                         count,
                         dim,
-                        out,
-                        input_arg,
-                        comptime_sequence(&input.shape),
-                        comptime_sequence(&output_shape),
+                        out.into_tensor_arg(),
+                        input_arg.into_tensor_arg(),
                         axis,
                         offset,
+                        input.shape.len(),
                     );
                 },
             )?;
@@ -1031,7 +1123,7 @@ impl CubeclBackend {
         I: CubeElement + CubeFloat + Clone,
     {
         let meta = gather_launch_meta(&operand.shape, &start_indices.shape, config)?;
-        launch_binary(
+        launch_binary_tensor(
             self.runtime(),
             operand,
             start_indices,
@@ -1042,18 +1134,18 @@ impl CubeclBackend {
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    indices_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&meta.output_shape),
+                    out.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
+                    indices_arg.into_tensor_arg(),
                     comptime_sequence(&meta.batch_shape),
                     comptime_sequence(&meta.window_dims),
                     comptime_sequence(&config.offset_dims),
                     comptime_sequence(&config.start_index_map),
-                    comptime_sequence(&start_indices.shape),
                     comptime_sequence(&config.slice_sizes),
                     config.index_vector_dim,
+                    operand.shape.len(),
+                    meta.output_shape.len(),
+                    start_indices.shape.len(),
                 );
             },
         )
@@ -1076,40 +1168,63 @@ impl CubeclBackend {
             &updates.shape,
             config,
         )?;
-        let (count, dim) = single_thread_launch_config();
-        launch_ternary_with_config(
+        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+
+        launch_unary_tensor_into(
             self.runtime(),
+            &output,
             operand,
-            scatter_indices,
-            updates,
-            &operand.shape,
             "scatter",
-            count,
-            dim,
-            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
-                indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
+            cube_count_for_len(output.n_elements()),
+            cube_dim_1d(),
+            |client, count, dim, out_arg, operand_arg| unsafe {
+                indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    scatter_arg,
-                    updates_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&updates.shape),
-                    comptime_sequence(&scatter_indices.shape),
-                    comptime_sequence(&meta.batch_shape),
-                    comptime_sequence(&meta.window_dims),
-                    comptime_sequence(&config.update_window_dims),
-                    comptime_sequence(&config.scatter_dims_to_operand_dims),
-                    config.index_vector_dim,
-                    comptime_sequence(&meta.window_shape_updates),
+                    out_arg.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
                 );
             },
-        )
+        )?;
+
+        let update_len = scatter_update_len(&meta)?;
+        if update_len == 0 {
+            return Ok(output);
+        }
+        let client = self.runtime().client();
+        ensure_atomic_add_supported::<T>(client, "scatter")?;
+        let output_arg = typed_tensor_binding(&output, "scatter")?;
+        let operand_arg = typed_tensor_binding(operand, "scatter")?;
+        let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
+        let updates_arg = typed_tensor_binding(updates, "scatter")?;
+        unsafe {
+            indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
+                client,
+                cube_count_for_len(update_len),
+                cube_dim_1d(),
+                output_arg.into_tensor_arg(),
+                operand_arg.into_tensor_arg(),
+                scatter_arg.into_tensor_arg(),
+                updates_arg.into_tensor_arg(),
+                comptime_sequence(&meta.batch_shape),
+                comptime_sequence(&meta.window_dims),
+                comptime_sequence(&config.update_window_dims),
+                comptime_sequence(&config.scatter_dims_to_operand_dims),
+                config.index_vector_dim,
+                comptime_sequence(&meta.window_shape_updates),
+                operand.shape.len(),
+                updates.shape.len(),
+                scatter_indices.shape.len(),
+            );
+        }
+        Ok(output)
     }
 
-    fn scatter_complex_typed<T, I>(
+    fn scatter_complex_typed<T, F, I>(
         &self,
         operand: &TypedTensor<T>,
         scatter_indices: &TypedTensor<I>,
@@ -1118,6 +1233,7 @@ impl CubeclBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubeComplex + Clone,
+        F: CubeElement + CubeFloat + Clone,
         I: CubeElement + CubeFloat + Clone,
     {
         let meta = scatter_launch_meta(
@@ -1126,37 +1242,80 @@ impl CubeclBackend {
             &updates.shape,
             config,
         )?;
-        let (count, dim) = single_thread_launch_config();
-        launch_ternary_with_config(
+        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        if output.n_elements() == 0 {
+            return Ok(output);
+        }
+
+        launch_unary_tensor_into(
             self.runtime(),
+            &output,
             operand,
-            scatter_indices,
-            updates,
-            &operand.shape,
             "scatter",
-            count,
-            dim,
-            |client, count, dim, out, operand_arg, scatter_arg, updates_arg| unsafe {
-                indexing::scatter_complex_kernel::launch_unchecked::<T, I, CudaRuntime>(
+            cube_count_for_len(output.n_elements()),
+            cube_dim_1d(),
+            |client, count, dim, out_arg, operand_arg| unsafe {
+                indexing::scatter_copy_kernel::launch_unchecked::<T, CudaRuntime>(
                     client,
                     count,
                     dim,
-                    out,
-                    operand_arg,
-                    scatter_arg,
-                    updates_arg,
-                    comptime_sequence(&operand.shape),
-                    comptime_sequence(&updates.shape),
-                    comptime_sequence(&scatter_indices.shape),
-                    comptime_sequence(&meta.batch_shape),
-                    comptime_sequence(&meta.window_dims),
-                    comptime_sequence(&config.update_window_dims),
-                    comptime_sequence(&config.scatter_dims_to_operand_dims),
-                    config.index_vector_dim,
-                    comptime_sequence(&meta.window_shape_updates),
+                    out_arg.into_tensor_arg(),
+                    operand_arg.into_tensor_arg(),
                 );
             },
-        )
+        )?;
+
+        let update_len = scatter_update_len(&meta)?;
+        if update_len == 0 {
+            return Ok(output);
+        }
+        let client = self.runtime().client();
+        ensure_atomic_add_supported::<F>(client, "scatter")?;
+        let output_part_len =
+            output
+                .n_elements()
+                .checked_mul(2)
+                .ok_or_else(|| crate::Error::BackendFailure {
+                    op: "scatter",
+                    message: "complex output part length overflow".into(),
+                })?;
+        let update_part_len =
+            updates
+                .n_elements()
+                .checked_mul(2)
+                .ok_or_else(|| crate::Error::BackendFailure {
+                    op: "scatter",
+                    message: "complex update part length overflow".into(),
+                })?;
+        // num_complex::Complex<T> is repr(C) as { re: T, im: T }, so the
+        // complex buffers can be viewed as real scalar parts for atomic add.
+        let output_parts = typed_tensor_array_arg_as::<T, F>(&output, output_part_len, "scatter")?;
+        let update_parts = typed_tensor_array_arg_as::<T, F>(updates, update_part_len, "scatter")?;
+        let operand_arg = typed_tensor_binding(operand, "scatter")?;
+        let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
+        let updates_arg = typed_tensor_binding(updates, "scatter")?;
+        unsafe {
+            indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CudaRuntime>(
+                client,
+                cube_count_for_len(update_len),
+                cube_dim_1d(),
+                output_parts,
+                operand_arg.into_tensor_arg(),
+                scatter_arg.into_tensor_arg(),
+                updates_arg.into_tensor_arg(),
+                update_parts,
+                comptime_sequence(&meta.batch_shape),
+                comptime_sequence(&meta.window_dims),
+                comptime_sequence(&config.update_window_dims),
+                comptime_sequence(&config.scatter_dims_to_operand_dims),
+                config.index_vector_dim,
+                comptime_sequence(&meta.window_shape_updates),
+                operand.shape.len(),
+                updates.shape.len(),
+                scatter_indices.shape.len(),
+            );
+        }
+        Ok(output)
     }
 }
 
@@ -2290,7 +2449,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F64),
-            Tensor::I64(_) => Err(unsupported_dtype("reduce_sum", input.dtype())),
+            Tensor::I64(t) => self.reduce_sum_int_typed(t, axes).map(Tensor::I64),
             Tensor::C32(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C64),
         }
@@ -2300,7 +2459,7 @@ impl TensorBackend for CubeclBackend {
         match input {
             Tensor::F32(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F64),
-            Tensor::I64(_) => Err(unsupported_dtype("reduce_prod", input.dtype())),
+            Tensor::I64(t) => self.reduce_prod_int_typed(t, axes).map(Tensor::I64),
             Tensor::C32(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C64),
         }
@@ -2411,10 +2570,10 @@ impl TensorBackend for CubeclBackend {
                 .scatter_float_typed(operand, indices, updates, config)
                 .map(Tensor::F64),
             (Tensor::C32(operand), Tensor::F32(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
                 .map(Tensor::C32),
             (Tensor::C64(operand), Tensor::F32(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (Tensor::F32(operand), Tensor::F64(indices), Tensor::F32(updates)) => self
                 .scatter_float_typed(operand, indices, updates, config)
@@ -2423,10 +2582,10 @@ impl TensorBackend for CubeclBackend {
                 .scatter_float_typed(operand, indices, updates, config)
                 .map(Tensor::F64),
             (Tensor::C32(operand), Tensor::F64(indices), Tensor::C32(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
                 .map(Tensor::C32),
             (Tensor::C64(operand), Tensor::F64(indices), Tensor::C64(updates)) => self
-                .scatter_complex_typed(operand, indices, updates, config)
+                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
@@ -2440,12 +2599,12 @@ impl TensorBackend for CubeclBackend {
             }
             (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed(operand, &indices, updates, config)
+                self.scatter_complex_typed::<_, f32, _>(operand, &indices, updates, config)
                     .map(Tensor::C32)
             }
             (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => {
                 let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed(operand, &indices, updates, config)
+                self.scatter_complex_typed::<_, f64, _>(operand, &indices, updates, config)
                     .map(Tensor::C64)
             }
             (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::BackendFailure {
@@ -2772,8 +2931,36 @@ fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
     }
 }
 
-fn reduction_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
-    axes.iter().map(|&axis| input_shape[axis]).collect()
+fn reduction_keepdims_shape(input_shape: &[usize], axis: usize) -> Vec<usize> {
+    let mut output_shape = input_shape.to_vec();
+    output_shape[axis] = 1;
+    output_shape
+}
+
+fn cubecl_reshape_metadata<T: CubeElement + Clone>(
+    tensor: TypedTensor<T>,
+    shape: Vec<usize>,
+    op: &'static str,
+) -> crate::Result<TypedTensor<T>> {
+    let len = shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op,
+            message: format!("shape product overflow for CubeCL reshape shape {shape:?}"),
+        })?;
+    let tensor_len = tensor.n_elements();
+    if len != tensor_len {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "cannot reshape CubeCL output metadata from {:?} ({tensor_len} elements) to {:?} ({len} elements)",
+                tensor.shape, shape
+            ),
+        });
+    }
+
+    Ok(TypedTensor { shape, ..tensor })
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {

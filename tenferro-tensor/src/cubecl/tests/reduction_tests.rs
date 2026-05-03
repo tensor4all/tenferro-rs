@@ -2,7 +2,8 @@
 use crate::TensorBackend;
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i64,
+    upload,
 };
 
 #[test]
@@ -79,4 +80,63 @@ fn test_cubecl_complex_sum_and_prod_match_cpu() {
             ..
         }
     ));
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_i64_sum_and_prod_match_cpu() {
+    let input = tensor_i64(vec![2, 3, 2], vec![1, 2, 3, 4, 5, 6, -1, -2, 2, 3, -3, 4]);
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+
+    let expected = cpu.reduce_sum(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_sum(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.reduce_prod(&input, &[2]).unwrap();
+    let gpu_out = gpu.reduce_prod(&gpu_input, &[2]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
+    let input = tensor_f64(
+        vec![2, 3, 4],
+        (1..=24).map(|value| value as f64 - 7.0).collect(),
+    );
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+
+    for axes in [&[0][..], &[1][..], &[2][..], &[0, 2][..]] {
+        let expected = cpu.reduce_sum(&input, axes).unwrap();
+        let gpu_out = gpu.reduce_sum(&gpu_input, axes).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_eq!(actual.shape(), expected.shape());
+        assert_tensor_close(&actual, &expected, 1e-12);
+
+        let expected = cpu.reduce_prod(&input, axes).unwrap();
+        let gpu_out = gpu.reduce_prod(&gpu_input, axes).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_eq!(actual.shape(), expected.shape());
+        assert_tensor_close(&actual, &expected, 1e-12);
+
+        let expected = cpu.reduce_max(&input, axes).unwrap();
+        let gpu_out = gpu.reduce_max(&gpu_input, axes).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_eq!(actual.shape(), expected.shape());
+        assert_tensor_close(&actual, &expected, 1e-12);
+
+        let expected = cpu.reduce_min(&input, axes).unwrap();
+        let gpu_out = gpu.reduce_min(&gpu_input, axes).unwrap();
+        let actual = download(&gpu, &gpu_out);
+        assert_eq!(actual.shape(), expected.shape());
+        assert_tensor_close(&actual, &expected, 1e-12);
+    }
 }

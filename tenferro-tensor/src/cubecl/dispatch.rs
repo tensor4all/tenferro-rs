@@ -19,10 +19,6 @@ pub(crate) fn cube_dim_1d() -> CubeDim {
     CubeDim::new_1d(DEFAULT_CUBE_DIM_X)
 }
 
-pub(crate) fn single_thread_launch_config() -> (CubeCount, CubeDim) {
-    (CubeCount::new_single(), CubeDim::new_1d(1))
-}
-
 pub(crate) fn comptime_sequence<T: CubeType>(values: &[T]) -> Sequence<T>
 where
     T: Clone,
@@ -47,6 +43,51 @@ pub(crate) fn cubecl_buffer<'a, T>(
         }),
         Buffer::Cubecl(buffer) => Ok(buffer),
     }
+}
+
+pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let strides = crate::types::col_major_strides(shape)
+        .into_iter()
+        .map(|stride| stride as usize)
+        .collect();
+    (shape.to_vec(), strides)
+}
+
+pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
+    tensor: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<TensorBinding<CudaRuntime>> {
+    let buffer = cubecl_buffer(tensor, op)?;
+    let expected_len = tensor
+        .shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "shape product overflow for CubeCL tensor shape {:?}",
+                tensor.shape
+            ),
+        })?;
+    if expected_len != buffer.len {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "expected shape product {expected_len} elements, actual CubeclBuffer::len {}",
+                buffer.len
+            ),
+        });
+    }
+    let (shape, strides) = cubecl_shape_and_strides(&tensor.shape);
+
+    // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
+    // The checked invariant above proves `buffer.len` equals the dense
+    // element count of `tensor.shape`; `strides` is the matching dense
+    // column-major layout metadata, so kernel indexing stays within that
+    // allocation.
+    Ok(unsafe {
+        TensorBinding::from_raw_parts(buffer.handle.clone(), strides.into(), shape.into())
+    })
 }
 
 pub(crate) fn ensure_resident_on_runtime<T>(
@@ -125,6 +166,47 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
 }
 
+pub(crate) fn typed_tensor_array_arg_as<T, U>(
+    tensor: &TypedTensor<T>,
+    len: usize,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CudaRuntime>>
+where
+    T: CubeElement + Clone,
+    U: CubeElement + Clone,
+{
+    let buffer = cubecl_buffer(tensor, op)?;
+    let requested_bytes =
+        len.checked_mul(core::mem::size_of::<U>())
+            .ok_or_else(|| crate::Error::BackendFailure {
+                op,
+                message: format!("reinterpreted CubeCL array length overflow for len {len}"),
+            })?;
+    let available_bytes = buffer
+        .len
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or_else(|| crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "CubeCL buffer byte length overflow for {} elements",
+                buffer.len
+            ),
+        })?;
+    if requested_bytes > available_bytes {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!(
+                "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
+            ),
+        });
+    }
+
+    // SAFETY: The checked byte-size invariant proves the requested view stays
+    // within the same CubeCL allocation. Kernels using this helper are
+    // responsible for using a representation-compatible scalar view.
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), len) })
+}
+
 pub(crate) fn launch_unary<TIn, TOut>(
     rt: &CubeclRuntime,
     input: &TypedTensor<TIn>,
@@ -160,6 +242,41 @@ where
     Ok(output)
 }
 
+pub(crate) fn launch_unary_tensor<TIn, TOut>(
+    rt: &CubeclRuntime,
+    input: &TypedTensor<TIn>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CudaRuntime>,
+        CubeCount,
+        CubeDim,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<TOut>>
+where
+    TIn: CubeElement + Clone,
+    TOut: CubeElement + Clone,
+{
+    let output = alloc_output::<TOut>(rt, out_shape);
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = typed_tensor_binding(&output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        input_arg,
+    );
+    Ok(output)
+}
+
 pub(crate) fn launch_nullary_into<TOut>(
     rt: &CubeclRuntime,
     output: &TypedTensor<TOut>,
@@ -179,37 +296,7 @@ where
     Ok(())
 }
 
-pub(crate) fn launch_unary_with_config<TIn, TOut>(
-    rt: &CubeclRuntime,
-    input: &TypedTensor<TIn>,
-    out_shape: &[usize],
-    op: &'static str,
-    count: CubeCount,
-    dim: CubeDim,
-    launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-    ),
-) -> crate::Result<TypedTensor<TOut>>
-where
-    TIn: CubeElement + Clone,
-    TOut: CubeElement + Clone,
-{
-    let output = alloc_output::<TOut>(rt, out_shape);
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let client = rt.client();
-    let output_arg = typed_tensor_array_arg(&output, op)?;
-    let input_arg = typed_tensor_array_arg(input, op)?;
-    launch(client, count, dim, output_arg, input_arg);
-    Ok(output)
-}
-
-pub(crate) fn launch_unary_into<TIn, TOut>(
+pub(crate) fn launch_unary_tensor_into<TIn, TOut>(
     rt: &CubeclRuntime,
     output: &TypedTensor<TOut>,
     input: &TypedTensor<TIn>,
@@ -220,8 +307,8 @@ pub(crate) fn launch_unary_into<TIn, TOut>(
         &ComputeClient<CudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
     ),
 ) -> crate::Result<()>
 where
@@ -231,8 +318,8 @@ where
     if output.n_elements() == 0 {
         return Ok(());
     }
-    let output_arg = typed_tensor_array_arg(output, op)?;
-    let input_arg = typed_tensor_array_arg(input, op)?;
+    let output_arg = typed_tensor_binding(output, op)?;
+    let input_arg = typed_tensor_binding(input, op)?;
     launch(rt.client(), count, dim, output_arg, input_arg);
     Ok(())
 }
@@ -277,21 +364,19 @@ where
     Ok(output)
 }
 
-pub(crate) fn launch_binary_with_config<TLhs, TRhs, TOut>(
+pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
     rt: &CubeclRuntime,
     lhs: &TypedTensor<TLhs>,
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
-    count: CubeCount,
-    dim: CubeDim,
     launch: impl FnOnce(
         &ComputeClient<CudaRuntime>,
         CubeCount,
         CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
+        TensorBinding<CudaRuntime>,
     ),
 ) -> crate::Result<TypedTensor<TOut>>
 where
@@ -300,47 +385,23 @@ where
     TOut: CubeElement + Clone,
 {
     let output = alloc_output::<TOut>(rt, out_shape);
-    if output.n_elements() == 0 {
+    let len = output.n_elements();
+    if len == 0 {
         return Ok(output);
     }
     let client = rt.client();
-    let output_arg = typed_tensor_array_arg(&output, op)?;
-    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
-    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
-    launch(client, count, dim, output_arg, lhs_arg, rhs_arg);
+    let output_arg = typed_tensor_binding(&output, op)?;
+    let lhs_arg = typed_tensor_binding(lhs, op)?;
+    let rhs_arg = typed_tensor_binding(rhs, op)?;
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
     Ok(output)
-}
-
-pub(crate) fn launch_binary_into<TLhs, TRhs, TOut>(
-    rt: &CubeclRuntime,
-    output: &TypedTensor<TOut>,
-    lhs: &TypedTensor<TLhs>,
-    rhs: &TypedTensor<TRhs>,
-    op: &'static str,
-    count: CubeCount,
-    dim: CubeDim,
-    launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-    ),
-) -> crate::Result<()>
-where
-    TLhs: CubeElement + Clone,
-    TRhs: CubeElement + Clone,
-    TOut: CubeElement + Clone,
-{
-    if output.n_elements() == 0 {
-        return Ok(());
-    }
-    let output_arg = typed_tensor_array_arg(output, op)?;
-    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
-    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
-    launch(rt.client(), count, dim, output_arg, lhs_arg, rhs_arg);
-    Ok(())
 }
 
 pub(crate) fn launch_ternary<TA, TB, TC, TOut>(
@@ -385,44 +446,6 @@ where
         b_arg,
         c_arg,
     );
-    Ok(output)
-}
-
-pub(crate) fn launch_ternary_with_config<TA, TB, TC, TOut>(
-    rt: &CubeclRuntime,
-    a: &TypedTensor<TA>,
-    b: &TypedTensor<TB>,
-    c: &TypedTensor<TC>,
-    out_shape: &[usize],
-    op: &'static str,
-    count: CubeCount,
-    dim: CubeDim,
-    launch: impl FnOnce(
-        &ComputeClient<CudaRuntime>,
-        CubeCount,
-        CubeDim,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-        ArrayArg<CudaRuntime>,
-    ),
-) -> crate::Result<TypedTensor<TOut>>
-where
-    TA: CubeElement + Clone,
-    TB: CubeElement + Clone,
-    TC: CubeElement + Clone,
-    TOut: CubeElement + Clone,
-{
-    let output = alloc_output::<TOut>(rt, out_shape);
-    if output.n_elements() == 0 {
-        return Ok(output);
-    }
-    let client = rt.client();
-    let output_arg = typed_tensor_array_arg(&output, op)?;
-    let a_arg = typed_tensor_array_arg(a, op)?;
-    let b_arg = typed_tensor_array_arg(b, op)?;
-    let c_arg = typed_tensor_array_arg(c, op)?;
-    launch(client, count, dim, output_arg, a_arg, b_arg, c_arg);
     Ok(output)
 }
 
@@ -510,309 +533,3 @@ pub(crate) fn compare_mode(dir: &CompareDir) -> usize {
         CompareDir::Ge => 4,
     }
 }
-
-macro_rules! dispatch_unary_both {
-    ($backend:expr, $input:expr, $op:literal, $float_launch:path, $complex_launch:path) => {{
-        match $input {
-            $crate::Tensor::F32(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $float_launch::<f32, cubecl_cuda::CudaRuntime>(client, count, dim, out, input);
-                },
-            )
-            .map($crate::Tensor::F32),
-            $crate::Tensor::F64(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $float_launch::<f64, cubecl_cuda::CudaRuntime>(client, count, dim, out, input);
-                },
-            )
-            .map($crate::Tensor::F64),
-            $crate::Tensor::C32(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $complex_launch::<num_complex::Complex32, cubecl_cuda::CudaRuntime>(
-                        client, count, dim, out, input,
-                    );
-                },
-            )
-            .map($crate::Tensor::C32),
-            $crate::Tensor::C64(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $complex_launch::<num_complex::Complex64, cubecl_cuda::CudaRuntime>(
-                        client, count, dim, out, input,
-                    );
-                },
-            )
-            .map($crate::Tensor::C64),
-        }
-    }};
-}
-
-macro_rules! dispatch_unary_float_only {
-    ($backend:expr, $input:expr, $op:literal, $float_launch:path) => {{
-        match $input {
-            $crate::Tensor::F32(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $float_launch::<f32, cubecl_cuda::CudaRuntime>(client, count, dim, out, input);
-                },
-            )
-            .map($crate::Tensor::F32),
-            $crate::Tensor::F64(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $float_launch::<f64, cubecl_cuda::CudaRuntime>(client, count, dim, out, input);
-                },
-            )
-            .map($crate::Tensor::F64),
-            $crate::Tensor::C32(_) | $crate::Tensor::C64(_) => Err($crate::Error::BackendFailure {
-                op: $op,
-                message: format!("unsupported dtype {:?}", $input.dtype()),
-            }),
-        }
-    }};
-}
-
-macro_rules! dispatch_unary_complex_or_clone {
-    ($backend:expr, $input:expr, $op:literal, $complex_launch:path) => {{
-        match $input {
-            $crate::Tensor::F32(tensor) => {
-                $crate::cubecl::dispatch::ensure_resident_on_runtime(
-                    $backend.runtime(),
-                    tensor,
-                    $op,
-                )?;
-                Ok($crate::Tensor::F32(tensor.clone()))
-            }
-            $crate::Tensor::F64(tensor) => {
-                $crate::cubecl::dispatch::ensure_resident_on_runtime(
-                    $backend.runtime(),
-                    tensor,
-                    $op,
-                )?;
-                Ok($crate::Tensor::F64(tensor.clone()))
-            }
-            $crate::Tensor::C32(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $complex_launch::<num_complex::Complex32, cubecl_cuda::CudaRuntime>(
-                        client, count, dim, out, input,
-                    );
-                },
-            )
-            .map($crate::Tensor::C32),
-            $crate::Tensor::C64(tensor) => $crate::cubecl::dispatch::launch_unary(
-                $backend.runtime(),
-                tensor,
-                &tensor.shape,
-                $op,
-                |client, count, dim, out, input| unsafe {
-                    $complex_launch::<num_complex::Complex64, cubecl_cuda::CudaRuntime>(
-                        client, count, dim, out, input,
-                    );
-                },
-            )
-            .map($crate::Tensor::C64),
-        }
-    }};
-}
-
-macro_rules! dispatch_binary_both {
-    ($backend:expr, $lhs:expr, $rhs:expr, $op:literal, $float_launch:path, $complex_launch:path) => {{
-        match ($lhs, $rhs) {
-            ($crate::Tensor::F32(lhs), $crate::Tensor::F32(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $float_launch::<f32, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::F32)
-            }
-            ($crate::Tensor::F64(lhs), $crate::Tensor::F64(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $float_launch::<f64, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::F64)
-            }
-            ($crate::Tensor::C32(lhs), $crate::Tensor::C32(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $complex_launch::<num_complex::Complex32, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::C32)
-            }
-            ($crate::Tensor::C64(lhs), $crate::Tensor::C64(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $complex_launch::<num_complex::Complex64, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::C64)
-            }
-            _ => Err($crate::cubecl::dispatch::dtype_mismatch($op, $lhs, $rhs)),
-        }
-    }};
-}
-
-macro_rules! dispatch_binary_float_only {
-    ($backend:expr, $lhs:expr, $rhs:expr, $op:literal, $float_launch:path) => {{
-        match ($lhs, $rhs) {
-            ($crate::Tensor::F32(lhs), $crate::Tensor::F32(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $float_launch::<f32, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::F32)
-            }
-            ($crate::Tensor::F64(lhs), $crate::Tensor::F64(rhs)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &lhs.shape, &rhs.shape)?;
-                $crate::cubecl::dispatch::launch_binary(
-                    $backend.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    $op,
-                    |client, count, dim, out, lhs, rhs| unsafe {
-                        $float_launch::<f64, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, lhs, rhs,
-                        );
-                    },
-                )
-                .map($crate::Tensor::F64)
-            }
-            ($crate::Tensor::C32(_), $crate::Tensor::C32(_))
-            | ($crate::Tensor::C64(_), $crate::Tensor::C64(_)) => {
-                Err($crate::Error::BackendFailure {
-                    op: $op,
-                    message: format!("unsupported dtype {:?}", $lhs.dtype()),
-                })
-            }
-            _ => Err($crate::cubecl::dispatch::dtype_mismatch($op, $lhs, $rhs)),
-        }
-    }};
-}
-
-macro_rules! dispatch_ternary_float_only {
-    ($backend:expr, $a:expr, $b:expr, $c:expr, $op:literal, $float_launch:path $(, $extra:expr )* $(,)?) => {{
-        match ($a, $b, $c) {
-            ($crate::Tensor::F32(a), $crate::Tensor::F32(b), $crate::Tensor::F32(c)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &a.shape, &b.shape)?;
-                $crate::cubecl::dispatch::ensure_same_shape($op, &a.shape, &c.shape)?;
-                $crate::cubecl::dispatch::launch_ternary(
-                    $backend.runtime(),
-                    a,
-                    b,
-                    c,
-                    &a.shape,
-                    $op,
-                    |client, count, dim, out, a, b, c| unsafe {
-                        $float_launch::<f32, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, a, b, c $(, $extra )*
-                        );
-                    },
-                )
-                .map($crate::Tensor::F32)
-            }
-            ($crate::Tensor::F64(a), $crate::Tensor::F64(b), $crate::Tensor::F64(c)) => {
-                $crate::cubecl::dispatch::ensure_same_shape($op, &a.shape, &b.shape)?;
-                $crate::cubecl::dispatch::ensure_same_shape($op, &a.shape, &c.shape)?;
-                $crate::cubecl::dispatch::launch_ternary(
-                    $backend.runtime(),
-                    a,
-                    b,
-                    c,
-                    &a.shape,
-                    $op,
-                    |client, count, dim, out, a, b, c| unsafe {
-                        $float_launch::<f64, cubecl_cuda::CudaRuntime>(
-                            client, count, dim, out, a, b, c $(, $extra )*
-                        );
-                    },
-                )
-                .map($crate::Tensor::F64)
-            }
-            ($crate::Tensor::C32(_), $crate::Tensor::C32(_), $crate::Tensor::C32(_))
-            | ($crate::Tensor::C64(_), $crate::Tensor::C64(_), $crate::Tensor::C64(_)) => {
-                Err($crate::Error::BackendFailure {
-                    op: $op,
-                    message: format!("unsupported dtype {:?}", $a.dtype()),
-                })
-            }
-            _ => Err($crate::cubecl::dispatch::ternary_dtype_mismatch($op, $a, $b, $c)),
-        }
-    }};
-}
-
-pub(crate) use dispatch_binary_both;
-pub(crate) use dispatch_binary_float_only;
-pub(crate) use dispatch_ternary_float_only;
-pub(crate) use dispatch_unary_both;
-pub(crate) use dispatch_unary_complex_or_clone;
-pub(crate) use dispatch_unary_float_only;

@@ -1,11 +1,5 @@
 use cubecl::prelude::*;
 
-pub(crate) mod diagonal;
-pub(crate) mod elementwise;
-pub(crate) mod indexing;
-pub(crate) mod reduction;
-pub(crate) mod structural;
-
 #[cube]
 pub(crate) fn zero_value<E: CubePrimitive>() -> E {
     E::cast_from(0u32)
@@ -40,6 +34,34 @@ pub(crate) fn multi_to_flat_index(
         let dim = comptime! { *shape.index(axis) };
         offset += indices[axis] * stride;
         stride *= dim;
+    }
+    offset
+}
+
+#[cube]
+pub(crate) fn flat_to_tensor_index<E: CubePrimitive>(
+    flat: usize,
+    tensor: &Tensor<E>,
+    #[comptime] rank: usize,
+) -> Array<usize> {
+    let mut indices = Array::<usize>::new(rank);
+    #[unroll]
+    for axis in 0..rank {
+        indices[axis] = tensor.coordinate(flat, axis);
+    }
+    indices
+}
+
+#[cube]
+pub(crate) fn multi_to_tensor_index<E: CubePrimitive>(
+    indices: &Array<usize>,
+    tensor: &Tensor<E>,
+    #[comptime] rank: usize,
+) -> usize {
+    let mut offset = 0usize;
+    #[unroll]
+    for axis in 0..rank {
+        offset += indices[axis] * tensor.stride(axis);
     }
     offset
 }

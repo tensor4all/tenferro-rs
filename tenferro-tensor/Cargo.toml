@@ -16,7 +16,13 @@ provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
 src-openblas = ["provider-src", "blas-src/openblas"]
 src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
-cubecl = ["dep:cubecl", "dep:cubecl-cuda", "dep:cubecl-runtime", "dep:cudarc"]
+cubecl = [
+    "dep:cubecl",
+    "dep:cubecl-cuda",
+    "dep:cubecl-runtime",
+    "dep:cudarc",
+    "dep:tenferro-cubecl",
+]
 rocm = []
 
 [dependencies]
@@ -39,3 +45,4 @@ cudarc = { workspace = true, optional = true }
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
+tenferro-cubecl = { workspace = true, optional = true }

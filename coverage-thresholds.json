@@ -1,13 +1,21 @@
 {
-  "_comment": "Per-file line coverage thresholds (%). Files not listed use 'default'.",
+  "_comment": "Per-file line coverage thresholds (%). Files not listed use 'default'. CubeCL device-kernel files are excluded because llvm-cov does not measure GPU kernel execution.",
   "default": 80,
   "exclude": [
     "tenferro/src/error.rs",
     "tenferro/src/lib.rs",
-    "tenferro-tensor/src/cpu/affinity.rs"
+    "tenferro-tensor/src/cpu/affinity.rs",
+    "tenferro-cubecl/src/diagonal.rs",
+    "tenferro-cubecl/src/elementwise.rs",
+    "tenferro-cubecl/src/helpers.rs",
+    "tenferro-cubecl/src/indexing.rs",
+    "tenferro-cubecl/src/reduce/kernels.rs",
+    "tenferro-cubecl/src/reduce/launch.rs",
+    "tenferro-cubecl/src/structural.rs"
   ],
   "files": {
     "tenferro-einsum/src/lib.rs": 65,
+    "tenferro-cubecl/src/reduce/routines.rs": 70,
     "tenferro-tensor/src/cpu/exec_session.rs": 60,
     "tenferro-tensor/src/cpu/backend.rs": 78,
     "tenferro/src/eager_exec.rs": 35,
