@@ -34,6 +34,7 @@ fn assert_device_backed(tensor: &Tensor) {
     match tensor {
         Tensor::F32(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
         Tensor::F64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
+        Tensor::I64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
         Tensor::C32(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
         Tensor::C64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
     }
