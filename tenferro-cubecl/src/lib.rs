@@ -5,7 +5,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```
 //! use tenferro_cubecl::reduce::{ReduceOp, ReduceStrategy};
 //!
 //! let _op = ReduceOp::Sum;

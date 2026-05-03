@@ -1,6 +1,11 @@
 use cubecl::prelude::*;
 
-use crate::Result;
+use crate::{CubeclKernelError, Result};
+
+#[cfg(test)]
+mod tests;
+
+const UNIMPLEMENTED_REDUCTION_KERNELS: &str = "reduction kernels are not implemented yet";
 
 /// Launch strategy for a single-axis reduction.
 ///
@@ -21,14 +26,16 @@ pub enum ReduceStrategy {
 }
 
 fn unimplemented_launch() -> Result<()> {
-    todo!("implemented in Task 5")
+    Err(CubeclKernelError::InvalidStrategy {
+        reason: UNIMPLEMENTED_REDUCTION_KERNELS.to_owned(),
+    })
 }
 
 /// Launch a floating-point sum reduction.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_sum_float, ReduceStrategy};
 /// # fn example<R: Runtime>(
@@ -53,7 +60,7 @@ pub fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_sum_int, ReduceStrategy};
 /// # fn example<R: Runtime>(
@@ -78,7 +85,7 @@ pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use num_complex::Complex64;
 /// # use tenferro_cubecl::reduce::{launch_sum_complex, ReduceStrategy};
@@ -104,7 +111,7 @@ pub fn launch_sum_complex<R: Runtime, C: Complex + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_prod_float, ReduceStrategy};
 /// # fn example<R: Runtime>(
@@ -129,7 +136,7 @@ pub fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_prod_int, ReduceStrategy};
 /// # fn example<R: Runtime>(
@@ -154,7 +161,7 @@ pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use num_complex::Complex32;
 /// # use tenferro_cubecl::reduce::{launch_prod_complex, ReduceStrategy};
@@ -180,7 +187,7 @@ pub fn launch_prod_complex<R: Runtime, C: Complex + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_max_float, ReduceStrategy};
 /// # fn example<R: Runtime>(
@@ -205,7 +212,7 @@ pub fn launch_max_float<R: Runtime, F: Float + CubeElement>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// # use cubecl::prelude::*;
 /// # use tenferro_cubecl::reduce::{launch_min_float, ReduceStrategy};
 /// # fn example<R: Runtime>(
