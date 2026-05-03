@@ -4,7 +4,7 @@
 //! so that `TypedTensor<MaxPlus<f64>>::add(a, b)` can compute max-plus
 //! addition element-wise by relying on the standard Rust arithmetic traits.
 //!
-//! # Current reachability (design_v3 Stage 4a)
+//! # Current reachability
 //!
 //! The `tenferro-tensor` public facade's `TensorScalar` trait is **sealed**
 //! (implemented only for `f32`, `f64`, `Complex32`, `Complex64`). This means
@@ -12,10 +12,10 @@
 //! enum, `TensorBackend` ops, or the `TracedTensor` / `Engine` pipeline
 //! through the public facade.
 //!
-//! The eager T-generic path is therefore scheduled for a later eager
-//! integration stage (after Stage 7). Until that stage lands, the scalar
-//! newtypes here are useful for direct scalar arithmetic and as a
-//! specification of the intended eager algebraic semantics.
+//! The eager T-generic path is therefore deferred until a later eager
+//! integration pass lands. Until then, the scalar newtypes here are useful for
+//! direct scalar arithmetic and as a specification of the intended eager
+//! algebraic semantics.
 //!
 //! # Semantics summary
 //!

@@ -7,36 +7,33 @@
 //! - Scalar newtypes [`newtype::MaxPlus`], [`newtype::MinPlus`],
 //!   [`newtype::MaxMul`] for eager `TypedTensor<T>` T-generic kernels
 //!   (eager-path integration deferred — see `newtype` module docs).
-//! - Traced composition wrappers (Stages 4a / 4b) in the [`traced`]
-//!   module: [`traced::tropical_dot_general`],
+//! - Traced composition wrappers in the [`traced`] module:
+//!   [`traced::tropical_dot_general`],
 //!   [`traced::min_plus_dot_general`], [`traced::tropical_reduce_sum`].
-//! - The Stage 7 fused [`fused::FusedTropicalDotGeneralOp`] `ExtensionOp`
-//!   plus its user-facing wrappers
+//! - The fused [`fused::FusedTropicalDotGeneralOp`] `ExtensionOp` plus its
+//!   user-facing wrappers
 //!   [`traced::tropical_dot_general_fused`] and
 //!   [`traced::min_plus_dot_general_fused`].
 //!
 //! # Design
 //!
-//! Stage 4a lowers tropical ops to `BroadcastInDim + Add + ReduceMax`
-//! (or `ReduceMin`) compositions over the core op vocabulary. Automatic
+//! The composition path lowers tropical ops to `BroadcastInDim + Add +
+//! ReduceMax` (or `ReduceMin`) compositions over the core op vocabulary. Automatic
 //! differentiation therefore works for free via the existing core AD
 //! rules — no new AD math is introduced there.
 //!
-//! Stage 7 packages a fused primal (conceptually a tropical GEMM kernel)
-//! as a single `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` node,
-//! routed through the Stage 6 extension registry. The AD rule remains
-//! expressed over core ops (indicator-based VJP/JVP), preserving the
-//! Stage 5 AD closure contract.
+//! The fused path packages a primal (conceptually a tropical GEMM kernel) as a
+//! single `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` node routed through
+//! the extension registry. The AD rule remains expressed over core ops
+//! (indicator-based VJP/JVP), preserving the AD closure contract.
 //!
 //! See:
 //!
-//! - `docs/design/design_v3/30-algebra-and-tropical.md` "Fused Tropical Support"
-//! - `docs/design/design_v3/40-extension-boundary.md` Recipe B
 //! - `docs/spec/extension-op.md` for the normative `ExtensionOp` contract
 //!
 //! # Examples
 //!
-//! Composition path (Stage 4):
+//! Composition path:
 //!
 //! ```
 //! use tenferro::{CpuBackend, Engine, TracedTensor};
@@ -51,7 +48,7 @@
 //! assert_eq!(out.shape(), &[2, 2]);
 //! ```
 //!
-//! Fused `ExtensionOp` path (Stage 7):
+//! Fused `ExtensionOp` path:
 //!
 //! ```
 //! use tenferro::{CpuBackend, Engine, TracedTensor};

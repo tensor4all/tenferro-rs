@@ -9,8 +9,8 @@
 //! shape when `wrt.shape_hint` was `None`. That has been replaced with a
 //! deferred zero-tangent approach: the zero tensor is synthesised at
 //! `eval_with_inputs` time once the caller supplies the concrete binding.
-//! See "Deferred Zero-Tangent Policy" in
-//! `docs/design/design_v3/10-ad-model.md`.
+//! See the deferred zero-tangent policy in `docs/spec/extension-op.md` and the
+//! symbolic-shape tests in this file.
 
 use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
 use tenferro_tensor::DType;

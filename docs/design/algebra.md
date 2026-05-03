@@ -1,182 +1,97 @@
-# Algebra
+# Algebra And External Numeric Extensions
 
-Minimal algebra foundation for the primitive family traits. Provides the `HasAlgebra`
-trait as UX sugar for automatic algebra inference and the `Standard<T>` type
-for standard arithmetic, where the scalar type `T` is carried by the algebra.
+**Status:** current design note
+**Related:** `../spec/extension-op.md`, `../spec/primitive-catalog.md`,
+`../spec/ad-contract.md`
 
----
+## Current Boundary
 
-## Core Model: `A::Scalar`-Centric Design
+The mainline tenferro graph is not algebra-parameterized. Core traced
+programs use the flat `StdTensorOp` vocabulary and execute through the standard
+`ExecOp` / backend pipeline.
 
-The fundamental design is that **the algebra `A` carries the scalar type** via
-`Semiring::Scalar`. The algebra parameter in the primitive family traits is the single
-source of truth for both the operation semantics and the scalar type.
+The following substrate is retired and must not be reintroduced as a parallel
+mainline path:
 
-`HasAlgebra` is **UX sugar only**: it lets the compiler infer `A` from `T`
-automatically (e.g. `Tensor<f64>` infers `Standard<f64>` without the user
-spelling it out). It does not change the core model.
+- `tenferro-algebra` as an in-tree core crate
+- `SemiringOp<Alg>` / `SemiringOpKind`
+- `SemiringOps`
+- `SemiringBackend<Alg>`
+- `compile_semiring_to_exec` / `eval_semiring_ir`
 
-```
-Scalar type T
-    │
-    │  (via HasAlgebra<Algebra = Standard<T>>)
-    ↓
-Algebra A = Standard<T>
-    │
-    │  (via Semiring::Scalar)
-    ↓
-A::Scalar = T   ← single source of truth for both semantics and scalar type
-```
+Historical references to those names describe an older extension strategy.
+Current extension work should use one of the patterns below.
 
-This means all generic bounds over the algebra are expressed as
-`A: Semiring<Scalar = T>` or simply as `A: Semiring`, with `A::Scalar`
-used wherever the scalar type is needed.
+## Supported Patterns
 
----
+### Core-Op Composition
 
-## Core Types
+If a non-standard numeric operation can be expressed as existing core ops, the
+preferred path is a wrapper that builds a `StdTensorOp` graph. This keeps the
+operation inside the normal compiler, executor, and AD pipeline.
 
-```rust
-/// Maps a scalar type T to its default algebra A.
-/// This is UX sugar: it enables automatic inference so that
-/// Tensor<f64> → Standard<f64>, Tensor<MaxPlus<f64>> → MaxPlus<f64>,
-/// without the user spelling out the algebra explicitly.
-pub trait HasAlgebra {
-    type Algebra;
-}
+Example: max-plus tropical matrix multiply can be expressed as:
 
-/// Standard arithmetic algebra (add = +, mul = *), parameterized by scalar type T.
-/// `A::Scalar` is the canonical way to refer to the scalar type in generic code.
-pub struct Standard<T>(PhantomData<T>);
-
-impl HasAlgebra for f64     { type Algebra = Standard<f64>; }
-impl HasAlgebra for f32     { type Algebra = Standard<f32>; }
-impl HasAlgebra for Complex64 { type Algebra = Standard<Complex64>; }
-// etc.
-
-/// Semiring trait for algebra-generic operations.
-/// Implemented for Standard<T> for each supported scalar type T.
-pub trait Semiring {
-    type Scalar: ScalarBase;
-    fn zero() -> Self::Scalar;
-    fn one() -> Self::Scalar;
-    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
-    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
-}
-
-impl<T: Scalar> Semiring for Standard<T> {
-    type Scalar = T;
-    fn zero() -> T { T::zero() }
-    fn one()  -> T { T::one() }
-    fn add(a: T, b: T) -> T { a + b }
-    fn mul(a: T, b: T) -> T { a * b }
-}
+```text
+BroadcastInDim(lhs) + BroadcastInDim(rhs) -> ReduceMax(contracting_axis)
 ```
 
----
+The composition path gets AD from the underlying core ops. It is also the best
+first implementation for proving user-facing semantics before introducing a
+fused op.
 
-## Tropical Extensibility
+### Fused `ExtensionOp`
 
-Tropical types (`MaxPlus`, `MinPlus`, `MaxMul`) are in the separate
-`tenferro-ext-tropical` crate, not here. This separation proves that the
-algebra extension mechanism works for external crates.
+If composition is too expensive or too awkward to package, external crates may
+contribute a fused op via `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`.
 
-```rust
-// tenferro-ext-tropical crate
-pub struct MaxPlus<T>(pub T);
-pub struct MaxPlusAlgebra<T>(PhantomData<T>);
+The `ExtensionOp` contract is normative in
+[`../spec/extension-op.md`](../spec/extension-op.md). The important constraints
+are:
 
-impl HasAlgebra for MaxPlus<f64> {
-    type Algebra = MaxPlusAlgebra<f64>;
-}
+- identity, hashing, and equality live on the trait object
+- shape and dtype inference must be total over concrete and symbolic metadata
+- eager and compiled execution both route through the extension's execution
+  method
+- extension AD must emit only core `StdTensorOp` values, never nested
+  `Extension` nodes
 
-impl TensorSemiringCore<MaxPlusAlgebra<f64>> for CpuBackend {
-    type Plan = TropicalPlan<MaxPlus<f64>>;
-    type Context = CpuContext;
-    // ...
-}
-```
+Example: `ext/tropical` provides `FusedTropicalDotGeneralOp` as an out-of-tree
+fused max-plus / min-plus dot-general.
 
----
+### Scalar Newtypes
 
-## User-Defined Algebras
+External crates may define scalar newtypes such as `MaxPlus<T>`,
+`MinPlus<T>`, or `MaxMul<T>` to document and test algebraic scalar semantics.
+Those newtypes are useful for direct scalar arithmetic and for eager helper
+experiments.
 
-The primitive-family parameterization enables external crates to implement
-their own algebras (orphan rule compatible):
+They are not, by themselves, a mainline tensor execution contract. The public
+tensor scalar surface is intentionally narrow and sealed by the tensor runtime.
+Any traced or backend-visible behavior still needs either core-op composition
+or an `ExtensionOp`.
 
-```rust
-// User crate
-struct MyScalar(f64);
-struct MyAlgebra;
+## AD Policy
 
-impl ScalarBase for MyScalar { ... }
-// HasAlgebra is UX sugar — wire MyScalar to MyAlgebra for automatic inference
-impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
+AD is defined for the standard core graph. External numeric behavior gets AD in
+one of two ways:
 
-impl TensorSemiringCore<MyAlgebra> for CpuBackend {
-    type Plan = MyPlan<MyScalar>;
-    type Context = CpuContext;
-    ...
-}
+- composition wrappers inherit the AD rules of the core ops they emit
+- fused `ExtensionOp` implementations provide `linearize` and
+  `transpose_rule`, but those methods must lower back to core ops
 
-// Just works:
-let a = Tensor::<MyScalar>::zeros(&[3, 4], ...);
-einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred via HasAlgebra
-```
+There is no separate AD system for arbitrary algebra-parameterized graphs.
 
----
+## When To Add A Core Op
 
-## Algebra and Autodiff
+A fused `ExtensionOp` is intentionally narrower than a built-in primitive. A
+new core op is justified only when all of the following hold:
 
-AD must remain algebra-aware:
+- the pattern is repeatedly useful beyond one experiment
+- composition has clear semantic or performance costs
+- an out-of-tree fused extension cannot reasonably share the needed backend
+  infrastructure
+- the op can be specified in the core primitive catalog and kept AD-closed
 
-- Standard arithmetic: direct rrule/frule formulas over `+/*`.
-- Tropical algebra: formulas may need algebra-specific state (e.g., argmax
-  path information for max-plus variants).
-- API design keeps this extensible by relying on `HasAlgebra` and
-  primitive-family contracts rather than hard-coding only standard arithmetic.
-
-See [autodiff.md](../architecture/ad-pipeline.md) for the AD architecture design and
-[einsum-dyadtensor.md](./einsum-dyadtensor.md) for einsum/frontend integration details.
-
----
-
-## Migration Checklist
-
-Steps for migrating to the typed algebra model consistently across the workspace.
-Work through these in order; each step unblocks the next.
-
-1. **Each algebra type must carry its scalar via `Semiring::Scalar`.**
-   - `Standard<T>` already does this. Any new algebra must define `type Scalar = …`
-     in its `Semiring` impl — not a free `T` parameter on the impl itself.
-   - Verify: `grep -r "impl Semiring"` — every impl must have an explicit
-     `type Scalar` associated type, not a generic `T` that floats free.
-
-2. **`HasAlgebra` impls map scalar types to their typed algebra.**
-   - Add `impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }` in the
-     crate that owns `MyScalar`. This is the only place `HasAlgebra` belongs;
-     do not add redundant impls elsewhere.
-   - `HasAlgebra` is UX sugar only — the algebra `A` is the source of truth.
-     Code that needs the algebra explicitly should accept `A: Semiring`, not
-     `T: HasAlgebra`.
-
-3. **Primitive-family impls must be parameterized by the typed algebra `A`.**
-   - Signature: `impl TensorSemiringCore<MyAlgebra> for CpuBackend { … }`
-   - The scalar type inside the impl is `<MyAlgebra as Semiring>::Scalar`,
-     not a free `T`. Use `A::Scalar` in method bodies instead of bare `T`.
-
-4. **Einsum and linalg functions use `A: Semiring` bounds for algebra-generic code.**
-   - Replace any `T: Scalar + HasAlgebra` bound with `A: Semiring` where the
-     function needs to be algebra-generic.
-   - Keep `T: HasAlgebra<Algebra = A>` on the public-facing thin wrapper so
-     callers do not have to spell out `A`.
-
-5. **Tropical algebras already carry their scalar via `Semiring::Scalar`.**
-   - `MaxPlus<T>`, `MinPlus<T>`, etc. define `type Scalar = T` in their
-     `Semiring` impls. No special case needed.
-   - Confirm tropical `HasAlgebra` impls are in `tenferro-ext-tropical`, not in
-     `tenferro-algebra`. Tropical types must not leak into the algebra core.
-
-6. **Keep primitive-family method signatures centered on `A::Scalar`.**
-   - New family traits already use `Alg::Scalar` directly in `execute`, which
-     keeps the algebra and value type coupled.
+Benchmark evidence for tropical matmul lives in
+`ext/tropical/BENCHMARK_RESULTS.md`.

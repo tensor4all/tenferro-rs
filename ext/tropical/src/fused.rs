@@ -1,9 +1,9 @@
-//! Stage 7 fused tropical dot-general as an `ExtensionOp`.
+//! Fused tropical dot-general as an `ExtensionOp`.
 //!
 //! This module implements `FusedTropicalDotGeneralOp`, the first canonical
 //! out-of-tree [`ExtensionOp`] in the `tenferro` ecosystem. It is the
-//! committed Stage 7 self-test for the `ExtensionOp` substrate ratified in
-//! Stage 5 (`docs/spec/extension-op.md`) and implemented in Stage 6.
+//! committed self-test for the `ExtensionOp` substrate specified in
+//! `docs/spec/extension-op.md`.
 //!
 //! # What this provides
 //!
@@ -24,24 +24,22 @@
 //! - `MinPlus`: `out[i, j] = min_k (a[i, k] + b[k, j])`
 //!
 //! Output shape is `[M, N]`. Contracting axes are `a` axis `1` and `b` axis
-//! `0` (same as `matmul`). The op only supports rank-2 inputs at Stage 7.
+//! `0` (same as `matmul`). The op currently supports rank-2 inputs.
 //!
 //! # Primal implementation
 //!
 //! [`FusedTropicalDotGeneralOp::eager_execute`] computes the primal directly
 //! from host data for `F64`. This is a correctness-first implementation, not
 //! a performance-optimised fused GEMM kernel. The "fused" label is a
-//! packaging decision per `docs/design/design_v3/30-algebra-and-tropical.md`
-//! ("Fused Tropical Support") — a real fused kernel would live behind the
-//! same trait, and no call site would need to change.
+//! packaging decision: a real fused kernel would live behind the same trait,
+//! and no call site would need to change.
 //!
 //! # Argmax capture in AD (spec Section 14 informative sketch)
 //!
-//! The Stage 5 spec's worked example (Section 14, **informative**) sketches
+//! The `ExtensionOp` spec's worked example (Section 14, **informative**) sketches
 //! `Gather` / `Scatter` on saved argmax indices. The core op vocabulary
-//! does not include an `ArgMax` op, and spec Section 10 / the Stage 7 scope
-//! forbid introducing one. Stage 7 therefore uses the mathematically
-//! equivalent **indicator-mask** approach — the same construction used by
+//! does not include an `ArgMax` op, so this implementation uses the
+//! mathematically equivalent **indicator-mask** approach — the same construction used by
 //! the core `ReduceMax` / `ReduceMin` AD rule
 //! (`tenferro-ops/src/ad/contraction.rs::linearize_reduce_chooser`) —
 //! which produces the same (subgradient) gradient as the argmax-based
@@ -72,7 +70,7 @@ use tenferro_tensor::{CompareDir, DType, Tensor, TypedTensor};
 
 /// The tropical semiring flavor selected by a [`FusedTropicalDotGeneralOp`].
 ///
-/// Stage 7 supports [`TropicalKind::MaxPlus`] (the usual tropical semiring)
+/// The fused op supports [`TropicalKind::MaxPlus`] (the usual tropical semiring)
 /// and [`TropicalKind::MinPlus`] (the min-plus, or "shortest-path",
 /// semiring). A `MaxMul` variant is a straightforward extension that can
 /// land later without breaking the v1 family contract.
@@ -93,7 +91,7 @@ pub enum TropicalKind {
     MinPlus,
 }
 
-/// Fused tropical dot-general [`ExtensionOp`] (Stage 7).
+/// Fused tropical dot-general [`ExtensionOp`].
 ///
 /// Carries only the [`TropicalKind`]. The contracting axes are fixed by
 /// the rank-2 shape rule (see module docs): `a: [M, K]` contracts over
@@ -1049,7 +1047,7 @@ impl ExtensionFactory for FusedTropicalDotGeneralFactory {
     }
 }
 
-/// Explicitly register the Stage 7 `FusedTropicalDotGeneral` family with the
+/// Explicitly register the `FusedTropicalDotGeneral` family with the
 /// extension registry. Idempotent across calls within a single process.
 ///
 /// Registration style: **explicit** (user / test code calls this, usually

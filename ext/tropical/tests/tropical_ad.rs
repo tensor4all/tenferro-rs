@@ -1,4 +1,4 @@
-//! Integration tests for `tenferro-ext-tropical` — Stage 4a coverage.
+//! Integration tests for `tenferro-ext-tropical` composition coverage.
 //!
 //! These tests:
 //! - exercise the public `tenferro` facade only,
@@ -6,7 +6,7 @@
 //!   compositions, and
 //! - verify that automatic differentiation flows through the core AD
 //!   rules of the underlying primitives (so no tropical-specific AD rule
-//!   is required at Stage 4a).
+//!   is required).
 
 use tenferro::{CpuBackend, Engine, TracedTensor};
 use tenferro_ext_tropical::newtype::{MaxMul, MaxPlus, MinPlus};
@@ -191,7 +191,7 @@ fn tropical_dot_general_backward_flows_through_core_ad() {
 // ---------------------------------------------------------------------------
 // Scalar newtype round-trip (not via TypedTensor — see newtype module docs
 // for why `TypedTensor<MaxPlus<T>>` is not reachable through the public
-// facade at Stage 4a).
+// facade).
 // ---------------------------------------------------------------------------
 
 #[test]

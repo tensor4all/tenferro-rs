@@ -1,11 +1,11 @@
-//! design_v3 Stage 8 evidence-gate benchmark.
+//! Tropical matmul composition-vs-fusion benchmark.
 //!
 //! Compares forward-only evaluation cost of two semantically identical
 //! tropical (max-plus) matmul paths:
 //!
-//! - **Composition** (Stage 4a): `tropical_dot_general` lowering to
+//! - **Composition**: `tropical_dot_general` lowering to
 //!   `BroadcastInDim + Add + ReduceMax` over the core op vocabulary.
-//! - **Fused `ExtensionOp`** (Stage 7): `tropical_dot_general_fused`
+//! - **Fused `ExtensionOp`**: `tropical_dot_general_fused`
 //!   routing through the `FusedTropicalDotGeneralOp` `ExtensionOp` whose
 //!   `eager_execute` is a direct triple-loop max-plus GEMM over host data.
 //!
@@ -61,7 +61,7 @@ fn bench_tropical_matmul(c: &mut Criterion) {
         let b_data = build_matrix(n, 7.5);
         let shape = vec![n, n];
 
-        // --- Composition path (Stage 4a) ---
+        // --- Composition path ---
         group.bench_with_input(BenchmarkId::new("composition", n), &n, |bencher, _| {
             bencher.iter(|| {
                 let a = TracedTensor::from_vec(shape.clone(), a_data.clone());
@@ -73,7 +73,7 @@ fn bench_tropical_matmul(c: &mut Criterion) {
             });
         });
 
-        // --- Fused ExtensionOp path (Stage 7) ---
+        // --- Fused ExtensionOp path ---
         group.bench_with_input(BenchmarkId::new("fused_ext", n), &n, |bencher, _| {
             bencher.iter(|| {
                 let a = TracedTensor::from_vec(shape.clone(), a_data.clone());

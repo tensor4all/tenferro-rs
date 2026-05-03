@@ -1,11 +1,10 @@
-//! Integration tests for the Stage 7 fused tropical `ExtensionOp`.
+//! Integration tests for the fused tropical `ExtensionOp`.
 //!
-//! These tests are the Stage 5/6 contract self-test: they exercise the
-//! full path from `register_extension` through `TracedTensor` graph
-//! building, primal execution, and both linearize- and transpose-based
-//! AD. They also cross-check the fused path against the composition-based
-//! Stage 4 wrapper to confirm the forward primal and AD gradient agree
-//! (modulo tie-breaking).
+//! These tests are the extension contract self-test: they exercise the full
+//! path from `register_extension` through `TracedTensor` graph building,
+//! primal execution, and both linearize- and transpose-based AD. They also
+//! cross-check the fused path against the composition-based wrapper to confirm
+//! the forward primal and AD gradient agree (modulo tie-breaking).
 
 use std::sync::Arc;
 
@@ -71,7 +70,7 @@ fn fused_forward_matches_composition_max_plus_2x2() {
 
     assert_eq!(out_fused.shape(), &[2, 2]);
     assert_eq!(out_comp.shape(), &[2, 2]);
-    // Hand-computed reference (see tropical_ad.rs Stage 4 test):
+    // Hand-computed reference (see tropical_ad.rs composition test):
     // out = [23, 24, 43, 44] in col-major order.
     let expected = [23.0, 24.0, 43.0, 44.0];
     assert_f64_close(f64_data(&out_fused), &expected, "fused");
@@ -259,12 +258,12 @@ fn fused_backward_symbolic_2x2() {
 }
 
 // ---------------------------------------------------------------------------
-// Stage 5 contract self-test — identity, registry, and failure modes.
+// Extension contract self-test: identity, registry, and failure modes.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn family_id_matches_spec_format() {
-    // Stage 5 Section 5 requires `<crate>.<op>.v<major>`.
+    // The spec requires `<crate>.<op>.v<major>`.
     assert_eq!(
         FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID,
         "tenferro-ext-tropical.fused_dot_general.v1"

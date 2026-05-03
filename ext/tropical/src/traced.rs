@@ -2,41 +2,36 @@
 //!
 //! This module ships two flavours of tropical matmul:
 //!
-//! - Stage 4a/4b **composition wrappers** — [`tropical_dot_general`],
+//! - **Composition wrappers** — [`tropical_dot_general`],
 //!   [`min_plus_dot_general`], [`tropical_reduce_sum`]. Lower directly to
 //!   `BroadcastInDim + Add + ReduceMax` (or `ReduceMin`). No new core ops,
 //!   no new AD rules; AD flows through the existing core rules.
-//! - Stage 7 **fused `ExtensionOp` wrappers** — [`tropical_dot_general_fused`],
+//! - **Fused `ExtensionOp` wrappers** — [`tropical_dot_general_fused`],
 //!   [`min_plus_dot_general_fused`]. Package
 //!   [`crate::fused::FusedTropicalDotGeneralOp`] into the traced graph via
-//!   the Stage 6 `ExtensionOp` carrier. AD is emitted inside the
+//!   the `ExtensionOp` carrier. AD is emitted inside the
 //!   `ExtensionOp::linearize` / `transpose_rule` methods, still targeting
 //!   only core `StdTensorOp` variants so the AD closure rule holds.
 //!
 //! The composition and fused paths compute the **same mathematical
 //! function** (and the same AD gradient modulo tie-breaking) for the
-//! cases Stage 7 covers (rank-2 inputs). They exist side-by-side so the
+//! rank-2 cases the fused op currently covers. They exist side-by-side so the
 //! fused path can be benchmarked against composition without changing the
 //! composition wrappers.
 //!
 //! Both paths accept `TracedTensor` arguments with either **concrete
-//! shapes** (Stage 4a) or **symbolic shapes** (Stage 4b). The composition
+//! shapes** or **symbolic shapes**. The composition
 //! wrappers derive axis sizes via [`TracedTensor::axis_sym_dim`] and feed
 //! them to [`TracedTensor::broadcast_in_dim_sym`]; the fused wrappers
 //! route through `tenferro::extension::apply`, whose `infer_output_meta`
 //! returns [`tenferro_ops::SymDim`] shapes that remain valid under either
 //! regime.
 //!
-//! # Stage boundaries
+//! # Boundaries
 //!
-//! - Stage 4a: concrete-shape composition via the public `tenferro`
-//!   facade.
-//! - Stage 4b: same composition extended to symbolic-shape inputs. Acts as
-//!   the contract test for Stage 3's symbolic-AD correctness work.
-//! - Stage 7 (this module also): `FusedTropicalDotGeneral` as an
-//!   `ExtensionOp` with indicator-based AD. See
-//!   `docs/design/design_v3/30-algebra-and-tropical.md` and
-//!   `docs/design/design_v3/40-extension-boundary.md` Recipe B.
+//! - Composition wrappers use only the public `tenferro` facade.
+//! - Fused wrappers use `FusedTropicalDotGeneral` as an `ExtensionOp` with
+//!   indicator-based AD, governed by `docs/spec/extension-op.md`.
 //!
 //! # Examples
 //!
@@ -197,10 +192,10 @@ pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> TracedTensor {
 }
 
 // ---------------------------------------------------------------------------
-// Stage 7 fused-`ExtensionOp` wrappers.
+// Fused `ExtensionOp` wrappers.
 // ---------------------------------------------------------------------------
 
-/// Max-plus matrix multiplication via the Stage 7 fused `ExtensionOp`.
+/// Max-plus matrix multiplication via the fused `ExtensionOp`.
 ///
 /// Semantically identical to [`tropical_dot_general`]: `out[i, j] = max_k
 /// (a[i, k] + b[k, j])`. The difference is how the computation reaches
@@ -248,10 +243,10 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> TracedT
     outputs.remove(0)
 }
 
-/// Min-plus matrix multiplication via the Stage 7 fused `ExtensionOp`.
+/// Min-plus matrix multiplication via the fused `ExtensionOp`.
 ///
 /// Semantically identical to [`min_plus_dot_general`]; the packaging and
-/// AD path is the Stage 7 fused one — see
+/// AD path is the fused one — see
 /// [`tropical_dot_general_fused`] for the full explanation.
 ///
 /// # Panics
