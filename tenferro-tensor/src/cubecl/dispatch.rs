@@ -49,6 +49,31 @@ pub(crate) fn cubecl_buffer<'a, T>(
     }
 }
 
+pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    let strides = crate::types::col_major_strides(shape)
+        .into_iter()
+        .map(|stride| stride as usize)
+        .collect();
+    (shape.to_vec(), strides)
+}
+
+pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
+    tensor: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<TensorBinding<CudaRuntime>> {
+    let buffer = cubecl_buffer(tensor, op)?;
+    let (shape, strides) = cubecl_shape_and_strides(&tensor.shape);
+
+    // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
+    // CubeCL tensors created by this backend keep `buffer.len` equal to the
+    // dense element count of `tensor.shape`; `strides` is the matching dense
+    // column-major layout metadata, so kernel indexing stays within that
+    // allocation.
+    Ok(unsafe {
+        TensorBinding::from_raw_parts(buffer.handle.clone(), strides.into(), shape.into())
+    })
+}
+
 pub(crate) fn ensure_resident_on_runtime<T>(
     rt: &CubeclRuntime,
     tensor: &TypedTensor<T>,
