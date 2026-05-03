@@ -1,8 +1,9 @@
 [workspace]
 members = [
-    # v2 core (5 crates)
+    # v2 core (6 crates)
     "tenferro-device",
     "tenferro-tensor",
+    "tenferro-cubecl",
     "tenferro-ops",
     "tenferro-einsum",
     "tenferro",
@@ -54,6 +55,7 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 cubecl = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96", features = ["cuda"] }
 cubecl-cuda = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
 cubecl-runtime = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
+tenferro-cubecl = { path = "tenferro-cubecl" }
 ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
