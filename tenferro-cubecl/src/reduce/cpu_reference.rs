@@ -5,6 +5,11 @@
 /// The input slice is interpreted in column-major order. The returned storage
 /// has the same rank as `input_shape`, with the reduced axis length set to one.
 ///
+/// # Panics
+///
+/// Panics if `axis` is out of bounds for `input_shape` or if `input.len()` does
+/// not match the product of the dimensions in `input_shape`.
+///
 /// # Examples
 ///
 /// ```
