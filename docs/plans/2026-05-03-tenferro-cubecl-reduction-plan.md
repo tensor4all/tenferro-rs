@@ -1300,7 +1300,87 @@ git commit -m "fix: correct cubecl reduction launch"
 
 ---
 
-### Task 9: Final Workspace Verification
+### Task 9: Document Implemented Reduction Operations
+
+**Files:**
+
+- Create: `tenferro-cubecl/README.md`
+- Modify: `tenferro-cubecl/Cargo.toml`
+
+**Step 1: Create the crate README**
+
+Create `tenferro-cubecl/README.md` with:
+
+```markdown
+# tenferro-cubecl
+
+CubeCL kernels and launch helpers for tenferro.
+
+This crate owns GPU kernel definitions and launch validation. It does not own
+tenferro tensor values, device placement, CPU/GPU transfers, or backend
+dispatch.
+
+## Implemented Operations
+
+All reductions use single-axis keepdims semantics inside this crate. For an
+input tensor `x` with shape `d_0, ..., d_{r-1}` and reduction axis `a`, the
+output tensor `y` has shape:
+
+```text
+(d_0, ..., d_{a-1}, 1, d_{a+1}, ..., d_{r-1})
+```
+
+For every output index `i = (i_0, ..., i_{r-1})` with `i_a = 0`, define:
+
+```text
+i[k <- a] = (i_0, ..., i_{a-1}, k, i_{a+1}, ..., i_{r-1})
+```
+
+| Operation | Dtypes | Definition |
+| --- | --- | --- |
+| `reduce_sum` | `f32`, `f64`, `i64`, `Complex32`, `Complex64` | `y_i = sum_{k=0}^{d_a-1} x_{i[k <- a]}` |
+| `reduce_prod` | `f32`, `f64`, `i64`, `Complex32`, `Complex64` | `y_i = prod_{k=0}^{d_a-1} x_{i[k <- a]}` |
+| `reduce_max` | `f32`, `f64` | `y_i = max_{0 <= k < d_a} x_{i[k <- a]}` |
+| `reduce_min` | `f32`, `f64` | `y_i = min_{0 <= k < d_a} x_{i[k <- a]}` |
+
+Complex `max` and `min` are unsupported because complex numbers have no
+canonical ordering. `i64 max` and `i64 min` are unsupported in this first split
+because the CPU backend does not currently expose them either.
+
+## Layout
+
+Shape and strides are runtime metadata supplied by the caller through CubeCL
+`TensorBinding`. tenferro passes dense column-major strides such as
+`[1, d_0, d_0 * d_1, ...]`.
+```
+
+**Step 2: Link the README from Cargo metadata**
+
+In `tenferro-cubecl/Cargo.toml`, add:
+
+```toml
+readme = "README.md"
+```
+
+**Step 3: Run checks**
+
+```bash
+cargo fmt --all --check
+cargo check -p tenferro-cubecl
+```
+
+Expected: pass.
+
+**Step 4: Commit**
+
+```bash
+git add tenferro-cubecl/README.md tenferro-cubecl/Cargo.toml
+git commit -m "docs: describe tenferro-cubecl reductions"
+```
+
+---
+
+### Task 10: Final Workspace Verification
 
 **Files:**
 
@@ -1342,8 +1422,8 @@ Expected: pass. If full coverage is slow, at minimum record which commands were 
 
 ```bash
 git status --short
-git diff --stat HEAD~9..HEAD
-git diff HEAD~9..HEAD -- Cargo.toml tenferro-tensor/Cargo.toml
+git diff --stat origin/main..HEAD
+git diff origin/main..HEAD -- Cargo.toml tenferro-tensor/Cargo.toml tenferro-cubecl/README.md
 ```
 
 Expected:
@@ -1353,6 +1433,11 @@ Expected:
 - no direct `cubek` dependency was added.
 - old tensor-local reduction kernels are gone.
 - attribution headers exist for adapted cubek logic.
+- `tenferro-cubecl/README.md` lists implemented operations and mathematical definitions.
+- GPU reduction kernels do not launch a single thread for the whole output.
+- GPU reduction kernels do not perform all output reductions through one serial thread.
+- Any per-output fallback loop is explicitly scoped to one output element per worker or better,
+  and final review calls out whether further tree/shared-memory optimization remains.
 
 **Step 5: Commit final verification-only fixes if needed**
 
