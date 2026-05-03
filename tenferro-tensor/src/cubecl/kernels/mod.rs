@@ -3,7 +3,6 @@ use cubecl::prelude::*;
 pub(crate) mod diagonal;
 pub(crate) mod elementwise;
 pub(crate) mod indexing;
-pub(crate) mod reduction;
 pub(crate) mod structural;
 
 #[cube]

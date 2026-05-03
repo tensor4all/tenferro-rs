@@ -38,7 +38,7 @@ Important constraints:
 - Tensor crate manifest: `tenferro-tensor/Cargo.toml`
 - CubeCL backend dispatch helpers: `tenferro-tensor/src/cubecl/dispatch.rs`
 - Current GPU reduction dispatch methods: `tenferro-tensor/src/cubecl/mod.rs`
-- Current GPU reduction kernels: `tenferro-tensor/src/cubecl/kernels/reduction.rs`
+- Current GPU reduction kernels: `tenferro-cubecl/src/reduce/kernels.rs`
 - Current GPU reduction tests: `tenferro-tensor/src/cubecl/tests/reduction_tests.rs`
 - Existing column-major stride helper: `tenferro-tensor/src/types.rs` (`col_major_strides`)
 - CubeCL `TensorBinding` constructor in the pinned CubeCL checkout:
@@ -887,7 +887,7 @@ If the CubeCL `Tensor<T>` API makes dynamic rank indexing awkward, use a small f
 
 **Step 6: Preserve complex support**
 
-Do not rely only on cubek's `Numeric` traits if they reject complex types in the pinned fork. Keep separate complex kernels with `C: Complex` for `sum` and `prod`, mirroring the current `tenferro-tensor/src/cubecl/kernels/reduction.rs` trait split.
+Do not rely only on cubek's `Numeric` traits if they reject complex types in the pinned fork. Keep separate complex kernels with `C: Complex` for `sum` and `prod`, preserving the migrated sum/prod complex trait split.
 
 **Step 7: Run compile checks**
 
