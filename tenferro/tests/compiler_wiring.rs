@@ -252,6 +252,33 @@ fn compile_std_to_exec_does_not_treat_dynamic_truncate_bound_as_exact() {
 }
 
 #[test]
+fn compile_std_to_exec_marks_unresolvable_extent_unknown() {
+    let program = CompiledProgram {
+        instructions: vec![make_instr(
+            StdTensorOp::BroadcastInDim {
+                shape: vec![DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                }],
+                dims: vec![],
+            },
+            vec![0],
+            vec![1],
+        )],
+        input_slots: vec![0],
+        output_slots: vec![1],
+        n_slots: 2,
+    };
+
+    let exec = compile_std_to_exec(&program, &[DType::F64], &[Vec::new()]);
+
+    assert_eq!(
+        exec.instructions[0].output_extents[0][0],
+        ShapeExtent::unknown()
+    );
+}
+
+#[test]
 fn compile_std_to_exec_wires_constant_and_convert_ops() {
     let complex = Complex64::new(1.0, -2.0);
     let mut complex_bytes = Vec::new();

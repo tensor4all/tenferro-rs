@@ -117,7 +117,22 @@ pub fn linearize(
         StdTensorOp::Gather(config) => {
             indexing::linearize_gather(builder, primal_in, tangent_in, config)
         }
-        StdTensorOp::GatherDynamicSliceSizes { .. } => todo_linearize(op),
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => indexing::linearize_gather_dynamic_slice_sizes(
+            builder,
+            primal_in,
+            tangent_in,
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            *index_vector_dim,
+            slice_sizes,
+        ),
         StdTensorOp::Scatter(config) => {
             indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
         }
@@ -281,7 +296,23 @@ pub fn transpose_rule(
         StdTensorOp::Gather(config) => {
             indexing::transpose_gather(emitter, cotangent_out, inputs, mode, config, ctx)
         }
-        StdTensorOp::GatherDynamicSliceSizes { .. } => todo_transpose_rule(op),
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            ..
+        } => indexing::transpose_gather_dynamic_slice_sizes(
+            emitter,
+            cotangent_out,
+            inputs,
+            mode,
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            *index_vector_dim,
+            ctx,
+        ),
         StdTensorOp::Scatter(config) => {
             indexing::transpose_scatter(emitter, cotangent_out, inputs, mode, config, ctx)
         }

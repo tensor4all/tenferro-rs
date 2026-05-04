@@ -11,7 +11,7 @@ pub use ext_op::{
     is_extension_registered, lookup_extension_factory, register_extension, ExtensionFactory,
     ExtensionOp, ExtensionRegistryError,
 };
-pub use shape_extent::{ShapeExtent, ShapeMeta};
+pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::config;
 

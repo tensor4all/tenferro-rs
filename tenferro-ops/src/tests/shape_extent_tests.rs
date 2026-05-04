@@ -1,4 +1,4 @@
-use crate::shape_extent::{ShapeExtent, ShapeMeta};
+use crate::shape_extent::ShapeExtent;
 use crate::SymDim;
 
 #[test]
@@ -17,21 +17,11 @@ fn upper_bound_is_not_exact() {
 }
 
 #[test]
-fn shape_meta_reports_rank_and_exact_shape() {
-    let meta = ShapeMeta::exact(vec![SymDim::from(2usize), SymDim::from(3usize)]);
-    assert_eq!(meta.rank(), 2);
+fn map_preserves_extent_kind() {
+    let extent = ShapeExtent::upper_bound(SymDim::from(4usize)).map(|dim| dim + SymDim::from(1));
+    assert!(matches!(extent, ShapeExtent::UpperBound(_)));
     assert_eq!(
-        meta.exact_shape(),
-        Some(vec![SymDim::from(2usize), SymDim::from(3usize)])
+        extent.bound_expr().and_then(SymDim::constant_value),
+        Some(5)
     );
-}
-
-#[test]
-fn shape_meta_exact_shape_rejects_upper_bound() {
-    let meta = ShapeMeta::new(vec![
-        ShapeExtent::exact(SymDim::from(2usize)),
-        ShapeExtent::upper_bound(SymDim::from(3usize)),
-    ]);
-    assert_eq!(meta.rank(), 2);
-    assert_eq!(meta.exact_shape(), None);
 }

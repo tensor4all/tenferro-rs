@@ -8,7 +8,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_ops::shape_extent::ShapeExtent;
 ///
 /// let extent = ShapeExtent::exact(4usize);
@@ -29,7 +29,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// let extent = ShapeExtent::exact(3usize);
@@ -43,7 +43,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// let extent = ShapeExtent::upper_bound(3usize);
@@ -57,7 +57,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// let extent: ShapeExtent<usize> = ShapeExtent::unknown();
@@ -71,7 +71,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// assert!(ShapeExtent::exact(2usize).is_exact());
@@ -85,7 +85,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// assert_eq!(ShapeExtent::exact(5usize).as_exact(), Some(&5));
@@ -102,7 +102,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// assert_eq!(ShapeExtent::upper_bound(5usize).bound_expr(), Some(&5));
@@ -118,7 +118,7 @@ impl<D> ShapeExtent<D> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::shape_extent::ShapeExtent;
     ///
     /// let extent = ShapeExtent::upper_bound(5usize).map(|dim| dim + 1);
@@ -130,116 +130,5 @@ impl<D> ShapeExtent<D> {
             Self::UpperBound(dim) => ShapeExtent::UpperBound(f(dim)),
             Self::Unknown => ShapeExtent::Unknown,
         }
-    }
-}
-
-/// Rank-exact shape metadata.
-///
-/// The rank is known from the number of extents even when some dimensions are
-/// only upper-bounded or unknown.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_ops::shape_extent::ShapeMeta;
-///
-/// let meta = ShapeMeta::exact(vec![2usize, 3]);
-/// assert_eq!(meta.rank(), 2);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ShapeMeta<D> {
-    extents: Vec<ShapeExtent<D>>,
-}
-
-impl<D> ShapeMeta<D> {
-    /// Construct shape metadata from per-axis extents.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::{ShapeExtent, ShapeMeta};
-    ///
-    /// let meta = ShapeMeta::new(vec![ShapeExtent::upper_bound(4usize)]);
-    /// assert_eq!(meta.rank(), 1);
-    /// ```
-    pub fn new(extents: Vec<ShapeExtent<D>>) -> Self {
-        Self { extents }
-    }
-
-    /// Construct shape metadata whose every axis is exact.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::ShapeMeta;
-    ///
-    /// let meta = ShapeMeta::exact(vec![2usize, 3]);
-    /// assert_eq!(meta.exact_shape(), Some(vec![2usize, 3]));
-    /// ```
-    pub fn exact(shape: Vec<D>) -> Self {
-        Self::new(shape.into_iter().map(ShapeExtent::Exact).collect())
-    }
-
-    /// Return the rank represented by this metadata.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::ShapeMeta;
-    ///
-    /// assert_eq!(ShapeMeta::exact(vec![2usize, 3]).rank(), 2);
-    /// ```
-    pub fn rank(&self) -> usize {
-        self.extents.len()
-    }
-
-    /// Return the per-axis extents.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::ShapeMeta;
-    ///
-    /// let meta = ShapeMeta::exact(vec![2usize]);
-    /// assert_eq!(meta.extents().len(), 1);
-    /// ```
-    pub fn extents(&self) -> &[ShapeExtent<D>] {
-        &self.extents
-    }
-}
-
-impl<D: Clone> ShapeMeta<D> {
-    /// Return the exact shape only when every axis is exact.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::{ShapeExtent, ShapeMeta};
-    ///
-    /// let meta = ShapeMeta::new(vec![ShapeExtent::upper_bound(4usize)]);
-    /// assert_eq!(meta.exact_shape(), None);
-    /// ```
-    pub fn exact_shape(&self) -> Option<Vec<D>> {
-        self.extents
-            .iter()
-            .map(|extent| extent.as_exact().cloned())
-            .collect()
-    }
-
-    /// Return the bound shape only when every axis has a bound.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_ops::shape_extent::{ShapeExtent, ShapeMeta};
-    ///
-    /// let meta = ShapeMeta::new(vec![ShapeExtent::upper_bound(4usize)]);
-    /// assert_eq!(meta.bound_shape(), Some(vec![4usize]));
-    /// ```
-    pub fn bound_shape(&self) -> Option<Vec<D>> {
-        self.extents
-            .iter()
-            .map(|extent| extent.bound_expr().cloned())
-            .collect()
     }
 }

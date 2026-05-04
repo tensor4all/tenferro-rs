@@ -47,7 +47,7 @@ fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_ops::{SymDim, TensorMeta};
 /// use tenferro_tensor::DType;
 ///
@@ -69,7 +69,7 @@ impl TensorMeta {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::{SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
@@ -93,7 +93,7 @@ impl TensorMeta {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
@@ -124,7 +124,7 @@ impl TensorMeta {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::{SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
@@ -139,7 +139,7 @@ impl TensorMeta {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     /// use tenferro_tensor::DType;
     ///
@@ -212,8 +212,9 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// let ctx = tenferro_ops::ShapeGuardContext::with_global_metadata();
+    /// assert!(ctx.guards().is_empty());
     /// ```
     pub fn with_global_metadata() -> Self {
         Self {
@@ -265,8 +266,20 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let shape = ctx.shape_of(&value);
+    /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
     pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
         &self.metadata_of(val).shape
@@ -276,8 +289,23 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(
+    ///     key,
+    ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
+    /// );
+    ///
     /// let extents = ctx.extents_of(&value);
+    /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
     /// ```
     pub fn extents_of(&mut self, val: &ValRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
         self.metadata_of(val).extents()
@@ -287,8 +315,23 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(
+    ///     key,
+    ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
+    /// );
+    ///
     /// let maybe_shape = ctx.exact_shape_of(&value);
+    /// assert_eq!(maybe_shape, None);
     /// ```
     pub fn exact_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<Vec<SymDim>> {
         self.metadata_of(val).exact_shape()
@@ -303,8 +346,20 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let dtype = ctx.dtype_of(&value);
+    /// assert_eq!(dtype, DType::F64);
     /// ```
     pub fn dtype_of(&mut self, val: &ValRef<StdTensorOp>) -> DType {
         self.metadata_of(val).dtype
@@ -314,8 +369,20 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let meta = ctx.metadata_of(&value);
+    /// assert_eq!(meta.dtype, DType::F64);
     /// ```
     pub fn metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
         let key = self.resolve_key(val).clone();
@@ -397,8 +464,15 @@ pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta
 ///
 /// # Examples
 ///
-/// ```ignore
-/// let meta = tenferro_ops::ad::context::lookup_global_metadata(&key);
+/// ```
+/// use computegraph::types::GlobalValKey;
+/// use tenferro_ops::ad::context::lookup_global_metadata;
+/// use tenferro_ops::input_key::TensorInputKey;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+///
+/// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 99 });
+/// let meta = lookup_global_metadata(&key);
+/// assert!(meta.is_none());
 /// ```
 pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorMeta> {
     let guard = global_metadata_registry()

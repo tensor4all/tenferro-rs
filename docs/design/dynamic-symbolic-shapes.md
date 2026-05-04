@@ -1,7 +1,8 @@
 # Dynamic And Symbolic Shape Metadata
 
-**Status:** canonical design note for issue #829
-**Related:** `../spec/optimizer-passes.md`, `../spec/ad-contract.md`
+**Status:** current design and implementation note for issue #829
+**Related:** `../spec/optimizer-passes.md`, `../spec/ad-contract.md`,
+`../spec/primitive-catalog.md`, `../spec/backend-contract.md`
 
 ## Purpose
 
@@ -61,8 +62,7 @@ some safety checks, but it is not a legal replacement for an exact dimension.
   sizes, not unresolved symbolic expressions.
 - Let graph and compiler layers carry symbolic config values until they can be
   resolved at execution time.
-- Make unsupported dynamic-shape AD paths fail through a structured error path,
-  not `panic!`.
+- Avoid new AD construction panics for resolvable symbolic shape metadata.
 - Avoid implementing full dynamic shape polymorphism in the first pass.
 
 ## Non-Goals
@@ -80,7 +80,7 @@ some safety checks, but it is not a legal replacement for an exact dimension.
 Use a two-layer model:
 
 ```text
-ShapeMeta
+Value shape metadata
   rank: exact
   extents: Vec<ShapeExtent>
 
@@ -96,7 +96,9 @@ ExtentExpr
   Add/Sub/Mul/FloorDiv/Min/Max(...)
 ```
 
-Names are provisional. The important split is semantic:
+The concrete implementation stores `Vec<ShapeExtent<_>>` directly in
+`TensorMeta` and `ExecInstruction::output_extents`; there is no separate public
+shape-metadata wrapper. The important split is semantic:
 
 - `ExtentExpr` says how a size would be computed.
 - `ShapeExtent` says what guarantee the expression provides.
@@ -186,20 +188,22 @@ Backend-facing configs should remain concrete. For example,
 `tenferro_tensor::GatherConfig` can continue to carry `slice_sizes: Vec<usize>`
 because backend kernels execute on concrete tensors.
 
-Graph-facing configs need a symbolic form where shape-derived sizes can appear:
+Graph-facing configs need a symbolic form where shape-derived sizes can appear.
+The current implementation uses `StdTensorOp::GatherDynamicSliceSizes` and the
+matching `ExecOp::GatherDynamicSliceSizes`:
 
 ```text
-GraphGatherConfig
+GatherDynamicSliceSizes
   offset_dims: Vec<usize>
   collapsed_slice_dims: Vec<usize>
   start_index_map: Vec<usize>
   index_vector_dim: usize
-  slice_sizes: Vec<ShapeExtent or ExtentExpr>
+  slice_sizes: Vec<DimExpr>
 ```
 
 Lowering from graph config to backend config resolves symbolic slice sizes
-against concrete runtime inputs immediately before dispatch. Resolution must
-fail if the value is not exact.
+against concrete runtime inputs immediately before dispatch. Backends still see
+the existing concrete `GatherConfig`.
 
 This keeps the layering clean:
 
@@ -209,22 +213,18 @@ This keeps the layering clean:
 
 ## Scatter Transpose Policy
 
-`transpose_scatter` currently builds inverse gather `slice_sizes` from
-`updates_shape[axis].constant_value()` and panics when that dimension is
-symbolic.
-
-The correct behavior is:
+`transpose_scatter` builds inverse gather `slice_sizes` from the primal updates
+shape:
 
 1. If all required update-window extents are concrete, keep emitting the
    existing concrete inverse gather.
-2. If an extent is symbolic but exact and resolvable through graph metadata,
-   emit a symbolic graph gather config.
-3. If the needed extent is not exact or cannot be expressed by the current AD
-   graph, return a structured unsupported-dynamic-shape error.
+2. If an extent is symbolic, emit `GatherDynamicSliceSizes` and add the updates
+   tensor as a non-differentiable shape-source input.
 
-The third case is acceptable in the first implementation stage. It is still a
-correctness improvement over panic because callers can report the limitation
-without aborting graph construction.
+The generated dynamic gather is AD-closed: its forward rule applies the same
+dynamic gather to the operand tangent, and its transpose emits the same inverse
+scatter as concrete `Gather` while returning `None` for indices and shape
+sources.
 
 ## Compiler Pass Contract
 
@@ -236,7 +236,7 @@ Compiler passes must state what shape guarantee they require.
 | `Transpose` metadata | any known extents | Permute extent metadata without changing guarantees. |
 | `BroadcastInDim` execution shape | exact target extents | Reject or defer if any target extent is not exact. |
 | `Reshape` execution shape | exact target extents | Never use upper bounds as reshape sizes. |
-| `DotDecomposer` merge reshapes | exact merged extents | Skip only if the original backend op remains correct; otherwise error. |
+| `DotDecomposer` merge reshapes | runtime shape inputs for execution; best extent metadata | Emit reshape parameters from actual input shapes, and propagate exact/upper-bound/unknown metadata without upgrading guarantees. |
 | DCE and last-use analysis | no extent guarantee | Shape metadata is irrelevant. |
 | Diagnostics | best available | May print exact, upper-bound, or unknown metadata. |
 
@@ -248,14 +248,15 @@ but it may not silently reinterpret upper-bound metadata as exact metadata.
 AD rules must not call `constant_value().unwrap_or_else(panic)` for user-reachable
 symbolic shapes.
 
-There are two acceptable outcomes:
+There are two acceptable outcomes for newly touched user-reachable symbolic
+shape paths:
 
 - emit a graph using exact symbolic metadata
 - return an unsupported-dynamic-shape error
 
 Current AD rule signatures are not uniformly `Result`-returning. The
-implementation should introduce one shared error channel for AD construction
-limitations instead of adding local panics or ad hoc sentinel ops.
+implementation should introduce one shared error channel before adding future
+AD paths that cannot be expressed as graph ops.
 
 The error should identify:
 
@@ -286,17 +287,17 @@ scalar expressions through all layers.
 
 ## Migration Plan
 
-1. Add the metadata contract types or equivalent internal representation.
+1. Done: add the metadata contract types or equivalent internal representation.
    Preserve current exact behavior for existing static programs.
-2. Mark `DynamicTruncate`'s truncated axis as an upper bound instead of exact.
+2. Done: mark `DynamicTruncate`'s truncated axis as an upper bound instead of exact.
    Update consumers so they do not use that extent as a concrete shape
    parameter.
-3. Add structured AD construction errors for dynamic or unsupported shape
-   requirements.
-4. Replace `transpose_scatter`'s symbolic update-window panic with either a
-   symbolic graph config or the structured unsupported error.
-5. Add graph-facing symbolic config support for gather-like `slice_sizes`.
-6. Add exact runtime scalar extents for `DynamicTruncate` once the compiler and
+3. Done: replace `transpose_scatter`'s symbolic update-window panic with a
+   dynamic graph gather config.
+4. Done: add graph-facing symbolic config support for gather-like `slice_sizes`.
+5. Deferred: add structured AD construction errors for future dynamic or
+   unsupported shape requirements.
+6. Deferred: add exact runtime scalar extents for `DynamicTruncate` once the compiler and
    execution layers can resolve them safely.
 
 Each step should add focused regression tests. The first tests should cover:
@@ -310,12 +311,11 @@ Each step should add focused regression tests. The first tests should cover:
 
 ## Open Questions
 
-- Should the new metadata type live in `tenferro-ops` beside `DimExpr` and
-  `SymDim`, or in `tenferro` beside lowering metadata until it stabilizes?
-- Should graph-facing symbolic gather config replace `StdTensorOp::Gather`
-  directly, or should a temporary `GatherSym` variant keep migration smaller?
+- Should graph-facing symbolic gather config eventually replace
+  `StdTensorOp::Gather` directly, or should `GatherDynamicSliceSizes` remain as
+  the narrow dynamic variant?
 - Which public transform APIs should surface unsupported dynamic-shape AD
   errors first?
 
-The preferred bias is to keep the first implementation private and narrow,
-then expose public types only after the compiler and AD contracts settle.
+The preferred bias is to keep public surface narrow until the compiler and AD
+contracts settle.

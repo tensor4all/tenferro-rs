@@ -495,6 +495,55 @@ fn test_dot_decomposer_multi_free_dim_emits_output_reshape() {
 }
 
 #[test]
+fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
+    let truncate_shape = dim_shape(&[5, 3, 4]);
+    let truncated_lhs = ExecInstruction {
+        op: ExecOp::DynamicTruncate { axis: 0 },
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        dtype: DType::F64,
+        output_shapes: vec![truncate_shape.clone()],
+        output_extents: vec![vec![
+            ShapeExtent::upper_bound(DimExpr::Const(5)),
+            ShapeExtent::exact(DimExpr::Const(3)),
+            ShapeExtent::exact(DimExpr::Const(4)),
+        ]],
+        last_use: Vec::new(),
+    };
+    let dot = dot_general_exec_instr(
+        vec![2],
+        vec![0],
+        vec![],
+        vec![],
+        vec![2, 3],
+        4,
+        dim_shape(&[5, 3, 2]),
+    );
+    let mut program = make_exec_program(vec![truncated_lhs, dot], vec![0, 1, 3], vec![4], 5);
+
+    dot_decomposer(
+        &mut program,
+        &[dim_shape(&[5, 3, 4]), Vec::new(), dim_shape(&[4, 2])],
+    );
+
+    let lhs_merge = program
+        .instructions
+        .iter()
+        .find(|instr| matches!(instr.op, ExecOp::Reshape { .. }) && instr.input_slots == vec![2])
+        .expect("expected LHS merge reshape from truncated input");
+
+    assert_eq!(
+        lhs_merge.output_extents[0][0],
+        ShapeExtent::upper_bound(DimExpr::mul(DimExpr::Const(5), DimExpr::Const(3))),
+        "merged free dimension must remain an upper bound"
+    );
+    assert_eq!(
+        lhs_merge.output_extents[0][1],
+        ShapeExtent::exact(DimExpr::Const(4))
+    );
+}
+
+#[test]
 fn test_dot_decomposer_noncanonical_dot_then_permute_downstream() {
     // A non-canonical DotGeneral whose output is consumed by a downstream
     // Transpose must still produce the original output shape after the

@@ -237,7 +237,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro::shape_infer::infer_output_extents;
 /// use tenferro_ops::dim_expr::DimExpr;
 /// use tenferro_ops::std_tensor_op::StdTensorOp;

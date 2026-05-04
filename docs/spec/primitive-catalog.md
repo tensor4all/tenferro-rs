@@ -272,6 +272,7 @@ backend level (not part of the custom backend contract).
 | `Reshape(shape)` | `x: [d0, ..., dn-1] -> y: shape` | Reinterpret the element sequence with a new shape | Total element count must stay unchanged. In the IR all tensors are logically dense column-major, so there is no stride ambiguity. |
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
 | `Gather` | `x: S -> y: S'` | Read values from `x` at positions specified by an index tensor | Needed for repeated-index einsum patterns (trace, diagonal extraction). Pure index-based read; no arithmetic. |
+| `GatherDynamicSliceSizes` | `x: S, shape_sources... -> y: S'` | Same read semantics as `Gather`, but `slice_sizes` are `DimExpr` values resolved from runtime input shapes before backend dispatch | Used when AD needs gather window sizes derived from symbolic tensor metadata. Shape-source inputs are non-differentiable. |
 | `Scatter` | `updates: S, x: S' -> y: S'` | Write or accumulate values into `y` at positions specified by an index tensor | Transpose of `Gather`. Accumulation uses ⊕. Needed for AD of `Gather` and for `embed_diag`. |
 
 ### DotGeneral config
@@ -366,9 +367,10 @@ this document is updated.
 
 ### Indexing and structural data movement
 
-`Gather` and `Scatter` are in the AD-closed graph core (Section IV) because
-they are needed for repeated-index einsum patterns and are well-defined for
-all algebras. The remaining indexing ops are standard-arithmetic only:
+`Gather`, `GatherDynamicSliceSizes`, and `Scatter` are in the AD-closed graph
+core (Section IV) because they are needed for repeated-index einsum patterns
+and symbolic-shape AD, and are well-defined for all algebras. The remaining
+indexing ops are standard-arithmetic only:
 
 | Primitive | Definition | Notes |
 |-----------|------------|-------|
