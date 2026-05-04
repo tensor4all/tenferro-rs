@@ -85,6 +85,13 @@ pub enum ExecOp {
     Expm1,
     Log1p,
     Gather(GatherConfig),
+    GatherDynamicSliceSizes {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<DimExpr>,
+    },
     Scatter(ScatterConfig),
     Slice(SliceConfig),
     DynamicSlice {
@@ -403,6 +410,27 @@ pub(crate) fn execute_backend_op(
             get(slots, &inst.input_slots, 1)?,
             config,
         )?,
+        ExecOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => {
+            let slice_sizes = resolve_tensor_shape_exprs(slots, &inst.input_slots, slice_sizes)?;
+            let config = GatherConfig {
+                offset_dims: offset_dims.clone(),
+                collapsed_slice_dims: collapsed_slice_dims.clone(),
+                start_index_map: start_index_map.clone(),
+                index_vector_dim: *index_vector_dim,
+                slice_sizes,
+            };
+            exec.gather(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                &config,
+            )?
+        }
         ExecOp::Scatter(config) => exec.scatter(
             get(slots, &inst.input_slots, 0)?,
             get(slots, &inst.input_slots, 1)?,

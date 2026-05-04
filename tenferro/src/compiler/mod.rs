@@ -370,6 +370,19 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::Tril { k } => ExecOp::Tril { k: *k },
         StdTensorOp::Triu { k } => ExecOp::Triu { k: *k },
         StdTensorOp::Gather(config) => ExecOp::Gather(config.clone()),
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => ExecOp::GatherDynamicSliceSizes {
+            offset_dims: offset_dims.clone(),
+            collapsed_slice_dims: collapsed_slice_dims.clone(),
+            start_index_map: start_index_map.clone(),
+            index_vector_dim: *index_vector_dim,
+            slice_sizes: slice_sizes.clone(),
+        },
         StdTensorOp::Scatter(config) => ExecOp::Scatter(config.clone()),
         StdTensorOp::Slice(config) => ExecOp::Slice(config.clone()),
         StdTensorOp::DynamicSlice { slice_sizes } => ExecOp::DynamicSlice {

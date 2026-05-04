@@ -307,6 +307,31 @@ fn dynamic_truncate_extent_is_upper_bound_on_truncated_axis() {
 }
 
 #[test]
+fn gather_dynamic_slice_sizes_uses_shape_source_input() {
+    let operand = vec![cst(4), cst(5)];
+    let indices = vec![cst(1), cst(1)];
+    let updates = vec![cst(1), cst(2)];
+    let op = StdTensorOp::GatherDynamicSliceSizes {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![
+            cst(1),
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 1,
+            },
+        ],
+    };
+
+    assert_eq!(
+        infer_output_shapes(&op, &[&operand, &indices, &updates]),
+        vec![vec![cst(1), cst(2)]]
+    );
+}
+
+#[test]
 fn test_multi_output_linalg_shape_rules() {
     let input = vec![cst(3), cst(4), cst(2)];
 

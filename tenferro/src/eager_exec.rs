@@ -95,6 +95,23 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 unreachable!("NaryEinsum is handled before opening an exec session")
             }
             StdTensorOp::Gather(config) => vec![exec.gather(inputs[0], inputs[1], config)?],
+            StdTensorOp::GatherDynamicSliceSizes {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                index_vector_dim,
+                slice_sizes,
+            } => {
+                let slice_sizes = resolve_tensor_shape_exprs(inputs, slice_sizes);
+                let config = tenferro_tensor::GatherConfig {
+                    offset_dims: offset_dims.clone(),
+                    collapsed_slice_dims: collapsed_slice_dims.clone(),
+                    start_index_map: start_index_map.clone(),
+                    index_vector_dim: *index_vector_dim,
+                    slice_sizes,
+                };
+                vec![exec.gather(inputs[0], inputs[1], &config)?]
+            }
             StdTensorOp::Scatter(config) => {
                 vec![exec.scatter(inputs[0], inputs[1], inputs[2], config)?]
             }

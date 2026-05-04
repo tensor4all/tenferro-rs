@@ -63,6 +63,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Tril { .. }
         | StdTensorOp::Triu { .. }
         | StdTensorOp::Gather(_)
+        | StdTensorOp::GatherDynamicSliceSizes { .. }
         | StdTensorOp::Scatter(_)
         | StdTensorOp::Slice(_)
         | StdTensorOp::DynamicSlice { .. }
@@ -162,6 +163,26 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             require_input(op, input_shapes, 1),
             config,
         )],
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            index_vector_dim,
+            slice_sizes,
+            ..
+        } => {
+            let resolved_slice_sizes: Vec<_> = slice_sizes
+                .iter()
+                .map(|dim| resolve_dim_expr_from_shapes(dim, input_shapes))
+                .collect();
+            vec![gather_shape_from_slice_sizes(
+                require_input(op, input_shapes, 0),
+                require_input(op, input_shapes, 1),
+                offset_dims,
+                collapsed_slice_dims,
+                *index_vector_dim,
+                &resolved_slice_sizes,
+            )]
+        }
         StdTensorOp::Slice(config) => vec![slice_shape(require_input(op, input_shapes, 0), config)],
         StdTensorOp::DynamicSlice { slice_sizes } => {
             vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
@@ -356,6 +377,54 @@ fn require_input<'a>(
     })
 }
 
+fn resolve_dim_expr_from_shapes(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> DimExpr {
+    match expr {
+        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::InputDim { input_idx, axis } => {
+            require_input_expr(input_shapes, *input_idx, *axis)
+        }
+        DimExpr::Add(a, b) => DimExpr::add(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+        DimExpr::Sub(a, b) => DimExpr::sub(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+        DimExpr::Mul(a, b) => DimExpr::mul(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+        DimExpr::FloorDiv(a, b) => DimExpr::floor_div(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+        DimExpr::Min(a, b) => DimExpr::min(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+        DimExpr::Max(a, b) => DimExpr::max(
+            resolve_dim_expr_from_shapes(a, input_shapes),
+            resolve_dim_expr_from_shapes(b, input_shapes),
+        ),
+    }
+}
+
+fn require_input_expr(input_shapes: &[&[DimExpr]], input_idx: usize, axis: usize) -> DimExpr {
+    input_shapes
+        .get(input_idx)
+        .and_then(|shape| shape.get(axis))
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "shape inference: InputDim({}, {}) cannot be resolved from {} input shapes",
+                input_idx,
+                axis,
+                input_shapes.len()
+            )
+        })
+}
+
 fn permute_shape(input_shape: &[DimExpr], perm: &[usize]) -> Vec<DimExpr> {
     perm.iter().map(|&axis| input_shape[axis].clone()).collect()
 }
@@ -464,42 +533,66 @@ fn gather_shape(
     index_shape: &[DimExpr],
     config: &GatherConfig,
 ) -> Vec<DimExpr> {
+    let slice_sizes: Vec<_> = config
+        .slice_sizes
+        .iter()
+        .copied()
+        .map(DimExpr::Const)
+        .collect();
+    gather_shape_from_slice_sizes(
+        operand_shape,
+        index_shape,
+        &config.offset_dims,
+        &config.collapsed_slice_dims,
+        config.index_vector_dim,
+        &slice_sizes,
+    )
+}
+
+fn gather_shape_from_slice_sizes(
+    operand_shape: &[DimExpr],
+    index_shape: &[DimExpr],
+    offset_dims: &[usize],
+    collapsed_slice_dims: &[usize],
+    index_vector_dim: usize,
+    slice_sizes: &[DimExpr],
+) -> Vec<DimExpr> {
     assert_eq!(
-        config.slice_sizes.len(),
+        slice_sizes.len(),
         operand_shape.len(),
         "gather: slice_sizes rank mismatch"
     );
 
-    let batch_shape = if config.index_vector_dim == index_shape.len() {
+    let batch_shape = if index_vector_dim == index_shape.len() {
         index_shape.to_vec()
     } else {
         index_shape
             .iter()
             .enumerate()
-            .filter_map(|(axis, dim)| (axis != config.index_vector_dim).then_some(dim.clone()))
+            .filter_map(|(axis, dim)| (axis != index_vector_dim).then_some(dim.clone()))
             .collect()
     };
 
     let window_dims: Vec<usize> = (0..operand_shape.len())
-        .filter(|dim| !config.collapsed_slice_dims.contains(dim))
+        .filter(|dim| !collapsed_slice_dims.contains(dim))
         .collect();
     assert_eq!(
-        config.offset_dims.len(),
+        offset_dims.len(),
         window_dims.len(),
         "gather: offset_dims length mismatch"
     );
 
-    let out_rank = batch_shape.len() + config.offset_dims.len();
+    let out_rank = batch_shape.len() + offset_dims.len();
     let mut out_shape = vec![DimExpr::Const(0); out_rank];
     let mut out_axis_to_operand_dim = vec![None; out_rank];
-    for (offset_axis, &out_axis) in config.offset_dims.iter().enumerate() {
+    for (offset_axis, &out_axis) in offset_dims.iter().enumerate() {
         out_axis_to_operand_dim[out_axis] = Some(window_dims[offset_axis]);
     }
 
     let mut batch_axis = 0usize;
     for out_axis in 0..out_rank {
         if let Some(operand_dim) = out_axis_to_operand_dim[out_axis] {
-            out_shape[out_axis] = DimExpr::Const(config.slice_sizes[operand_dim]);
+            out_shape[out_axis] = slice_sizes[operand_dim].clone();
         } else {
             out_shape[out_axis] = batch_shape[batch_axis].clone();
             batch_axis += 1;

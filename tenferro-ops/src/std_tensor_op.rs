@@ -86,6 +86,13 @@ pub enum StdTensorOp {
 
     // Indexing
     Gather(GatherConfig),
+    GatherDynamicSliceSizes {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<DimExpr>,
+    },
     Scatter(ScatterConfig),
     Slice(SliceConfig),
     DynamicSlice {
@@ -335,6 +342,22 @@ impl PartialEq for StdTensorOp {
             (Self::Tril { k: a }, Self::Tril { k: b })
             | (Self::Triu { k: a }, Self::Triu { k: b }) => a == b,
             (Self::Gather(a), Self::Gather(b)) => a == b,
+            (
+                Self::GatherDynamicSliceSizes {
+                    offset_dims: oa,
+                    collapsed_slice_dims: ca,
+                    start_index_map: sa,
+                    index_vector_dim: ia,
+                    slice_sizes: za,
+                },
+                Self::GatherDynamicSliceSizes {
+                    offset_dims: ob,
+                    collapsed_slice_dims: cb,
+                    start_index_map: sb,
+                    index_vector_dim: ib,
+                    slice_sizes: zb,
+                },
+            ) => oa == ob && ca == cb && sa == sb && ia == ib && za == zb,
             (Self::Scatter(a), Self::Scatter(b)) => a == b,
             (Self::Slice(a), Self::Slice(b)) => a == b,
             (Self::DynamicSlice { slice_sizes: a }, Self::DynamicSlice { slice_sizes: b }) => {
@@ -450,6 +473,19 @@ impl Hash for StdTensorOp {
             }
             Self::Tril { k } | Self::Triu { k } => k.hash(state),
             Self::Gather(config) => config.hash(state),
+            Self::GatherDynamicSliceSizes {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                index_vector_dim,
+                slice_sizes,
+            } => {
+                offset_dims.hash(state);
+                collapsed_slice_dims.hash(state);
+                start_index_map.hash(state);
+                index_vector_dim.hash(state);
+                slice_sizes.hash(state);
+            }
             Self::Scatter(config) => config.hash(state),
             Self::Slice(config) => config.hash(state),
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
@@ -517,6 +553,9 @@ impl GraphOp for StdTensorOp {
     fn n_inputs(&self) -> usize {
         match self {
             Self::Add | Self::Mul | Self::DotGeneral { .. } | Self::Gather(_) => 2,
+            Self::GatherDynamicSliceSizes { slice_sizes, .. } => {
+                n_inputs_from_dim_exprs(2, &[slice_sizes])
+            }
             Self::Neg
             | Self::Conj
             | Self::Transpose { .. }
@@ -603,6 +642,7 @@ impl GraphOp for StdTensorOp {
             | Self::Tril { .. }
             | Self::Triu { .. }
             | Self::Gather(_)
+            | Self::GatherDynamicSliceSizes { .. }
             | Self::Scatter(_)
             | Self::Slice(_)
             | Self::DynamicSlice { .. }

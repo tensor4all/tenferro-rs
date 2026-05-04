@@ -95,6 +95,7 @@ struct FakeTensorBackend {
     calls: Vec<&'static str>,
     error_on: Option<&'static str>,
     reclaimed: usize,
+    last_gather_slice_sizes: Option<Vec<usize>>,
 }
 
 impl FakeTensorBackend {
@@ -255,8 +256,9 @@ impl TensorBackend for FakeTensorBackend {
         &mut self,
         _operand: &Tensor,
         _start_indices: &Tensor,
-        _config: &GatherConfig,
+        config: &GatherConfig,
     ) -> tenferro_tensor::Result<Tensor> {
+        self.last_gather_slice_sizes = Some(config.slice_sizes.clone());
         self.result("gather", 33.0)
     }
     fn scatter(
@@ -525,6 +527,49 @@ fn eval_exec_ir_executes_nary_einsum_via_nested_program() {
 }
 
 #[test]
+fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
+    let mut backend = FakeTensorBackend::default();
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::GatherDynamicSliceSizes {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![
+                    DimExpr::Const(1),
+                    DimExpr::InputDim {
+                        input_idx: 2,
+                        axis: 1,
+                    },
+                ],
+            },
+            input_slots: vec![0, 1, 2],
+            output_slots: vec![3],
+            dtype: DType::F64,
+            output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
+            last_use: vec![true, true, true],
+        }],
+        input_slots: vec![0, 1, 2],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+    let inputs = vec![
+        f64_tensor(vec![4, 5], vec![0.0; 20]),
+        f64_tensor(vec![1, 1], vec![0.0]),
+        f64_tensor(vec![1, 3], vec![0.0; 3]),
+    ];
+
+    let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
+
+    assert_eq!(backend.calls, vec!["gather"]);
+    assert_eq!(backend.last_gather_slice_sizes, Some(vec![1, 3]));
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_value(&outputs[0]), 33.0);
+}
+
+#[test]
 fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
     let mut backend = FakeTensorBackend::default();
     let program = ExecProgram {
@@ -590,6 +635,7 @@ fn eval_exec_ir_propagates_backend_errors() {
         calls: Vec::new(),
         error_on: Some("add"),
         reclaimed: 0,
+        last_gather_slice_sizes: None,
     };
     let err = eval_exec_ir(
         &mut backend,
