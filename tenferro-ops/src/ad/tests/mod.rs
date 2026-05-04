@@ -14,6 +14,7 @@ use crate::{SymDim, TensorMeta};
 mod elementwise_tests;
 mod indexing_tests;
 mod linalg_tests;
+mod support_tests;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }

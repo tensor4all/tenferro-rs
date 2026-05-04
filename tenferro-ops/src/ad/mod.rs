@@ -1,3 +1,12 @@
+//! Automatic differentiation rules for [`StdTensorOp`].
+//!
+//! `linearize` and `transpose_rule` are separate graph-level contracts. Most
+//! ops have a direct transpose rule, but some primal ops are reverse-mode
+//! supported by first linearizing them into primitive linear ops and then
+//! transposing that emitted linear graph. The machine-readable support
+//! manifest in `support` records which path each core op uses; audits must
+//! consult it before treating a missing direct transpose arm as unsupported AD.
+
 pub mod context;
 
 mod analytic;
@@ -9,6 +18,7 @@ mod indexing;
 mod linalg;
 mod semiring;
 mod structural;
+mod support;
 mod zeros;
 
 use computegraph::fragment::FragmentBuilder;
@@ -18,7 +28,15 @@ use computegraph::OpEmitter;
 use crate::std_tensor_op::StdTensorOp;
 
 fn todo_transpose_rule(op: &StdTensorOp) -> ! {
-    todo!("transpose_rule not implemented for {:?}", op)
+    match support::ad_rule_support(op) {
+        support::AdRuleSupport::SupportedViaLinearize => {
+            panic!(
+                "direct transpose_rule not implemented for {:?}; reverse-mode support is provided by linearize() and transposing the emitted linear primitive graph",
+                op
+            )
+        }
+        _ => todo!("transpose_rule not implemented for {:?}", op),
+    }
 }
 
 /// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its

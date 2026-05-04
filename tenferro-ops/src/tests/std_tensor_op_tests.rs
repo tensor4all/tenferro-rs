@@ -1331,7 +1331,9 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
 }
 
 #[test]
-#[should_panic(expected = "transpose_rule not implemented for FullPivLu")]
+#[should_panic(
+    expected = "direct transpose_rule not implemented for FullPivLu; reverse-mode support is provided by linearize()"
+)]
 fn test_std_tensor_op_transpose_rule_panics_for_unimplemented_variant() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
