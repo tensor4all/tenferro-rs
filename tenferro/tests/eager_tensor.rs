@@ -569,3 +569,132 @@ fn eager_embed_diag_and_triu_primal() {
         TOL,
     );
 }
+
+// --- Context boundary tests ---
+
+#[test]
+fn context_id_is_unique() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    assert_ne!(ctx_a.id(), ctx_b.id());
+}
+
+#[test]
+fn same_context_true_for_shared_ctx() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![2.0_f64]), ctx);
+    assert!(x.same_context(&y));
+    assert_eq!(x.ctx_id(), y.ctx_id());
+}
+
+#[test]
+fn same_context_false_for_different_ctx() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx_a);
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![2.0_f64]), ctx_b);
+    assert!(!x.same_context(&y));
+    assert_ne!(x.ctx_id(), y.ctx_id());
+}
+
+#[test]
+fn constant_from_creates_untracked_leaf() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let c = ctx.constant_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    assert_eq!(c.ctx_id(), ctx.id());
+    assert!(!c.tracks_grad());
+    assert_eq!(f64_data(c.data()), &[1.0, 2.0]);
+}
+
+#[test]
+fn variable_from_creates_tracked_leaf() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let p = ctx.variable_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    assert_eq!(p.ctx_id(), ctx.id());
+    assert!(p.tracks_grad());
+    // backward should work on a tracked variable
+    let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+    assert!(p.grad().is_some());
+}
+
+#[test]
+fn cross_context_add_rejected() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx_b);
+    let msg = match x.add(&y) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected error"),
+    };
+    assert!(msg.contains("different eager contexts"), "got: {msg}");
+}
+
+#[test]
+fn cross_context_mul_rejected() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx_b);
+    let msg = match x.mul(&y) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected error"),
+    };
+    assert!(msg.contains("different eager contexts"), "got: {msg}");
+}
+
+#[test]
+fn cross_context_tracked_tensors_rejected() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
+    let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx_b);
+    let msg = match x.add(&y) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected error"),
+    };
+    assert!(msg.contains("different eager contexts"), "got: {msg}");
+}
+
+#[test]
+fn constant_from_can_cross_context() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
+    // Import a fixed mask from a raw tensor into the same context
+    let c = ctx.constant_from(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]));
+    let z = x.add(&c).unwrap();
+    assert_eq!(f64_data(z.data()), &[4.0, 6.0]);
+}
+
+#[test]
+fn detach_into_different_context() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
+    let d = x.detach_into(&ctx_b);
+    assert_eq!(d.ctx_id(), ctx_b.id());
+    assert!(!d.tracks_grad());
+    assert_eq!(f64_data(d.data()), &[1.0, 2.0]);
+    // Can operate with tensors from ctx_b now
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx_b);
+    let z = d.add(&y).unwrap();
+    assert_eq!(f64_data(z.data()), &[4.0, 6.0]);
+}
+
+#[test]
+fn detach_into_still_accessible_in_original_context() {
+    let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a.clone());
+    let d = x.detach_into(&ctx_b);
+    // Original tensor still in ctx_a, should work fine
+    let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+    assert!(x.grad().is_some());
+    // d is in ctx_b, x is in ctx_a
+    assert_ne!(d.ctx_id(), x.ctx_id());
+}

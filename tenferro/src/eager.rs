@@ -15,7 +15,7 @@ use tidu::{
 
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
-use crate::error::{Error, Result};
+use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
     register_fragment_metadata, register_value_metadata, tensor_meta_from_tensor,
 };
@@ -68,19 +68,25 @@ impl<B: TensorBackend> EagerContext<B> {
         Arc::new(Self::new(backend))
     }
 
+    /// Return an opaque identifier for this context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// assert_ne!(ctx.id(), EagerContext::with_backend(CpuBackend::new()).id());
+    /// ```
+    pub fn id(&self) -> ContextId {
+        ContextId::from_ptr(self)
+    }
+
     pub(crate) fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
         self.grad_slots
             .lock()
             .unwrap()
             .insert(key.clone(), Arc::downgrade(slot));
-    }
-
-    pub(crate) fn absorb_from(&self, other: &Self) {
-        let other_slots = other.grad_slots.lock().unwrap();
-        let mut slots = self.grad_slots.lock().unwrap();
-        for (key, slot) in other_slots.iter() {
-            slots.entry(key.clone()).or_insert_with(|| slot.clone());
-        }
     }
 
     /// Clear all live gradient slots tracked by this context.
@@ -113,6 +119,50 @@ impl<B: TensorBackend> EagerContext<B> {
                 false
             }
         });
+    }
+
+    /// Import a concrete tensor into this context as an untracked constant.
+    ///
+    /// The returned tensor does not participate in gradient tracking.
+    /// Use this for fixed masks, quadrature weights, physical constants,
+    /// and other data that should not receive gradients.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let c = ctx.constant_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx);
+    /// let z = x.add(&c).unwrap();
+    ///
+    /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// ```
+    pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor<B> {
+        EagerTensor::new_leaf(Arc::clone(self), tensor, false)
+    }
+
+    /// Import a concrete tensor into this context as a trainable variable.
+    ///
+    /// The returned tensor participates in gradient tracking; its gradient
+    /// slot is registered in this context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let p = ctx.variable_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
+    /// let _ = loss.backward().unwrap();
+    ///
+    /// let grad = p.grad().unwrap();
+    /// assert_eq!(grad.shape(), &[2]);
+    /// ```
+    pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor<B> {
+        EagerTensor::new_leaf(Arc::clone(self), tensor, true)
     }
 
     fn store_grads(
@@ -214,7 +264,16 @@ impl<B: TensorBackend> std::ops::Neg for &EagerTensor<B> {
 }
 
 impl EagerTensor<CpuBackend> {
+    fn default_ctx() -> Arc<EagerContext<CpuBackend>> {
+        use std::sync::OnceLock;
+        static DEFAULT_CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
+        Arc::clone(DEFAULT_CTX.get_or_init(|| EagerContext::with_backend(CpuBackend::new())))
+    }
+
     /// Create an untracked eager tensor on the default CPU backend.
+    ///
+    /// All tensors created via this constructor share a single default context,
+    /// so they can participate in operations with each other.
     ///
     /// # Examples
     ///
@@ -226,10 +285,13 @@ impl EagerTensor<CpuBackend> {
     /// assert!(x.grad().is_none());
     /// ```
     pub fn from_tensor(tensor: Tensor) -> Self {
-        Self::from_tensor_in(tensor, EagerContext::with_backend(CpuBackend::new()))
+        Self::from_tensor_in(tensor, Self::default_ctx())
     }
 
     /// Create a tracked eager leaf on the default CPU backend.
+    ///
+    /// All tensors created via this constructor share a single default context,
+    /// so gradients can flow between them.
     ///
     /// # Examples
     ///
@@ -240,7 +302,7 @@ impl EagerTensor<CpuBackend> {
     /// assert!(x.grad().is_none());
     /// ```
     pub fn requires_grad(tensor: Tensor) -> Self {
-        Self::requires_grad_in(tensor, EagerContext::with_backend(CpuBackend::new()))
+        Self::requires_grad_in(tensor, Self::default_ctx())
     }
 }
 
@@ -338,6 +400,26 @@ impl<B: TensorBackend> EagerTensor<B> {
         Self::new_leaf(self.ctx.clone(), self.data.as_ref().clone(), false)
     }
 
+    /// Detach this tensor from its graph and re-register it in a different
+    /// context as an untracked leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx_a = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
+    /// let d = x.detach_into(&ctx_b);
+    ///
+    /// assert!(!d.tracks_grad());
+    /// assert_eq!(d.ctx_id(), ctx_b.id());
+    /// ```
+    pub fn detach_into(&self, ctx: &Arc<EagerContext<B>>) -> Self {
+        Self::new_leaf(Arc::clone(ctx), self.data.as_ref().clone(), false)
+    }
+
     /// Borrow the concrete tensor value.
     ///
     /// # Examples
@@ -420,6 +502,39 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn tracks_grad(&self) -> bool {
         self.requires_grad
+    }
+
+    /// Return the opaque identifier of the context this tensor belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
+    ///
+    /// assert_eq!(x.ctx_id(), ctx.id());
+    /// ```
+    pub fn ctx_id(&self) -> ContextId {
+        self.ctx.id()
+    }
+
+    /// Check whether two tensors belong to the same eager context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
+    /// let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![2.0_f64]), ctx);
+    ///
+    /// assert!(x.same_context(&y));
+    /// ```
+    pub fn same_context(&self, other: &Self) -> bool {
+        self.ctx_id() == other.ctx_id()
     }
 
     /// Run reverse-mode AD from this scalar output.
