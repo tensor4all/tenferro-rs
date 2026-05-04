@@ -12,7 +12,7 @@ use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
 use tenferro::einsum::einsum;
 use tenferro::exec::eval_exec_ir;
-use tenferro::shape_infer::{infer_output_dtype, infer_output_shapes};
+use tenferro::shape_infer::{infer_output_dtype, infer_output_extents};
 use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_global_metadata_batch, TensorMeta,
@@ -236,18 +236,16 @@ fn register_fragment_metadata_for_test(
             .map(|meta| meta.shape.as_slice())
             .collect();
 
-        for (&output_id, shape) in op_node
+        for (&output_id, extents) in op_node
             .outputs
             .iter()
-            .zip(infer_output_shapes(&op_node.op, &input_shape_refs))
+            .zip(infer_output_extents(&op_node.op, &input_shape_refs))
         {
-            let meta = TensorMeta::exact(
-                output_dtype,
-                shape
-                    .iter()
-                    .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
-                    .collect(),
-            );
+            let resolved_extents = extents
+                .into_iter()
+                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_inputs)))
+                .collect();
+            let meta = TensorMeta::with_extents(output_dtype, resolved_extents);
             let key = fragment.vals()[output_id].key.clone();
             known.insert(key.clone(), meta.clone());
             registrations.push((key, meta));

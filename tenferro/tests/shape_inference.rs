@@ -1,6 +1,7 @@
-use tenferro::shape_infer::infer_output_shapes;
+use tenferro::shape_infer::{infer_output_extents, infer_output_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn cst(n: usize) -> DimExpr {
@@ -290,6 +291,19 @@ fn test_structural_indexing_and_dynamic_shapes() {
         infer_output_shapes(&pad_to_match, &[&input, &reference]),
         vec![vec![cst(4), cst(9)]]
     );
+}
+
+#[test]
+fn dynamic_truncate_extent_is_upper_bound_on_truncated_axis() {
+    let input = vec![cst(4), cst(7)];
+    let scalar = vec![];
+    let op = StdTensorOp::DynamicTruncate { axis: 1 };
+
+    let extents = infer_output_extents(&op, &[&input, &scalar]);
+
+    assert_eq!(extents.len(), 1);
+    assert_eq!(extents[0][0], ShapeExtent::exact(cst(4)));
+    assert_eq!(extents[0][1], ShapeExtent::upper_bound(cst(7)));
 }
 
 #[test]

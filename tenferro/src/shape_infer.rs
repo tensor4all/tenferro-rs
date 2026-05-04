@@ -10,6 +10,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
 
 /// Infer output dtype for a single instruction given its op and input dtypes.
@@ -204,6 +205,51 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes);
             metas.into_iter().map(|(_dtype, shape)| shape).collect()
         }
+    }
+}
+
+/// Infer output shape extents for a single instruction.
+///
+/// Most existing shape rules produce exact dimensions. Runtime-sized operators
+/// can instead report a known upper bound so metadata consumers do not treat a
+/// compatibility shape as proof of exactness.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro::shape_infer::infer_output_extents;
+/// use tenferro_ops::dim_expr::DimExpr;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+/// use tenferro_ops::ShapeExtent;
+///
+/// let input = vec![DimExpr::Const(4)];
+/// let scalar = vec![];
+/// let extents = infer_output_extents(
+///     &StdTensorOp::DynamicTruncate { axis: 0 },
+///     &[&input, &scalar],
+/// );
+/// assert_eq!(extents[0][0], ShapeExtent::upper_bound(DimExpr::Const(4)));
+/// ```
+pub fn infer_output_extents(
+    op: &StdTensorOp,
+    input_shapes: &[&[DimExpr]],
+) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    match op {
+        StdTensorOp::DynamicTruncate { axis } => {
+            let shape = require_input(op, input_shapes, 0);
+            assert!(
+                *axis < shape.len(),
+                "DynamicTruncate axis {axis} out of bounds for rank {}",
+                shape.len()
+            );
+            let mut extents: Vec<_> = shape.iter().cloned().map(ShapeExtent::exact).collect();
+            extents[*axis] = ShapeExtent::upper_bound(shape[*axis].clone());
+            vec![extents]
+        }
+        _ => infer_output_shapes(op, input_shapes)
+            .into_iter()
+            .map(|shape| shape.into_iter().map(ShapeExtent::exact).collect())
+            .collect(),
     }
 }
 
