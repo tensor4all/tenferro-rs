@@ -1,9 +1,12 @@
 use computegraph::compile::CompiledProgram;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
-use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_shapes};
+use crate::shape_infer::{
+    infer_extension_output_meta, infer_output_dtype, infer_output_extents, infer_output_shapes,
+};
 
 use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
@@ -25,10 +28,12 @@ pub fn compile_std_to_exec(
 
     let mut slot_dtypes: Vec<Option<DType>> = vec![None; prog.n_slots];
     let mut slot_shapes: Vec<Option<Vec<DimExpr>>> = vec![None; prog.n_slots];
+    let mut slot_extents: Vec<Option<Vec<ShapeExtent<DimExpr>>>> = vec![None; prog.n_slots];
 
     for (index, &slot) in prog.input_slots.iter().enumerate() {
         slot_dtypes[slot] = Some(input_dtypes[index]);
         slot_shapes[slot] = Some(input_shapes[index].clone());
+        slot_extents[slot] = Some(exact_extents_from_shape(&input_shapes[index]));
     }
 
     let instructions = prog
@@ -55,56 +60,83 @@ pub fn compile_std_to_exec(
                 .collect();
             let input_shapes_refs: Vec<&[DimExpr]> =
                 input_shapes_owned.iter().map(Vec::as_slice).collect();
+            let input_extents_owned: Vec<Vec<ShapeExtent<DimExpr>>> = instr
+                .inputs
+                .iter()
+                .map(|&slot| {
+                    slot_extents[slot].clone().unwrap_or_else(|| {
+                        panic!("compile_std_to_exec: missing extents for slot {slot}")
+                    })
+                })
+                .collect();
 
-            let (output_dtype, output_shapes): (DType, Vec<Vec<DimExpr>>) =
-                if let StdTensorOp::Extension(ext) = &instr.op {
-                    let metas = infer_extension_output_meta(
-                        ext.as_ref(),
-                        &input_dtypes,
-                        &input_shapes_refs,
-                    );
-                    assert_eq!(
-                        metas.len(),
-                        instr.outputs.len(),
-                        "compile_std_to_exec: extension family_id={:?} \
+            let (output_dtype, output_shapes, output_extents): (
+                DType,
+                Vec<Vec<DimExpr>>,
+                Vec<Vec<ShapeExtent<DimExpr>>>,
+            ) = if let StdTensorOp::Extension(ext) = &instr.op {
+                let metas =
+                    infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shapes_refs);
+                assert_eq!(
+                    metas.len(),
+                    instr.outputs.len(),
+                    "compile_std_to_exec: extension family_id={:?} \
                          inferred {} output metas for {} output slots",
-                        ext.family_id(),
-                        metas.len(),
-                        instr.outputs.len()
-                    );
-                    // Current compiler supports a single dtype per instruction;
-                    // per spec Section 7, extensions must keep a uniform dtype
-                    // across all outputs. Surface a clean panic if violated.
-                    let dtypes_consistent = metas.iter().all(|(dtype, _)| *dtype == metas[0].0);
-                    assert!(
-                        dtypes_consistent,
-                        "compile_std_to_exec: extension family_id={:?} returned \
+                    ext.family_id(),
+                    metas.len(),
+                    instr.outputs.len()
+                );
+                // Current compiler supports a single dtype per instruction;
+                // per spec Section 7, extensions must keep a uniform dtype
+                // across all outputs. Surface a clean panic if violated.
+                let dtypes_consistent = metas.iter().all(|(dtype, _)| *dtype == metas[0].0);
+                assert!(
+                    dtypes_consistent,
+                    "compile_std_to_exec: extension family_id={:?} returned \
                          multiple output dtypes {:?}; multi-dtype extensions are \
                          not yet supported in the compiled path",
-                        ext.family_id(),
-                        metas.iter().map(|(dtype, _)| *dtype).collect::<Vec<_>>()
-                    );
-                    let dtype = metas[0].0;
-                    let shapes: Vec<Vec<DimExpr>> =
-                        metas.into_iter().map(|(_dtype, shape)| shape).collect();
-                    (dtype, shapes)
-                } else {
-                    let dtype = infer_output_dtype(&instr.op, &input_dtypes);
-                    let shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
-                    assert_eq!(
-                        shapes.len(),
-                        instr.outputs.len(),
-                        "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
-                        instr.op,
-                        shapes.len(),
-                        instr.outputs.len()
-                    );
-                    (dtype, shapes)
-                };
+                    ext.family_id(),
+                    metas.iter().map(|(dtype, _)| *dtype).collect::<Vec<_>>()
+                );
+                let dtype = metas[0].0;
+                let shapes: Vec<Vec<DimExpr>> =
+                    metas.into_iter().map(|(_dtype, shape)| shape).collect();
+                let extents = exact_extents_from_shapes(&shapes);
+                (dtype, shapes, extents)
+            } else {
+                let dtype = infer_output_dtype(&instr.op, &input_dtypes);
+                let shapes = infer_output_shapes(&instr.op, &input_shapes_refs);
+                let extents = infer_output_extents(&instr.op, &input_shapes_refs);
+                assert_eq!(
+                    shapes.len(),
+                    instr.outputs.len(),
+                    "compile_std_to_exec: {:?} inferred {} output shapes for {} output slots",
+                    instr.op,
+                    shapes.len(),
+                    instr.outputs.len()
+                );
+                assert_eq!(
+                    extents.len(),
+                    instr.outputs.len(),
+                    "compile_std_to_exec: {:?} inferred {} output extents for {} output slots",
+                    instr.op,
+                    extents.len(),
+                    instr.outputs.len()
+                );
+                let resolved_extents =
+                    resolve_output_extents(extents, &input_shapes_owned, &input_extents_owned);
+                (dtype, shapes, resolved_extents)
+            };
 
-            for (slot, shape) in instr.outputs.iter().zip(output_shapes.iter()) {
+            for ((slot, shape), extents) in instr
+                .outputs
+                .iter()
+                .zip(output_shapes.iter())
+                .zip(output_extents.iter())
+            {
                 slot_dtypes[*slot] = Some(output_dtype);
                 slot_shapes[*slot] = Some(shape.clone());
+                slot_extents[*slot] = Some(extents.clone());
             }
 
             ExecInstruction {
@@ -113,6 +145,7 @@ pub fn compile_std_to_exec(
                 output_slots: instr.outputs.clone(),
                 dtype: output_dtype,
                 output_shapes,
+                output_extents,
                 last_use: Vec::new(),
             }
         })
@@ -130,6 +163,155 @@ pub fn compile_std_to_exec(
     eliminate_dead_code(&mut program);
     populate_last_use(&mut program);
     program
+}
+
+fn exact_extents_from_shape(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
+    shape.iter().cloned().map(ShapeExtent::exact).collect()
+}
+
+fn exact_extents_from_shapes(shapes: &[Vec<DimExpr>]) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    shapes
+        .iter()
+        .map(|shape| exact_extents_from_shape(shape))
+        .collect()
+}
+
+fn resolve_output_extents(
+    extents: Vec<Vec<ShapeExtent<DimExpr>>>,
+    input_shapes: &[Vec<DimExpr>],
+    input_extents: &[Vec<ShapeExtent<DimExpr>>],
+) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    extents
+        .into_iter()
+        .map(|shape_extents| {
+            shape_extents
+                .into_iter()
+                .map(|extent| resolve_extent(extent, input_shapes, input_extents))
+                .collect()
+        })
+        .collect()
+}
+
+fn resolve_extent(
+    extent: ShapeExtent<DimExpr>,
+    input_shapes: &[Vec<DimExpr>],
+    input_extents: &[Vec<ShapeExtent<DimExpr>>],
+) -> ShapeExtent<DimExpr> {
+    match extent {
+        ShapeExtent::Exact(dim) => {
+            let resolved = resolve_dim_expr(&dim, input_shapes);
+            match dim_expr_extent_kind(&dim, input_extents) {
+                ExtentKind::Exact => ShapeExtent::exact(resolved),
+                ExtentKind::UpperBound => ShapeExtent::upper_bound(resolved),
+                ExtentKind::Unknown => ShapeExtent::unknown(),
+            }
+        }
+        ShapeExtent::UpperBound(dim) => {
+            let resolved = resolve_dim_expr(&dim, input_shapes);
+            match dim_expr_extent_kind(&dim, input_extents) {
+                ExtentKind::Unknown => ShapeExtent::unknown(),
+                ExtentKind::Exact | ExtentKind::UpperBound => ShapeExtent::upper_bound(resolved),
+            }
+        }
+        ShapeExtent::Unknown => ShapeExtent::unknown(),
+    }
+}
+
+fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[Vec<DimExpr>]) -> DimExpr {
+    match expr {
+        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::InputDim { input_idx, axis } => input_shapes
+            .get(*input_idx)
+            .and_then(|shape| shape.get(*axis))
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "compile_std_to_exec: InputDim({}, {}) cannot be resolved from {} input shapes",
+                    input_idx,
+                    axis,
+                    input_shapes.len()
+                )
+            }),
+        DimExpr::Add(a, b) => DimExpr::add(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+        DimExpr::Sub(a, b) => DimExpr::sub(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+        DimExpr::Mul(a, b) => DimExpr::mul(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+        DimExpr::FloorDiv(a, b) => DimExpr::floor_div(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+        DimExpr::Min(a, b) => DimExpr::min(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+        DimExpr::Max(a, b) => DimExpr::max(
+            resolve_dim_expr(a, input_shapes),
+            resolve_dim_expr(b, input_shapes),
+        ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExtentKind {
+    Exact,
+    UpperBound,
+    Unknown,
+}
+
+fn dim_expr_extent_kind(expr: &DimExpr, input_extents: &[Vec<ShapeExtent<DimExpr>>]) -> ExtentKind {
+    match expr {
+        DimExpr::Const(_) => ExtentKind::Exact,
+        DimExpr::InputDim { input_idx, axis } => input_extents
+            .get(*input_idx)
+            .and_then(|shape| shape.get(*axis))
+            .map(extent_kind)
+            .unwrap_or(ExtentKind::Unknown),
+        DimExpr::Add(a, b) | DimExpr::Mul(a, b) | DimExpr::Min(a, b) | DimExpr::Max(a, b) => {
+            combine_monotonic_kinds(
+                dim_expr_extent_kind(a, input_extents),
+                dim_expr_extent_kind(b, input_extents),
+            )
+        }
+        DimExpr::FloorDiv(a, b) => match (
+            dim_expr_extent_kind(a, input_extents),
+            dim_expr_extent_kind(b, input_extents),
+        ) {
+            (ExtentKind::Exact, ExtentKind::Exact) => ExtentKind::Exact,
+            (ExtentKind::UpperBound, ExtentKind::Exact) => ExtentKind::UpperBound,
+            _ => ExtentKind::Unknown,
+        },
+        DimExpr::Sub(a, b) => match (
+            dim_expr_extent_kind(a, input_extents),
+            dim_expr_extent_kind(b, input_extents),
+        ) {
+            (ExtentKind::Exact, ExtentKind::Exact) => ExtentKind::Exact,
+            _ => ExtentKind::Unknown,
+        },
+    }
+}
+
+fn extent_kind(extent: &ShapeExtent<DimExpr>) -> ExtentKind {
+    match extent {
+        ShapeExtent::Exact(_) => ExtentKind::Exact,
+        ShapeExtent::UpperBound(_) => ExtentKind::UpperBound,
+        ShapeExtent::Unknown => ExtentKind::Unknown,
+    }
+}
+
+fn combine_monotonic_kinds(lhs: ExtentKind, rhs: ExtentKind) -> ExtentKind {
+    match (lhs, rhs) {
+        (ExtentKind::Unknown, _) | (_, ExtentKind::Unknown) => ExtentKind::Unknown,
+        (ExtentKind::Exact, ExtentKind::Exact) => ExtentKind::Exact,
+        _ => ExtentKind::UpperBound,
+    }
 }
 
 fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
@@ -774,7 +956,8 @@ fn decompose_dot(
         input_slots: vec![lhs_canon_slot, rhs_canon_slot],
         output_slots: vec![canonical_output_slot],
         dtype: instr.dtype,
-        output_shapes: vec![canonical_output_shape],
+        output_shapes: vec![canonical_output_shape.clone()],
+        output_extents: vec![exact_extents_from_shape(&canonical_output_shape)],
         last_use: Vec::new(),
     });
 
@@ -807,6 +990,7 @@ fn decompose_dot(
             output_slots: vec![instr.output_slots[0]],
             dtype: instr.dtype,
             output_shapes: vec![metadata_shape],
+            output_extents: instr.output_extents.clone(),
             last_use: Vec::new(),
         });
     }
@@ -839,6 +1023,7 @@ fn emit_transpose_if_needed(
         output_slots: vec![out_slot],
         dtype,
         output_shapes: vec![transposed_shape.clone()],
+        output_extents: vec![exact_extents_from_shape(&transposed_shape)],
         last_use: Vec::new(),
     });
     (out_slot, transposed_shape)
@@ -903,6 +1088,7 @@ fn emit_merge_reshape(
         output_slots: vec![out_slot],
         dtype,
         output_shapes: vec![output_shape_meta.clone()],
+        output_extents: vec![exact_extents_from_shape(&output_shape_meta)],
         last_use: Vec::new(),
     });
     (out_slot, output_shape_meta)
@@ -963,6 +1149,7 @@ fn emit_merge_reshape_rhs(
         output_slots: vec![out_slot],
         dtype,
         output_shapes: vec![output_shape_meta.clone()],
+        output_extents: vec![exact_extents_from_shape(&output_shape_meta)],
         last_use: Vec::new(),
     });
     (out_slot, output_shape_meta)

@@ -2,6 +2,7 @@ use num_complex::Complex64;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -10,6 +11,10 @@ use tenferro_tensor::{
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
+}
+
+fn empty_extents(n_outputs: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    vec![Vec::new(); n_outputs]
 }
 
 fn scalar_tensor(value: f64) -> Tensor {
@@ -76,6 +81,7 @@ fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
             output_slots: vec![n_inputs],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -531,6 +537,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
             output_slots: vec![0],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -562,6 +569,7 @@ fn eval_exec_ir_materializes_complex_constants() {
             output_slots: vec![0],
             dtype: DType::C64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -607,6 +615,7 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
             output_slots: vec![2],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![false, false],
         }],
         input_slots: vec![0],
@@ -632,6 +641,7 @@ fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecPr
             output_slots: output_slots.clone(),
             dtype: DType::F64,
             output_shapes: vec![Vec::new(); n_outputs],
+            output_extents: empty_extents(n_outputs),
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -715,6 +725,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 output_slots: vec![2],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: empty_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -723,6 +734,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 output_slots: vec![3],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: empty_extents(1),
                 last_use: vec![true],
             },
         ],

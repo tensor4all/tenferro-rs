@@ -6,10 +6,15 @@ use tenferro::compiler::{
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
+}
+
+fn exact_extents(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
+    shape.iter().cloned().map(ShapeExtent::exact).collect()
 }
 
 fn make_exec_program(
@@ -37,6 +42,7 @@ fn make_exec_instr(
         output_slots: output_slots.clone(),
         dtype: DType::F64,
         output_shapes: vec![Vec::new(); output_slots.len()],
+        output_extents: vec![Vec::new(); output_slots.len()],
         last_use: Vec::new(),
     }
 }
@@ -359,6 +365,7 @@ fn dot_general_exec_instr(
         input_slots,
         output_slots: vec![output_slot],
         dtype: DType::F64,
+        output_extents: vec![exact_extents(&output_shape)],
         output_shapes: vec![output_shape],
         last_use: Vec::new(),
     }
