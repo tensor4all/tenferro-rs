@@ -69,13 +69,6 @@ pub mod types;
 pub mod validate;
 
 #[cfg(all(
-    feature = "rocm",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
-pub mod rocm;
-
-#[cfg(all(
     feature = "cubecl",
     any(feature = "cpu-faer", feature = "cpu-blas"),
     not(all(feature = "cpu-faer", feature = "cpu-blas"))
