@@ -399,9 +399,9 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::FullPivLuSolve { transpose_a } => ExecOp::FullPivLuSolve {
             transpose_a: *transpose_a,
         },
-        StdTensorOp::Svd { eps, .. } => ExecOp::Svd { eps: *eps },
+        StdTensorOp::Svd { .. } => ExecOp::Svd,
         StdTensorOp::Qr { .. } => ExecOp::Qr,
-        StdTensorOp::Eigh { eps, .. } => ExecOp::Eigh { eps: *eps },
+        StdTensorOp::Eigh { .. } => ExecOp::Eigh,
         StdTensorOp::Eig { .. } => ExecOp::Eig,
         StdTensorOp::TriangularSolve {
             left_side,

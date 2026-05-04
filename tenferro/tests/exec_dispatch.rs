@@ -732,7 +732,7 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     backend.calls.clear();
 
     // SVD: 1 input, 2 outputs (fake returns 2)
-    let program = multi_output_program(ExecOp::Svd { eps: 1e-10 }, 1, 2);
+    let program = multi_output_program(ExecOp::Svd, 1, 2);
     let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["svd"]);
     assert_eq!(outputs.len(), 2);
@@ -752,7 +752,7 @@ fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
     backend.calls.clear();
 
     // Eigh: 1 input, 2 outputs
-    let program = multi_output_program(ExecOp::Eigh { eps: 1e-10 }, 1, 2);
+    let program = multi_output_program(ExecOp::Eigh, 1, 2);
     let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
     assert_eq!(backend.calls, vec!["eigh"]);
     assert_eq!(outputs.len(), 2);

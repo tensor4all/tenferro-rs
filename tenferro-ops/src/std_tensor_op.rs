@@ -140,10 +140,20 @@ pub enum StdTensorOp {
     FullPivLuSolve {
         transpose_a: bool,
     },
+    /// Singular value decomposition.
+    ///
+    /// `eps` regularizes the AD rule for repeated or nearly repeated singular
+    /// values and singular values near zero. It is not a primal decomposition
+    /// backend parameter.
     Svd {
         eps: f64,
     },
     Qr,
+    /// Hermitian eigenvalue decomposition.
+    ///
+    /// `eps` regularizes the eigenvector AD rule for repeated or nearly
+    /// repeated eigenvalues. It is not a primal decomposition backend
+    /// parameter.
     Eigh {
         eps: f64,
     },
