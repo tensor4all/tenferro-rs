@@ -4,6 +4,7 @@ use computegraph::OpEmitter;
 use tenferro_tensor::{PadConfig, SliceConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::zeros::build_zero_like;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -194,6 +195,47 @@ pub fn linearize_pad(
         }
         None => vec![None],
     }
+}
+
+pub fn linearize_concatenate(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    axis: usize,
+    n_inputs: usize,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    if tangent_in.iter().all(Option::is_none) {
+        return vec![None];
+    }
+    if n_inputs == 1 {
+        return vec![tangent_in[0]];
+    }
+
+    let mut inputs = Vec::with_capacity(n_inputs);
+    let mut active_mask = Vec::with_capacity(n_inputs);
+    for input_index in 0..n_inputs {
+        match tangent_in[input_index] {
+            Some(tangent) => {
+                inputs.push(ValRef::Local(tangent));
+                active_mask.push(true);
+            }
+            None => {
+                let anchor = ValRef::External(primal_in[input_index].clone());
+                let meta = ctx.metadata_of(&anchor);
+                let zero = build_zero_like(builder, meta.dtype, anchor, meta.shape.len());
+                inputs.push(ValRef::Local(zero));
+                active_mask.push(false);
+            }
+        }
+    }
+
+    let out = builder.add_op(
+        StdTensorOp::Concatenate { axis, n_inputs },
+        inputs,
+        OpMode::Linear { active_mask },
+    );
+    vec![Some(out[0])]
 }
 
 pub fn linearize_reverse(
@@ -621,11 +663,76 @@ pub fn transpose_reverse(
     vec![Some(out[0])]
 }
 
+pub fn transpose_concatenate(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    axis: usize,
+    n_inputs: usize,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let Some(ct) = cotangent_out[0] else {
+        return vec![None; n_inputs];
+    };
+    let active_mask = match mode {
+        OpMode::Linear { active_mask } => active_mask,
+        OpMode::Primal => return vec![None; n_inputs],
+    };
+
+    let mut result = vec![None; n_inputs];
+    let mut axis_offset = 0usize;
+    for input_index in 0..n_inputs {
+        let input_shape = ctx.shape_of(&inputs[input_index]);
+        let rank = input_shape.len();
+        assert!(
+            axis < rank,
+            "transpose_concatenate: axis {axis} out of bounds for rank {rank}"
+        );
+        let axis_extent = static_dim(input_shape, axis, "transpose_concatenate");
+        if active_mask.get(input_index).copied().unwrap_or(false) {
+            let starts = vec_with_axis(rank, axis, axis_offset, 0);
+            let limits = input_shape
+                .iter()
+                .enumerate()
+                .map(|(dim, _)| {
+                    if dim == axis {
+                        axis_offset + axis_extent
+                    } else {
+                        static_dim(input_shape, dim, "transpose_concatenate")
+                    }
+                })
+                .collect();
+            let out = emitter.add_op(
+                StdTensorOp::Slice(SliceConfig {
+                    starts,
+                    limits,
+                    strides: vec![1; rank],
+                }),
+                vec![ValRef::Local(ct)],
+                OpMode::Linear {
+                    active_mask: vec![true],
+                },
+            );
+            result[input_index] = Some(out[0]);
+        }
+        axis_offset += axis_extent;
+    }
+
+    result
+}
+
 fn first_input_active(mode: &OpMode) -> bool {
     matches!(
         mode,
         OpMode::Linear { active_mask } if active_mask.first().copied().unwrap_or(false)
     )
+}
+
+fn vec_with_axis(rank: usize, axis: usize, axis_value: usize, other_value: usize) -> Vec<usize> {
+    (0..rank)
+        .map(|dim| if dim == axis { axis_value } else { other_value })
+        .collect()
 }
 
 fn static_dim(shape: &[SymDim], axis: usize, op: &str) -> usize {

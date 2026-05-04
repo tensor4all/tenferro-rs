@@ -102,7 +102,7 @@ the ops are the real runtime contract:
   `ExtractDiag`, `EmbedDiag`, `Tril`, `Triu`
 - Reductions: `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
 - Indexing / shape: `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
-  `DynamicSlice`, `Pad`, `Concatenate`, `Reverse`, `ShapeOf`,
+  `DynamicSlice`, `DynamicUpdateSlice`, `Pad`, `Concatenate`, `Reverse`, `ShapeOf`,
   `DynamicTruncate`, `PadToMatch`
 - Contraction: `DotGeneral`, `NaryEinsum`
 - Linalg: `Cholesky`, `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
@@ -179,7 +179,7 @@ Examples:
 - structural ops such as `Transpose`, `Reshape`, `BroadcastInDim`
 - reductions such as `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
 - indexing ops such as `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
-  `DynamicSlice`, `Pad`, `Concatenate`, `Reverse`
+  `DynamicSlice`, `DynamicUpdateSlice`, `Pad`, `Concatenate`, `Reverse`
 
 The helper that executes one such instruction is `execute_backend_op()`.
 

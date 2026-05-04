@@ -387,6 +387,15 @@ impl TensorBackend for CpuBackend {
         self.install(|| indexing::dynamic_slice(input, starts, slice_sizes))
     }
 
+    fn dynamic_update_slice(
+        &mut self,
+        operand: &Tensor,
+        update: &Tensor,
+        starts: &Tensor,
+    ) -> crate::Result<Tensor> {
+        self.install(|| indexing::dynamic_update_slice(operand, update, starts))
+    }
+
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
         self.install(|| indexing::try_pad(input, config))
     }

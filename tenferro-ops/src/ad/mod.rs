@@ -9,16 +9,13 @@ mod indexing;
 mod linalg;
 mod semiring;
 mod structural;
+mod zeros;
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
 use crate::std_tensor_op::StdTensorOp;
-
-fn todo_linearize(op: &StdTensorOp) -> ! {
-    todo!("linearize not implemented for {:?}", op)
-}
 
 fn todo_transpose_rule(op: &StdTensorOp) -> ! {
     todo!("transpose_rule not implemented for {:?}", op)
@@ -52,6 +49,10 @@ pub fn linearize(
         StdTensorOp::Div => elementwise::linearize_div(builder, primal_in, primal_out, tangent_in),
         StdTensorOp::Abs => elementwise::linearize_abs(builder, primal_in, tangent_in),
         StdTensorOp::Sign => elementwise::linearize_sign(builder, tangent_in),
+        StdTensorOp::Maximum => elementwise::linearize_maximum(builder, primal_in, tangent_in),
+        StdTensorOp::Minimum => elementwise::linearize_minimum(builder, primal_in, tangent_in),
+        StdTensorOp::Select => elementwise::linearize_select(builder, primal_in, tangent_in),
+        StdTensorOp::Clamp => elementwise::linearize_clamp(builder, primal_in, tangent_in),
         StdTensorOp::Constant { .. } => vec![None],
         StdTensorOp::Compare(_) => vec![None],
 
@@ -103,6 +104,9 @@ pub fn linearize(
         StdTensorOp::Triu { k } => structural::linearize_triu(builder, tangent_in, *k),
         StdTensorOp::Slice(config) => structural::linearize_slice(builder, tangent_in, config),
         StdTensorOp::Pad(config) => structural::linearize_pad(builder, tangent_in, config),
+        StdTensorOp::Concatenate { axis, n_inputs } => {
+            structural::linearize_concatenate(builder, primal_in, tangent_in, *axis, *n_inputs, ctx)
+        }
         StdTensorOp::Reverse { axes } => structural::linearize_reverse(builder, tangent_in, axes),
 
         // Diagonal family.
@@ -136,6 +140,12 @@ pub fn linearize(
         StdTensorOp::Scatter(config) => {
             indexing::linearize_scatter(builder, primal_in, tangent_in, config, ctx)
         }
+        StdTensorOp::DynamicSlice { slice_sizes } => {
+            indexing::linearize_dynamic_slice(builder, primal_in, tangent_in, slice_sizes)
+        }
+        StdTensorOp::DynamicUpdateSlice => {
+            indexing::linearize_dynamic_update_slice(builder, primal_in, tangent_in, ctx)
+        }
 
         // Dynamic family.
         StdTensorOp::DynamicTruncate { axis } => dynamic::linearize_dynamic_truncate(
@@ -148,7 +158,9 @@ pub fn linearize(
 
         // Linalg family.
         StdTensorOp::Lu => linalg::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
-        StdTensorOp::FullPivLu => vec![None, None, None, None, None],
+        StdTensorOp::FullPivLu => {
+            linalg::linearize_full_piv_lu(builder, primal_in, primal_out, tangent_in, ctx)
+        }
         StdTensorOp::FullPivLuSolve { transpose_a } => linalg::linearize_full_piv_lu_solve(
             builder,
             primal_in,
@@ -197,8 +209,6 @@ pub fn linearize(
         StdTensorOp::Extension(ext) => {
             ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
         }
-
-        _ => todo_linearize(op),
     }
 }
 
@@ -227,6 +237,14 @@ pub fn transpose_rule(
         StdTensorOp::Div => elementwise::transpose_div(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Abs => elementwise::transpose_abs(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Sign => elementwise::transpose_sign(emitter, cotangent_out, mode),
+        StdTensorOp::Maximum => {
+            elementwise::transpose_maximum(emitter, cotangent_out, inputs, mode)
+        }
+        StdTensorOp::Minimum => {
+            elementwise::transpose_minimum(emitter, cotangent_out, inputs, mode)
+        }
+        StdTensorOp::Select => elementwise::transpose_select(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Clamp => elementwise::transpose_clamp(emitter, cotangent_out, inputs, mode),
         StdTensorOp::Constant { .. } => vec![],
         StdTensorOp::Compare(_) => vec![None, None],
 
@@ -280,6 +298,15 @@ pub fn transpose_rule(
         StdTensorOp::Pad(config) => {
             structural::transpose_pad(emitter, cotangent_out, inputs, mode, config, ctx)
         }
+        StdTensorOp::Concatenate { axis, n_inputs } => structural::transpose_concatenate(
+            emitter,
+            cotangent_out,
+            inputs,
+            mode,
+            *axis,
+            *n_inputs,
+            ctx,
+        ),
         StdTensorOp::Reverse { axes } => {
             structural::transpose_reverse(emitter, cotangent_out, mode, axes)
         }
@@ -315,6 +342,12 @@ pub fn transpose_rule(
         ),
         StdTensorOp::Scatter(config) => {
             indexing::transpose_scatter(emitter, cotangent_out, inputs, mode, config, ctx)
+        }
+        StdTensorOp::DynamicSlice { .. } => {
+            indexing::transpose_dynamic_slice(emitter, cotangent_out, inputs, mode, ctx)
+        }
+        StdTensorOp::DynamicUpdateSlice => {
+            indexing::transpose_dynamic_update_slice(emitter, cotangent_out, inputs, mode, ctx)
         }
 
         // Dynamic family.

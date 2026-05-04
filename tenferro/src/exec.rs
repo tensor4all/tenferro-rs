@@ -97,6 +97,7 @@ pub enum ExecOp {
     DynamicSlice {
         slice_sizes: Vec<usize>,
     },
+    DynamicUpdateSlice,
     Pad(PadConfig),
     Concatenate {
         axis: usize,
@@ -442,6 +443,11 @@ pub(crate) fn execute_backend_op(
             get(slots, &inst.input_slots, 0)?,
             get(slots, &inst.input_slots, 1)?,
             slice_sizes,
+        )?,
+        ExecOp::DynamicUpdateSlice => exec.dynamic_update_slice(
+            get(slots, &inst.input_slots, 0)?,
+            get(slots, &inst.input_slots, 1)?,
+            get(slots, &inst.input_slots, 2)?,
         )?,
         ExecOp::Pad(config) => exec.pad(get(slots, &inst.input_slots, 0)?, config)?,
         ExecOp::Concatenate { axis } => {

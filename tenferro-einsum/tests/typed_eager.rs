@@ -58,6 +58,7 @@ impl TensorBackend for WrongDTypeBackend {
         scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> tenferro_tensor::Result<Tensor>;
         slice(input: &Tensor, config: &SliceConfig) -> tenferro_tensor::Result<Tensor>;
         dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> tenferro_tensor::Result<Tensor>;
+        dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> tenferro_tensor::Result<Tensor>;
         pad(input: &Tensor, config: &PadConfig) -> tenferro_tensor::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> tenferro_tensor::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;

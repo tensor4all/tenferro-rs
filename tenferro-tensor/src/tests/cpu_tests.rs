@@ -14,9 +14,10 @@ use crate::cpu::backend;
 #[cfg(feature = "cpu-faer")]
 use crate::cpu::linalg::faer_linalg;
 use crate::cpu::{
-    abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, embed_diagonal,
-    extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max, reduce_min, reduce_prod,
-    reduce_sum, reshape, scatter, select, sign, transpose, tril, triu, CpuBackend, CpuContext,
+    abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
+    embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
+    reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
+    CpuBackend, CpuContext,
 };
 use crate::types::{DType, Tensor, TypedTensor};
 
@@ -2820,6 +2821,21 @@ fn test_dynamic_slice_accepts_i64_starts() {
     assert_eq!(get_f64(&out, &[1, 0]), 12.0);
     assert_eq!(get_f64(&out, &[0, 1]), 15.0);
     assert_eq!(get_f64(&out, &[1, 1]), 16.0);
+}
+
+#[test]
+fn test_dynamic_update_slice_clamps_starts() {
+    let operand = Tensor::F64(TypedTensor::from_vec(
+        vec![5],
+        vec![10.0, 11.0, 12.0, 13.0, 14.0],
+    ));
+    let update = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let starts = Tensor::from_vec(vec![1], vec![4_i64]);
+
+    let out = dynamic_update_slice(&operand, &update, &starts).unwrap();
+
+    assert_eq!(out.shape(), &[5]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[10.0, 11.0, 1.0, 2.0, 3.0]);
 }
 
 #[test]

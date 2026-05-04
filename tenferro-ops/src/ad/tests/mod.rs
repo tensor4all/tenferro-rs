@@ -11,6 +11,7 @@ use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 
+mod elementwise_tests;
 mod indexing_tests;
 mod linalg_tests;
 

@@ -386,6 +386,7 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::DynamicSlice { slice_sizes } => ExecOp::DynamicSlice {
             slice_sizes: slice_sizes.clone(),
         },
+        StdTensorOp::DynamicUpdateSlice => ExecOp::DynamicUpdateSlice,
         StdTensorOp::Pad(config) => ExecOp::Pad(config.clone()),
         StdTensorOp::Concatenate { axis, .. } => ExecOp::Concatenate { axis: *axis },
         StdTensorOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },

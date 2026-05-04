@@ -153,6 +153,12 @@ pub trait TensorExec {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor>;
+    fn dynamic_update_slice(
+        &mut self,
+        operand: &Tensor,
+        update: &Tensor,
+        starts: &Tensor,
+    ) -> crate::Result<Tensor>;
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
@@ -252,6 +258,7 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
         ) -> crate::Result<Tensor>;
         slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
         dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> crate::Result<Tensor>;
+        dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
         pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
@@ -395,6 +402,12 @@ pub trait TensorBackend {
         input: &Tensor,
         starts: &Tensor,
         slice_sizes: &[usize],
+    ) -> crate::Result<Tensor>;
+    fn dynamic_update_slice(
+        &mut self,
+        operand: &Tensor,
+        update: &Tensor,
+        starts: &Tensor,
     ) -> crate::Result<Tensor>;
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;

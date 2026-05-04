@@ -376,6 +376,7 @@ indexing ops are standard-arithmetic only:
 |-----------|------------|-------|
 | `Slice` | Read a static rectangular subregion | Start/limit/stride known in the op |
 | `DynamicSlice` | Read a slice whose start index is data-dependent | Dynamic counterpart of `Slice` |
+| `DynamicUpdateSlice` | Write an update tensor into an operand at data-dependent start indices | Transpose counterpart of `DynamicSlice`; start indices are adjusted with StableHLO `dynamic_update_slice` semantics. |
 | `Pad` | Extend a tensor with edge/interior padding values | Needed for transpose of slicing-like ops |
 | `Concatenate` | Join tensors along one axis | Rank-preserving shape change |
 | `Reverse` | Reverse the order of elements along selected axes | Useful for convolutions and sequence models |

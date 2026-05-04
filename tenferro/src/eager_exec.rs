@@ -118,6 +118,9 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::DynamicSlice { slice_sizes } => {
                 vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
             }
+            StdTensorOp::DynamicUpdateSlice => {
+                vec![exec.dynamic_update_slice(inputs[0], inputs[1], inputs[2])?]
+            }
             StdTensorOp::Cholesky { .. } => vec![exec.cholesky(inputs[0])?],
             StdTensorOp::TriangularSolve {
                 left_side,

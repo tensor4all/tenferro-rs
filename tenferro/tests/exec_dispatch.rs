@@ -281,6 +281,14 @@ impl TensorBackend for FakeTensorBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         self.result("dynamic_slice", 36.0)
     }
+    fn dynamic_update_slice(
+        &mut self,
+        _operand: &Tensor,
+        _update: &Tensor,
+        _starts: &Tensor,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.result("dynamic_update_slice", 36.5)
+    }
     fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> tenferro_tensor::Result<Tensor> {
         self.result("pad", 37.0)
     }
@@ -465,6 +473,7 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
             "dynamic_slice",
             36.0,
         ),
+        (ExecOp::DynamicUpdateSlice, 3, "dynamic_update_slice", 36.5),
         (ExecOp::Pad(pad_config()), 1, "pad", 37.0),
         (ExecOp::Concatenate { axis: 0 }, 2, "concatenate", 38.0),
         (ExecOp::Reverse { axes: vec![0] }, 1, "reverse", 39.0),
