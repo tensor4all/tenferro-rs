@@ -8,7 +8,7 @@ use crate::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tensor::cpu::CpuContext;
 ///
 /// let ctx = CpuContext::with_threads(1);
@@ -25,7 +25,14 @@ fn shared_pools() -> &'static Mutex<HashMap<usize, Arc<rayon::ThreadPool>>> {
     POOLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn get_or_create_pool(num_threads: usize) -> Arc<rayon::ThreadPool> {
+pub(crate) fn try_get_or_create_pool(num_threads: usize) -> Result<Arc<rayon::ThreadPool>> {
+    if num_threads == 0 {
+        return Err(Error::InvalidConfig {
+            op: "CpuContext::try_with_threads",
+            message: "thread count must be at least 1".into(),
+        });
+    }
+
     let mut pools = match shared_pools().lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -34,17 +41,20 @@ pub(crate) fn get_or_create_pool(num_threads: usize) -> Arc<rayon::ThreadPool> {
         }
     };
     if let Some(pool) = pools.get(&num_threads) {
-        return Arc::clone(pool);
+        return Ok(Arc::clone(pool));
     }
 
     let pool = Arc::new(
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build()
-            .unwrap_or_else(|e| panic!("failed to create rayon thread pool: {e}")),
+            .map_err(|err| Error::BackendFailure {
+                op: "CpuContext::try_with_threads",
+                message: format!("failed to create rayon thread pool: {err}"),
+            })?,
     );
     pools.insert(num_threads, Arc::clone(&pool));
-    pool
+    Ok(pool)
 }
 
 impl CpuContext {
@@ -53,7 +63,7 @@ impl CpuContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuContext;
     ///
     /// let ctx = CpuContext::from_env();
@@ -68,10 +78,11 @@ impl CpuContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuContext;
     ///
-    /// let ctx = CpuContext::try_from_env().unwrap();
+    /// let ctx = CpuContext::try_from_env()
+    ///     .unwrap_or_else(|_| CpuContext::with_threads(1));
     /// let _ = ctx.num_threads();
     /// ```
     pub fn try_from_env() -> Result<Self> {
@@ -81,16 +92,20 @@ impl CpuContext {
                     op: "CpuContext::try_from_env",
                     message: format!("invalid RAYON_NUM_THREADS value {value:?}: {err}"),
                 })?;
-                if num_threads == 0 {
-                    return Err(Error::InvalidConfig {
+                Self::try_with_threads(num_threads).map_err(|err| match err {
+                    Error::InvalidConfig { message, .. } => Error::InvalidConfig {
                         op: "CpuContext::try_from_env",
-                        message: "RAYON_NUM_THREADS must be at least 1".to_string(),
-                    });
-                }
-                Ok(Self::with_threads(num_threads))
+                        message: format!("invalid RAYON_NUM_THREADS value {value:?}: {message}"),
+                    },
+                    Error::BackendFailure { message, .. } => Error::BackendFailure {
+                        op: "CpuContext::try_from_env",
+                        message,
+                    },
+                    err => err,
+                })
             }
             Err(env::VarError::NotPresent) => {
-                Ok(Self::with_threads(super::affinity::available_parallelism()))
+                Self::try_with_threads(super::affinity::available_parallelism())
             }
             Err(err) => Err(Error::InvalidConfig {
                 op: "CpuContext::try_from_env",
@@ -103,24 +118,40 @@ impl CpuContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuContext;
     ///
     /// let ctx = CpuContext::with_threads(2);
     /// assert_eq!(ctx.num_threads(), 2);
     /// ```
     pub fn with_threads(num_threads: usize) -> Self {
-        assert!(num_threads >= 1, "thread count must be >= 1");
-        Self {
-            pool: get_or_create_pool(num_threads),
+        match Self::try_with_threads(num_threads) {
+            Ok(ctx) => ctx,
+            Err(err) => panic!("{err}"),
         }
+    }
+
+    /// Try to create a CPU context with a fixed rayon thread-pool size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuContext;
+    ///
+    /// let ctx = CpuContext::try_with_threads(1).unwrap();
+    /// assert_eq!(ctx.num_threads(), 1);
+    /// ```
+    pub fn try_with_threads(num_threads: usize) -> Result<Self> {
+        Ok(Self {
+            pool: try_get_or_create_pool(num_threads)?,
+        })
     }
 
     /// Return the number of threads in this context's owned rayon pool.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuContext;
     ///
     /// let ctx = CpuContext::with_threads(2);
@@ -134,7 +165,7 @@ impl CpuContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuContext;
     ///
     /// let ctx = CpuContext::with_threads(1);

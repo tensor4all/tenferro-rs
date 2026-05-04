@@ -4,8 +4,9 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    batched_binary_result, dim_i32, has_zero_dim, matrix_dims, panic_on_lapack_error,
-    square_matrix_dim, tensor_from_vec_with_template, transpose_col_major_data,
+    batched_binary_result, check_lapack_info, dim_i32, has_zero_dim, matrix_core_and_batch_result,
+    matrix_dims, square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    transpose_col_major_data,
 };
 
 pub(crate) trait LapackTriangularSolve: Clone + Copy {
@@ -68,8 +69,8 @@ fn solve_left<T: LapackTriangularSolve>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> crate::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "triangular_solve");
-    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+    let n = square_matrix_dim(a, "triangular_solve")?;
+    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
     if b_rows != n {
         return Err(crate::Error::ShapeMismatch {
             op: "triangular_solve",
@@ -84,15 +85,15 @@ fn solve_left<T: LapackTriangularSolve>(
         if lower { b'L' } else { b'U' },
         if transpose_a { b'T' } else { b'N' },
         if unit_diagonal { b'U' } else { b'N' },
-        dim_i32(n, "triangular_solve"),
-        dim_i32(b_cols, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
+        dim_i32(b_cols, "triangular_solve")?,
         a.host_data(),
-        dim_i32(n, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
         &mut rhs,
-        dim_i32(n, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
         &mut info,
     );
-    panic_on_lapack_error("triangular_solve", "dtrtrs", info);
+    check_lapack_info("triangular_solve", "trtrs", info)?;
     Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
 }
 
@@ -103,8 +104,8 @@ fn solve_right<T: LapackTriangularSolve>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> crate::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "triangular_solve");
-    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve");
+    let n = square_matrix_dim(a, "triangular_solve")?;
+    let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
     if b_cols != n {
         return Err(crate::Error::ShapeMismatch {
             op: "triangular_solve",
@@ -119,15 +120,15 @@ fn solve_right<T: LapackTriangularSolve>(
         if lower { b'L' } else { b'U' },
         if transpose_a { b'N' } else { b'T' },
         if unit_diagonal { b'U' } else { b'N' },
-        dim_i32(n, "triangular_solve"),
-        dim_i32(b_rows, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
+        dim_i32(b_rows, "triangular_solve")?,
         a.host_data(),
-        dim_i32(n, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
         &mut rhs_t,
-        dim_i32(n, "triangular_solve"),
+        dim_i32(n, "triangular_solve")?,
         &mut info,
     );
-    panic_on_lapack_error("triangular_solve", "dtrtrs", info);
+    check_lapack_info("triangular_solve", "trtrs", info)?;
     let result = transpose_col_major_data(&rhs_t, n, b_rows);
     Ok(tensor_from_vec_with_template(vec![b_rows, n], result, b))
 }
@@ -158,6 +159,23 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
     unit_diagonal: bool,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        let (n, a_batch_shape) = square_core_and_batch_result(a, "triangular_solve")?;
+        let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, "triangular_solve")?;
+        let rhs_core_dim = if left_side { b_rows } else { b_cols };
+        if rhs_core_dim != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "triangular_solve",
+                lhs: vec![n],
+                rhs: vec![rhs_core_dim],
+            });
+        }
+        if a_batch_shape != b_batch_shape {
+            return Err(crate::Error::ShapeMismatch {
+                op: "triangular_solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
         return Ok(tensor_from_vec_with_template(
             b.shape.clone(),
             Vec::new(),

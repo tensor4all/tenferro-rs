@@ -1,15 +1,33 @@
 use crate::buffer_pool::BufferPool;
 use crate::{Tensor, TypedTensor};
 
-pub(crate) fn matrix_dims<T>(input: &TypedTensor<T>, op: &str) -> (usize, usize) {
-    assert_eq!(input.shape.len(), 2, "{op}: expected a 2D matrix");
-    (input.shape[0], input.shape[1])
+pub(crate) fn matrix_dims<T>(
+    input: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(usize, usize)> {
+    if input.shape.len() != 2 {
+        return Err(crate::Error::RankMismatch {
+            op,
+            expected: 2,
+            actual: input.shape.len(),
+        });
+    }
+    Ok((input.shape[0], input.shape[1]))
 }
 
-pub(crate) fn square_matrix_dim<T>(input: &TypedTensor<T>, op: &str) -> usize {
-    let (rows, cols) = matrix_dims(input, op);
-    assert_eq!(rows, cols, "{op}: expected a square matrix");
-    rows
+pub(crate) fn square_matrix_dim<T>(
+    input: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<usize> {
+    let (rows, cols) = matrix_dims(input, op)?;
+    if rows != cols {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: vec![rows],
+            rhs: vec![cols],
+        });
+    }
+    Ok(rows)
 }
 
 pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
@@ -22,18 +40,6 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
         shape,
         placement: template.placement.clone(),
     }
-}
-
-pub(crate) fn split_core_and_batch<'a, T>(
-    input: &'a TypedTensor<T>,
-    core_rank: usize,
-    op: &str,
-) -> (&'a [usize], &'a [usize]) {
-    assert!(
-        input.shape.len() >= core_rank,
-        "{op}: expected rank >= {core_rank}"
-    );
-    input.shape.split_at(core_rank)
 }
 
 pub(crate) fn split_core_and_batch_result<'a, T>(
@@ -49,6 +55,42 @@ pub(crate) fn split_core_and_batch_result<'a, T>(
         });
     }
     Ok(input.shape.split_at(core_rank))
+}
+
+pub(crate) fn matrix_core_and_batch_result<'a, T>(
+    input: &'a TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(usize, usize, &'a [usize])> {
+    let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, op)?;
+    Ok((matrix_shape[0], matrix_shape[1], batch_shape))
+}
+
+pub(crate) fn square_core_and_batch_result<'a, T>(
+    input: &'a TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(usize, &'a [usize])> {
+    let (rows, cols, batch_shape) = matrix_core_and_batch_result(input, op)?;
+    if rows != cols {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: vec![rows],
+            rhs: vec![cols],
+        });
+    }
+    Ok((rows, batch_shape))
+}
+
+pub(crate) fn batch_element_count(op: &'static str, batch_shape: &[usize]) -> crate::Result<usize> {
+    if batch_shape.is_empty() {
+        return Ok(1);
+    }
+    batch_shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: "batch element count overflow".into(),
+            })
+    })
 }
 
 pub(crate) fn has_zero_dim(shape: &[usize]) -> bool {
@@ -71,31 +113,41 @@ pub(crate) fn vector_with_batch_shape(len: usize, batch_shape: &[usize]) -> Vec<
     shape
 }
 
-pub(crate) fn dim_i32(value: usize, op: &str) -> i32 {
-    match i32::try_from(value) {
-        Ok(value) => value,
-        Err(_) => panic!("{op}: dimension exceeds LAPACK i32 range"),
-    }
+pub(crate) fn dim_i32(value: usize, op: &'static str) -> crate::Result<i32> {
+    i32::try_from(value).map_err(|_| crate::Error::InvalidConfig {
+        op,
+        message: format!("dimension {value} exceeds LAPACK i32 range"),
+    })
 }
 
-pub(crate) fn work_len(query: f64, op: &str, routine: &str) -> i32 {
-    assert!(
-        query.is_finite() && query >= 1.0,
-        "{op}: LAPACK {routine} returned invalid workspace size {query}"
-    );
+pub(crate) fn work_len(query: f64, op: &'static str, routine: &'static str) -> crate::Result<i32> {
+    if !(query.is_finite() && query >= 1.0) {
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!("LAPACK {routine} returned invalid workspace size {query}"),
+        });
+    }
     dim_i32(query.ceil() as usize, op)
 }
 
-pub(crate) fn panic_on_lapack_error(op: &str, routine: &str, info: i32) {
+pub(crate) fn check_lapack_info(
+    op: &'static str,
+    routine: &'static str,
+    info: i32,
+) -> crate::Result<()> {
     if info < 0 {
-        panic!(
-            "{op}: LAPACK {routine} argument {} had an illegal value",
-            -info
-        );
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!("LAPACK {routine} argument {} had an illegal value", -info),
+        });
     }
     if info > 0 {
-        panic!("{op}: LAPACK {routine} failed with info {info}");
+        return Err(crate::Error::BackendFailure {
+            op,
+            message: format!("LAPACK {routine} failed with info {info}"),
+        });
     }
+    Ok(())
 }
 
 pub(crate) fn lower_triangle_from_lapack<T: Copy + Default>(
@@ -138,6 +190,7 @@ pub(crate) fn transpose_col_major_data<T: Copy>(data: &[T], rows: usize, cols: u
 }
 
 pub(crate) fn batched_single<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     op: F,
@@ -146,17 +199,19 @@ where
     T: Clone,
     F: Fn(&mut BufferPool, &TypedTensor<T>) -> crate::Result<TypedTensor<T>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, 2, "batched_single");
+    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
     let slice_size: usize = core_shape.iter().product();
     let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_single: zero-sized batch dims are unsupported"
-    );
+    if batch_count == 0 {
+        return Err(crate::Error::InvalidConfig {
+            op: op_name,
+            message: "zero-sized batch dims must be handled by the caller".into(),
+        });
+    }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
     let mut out_data: Option<Vec<T>> = None;
@@ -172,11 +227,13 @@ where
         let batch_output = op(buffers, &batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                expected_shape.as_slice(),
-                "batched_single: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: expected_shape.clone(),
+                });
+            }
         } else {
             out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
             out_core_shape = Some(batch_output.shape.clone());
@@ -184,45 +241,50 @@ where
 
         match &mut out_data {
             Some(data) => data.extend_from_slice(batch_output.host_data()),
-            None => panic!("batched_single: missing output buffer"),
+            None => {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: "missing output buffer after first batch".into(),
+                });
+            }
         }
     }
 
-    let mut out_shape = match out_core_shape {
-        Some(shape) => shape,
-        None => panic!("batched_single: missing output shape"),
-    };
+    let mut out_shape = out_core_shape.ok_or_else(|| crate::Error::InvalidConfig {
+        op: op_name,
+        message: "missing output shape".into(),
+    })?;
     out_shape.extend_from_slice(batch_shape);
-    Ok(tensor_from_vec_with_template(
-        out_shape,
-        match out_data {
-            Some(data) => data,
-            None => panic!("batched_single: missing output data"),
-        },
-        input,
-    ))
+    let out_data = out_data.ok_or_else(|| crate::Error::InvalidConfig {
+        op: op_name,
+        message: "missing output data".into(),
+    })?;
+    Ok(tensor_from_vec_with_template(out_shape, out_data, input))
 }
 
 pub(crate) fn batched_multi<T, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     op: F,
-) -> Vec<TypedTensor<T>>
+) -> crate::Result<Vec<TypedTensor<T>>>
 where
     T: Clone,
-    F: Fn(&mut BufferPool, &TypedTensor<T>) -> Vec<TypedTensor<T>>,
+    F: Fn(&mut BufferPool, &TypedTensor<T>) -> crate::Result<Vec<TypedTensor<T>>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, 2, "batched_multi");
+    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
     let slice_size: usize = core_shape.iter().product();
     let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_multi: zero-sized batch dims are unsupported"
-    );
+    if batch_count == 0 {
+        return Err(crate::Error::InvalidConfig {
+            op: op_name,
+            message: "zero-sized batch dims must be handled by the caller".into(),
+        });
+    }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<T>> = Vec::new();
@@ -235,9 +297,15 @@ where
             input.host_data()[start..end].to_vec(),
             input,
         );
-        let batch_outputs = op(buffers, &batch_input);
+        let batch_outputs = op(buffers, &batch_input)?;
 
         if out_shapes.is_empty() {
+            if batch_outputs.is_empty() {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: "missing outputs for first batch".into(),
+                });
+            }
             out_shapes = batch_outputs
                 .iter()
                 .map(|tensor| tensor.shape.clone())
@@ -247,52 +315,62 @@ where
                 .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
                 .collect();
         } else {
-            assert_eq!(
-                batch_outputs.len(),
-                out_shapes.len(),
-                "batched_multi: output count mismatch across batches"
-            );
+            if batch_outputs.len() != out_shapes.len() {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: format!(
+                        "output count mismatch across batches: got {}, expected {}",
+                        batch_outputs.len(),
+                        out_shapes.len()
+                    ),
+                });
+            }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                out_shapes[idx].as_slice(),
-                "batched_multi: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: out_shapes[idx].clone(),
+                });
+            }
             out_data[idx].extend_from_slice(batch_output.host_data());
         }
     }
 
-    out_shapes
+    Ok(out_shapes
         .into_iter()
         .zip(out_data)
         .map(|(mut out_shape, out_data)| {
             out_shape.extend_from_slice(batch_shape);
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) fn batched_multi_convert<InT: Clone, OutT: Clone, F>(
+    op_name: &'static str,
     buffers: &mut BufferPool,
     input: &TypedTensor<InT>,
     op: F,
-) -> Vec<TypedTensor<OutT>>
+) -> crate::Result<Vec<TypedTensor<OutT>>>
 where
-    F: Fn(&mut BufferPool, &TypedTensor<InT>) -> Vec<TypedTensor<OutT>>,
+    F: Fn(&mut BufferPool, &TypedTensor<InT>) -> crate::Result<Vec<TypedTensor<OutT>>>,
 {
-    let (core_shape, batch_shape) = split_core_and_batch(input, 2, "batched_multi");
+    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
     if batch_shape.is_empty() {
         return op(buffers, input);
     }
 
     let slice_size: usize = core_shape.iter().product();
     let batch_count: usize = batch_shape.iter().product();
-    assert!(
-        batch_count > 0,
-        "batched_multi: zero-sized batch dims are unsupported"
-    );
+    if batch_count == 0 {
+        return Err(crate::Error::InvalidConfig {
+            op: op_name,
+            message: "zero-sized batch dims must be handled by the caller".into(),
+        });
+    }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
     let mut out_data: Vec<Vec<OutT>> = Vec::new();
@@ -305,9 +383,15 @@ where
             input.host_data()[start..end].to_vec(),
             input,
         );
-        let batch_outputs = op(buffers, &batch_input);
+        let batch_outputs = op(buffers, &batch_input)?;
 
         if out_shapes.is_empty() {
+            if batch_outputs.is_empty() {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: "missing outputs for first batch".into(),
+                });
+            }
             out_shapes = batch_outputs
                 .iter()
                 .map(|tensor| tensor.shape.clone())
@@ -317,31 +401,38 @@ where
                 .map(|tensor| Vec::with_capacity(tensor.n_elements() * batch_count))
                 .collect();
         } else {
-            assert_eq!(
-                batch_outputs.len(),
-                out_shapes.len(),
-                "batched_multi: output count mismatch across batches"
-            );
+            if batch_outputs.len() != out_shapes.len() {
+                return Err(crate::Error::InvalidConfig {
+                    op: op_name,
+                    message: format!(
+                        "output count mismatch across batches: got {}, expected {}",
+                        batch_outputs.len(),
+                        out_shapes.len()
+                    ),
+                });
+            }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            assert_eq!(
-                batch_output.shape.as_slice(),
-                out_shapes[idx].as_slice(),
-                "batched_multi: output core shape mismatch across batches"
-            );
+            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+                return Err(crate::Error::ShapeMismatch {
+                    op: op_name,
+                    lhs: batch_output.shape.clone(),
+                    rhs: out_shapes[idx].clone(),
+                });
+            }
             out_data[idx].extend_from_slice(batch_output.host_data());
         }
     }
 
-    out_shapes
+    Ok(out_shapes
         .into_iter()
         .zip(out_data)
         .map(|(mut out_shape, out_data)| {
             out_shape.extend_from_slice(batch_shape);
             tensor_from_vec_with_template(out_shape, out_data, input)
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) fn batched_binary_result<T, F>(
@@ -436,10 +527,25 @@ where
     Ok(tensor_from_vec_with_template(out_shape, out_data, b))
 }
 
-pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> Vec<Tensor> {
-    let n = input.shape()[0];
-    let batch_shape = &input.shape()[2..];
-    vec![
+pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> crate::Result<Vec<Tensor>> {
+    let shape = input.shape();
+    if shape.len() < 2 {
+        return Err(crate::Error::RankMismatch {
+            op: "eig",
+            expected: 2,
+            actual: shape.len(),
+        });
+    }
+    let n = shape[0];
+    if shape[1] != n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "eig",
+            lhs: vec![n],
+            rhs: vec![shape[1]],
+        });
+    }
+    let batch_shape = &shape[2..];
+    Ok(vec![
         Tensor::C64(TypedTensor::from_vec(
             vector_with_batch_shape(n, batch_shape),
             Vec::new(),
@@ -448,5 +554,5 @@ pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> Vec<Tensor> {
             matrix_with_batch_shape(n, n, batch_shape),
             Vec::new(),
         )),
-    ]
+    ])
 }

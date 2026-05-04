@@ -475,7 +475,7 @@ where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
     validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_blas_gemm(buffers, lhs, rhs, config) {
+    if let Some(result) = typed_blas_gemm(buffers, lhs, rhs, config)? {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -490,7 +490,7 @@ where
     } else {
         std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
     };
-    typed_blas_gemm(buffers, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
+    typed_blas_gemm(buffers, &lhs_canon, &rhs_canon, &new_config)?.ok_or_else(|| {
         Error::BackendFailure {
             op: "dot_general",
             message: "CPU GEMM requires host-backed canonical inputs".into(),
@@ -504,18 +504,24 @@ fn typed_blas_gemm<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
-) -> Option<TypedTensor<T>>
+) -> crate::Result<Option<TypedTensor<T>>>
 where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
-    let dims = analyse_gemm(lhs, rhs, config)?;
-    let out_n = checked_product(&dims.out_shape)?;
+    let dims = match analyse_gemm(lhs, rhs, config) {
+        Some(dims) => dims,
+        None => return Ok(None),
+    };
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "output element count overflow".into(),
+    })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
-        return Some(TypedTensor {
+        return Ok(Some(TypedTensor {
             buffer: Buffer::Host(vec![T::zero(); out_n]),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
-        });
+        }));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -529,18 +535,18 @@ where
     let b_ok = b_rs == 1 || b_cs == 1;
     let c_ok = c_rs == 1;
     if !a_ok || !b_ok || !c_ok {
-        return None;
+        return Ok(None);
     }
 
     let a_data = match &lhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
-        Buffer::Backend(_) => return None,
+        Buffer::Backend(_) => return Ok(None),
         #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
-        Buffer::Backend(_) => return None,
+        Buffer::Backend(_) => return Ok(None),
         #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
@@ -550,9 +556,21 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)?;
-        let c_off = checked_batch_offset(batch, dims.c_bs)?;
+        let a_off =
+            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "lhs batch offset overflow".into(),
+            })?;
+        let b_off =
+            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "rhs batch offset overflow".into(),
+            })?;
+        let c_off =
+            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "output batch offset overflow".into(),
+            })?;
         unsafe {
             T::strided_gemm(
                 T::one(),
@@ -569,15 +587,15 @@ where
                 c_ptr.offset(c_off),
                 c_rs,
                 c_cs,
-            );
+            )?;
         }
     }
 
-    Some(TypedTensor {
+    Ok(Some(TypedTensor {
         buffer: Buffer::Host(out),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
-    })
+    }))
 }
 
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {

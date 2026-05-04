@@ -337,6 +337,29 @@ fn split_core_and_batch<'a, T>(
     split_shape_core_and_batch(&input.shape, core_rank, op)
 }
 
+fn matrix_core_and_batch<'a, T>(
+    input: &'a TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(usize, usize, &'a [usize])> {
+    let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, op)?;
+    Ok((matrix_shape[0], matrix_shape[1], batch_shape))
+}
+
+fn square_core_and_batch<'a, T>(
+    input: &'a TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<(usize, &'a [usize])> {
+    let (rows, cols, batch_shape) = matrix_core_and_batch(input, op)?;
+    if rows != cols {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: vec![rows],
+            rhs: vec![cols],
+        });
+    }
+    Ok((rows, batch_shape))
+}
+
 fn transpose_col_major_data<T: Copy + PoolScalar>(
     buffers: &mut BufferPool,
     data: &[T],
@@ -1798,8 +1821,9 @@ pub(crate) fn cholesky<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&input.shape) {
+        let (n, batch_shape) = square_core_and_batch(input, "cholesky")?;
         return Ok(tensor_from_vec_with_template(
-            input.shape.clone(),
+            matrix_with_batch_shape(n, n, batch_shape),
             Vec::new(),
             input,
         ));
@@ -1815,9 +1839,7 @@ pub(crate) fn lu<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "lu")?;
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "lu")?;
         let k = m.min(n);
         let parity_elements = checked_product("lu", "batch shape", batch_shape)?;
         return Ok(vec![
@@ -1854,15 +1876,7 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "full_piv_lu")?;
-        let n = matrix_shape[0];
-        if matrix_shape[1] != n {
-            return Err(crate::Error::ShapeMismatch {
-                op: "full_piv_lu",
-                lhs: vec![n],
-                rhs: vec![matrix_shape[1]],
-            });
-        }
+        let (n, batch_shape) = square_core_and_batch(input, "full_piv_lu")?;
         let parity_elements = checked_product("full_piv_lu", "batch shape", batch_shape)?;
         return Ok(vec![
             tensor_from_vec_with_template(
@@ -1905,8 +1919,15 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        let (_, a_batch_shape) = split_core_and_batch(a, 2, "full_piv_lu_solve")?;
-        let (_, b_batch_shape) = split_core_and_batch(b, 2, "full_piv_lu_solve")?;
+        let (n, a_batch_shape) = square_core_and_batch(a, "full_piv_lu_solve")?;
+        let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "full_piv_lu_solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
         if a_batch_shape != b_batch_shape {
             return Err(crate::Error::ShapeMismatch {
                 op: "full_piv_lu_solve",
@@ -1936,8 +1957,16 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     unit_diagonal: bool,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        let (_, a_batch_shape) = split_core_and_batch(a, 2, "triangular_solve")?;
-        let (_, b_batch_shape) = split_core_and_batch(b, 2, "triangular_solve")?;
+        let (n, a_batch_shape) = square_core_and_batch(a, "triangular_solve")?;
+        let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch(b, "triangular_solve")?;
+        let rhs_core_dim = if left_side { b_rows } else { b_cols };
+        if rhs_core_dim != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "triangular_solve",
+                lhs: vec![n],
+                rhs: vec![rhs_core_dim],
+            });
+        }
         if a_batch_shape != b_batch_shape {
             return Err(crate::Error::ShapeMismatch {
                 op: "triangular_solve",
@@ -1971,9 +2000,7 @@ pub(crate) fn svd<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd")?;
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "svd")?;
         let k = m.min(n);
         return Ok(vec![
             tensor_from_vec_with_template(
@@ -2004,9 +2031,7 @@ pub(crate) fn qr<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "qr")?;
-        let m = matrix_shape[0];
-        let n = matrix_shape[1];
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "qr")?;
         let k = m.min(n);
         return Ok(vec![
             tensor_from_vec_with_template(
@@ -2032,15 +2057,7 @@ pub(crate) fn eigh<T: FaerLinalg>(
     input: &TypedTensor<T>,
 ) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "eigh")?;
-        let n = matrix_shape[0];
-        if matrix_shape[1] != n {
-            return Err(crate::Error::ShapeMismatch {
-                op: "eigh",
-                lhs: vec![n],
-                rhs: vec![matrix_shape[1]],
-            });
-        }
+        let (n, batch_shape) = square_core_and_batch(input, "eigh")?;
         return Ok(vec![
             tensor_from_vec_with_template(
                 vector_with_batch_shape(n, batch_shape),
@@ -2179,7 +2196,10 @@ pub(crate) fn eig(
                 .collect(),
             )
         }
-        _ => todo!("eig: unsupported dtype"),
+        _ => Err(crate::Error::BackendFailure {
+            op: "eig",
+            message: format!("unsupported dtype {:?}", input.dtype()),
+        }),
     }
 }
 

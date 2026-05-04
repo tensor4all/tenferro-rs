@@ -29,7 +29,7 @@ the symbol is present.
 
 ### Documentation Requirements
 
-Every public type, trait, and function **must** include minimal but sufficient usage examples in its doc comments (`/// # Examples`). The examples should help a human quickly understand how to use the API. Use `ignore` attribute on examples that cannot run in docs. Crate-level docs (`//!`) should include typical end-to-end usage examples.
+Every public type, trait, and function **must** include minimal but sufficient usage examples in its doc comments (`/// # Examples`). The examples should help a human quickly understand how to use the API. Doc examples must compile and run as doctests; do not use `ignore` or `no_run`. Crate-level docs (`//!`) should include typical end-to-end usage examples.
 
 ## Project Overview
 
@@ -151,6 +151,7 @@ If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting auto
 
 Additionally, verify the following before pushing:
 
+- **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`. Stale documentation is worse than no documentation.
 

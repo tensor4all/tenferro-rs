@@ -1,6 +1,8 @@
 use cblas_sys::{CBLAS_LAYOUT, CBLAS_TRANSPOSE};
 use num_complex::{Complex32, Complex64};
 
+use crate::Error;
+
 pub(crate) trait BlasGemm: Sized {
     #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
@@ -13,7 +15,7 @@ pub(crate) trait BlasGemm: Sized {
         m: usize,
         n: usize,
         k: usize,
-    );
+    ) -> crate::Result<()>;
 
     #[allow(clippy::too_many_arguments)]
     /// Run GEMM against raw strided matrix pointers.
@@ -40,68 +42,110 @@ pub(crate) trait BlasGemm: Sized {
         c_ptr: *mut Self,
         c_rs: isize,
         c_cs: isize,
-    );
+    ) -> crate::Result<()>;
 }
 
-fn dim_to_i32(name: &str, value: usize) -> i32 {
+fn dim_to_i32(name: &'static str, value: usize) -> crate::Result<i32> {
+    i32::try_from(value).map_err(|_| Error::InvalidConfig {
+        op: "dot_general",
+        message: format!("{name}={value} exceeds BLAS i32 range"),
+    })
+}
+
+fn stride_to_i32(name: &'static str, value: isize) -> crate::Result<i32> {
     match i32::try_from(value) {
-        Ok(value) => value,
-        Err(_) => panic!("{name} too large for BLAS i32 dimensions"),
+        Ok(value) if value > 0 => Ok(value),
+        _ => Err(Error::InvalidConfig {
+            op: "dot_general",
+            message: format!("{name}={value} must be a positive BLAS stride"),
+        }),
     }
 }
 
-fn stride_to_i32(name: &str, value: isize) -> i32 {
-    match i32::try_from(value) {
-        Ok(value) if value > 0 => value,
-        _ => panic!("{name} must be a positive BLAS stride"),
-    }
-}
-
-fn infer_a_layout(m: usize, k: usize, a_rs: isize, a_cs: isize) -> (CBLAS_TRANSPOSE, i32) {
+fn infer_a_layout(
+    m: usize,
+    k: usize,
+    a_rs: isize,
+    a_cs: isize,
+) -> crate::Result<(CBLAS_TRANSPOSE, i32)> {
     if a_rs == 1 {
-        let lda = stride_to_i32("lda", a_cs);
-        assert!(
-            lda >= dim_to_i32("m", m),
-            "lda must be >= max(1, m) for NoTrans A"
-        );
-        (CBLAS_TRANSPOSE::CblasNoTrans, lda)
+        let lda = stride_to_i32("lda", a_cs)?;
+        let min_lda = dim_to_i32("m", m)?;
+        if lda < min_lda {
+            return Err(Error::InvalidConfig {
+                op: "dot_general",
+                message: format!("lda={lda} must be >= max(1, m)={min_lda} for NoTrans A"),
+            });
+        }
+        Ok((CBLAS_TRANSPOSE::CblasNoTrans, lda))
     } else if a_cs == 1 {
-        let lda = stride_to_i32("lda", a_rs);
-        assert!(
-            lda >= dim_to_i32("k", k),
-            "lda must be >= max(1, k) for Trans A"
-        );
-        (CBLAS_TRANSPOSE::CblasTrans, lda)
+        let lda = stride_to_i32("lda", a_rs)?;
+        let min_lda = dim_to_i32("k", k)?;
+        if lda < min_lda {
+            return Err(Error::InvalidConfig {
+                op: "dot_general",
+                message: format!("lda={lda} must be >= max(1, k)={min_lda} for Trans A"),
+            });
+        }
+        Ok((CBLAS_TRANSPOSE::CblasTrans, lda))
     } else {
-        panic!("BLAS requires unit stride on one axis of A");
+        Err(Error::InvalidConfig {
+            op: "dot_general",
+            message: "BLAS requires unit stride on one axis of A".into(),
+        })
     }
 }
 
-fn infer_b_layout(k: usize, n: usize, b_rs: isize, b_cs: isize) -> (CBLAS_TRANSPOSE, i32) {
+fn infer_b_layout(
+    k: usize,
+    n: usize,
+    b_rs: isize,
+    b_cs: isize,
+) -> crate::Result<(CBLAS_TRANSPOSE, i32)> {
     if b_rs == 1 {
-        let ldb = stride_to_i32("ldb", b_cs);
-        assert!(
-            ldb >= dim_to_i32("k", k),
-            "ldb must be >= max(1, k) for NoTrans B"
-        );
-        (CBLAS_TRANSPOSE::CblasNoTrans, ldb)
+        let ldb = stride_to_i32("ldb", b_cs)?;
+        let min_ldb = dim_to_i32("k", k)?;
+        if ldb < min_ldb {
+            return Err(Error::InvalidConfig {
+                op: "dot_general",
+                message: format!("ldb={ldb} must be >= max(1, k)={min_ldb} for NoTrans B"),
+            });
+        }
+        Ok((CBLAS_TRANSPOSE::CblasNoTrans, ldb))
     } else if b_cs == 1 {
-        let ldb = stride_to_i32("ldb", b_rs);
-        assert!(
-            ldb >= dim_to_i32("n", n),
-            "ldb must be >= max(1, n) for Trans B"
-        );
-        (CBLAS_TRANSPOSE::CblasTrans, ldb)
+        let ldb = stride_to_i32("ldb", b_rs)?;
+        let min_ldb = dim_to_i32("n", n)?;
+        if ldb < min_ldb {
+            return Err(Error::InvalidConfig {
+                op: "dot_general",
+                message: format!("ldb={ldb} must be >= max(1, n)={min_ldb} for Trans B"),
+            });
+        }
+        Ok((CBLAS_TRANSPOSE::CblasTrans, ldb))
     } else {
-        panic!("BLAS requires unit stride on one axis of B");
+        Err(Error::InvalidConfig {
+            op: "dot_general",
+            message: "BLAS requires unit stride on one axis of B".into(),
+        })
     }
 }
 
-fn infer_c_layout(m: usize, c_rs: isize, c_cs: isize) -> i32 {
-    assert!(c_rs == 1, "BLAS output requires unit row stride");
-    let ldc = stride_to_i32("ldc", c_cs);
-    assert!(ldc >= dim_to_i32("m", m), "ldc must be >= max(1, m)");
-    ldc
+fn infer_c_layout(m: usize, c_rs: isize, c_cs: isize) -> crate::Result<i32> {
+    if c_rs != 1 {
+        return Err(Error::InvalidConfig {
+            op: "dot_general",
+            message: format!("BLAS output requires unit row stride, got {c_rs}"),
+        });
+    }
+    let ldc = stride_to_i32("ldc", c_cs)?;
+    let min_ldc = dim_to_i32("m", m)?;
+    if ldc < min_ldc {
+        return Err(Error::InvalidConfig {
+            op: "dot_general",
+            message: format!("ldc={ldc} must be >= max(1, m)={min_ldc}"),
+        });
+    }
+    Ok(ldc)
 }
 
 macro_rules! impl_real_blas_gemm {
@@ -116,10 +160,10 @@ macro_rules! impl_real_blas_gemm {
                 m: usize,
                 n: usize,
                 k: usize,
-            ) {
-                let m_i32 = dim_to_i32("m", m);
-                let n_i32 = dim_to_i32("n", n);
-                let k_i32 = dim_to_i32("k", k);
+            ) -> crate::Result<()> {
+                let m_i32 = dim_to_i32("m", m)?;
+                let n_i32 = dim_to_i32("n", n)?;
+                let k_i32 = dim_to_i32("k", k)?;
                 // SAFETY: the slices provide valid contiguous column-major
                 // storage for the BLAS read/write regions implied by m, n,
                 // and k, and dimensions were checked to fit BLAS i32 args.
@@ -141,6 +185,7 @@ macro_rules! impl_real_blas_gemm {
                         m_i32,
                     );
                 }
+                Ok(())
             }
 
             unsafe fn strided_gemm(
@@ -158,13 +203,13 @@ macro_rules! impl_real_blas_gemm {
                 c_ptr: *mut Self,
                 c_rs: isize,
                 c_cs: isize,
-            ) {
-                let m_i32 = dim_to_i32("m", m);
-                let n_i32 = dim_to_i32("n", n);
-                let k_i32 = dim_to_i32("k", k);
-                let (trans_a, lda) = infer_a_layout(m, k, a_rs, a_cs);
-                let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs);
-                let ldc = infer_c_layout(m, c_rs, c_cs);
+            ) -> crate::Result<()> {
+                let m_i32 = dim_to_i32("m", m)?;
+                let n_i32 = dim_to_i32("n", n)?;
+                let k_i32 = dim_to_i32("k", k)?;
+                let (trans_a, lda) = infer_a_layout(m, k, a_rs, a_cs)?;
+                let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs)?;
+                let ldc = infer_c_layout(m, c_rs, c_cs)?;
 
                 // SAFETY: `strided_gemm`'s caller guarantees the raw pointers
                 // are valid for the strided matrix regions. Layout inference
@@ -185,6 +230,7 @@ macro_rules! impl_real_blas_gemm {
                     c_ptr,
                     ldc,
                 );
+                Ok(())
             }
         }
     };
@@ -202,10 +248,10 @@ macro_rules! impl_complex_blas_gemm {
                 m: usize,
                 n: usize,
                 k: usize,
-            ) {
-                let m_i32 = dim_to_i32("m", m);
-                let n_i32 = dim_to_i32("n", n);
-                let k_i32 = dim_to_i32("k", k);
+            ) -> crate::Result<()> {
+                let m_i32 = dim_to_i32("m", m)?;
+                let n_i32 = dim_to_i32("n", n)?;
+                let k_i32 = dim_to_i32("k", k)?;
                 let alpha_ri = [alpha.re, alpha.im];
                 let beta_ri = [beta.re, beta.im];
                 // SAFETY: the slices provide valid contiguous column-major
@@ -229,6 +275,7 @@ macro_rules! impl_complex_blas_gemm {
                         m_i32,
                     );
                 }
+                Ok(())
             }
 
             unsafe fn strided_gemm(
@@ -246,13 +293,13 @@ macro_rules! impl_complex_blas_gemm {
                 c_ptr: *mut Self,
                 c_rs: isize,
                 c_cs: isize,
-            ) {
-                let m_i32 = dim_to_i32("m", m);
-                let n_i32 = dim_to_i32("n", n);
-                let k_i32 = dim_to_i32("k", k);
-                let (trans_a, lda) = infer_a_layout(m, k, a_rs, a_cs);
-                let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs);
-                let ldc = infer_c_layout(m, c_rs, c_cs);
+            ) -> crate::Result<()> {
+                let m_i32 = dim_to_i32("m", m)?;
+                let n_i32 = dim_to_i32("n", n)?;
+                let k_i32 = dim_to_i32("k", k)?;
+                let (trans_a, lda) = infer_a_layout(m, k, a_rs, a_cs)?;
+                let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs)?;
+                let ldc = infer_c_layout(m, c_rs, c_cs)?;
                 let alpha_ri = [alpha.re, alpha.im];
                 let beta_ri = [beta.re, beta.im];
 
@@ -275,6 +322,7 @@ macro_rules! impl_complex_blas_gemm {
                     c_ptr as *mut _,
                     ldc,
                 );
+                Ok(())
             }
         }
     };

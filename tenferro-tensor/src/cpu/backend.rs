@@ -1,5 +1,3 @@
-use std::any::Any;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use crate::backend::{TensorBackend, TensorExec};
@@ -17,7 +15,7 @@ use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tensor::cpu::CpuBackend;
 ///
 /// let backend = CpuBackend::new();
@@ -32,7 +30,7 @@ impl CpuBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::new();
@@ -45,10 +43,11 @@ impl CpuBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::try_new().unwrap();
+    /// let backend = CpuBackend::try_new()
+    ///     .unwrap_or_else(|_| CpuBackend::with_threads(1));
     /// let _ = backend.num_threads();
     /// ```
     pub fn try_new() -> crate::Result<Self> {
@@ -59,7 +58,7 @@ impl CpuBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use std::sync::Arc;
     /// use tenferro_tensor::cpu::{CpuBackend, CpuContext};
     ///
@@ -78,22 +77,50 @@ impl CpuBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::with_threads(2);
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
     pub fn with_threads(num_threads: usize) -> Self {
-        assert!(num_threads >= 1, "thread count must be >= 1");
-        Self::from_context(Arc::new(CpuContext::with_threads(num_threads)))
+        match Self::try_with_threads(num_threads) {
+            Ok(backend) => backend,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
+    /// Try to create a CPU backend with a custom thread count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::try_with_threads(1).unwrap();
+    /// assert_eq!(backend.num_threads(), 1);
+    /// ```
+    pub fn try_with_threads(num_threads: usize) -> crate::Result<Self> {
+        CpuContext::try_with_threads(num_threads)
+            .map(|ctx| Self::from_context(Arc::new(ctx)))
+            .map_err(|err| match err {
+                crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
+                    op: "CpuBackend::try_with_threads",
+                    message,
+                },
+                crate::Error::BackendFailure { message, .. } => crate::Error::BackendFailure {
+                    op: "CpuBackend::try_with_threads",
+                    message,
+                },
+                err => err,
+            })
     }
 
     /// Return the number of threads in this backend's CPU context.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::with_threads(2);
@@ -107,7 +134,7 @@ impl CpuBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::new();
@@ -413,25 +440,13 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => {
-                catch_backend_panic("cholesky", || linalg::cholesky(ctx.as_ref(), buffers, t))
-                    .and_then(|result| result)
-                    .map(Tensor::F64)
-            }
+            Tensor::F64(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("cholesky", || linalg::cholesky(buffers, t))
-                .and_then(|result| result)
-                .map(Tensor::F64),
+            Tensor::F64(t) => linalg::cholesky(buffers, t).map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("cholesky", || linalg::cholesky(buffers, t))
-                .and_then(|result| result)
-                .map(Tensor::C64),
+            Tensor::C64(t) => linalg::cholesky(buffers, t).map(Tensor::C64),
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => {
-                catch_backend_panic("cholesky", || linalg::cholesky(ctx.as_ref(), buffers, t))
-                    .and_then(|result| result)
-                    .map(Tensor::C64)
-            }
+            Tensor::C64(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::C64),
             _ => Err(unsupported_dtype("cholesky", input.dtype())),
         })
     }
@@ -449,63 +464,51 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match (a, b) {
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    ctx.as_ref(),
-                    buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
+                ctx.as_ref(),
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C64),
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    ctx.as_ref(),
-                    buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
+                ctx.as_ref(),
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C64),
             _ => {
                 if a.dtype() != b.dtype() {
                     Err(crate::Error::DTypeMismatch {
@@ -525,26 +528,18 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => catch_backend_panic("lu", || linalg::lu(ctx.as_ref(), buffers, t))
-                .and_then(|result| result)
+            Tensor::F64(t) => linalg::lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("lu", || {
-                linalg::lu(buffers, t)
-                    .into_iter()
-                    .map(Tensor::F64)
-                    .collect()
-            }),
+            Tensor::F64(t) => {
+                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
+            }
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("lu", || {
-                linalg::lu(buffers, t)
-                    .into_iter()
-                    .map(Tensor::C64)
-                    .collect()
-            }),
+            Tensor::C64(t) => {
+                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
+            }
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => catch_backend_panic("lu", || linalg::lu(ctx.as_ref(), buffers, t))
-                .and_then(|result| result)
+            Tensor::C64(t) => linalg::lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             _ => Err(unsupported_dtype("lu", input.dtype())),
         })
@@ -555,31 +550,17 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => catch_backend_panic("full_piv_lu", || {
-                linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-            })
-            .and_then(|result| result)
-            .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            Tensor::F64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("full_piv_lu", || {
-                linalg::full_piv_lu(buffers, t)
-                    .into_iter()
-                    .map(Tensor::F64)
-                    .collect()
-            }),
+            Tensor::F64(t) => linalg::full_piv_lu(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("full_piv_lu", || {
-                linalg::full_piv_lu(buffers, t)
-                    .into_iter()
-                    .map(Tensor::C64)
-                    .collect()
-            }),
+            Tensor::C64(t) => linalg::full_piv_lu(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => catch_backend_panic("full_piv_lu", || {
-                linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-            })
-            .and_then(|result| result)
-            .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+            Tensor::C64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
         })
     }
@@ -607,25 +588,21 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         let result = self.install_with_pool(|buffers| match (a, &rhs) {
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::C64(a), Tensor::C64(b)) => {
                 linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::C64(a), Tensor::C64(b)) => {
                 linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            }
             _ => {
                 if a.dtype() != rhs.dtype() {
                     Err(crate::Error::DTypeMismatch {
@@ -651,26 +628,16 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => catch_backend_panic("svd", || linalg::svd(ctx.as_ref(), buffers, t))
-                .and_then(|r| r)
+            Tensor::F64(t) => linalg::svd(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("svd", || {
-                linalg::svd(buffers, t)
-                    .into_iter()
-                    .map(Tensor::F64)
-                    .collect()
-            }),
+            Tensor::F64(t) => linalg::svd(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("svd", || {
-                linalg::svd(buffers, t)
-                    .into_iter()
-                    .map(Tensor::C64)
-                    .collect()
-            }),
+            Tensor::C64(t) => linalg::svd(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => catch_backend_panic("svd", || linalg::svd(ctx.as_ref(), buffers, t))
-                .and_then(|r| r)
+            Tensor::C64(t) => linalg::svd(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             _ => Err(unsupported_dtype("svd", input.dtype())),
         })
@@ -681,26 +648,18 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => catch_backend_panic("qr", || linalg::qr(ctx.as_ref(), buffers, t))
-                .and_then(|result| result)
+            Tensor::F64(t) => linalg::qr(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("qr", || {
-                linalg::qr(buffers, t)
-                    .into_iter()
-                    .map(Tensor::F64)
-                    .collect()
-            }),
+            Tensor::F64(t) => {
+                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
+            }
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("qr", || {
-                linalg::qr(buffers, t)
-                    .into_iter()
-                    .map(Tensor::C64)
-                    .collect()
-            }),
+            Tensor::C64(t) => {
+                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
+            }
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => catch_backend_panic("qr", || linalg::qr(ctx.as_ref(), buffers, t))
-                .and_then(|result| result)
+            Tensor::C64(t) => linalg::qr(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             _ => Err(unsupported_dtype("qr", input.dtype())),
         })
@@ -711,31 +670,17 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => {
-                catch_backend_panic("eigh", || linalg::eigh(ctx.as_ref(), buffers, t))
-                    .and_then(|r| r)
-                    .map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
-            }
+            Tensor::F64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => catch_backend_panic("eigh", || {
-                linalg::eigh(buffers, t)
-                    .into_iter()
-                    .map(Tensor::F64)
-                    .collect()
-            }),
+            Tensor::F64(t) => linalg::eigh(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => catch_backend_panic("eigh", || {
-                linalg::eigh(buffers, t)
-                    .into_iter()
-                    .map(Tensor::C64)
-                    .collect()
-            }),
+            Tensor::C64(t) => linalg::eigh(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => {
-                catch_backend_panic("eigh", || linalg::eigh(ctx.as_ref(), buffers, t))
-                    .and_then(|r| r)
-                    .map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
-            }
+            Tensor::C64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
             _ => Err(unsupported_dtype("eigh", input.dtype())),
         })
     }
@@ -749,12 +694,11 @@ impl TensorBackend for CpuBackend {
         self.install_with_pool(|buffers| {
             #[cfg(feature = "cpu-faer")]
             {
-                catch_backend_panic("eig", || linalg::eig(ctx.as_ref(), buffers, input))
-                    .and_then(|r| r)
+                linalg::eig(ctx.as_ref(), buffers, input)
             }
             #[cfg(feature = "cpu-blas")]
             {
-                catch_backend_panic("eig", || linalg::eig(buffers, input))
+                linalg::eig(buffers, input)
             }
         })
     }
@@ -872,23 +816,6 @@ fn zeros_like_tensor(input: &Tensor) -> Tensor {
         Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
         Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
     }
-}
-
-fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "backend panic".into()
-    }
-}
-
-pub(crate) fn catch_backend_panic<R>(op: &'static str, f: impl FnOnce() -> R) -> crate::Result<R> {
-    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| crate::Error::BackendFailure {
-        op,
-        message: panic_payload_message(payload),
-    })
 }
 
 pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {

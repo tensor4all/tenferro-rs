@@ -4,22 +4,27 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    batched_multi, dim_i32, has_zero_dim, matrix_dims, matrix_with_batch_shape,
-    panic_on_lapack_error, split_core_and_batch, tensor_from_vec_with_template,
-    vector_with_batch_shape, work_len,
+    batched_multi, check_lapack_info, dim_i32, has_zero_dim, matrix_dims, matrix_with_batch_shape,
+    split_core_and_batch_result, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackSvd: Clone + Copy + Default {
-    fn svd_2d(buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn svd_2d(
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
 }
 
 impl LapackSvd for f64 {
-    fn svd_2d(_buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "svd");
+    fn svd_2d(
+        _buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
-        let m_i32 = dim_i32(m, "svd");
-        let n_i32 = dim_i32(n, "svd");
-        let k_i32 = dim_i32(k, "svd");
+        let m_i32 = dim_i32(m, "svd")?;
+        let n_i32 = dim_i32(n, "svd")?;
+        let k_i32 = dim_i32(k, "svd")?;
 
         let mut a = input.host_data().to_vec();
         let mut s = vec![0.0; k];
@@ -33,8 +38,8 @@ impl LapackSvd for f64 {
                 &mut query, -1, &mut info,
             );
         }
-        panic_on_lapack_error("svd", "dgesvd(work query)", info);
-        let lwork = work_len(query[0], "svd", "dgesvd");
+        check_lapack_info("svd", "dgesvd(work query)", info)?;
+        let lwork = work_len(query[0], "svd", "dgesvd")?;
         let mut work = vec![0.0; lwork as usize];
         unsafe {
             lapack::dgesvd(
@@ -42,23 +47,26 @@ impl LapackSvd for f64 {
                 &mut work, lwork, &mut info,
             );
         }
-        panic_on_lapack_error("svd", "dgesvd", info);
+        check_lapack_info("svd", "dgesvd", info)?;
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![m, k], u, input),
             tensor_from_vec_with_template(vec![k], s, input),
             tensor_from_vec_with_template(vec![k, n], vt, input),
-        ]
+        ])
     }
 }
 
 impl LapackSvd for Complex64 {
-    fn svd_2d(_buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
-        let (m, n) = matrix_dims(input, "svd");
+    fn svd_2d(
+        _buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
-        let m_i32 = dim_i32(m, "svd");
-        let n_i32 = dim_i32(n, "svd");
-        let k_i32 = dim_i32(k, "svd");
+        let m_i32 = dim_i32(m, "svd")?;
+        let n_i32 = dim_i32(n, "svd")?;
+        let k_i32 = dim_i32(k, "svd")?;
 
         let mut a = input.host_data().to_vec();
         let mut s = vec![0.0; k];
@@ -73,8 +81,8 @@ impl LapackSvd for Complex64 {
                 &mut query, -1, &mut rwork, &mut info,
             );
         }
-        panic_on_lapack_error("svd", "zgesvd(work query)", info);
-        let lwork = work_len(query[0].re, "svd", "zgesvd");
+        check_lapack_info("svd", "zgesvd(work query)", info)?;
+        let lwork = work_len(query[0].re, "svd", "zgesvd")?;
         let mut work = vec![Complex64::new(0.0, 0.0); lwork as usize];
         unsafe {
             lapack::zgesvd(
@@ -82,9 +90,9 @@ impl LapackSvd for Complex64 {
                 &mut work, lwork, &mut rwork, &mut info,
             );
         }
-        panic_on_lapack_error("svd", "zgesvd", info);
+        check_lapack_info("svd", "zgesvd", info)?;
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![m, k], u, input),
             tensor_from_vec_with_template(
                 vec![k],
@@ -94,24 +102,27 @@ impl LapackSvd for Complex64 {
                 input,
             ),
             tensor_from_vec_with_template(vec![k, n], vt, input),
-        ]
+        ])
     }
 }
 
-fn svd_2d<T: LapackSvd>(buffers: &mut BufferPool, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+fn svd_2d<T: LapackSvd>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<Vec<TypedTensor<T>>> {
     T::svd_2d(buffers, input)
 }
 
 pub(crate) fn svd<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let (matrix_shape, batch_shape) = split_core_and_batch(input, 2, "svd");
+        let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
         let m = matrix_shape[0];
         let n = matrix_shape[1];
         let k = m.min(n);
-        return vec![
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(m, k, batch_shape),
                 Vec::new(),
@@ -127,7 +138,7 @@ pub(crate) fn svd<T: LapackSvd>(
                 Vec::new(),
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, svd_2d)
+    batched_multi("svd", buffers, input, svd_2d)
 }
