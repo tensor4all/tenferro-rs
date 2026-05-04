@@ -124,18 +124,19 @@ pub enum ExecOp {
         axes: Vec<usize>,
     },
     Cholesky,
-    Svd {
-        eps: f64,
-    },
+    /// Primal SVD execution. AD regularization eps stays on `StdTensorOp::Svd`
+    /// and is consumed before lowering into this execution IR.
+    Svd,
     Qr,
     Lu,
     FullPivLu,
     FullPivLuSolve {
         transpose_a: bool,
     },
-    Eigh {
-        eps: f64,
-    },
+    /// Primal Hermitian eigendecomposition execution. AD regularization eps
+    /// stays on `StdTensorOp::Eigh` and is consumed before lowering into this
+    /// execution IR.
+    Eigh,
     Eig,
     ValidateNonsingular,
     TriangularSolve {
@@ -230,12 +231,12 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
         ExecOp::DotGeneral(_)
             | ExecOp::NaryEinsum { .. }
             | ExecOp::Cholesky
-            | ExecOp::Svd { .. }
+            | ExecOp::Svd
             | ExecOp::Qr
             | ExecOp::Lu
             | ExecOp::FullPivLu
             | ExecOp::FullPivLuSolve { .. }
-            | ExecOp::Eigh { .. }
+            | ExecOp::Eigh
             | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
             | ExecOp::Extension(_)
@@ -580,7 +581,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             let result = backend.cholesky(get(slots, &inst.input_slots, 0)?)?;
             slots[inst.output_slots[0]] = Some(result);
         }
-        ExecOp::Svd { .. } => {
+        ExecOp::Svd => {
             let results = backend.svd(get(slots, &inst.input_slots, 0)?)?;
             assign_multi_output(slots, inst, results, "svd")?;
         }
@@ -604,7 +605,7 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             )?;
             slots[inst.output_slots[0]] = Some(result);
         }
-        ExecOp::Eigh { .. } => {
+        ExecOp::Eigh => {
             let results = backend.eigh(get(slots, &inst.input_slots, 0)?)?;
             assign_multi_output(slots, inst, results, "eigh")?;
         }

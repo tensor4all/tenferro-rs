@@ -351,7 +351,7 @@ fn compile_std_to_exec_lowers_linalg_variants_directly() {
         &[dim_shape(&[3, 2]), dim_shape(&[2, 2])],
     );
 
-    assert!(matches!(exec.instructions[0].op, ExecOp::Svd { eps } if eps == 1.0e-8));
+    assert!(matches!(exec.instructions[0].op, ExecOp::Svd));
     assert_eq!(
         exec.instructions[0].output_shapes,
         vec![dim_shape(&[3, 2]), dim_shape(&[2]), dim_shape(&[2, 2])]
@@ -371,7 +371,7 @@ fn compile_std_to_exec_lowers_linalg_variants_directly() {
             Vec::new()
         ]
     );
-    assert!(matches!(exec.instructions[3].op, ExecOp::Eigh { eps } if eps == 1.0e-6));
+    assert!(matches!(exec.instructions[3].op, ExecOp::Eigh));
     assert_eq!(
         exec.instructions[3].output_shapes,
         vec![dim_shape(&[2]), dim_shape(&[2, 2])]

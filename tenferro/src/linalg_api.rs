@@ -25,7 +25,11 @@ fn sym_shape(shape: &[usize]) -> Vec<SymDim> {
     shape.iter().copied().map(SymDim::from).collect()
 }
 
-/// Singular value decomposition with a default numerical epsilon.
+/// Singular value decomposition with the default AD regularization epsilon.
+///
+/// The epsilon is used by the SVD AD rule to regularize divisions by small
+/// singular-value gaps and small singular values. It does not change the
+/// primal backend decomposition.
 ///
 /// # Examples
 ///
@@ -36,7 +40,12 @@ pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
     svd_with_eps(a, 1e-12)
 }
 
-/// Singular value decomposition with an explicit numerical epsilon.
+/// Singular value decomposition with an explicit AD regularization epsilon.
+///
+/// The epsilon is used only when differentiating through the SVD. It
+/// regularizes eigenvector-like singular-vector terms for repeated or nearly
+/// repeated singular values and for singular values near zero; primal execution
+/// returns the backend SVD result without applying this epsilon.
 ///
 /// # Examples
 ///
@@ -106,7 +115,10 @@ pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     }
 }
 
-/// Hermitian eigenvalue decomposition with a default numerical epsilon.
+/// Hermitian eigenvalue decomposition with the default AD regularization epsilon.
+///
+/// The epsilon is used by the `eigh` AD rule to regularize divisions by small
+/// eigenvalue gaps. It does not change the primal backend decomposition.
 ///
 /// # Examples
 ///
@@ -117,7 +129,12 @@ pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     eigh_with_eps(a, 1e-12)
 }
 
-/// Hermitian eigenvalue decomposition with an explicit numerical epsilon.
+/// Hermitian eigenvalue decomposition with an explicit AD regularization epsilon.
+///
+/// The epsilon is used only when differentiating through the eigenvectors of
+/// `eigh`. It regularizes terms involving small eigenvalue gaps; primal
+/// execution returns the backend eigendecomposition result without applying
+/// this epsilon.
 ///
 /// # Examples
 ///
