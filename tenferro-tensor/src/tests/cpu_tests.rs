@@ -10,7 +10,6 @@ use crate::buffer_pool::BufferPool;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::cpu::backend;
 #[cfg(feature = "cpu-faer")]
 use crate::cpu::linalg::faer_linalg;
 use crate::cpu::{
@@ -276,6 +275,24 @@ fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
     with_rayon_num_threads(Some("not-a-number"), || {
         assert!(CpuContext::try_from_env().is_err());
     });
+}
+
+#[test]
+fn cpu_context_try_from_env_rejects_zero_rayon_num_threads() {
+    with_rayon_num_threads(Some("0"), || {
+        let err = match CpuContext::try_from_env() {
+            Ok(_) => panic!("expected zero RAYON_NUM_THREADS to be rejected"),
+            Err(err) => err,
+        };
+        assert!(format!("{err}").contains("CpuContext::try_from_env"));
+        assert!(format!("{err}").contains("thread count must be at least 1"));
+    });
+}
+
+#[test]
+#[should_panic(expected = "thread count must be at least 1")]
+fn cpu_context_with_threads_zero_panics_for_compatibility() {
+    let _ctx = CpuContext::with_threads(0);
 }
 
 #[test]
@@ -3277,42 +3294,6 @@ fn test_reclaim_buffer_covers_all_dtypes() {
     ));
     backend.reclaim_buffer(c64_t);
     assert!(backend.buffer_pool_len() >= 3);
-}
-
-#[test]
-fn test_catch_backend_panic_extracts_string_and_str_messages() {
-    let result = backend::catch_backend_panic("test_op", || panic!("explicit string message"));
-    let err = result.unwrap_err();
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "test_op");
-            assert!(message.contains("explicit string message"));
-        }
-        other => panic!("expected BackendFailure, got {:?}", other),
-    }
-
-    let result = backend::catch_backend_panic("test_op2", || panic!("formatted {}", 42));
-    let err = result.unwrap_err();
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "test_op2");
-            assert!(message.contains("formatted 42"));
-        }
-        other => panic!("expected BackendFailure, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_catch_backend_panic_handles_non_string_payload() {
-    let result = backend::catch_backend_panic("test_op3", || std::panic::panic_any(42usize));
-    let err = result.unwrap_err();
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "test_op3");
-            assert_eq!(message, "backend panic");
-        }
-        other => panic!("expected BackendFailure, got {:?}", other),
-    }
 }
 
 #[test]

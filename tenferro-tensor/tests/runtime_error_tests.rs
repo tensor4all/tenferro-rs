@@ -14,6 +14,60 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
 }
 
 #[test]
+fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
+    let backend_dispatch = include_str!("../src/cpu/backend.rs");
+    let exec_session_dispatch = include_str!("../src/cpu/exec_session.rs");
+
+    assert!(
+        !backend_dispatch.contains("catch_backend_panic"),
+        "CpuBackend should return typed errors from linalg helpers instead of catching panics"
+    );
+    assert!(
+        !exec_session_dispatch.contains("catch_backend_panic"),
+        "CpuExecSession should return typed errors from linalg helpers instead of catching panics"
+    );
+    assert!(
+        !backend_dispatch.contains("catch_unwind"),
+        "CPU backend error handling should not depend on panic unwinding"
+    );
+}
+
+#[test]
+fn cpu_backend_try_with_threads_rejects_zero_without_panicking() {
+    let err = match CpuBackend::try_with_threads(0) {
+        Ok(_) => panic!("zero threads should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "CpuBackend::try_with_threads",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
+    let input = f64_tensor(vec![0], Vec::new());
+    let mut backend = CpuBackend::new();
+
+    let result = catch_unwind(AssertUnwindSafe(|| backend.cholesky(&input)));
+
+    assert!(result.is_ok(), "cholesky should return Err, not panic");
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            op: "cholesky",
+            expected: 2,
+            actual: 1,
+        }
+    ));
+}
+
+#[test]
 fn dot_general_rejects_out_of_bounds_contracting_dim() {
     let lhs = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let rhs = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);

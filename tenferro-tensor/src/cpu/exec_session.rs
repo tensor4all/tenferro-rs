@@ -5,7 +5,7 @@ use crate::config::{
 };
 use crate::Tensor;
 
-use super::backend::{catch_backend_panic, reclaim_typed, unsupported_dtype};
+use super::backend::{reclaim_typed, unsupported_dtype};
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
 
 pub(crate) struct CpuExecSession<'a> {
@@ -27,16 +27,8 @@ macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             match input {
-                Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(Tensor::F64),
-                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(Tensor::C64),
+                Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::F64),
+                Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::C64),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -49,16 +41,8 @@ macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             match input {
-                Tensor::F64(t) => {
-                    catch_backend_panic(stringify!($name), || linalg::$name(self.buffers, t))
-                        .and_then(|r| r)
-                        .map(Tensor::F64)
-                }
-                Tensor::C64(t) => {
-                    catch_backend_panic(stringify!($name), || linalg::$name(self.buffers, t))
-                        .and_then(|r| r)
-                        .map(Tensor::C64)
-                }
+                Tensor::F64(t) => linalg::$name(self.buffers, t).map(Tensor::F64),
+                Tensor::C64(t) => linalg::$name(self.buffers, t).map(Tensor::C64),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -71,16 +55,10 @@ macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
-                Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -93,16 +71,10 @@ macro_rules! linalg_multi_result {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
-                Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.ctx, self.buffers, t)
-                })
-                .and_then(|r| r)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+                Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -115,18 +87,10 @@ macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
-                Tensor::F64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.buffers, t)
-                        .into_iter()
-                        .map(Tensor::F64)
-                        .collect()
-                }),
-                Tensor::C64(t) => catch_backend_panic(stringify!($name), || {
-                    linalg::$name(self.buffers, t)
-                        .into_iter()
-                        .map(Tensor::C64)
-                        .collect()
-                }),
+                Tensor::F64(t) => linalg::$name(self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C64(t) => linalg::$name(self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
         }
@@ -258,12 +222,11 @@ impl TensorExec for CpuExecSession<'_> {
         }
         #[cfg(feature = "cpu-faer")]
         {
-            catch_backend_panic("eig", || linalg::eig(self.ctx, self.buffers, input))
-                .and_then(|r| r)
+            linalg::eig(self.ctx, self.buffers, input)
         }
         #[cfg(feature = "cpu-blas")]
         {
-            catch_backend_panic("eig", || linalg::eig(self.buffers, input))
+            linalg::eig(self.buffers, input)
         }
     }
 
@@ -278,63 +241,51 @@ impl TensorExec for CpuExecSession<'_> {
     ) -> crate::Result<Tensor> {
         match (a, b) {
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    self.ctx,
-                    self.buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::F64)
-            })
-            .and_then(|r| r),
+            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
+                self.ctx,
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    self.ctx,
-                    self.buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::C64)
-            })
-            .and_then(|r| r),
+            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
+                self.ctx,
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    self.buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::F64)
-            })
-            .and_then(|r| r),
+            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("triangular_solve", || {
-                linalg::triangular_solve(
-                    self.buffers,
-                    a,
-                    b,
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
-                )
-                .map(Tensor::C64)
-            })
-            .and_then(|r| r),
+            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C64),
             _ => {
                 if a.dtype() != b.dtype() {
                     Err(crate::Error::DTypeMismatch {
@@ -357,27 +308,23 @@ impl TensorExec for CpuExecSession<'_> {
     ) -> crate::Result<Tensor> {
         match (a, b) {
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
                     .map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::C64(a), Tensor::C64(b)) => {
                 linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
                     .map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::F64)
-            })
-            .and_then(|result| result),
+            }
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => catch_backend_panic("full_piv_lu_solve", || {
+            (Tensor::C64(a), Tensor::C64(b)) => {
                 linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::C64)
-            })
-            .and_then(|result| result),
+            }
             _ => {
                 if a.dtype() != b.dtype() {
                     Err(crate::Error::DTypeMismatch {

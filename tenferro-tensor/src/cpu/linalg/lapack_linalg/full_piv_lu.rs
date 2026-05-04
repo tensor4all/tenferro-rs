@@ -4,9 +4,10 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    batched_binary_result, dim_i32, has_zero_dim, leading_upper_triangle_from_lapack,
-    lower_triangle_from_lapack, matrix_dims, matrix_with_batch_shape, panic_on_lapack_error,
-    square_matrix_dim, tensor_from_vec_with_template, transpose_col_major_data,
+    batch_element_count, batched_binary_result, check_lapack_info, dim_i32, has_zero_dim,
+    leading_upper_triangle_from_lapack, lower_triangle_from_lapack, matrix_core_and_batch_result,
+    matrix_dims, matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
+    tensor_from_vec_with_template, transpose_col_major_data,
 };
 
 extern "C" {
@@ -208,18 +209,23 @@ impl LapackFullPivLu for Complex64 {
     }
 }
 
-fn permutation_from_lapack_pivots(pivots: &[i32], op: &str) -> Vec<usize> {
+fn permutation_from_lapack_pivots(pivots: &[i32], op: &'static str) -> crate::Result<Vec<usize>> {
     let mut permutation: Vec<usize> = (0..pivots.len()).collect();
     for (idx, &pivot_one_based) in pivots.iter().enumerate() {
         let pivot = match usize::try_from(pivot_one_based - 1) {
             Ok(pivot) if pivot < pivots.len() => pivot,
-            _ => panic!("{op}: LAPACK getc2 returned invalid pivot index"),
+            _ => {
+                return Err(crate::Error::BackendFailure {
+                    op,
+                    message: "LAPACK getc2 returned invalid pivot index".into(),
+                });
+            }
         };
         if pivot != idx {
             permutation.swap(idx, pivot);
         }
     }
-    permutation
+    Ok(permutation)
 }
 
 fn permutation_matrix<T: LapackFullPivLu>(permutation: &[usize]) -> Vec<T> {
@@ -235,26 +241,26 @@ fn factor_getc2<T: LapackFullPivLu>(
     op: &'static str,
     data: &mut [T],
     n: usize,
-) -> (Vec<i32>, Vec<i32>, i32) {
-    let n_i32 = dim_i32(n, op);
+) -> crate::Result<(Vec<i32>, Vec<i32>, i32)> {
+    let n_i32 = dim_i32(n, op)?;
     let mut ipiv = vec![0_i32; n];
     let mut jpiv = vec![0_i32; n];
     let mut info = 0;
     T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
-    panic_on_lapack_error(op, "getc2", info.min(0));
-    (ipiv, jpiv, info)
+    check_lapack_info(op, "getc2", info.min(0))?;
+    Ok((ipiv, jpiv, info))
 }
 
 fn full_piv_lu_2d<T: LapackFullPivLu>(
     _buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
-    let n = square_matrix_dim(input, "full_piv_lu");
+) -> crate::Result<Vec<TypedTensor<T>>> {
+    let n = square_matrix_dim(input, "full_piv_lu")?;
     let mut lu = input.host_data().to_vec();
-    let (ipiv, jpiv, _info) = factor_getc2("full_piv_lu", &mut lu, n);
+    let (ipiv, jpiv, _info) = factor_getc2("full_piv_lu", &mut lu, n)?;
 
-    let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu");
-    let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu");
+    let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
+    let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
     let p_data = permutation_matrix::<T>(&row_perm);
     let q_data = permutation_matrix::<T>(&col_perm);
     let mut l_data = lower_triangle_from_lapack(&lu, n, n);
@@ -278,13 +284,13 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
         T::negative_one()
     };
 
-    vec![
+    Ok(vec![
         tensor_from_vec_with_template(vec![n, n], p_data, input),
         tensor_from_vec_with_template(vec![n, n], l_data, input),
         tensor_from_vec_with_template(vec![n, n], u_data, input),
         tensor_from_vec_with_template(vec![n, n], q_data, input),
         tensor_from_vec_with_template(vec![], vec![parity], input),
-    ]
+    ])
 }
 
 fn solve_2d<T: LapackFullPivLu>(
@@ -293,16 +299,22 @@ fn solve_2d<T: LapackFullPivLu>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> crate::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(a, "full_piv_lu_solve");
-    let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve");
-    assert_eq!(b_rows, n, "full_piv_lu_solve: rhs row count mismatch");
+    let n = square_matrix_dim(a, "full_piv_lu_solve")?;
+    let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
+    if b_rows != n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "full_piv_lu_solve",
+            lhs: vec![n],
+            rhs: vec![b_rows],
+        });
+    }
 
     let mut lu = if transpose_a {
         transpose_col_major_data(a.host_data(), n, n)
     } else {
         a.host_data().to_vec()
     };
-    let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n);
+    let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n)?;
     if info > 0 {
         return Err(crate::Error::BackendFailure {
             op: "full_piv_lu_solve",
@@ -311,7 +323,7 @@ fn solve_2d<T: LapackFullPivLu>(
     }
 
     let mut rhs = b.host_data().to_vec();
-    let n_i32 = dim_i32(n, "full_piv_lu_solve");
+    let n_i32 = dim_i32(n, "full_piv_lu_solve")?;
     for col in 0..b_cols {
         let start = col * n;
         let end = start + n;
@@ -334,16 +346,11 @@ fn solve_2d<T: LapackFullPivLu>(
 pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let n = input.shape[0];
-        let batch_shape = &input.shape[2..];
-        let parity_elements = if batch_shape.is_empty() {
-            1
-        } else {
-            batch_shape.iter().product()
-        };
-        return vec![
+        let (n, batch_shape) = square_core_and_batch_result(input, "full_piv_lu")?;
+        let parity_elements = batch_element_count("full_piv_lu", batch_shape)?;
+        return Ok(vec![
             tensor_from_vec_with_template(
                 matrix_with_batch_shape(n, n, batch_shape),
                 Vec::new(),
@@ -369,9 +376,9 @@ pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
                 vec![T::one(); parity_elements],
                 input,
             ),
-        ];
+        ]);
     }
-    super::helpers::batched_multi(buffers, input, full_piv_lu_2d)
+    super::helpers::batched_multi("full_piv_lu", buffers, input, full_piv_lu_2d)
 }
 
 pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
@@ -381,6 +388,22 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
     transpose_a: bool,
 ) -> crate::Result<TypedTensor<T>> {
     if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        let (n, a_batch_shape) = square_core_and_batch_result(a, "full_piv_lu_solve")?;
+        let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "full_piv_lu_solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
+        if a_batch_shape != b_batch_shape {
+            return Err(crate::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
         return Ok(tensor_from_vec_with_template(
             b.shape.clone(),
             Vec::new(),

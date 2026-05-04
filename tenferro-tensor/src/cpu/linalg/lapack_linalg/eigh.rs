@@ -4,18 +4,25 @@ use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
 
 use super::helpers::{
-    batched_multi, dim_i32, has_zero_dim, matrix_with_batch_shape, panic_on_lapack_error,
-    square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
+    batched_multi, check_lapack_info, dim_i32, has_zero_dim, matrix_with_batch_shape,
+    square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    vector_with_batch_shape, work_len,
 };
 
 pub(crate) trait LapackEigh: Clone + Copy + Default {
-    fn eigh_2d(buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>>;
+    fn eigh_2d(
+        buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>>;
 }
 
 impl LapackEigh for f64 {
-    fn eigh_2d(_buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "eigh");
-        let n_i32 = dim_i32(n, "eigh");
+    fn eigh_2d(
+        _buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let n = square_matrix_dim(input, "eigh")?;
+        let n_i32 = dim_i32(n, "eigh")?;
         let mut vectors = input.host_data().to_vec();
         let mut values = vec![0.0; n];
         let mut query = vec![0.0; 1];
@@ -33,8 +40,8 @@ impl LapackEigh for f64 {
                 &mut info,
             );
         }
-        panic_on_lapack_error("eigh", "dsyev(work query)", info);
-        let lwork = work_len(query[0], "eigh", "dsyev");
+        check_lapack_info("eigh", "dsyev(work query)", info)?;
+        let lwork = work_len(query[0], "eigh", "dsyev")?;
         let mut work = vec![0.0; lwork as usize];
         unsafe {
             lapack::dsyev(
@@ -49,19 +56,22 @@ impl LapackEigh for f64 {
                 &mut info,
             );
         }
-        panic_on_lapack_error("eigh", "dsyev", info);
+        check_lapack_info("eigh", "dsyev", info)?;
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(vec![n], values, input),
             tensor_from_vec_with_template(vec![n, n], vectors, input),
-        ]
+        ])
     }
 }
 
 impl LapackEigh for Complex64 {
-    fn eigh_2d(_buffers: &mut BufferPool, input: &TypedTensor<Self>) -> Vec<TypedTensor<Self>> {
-        let n = square_matrix_dim(input, "eigh");
-        let n_i32 = dim_i32(n, "eigh");
+    fn eigh_2d(
+        _buffers: &mut BufferPool,
+        input: &TypedTensor<Self>,
+    ) -> crate::Result<Vec<TypedTensor<Self>>> {
+        let n = square_matrix_dim(input, "eigh")?;
+        let n_i32 = dim_i32(n, "eigh")?;
         let mut vectors = input.host_data().to_vec();
         let mut values = vec![0.0; n];
         let mut query = vec![Complex64::new(0.0, 0.0); 1];
@@ -81,8 +91,8 @@ impl LapackEigh for Complex64 {
                 &mut info,
             );
         }
-        panic_on_lapack_error("eigh", "zheev(work query)", info);
-        let lwork = work_len(query[0].re, "eigh", "zheev");
+        check_lapack_info("eigh", "zheev(work query)", info)?;
+        let lwork = work_len(query[0].re, "eigh", "zheev")?;
         let mut work = vec![Complex64::new(0.0, 0.0); lwork as usize];
         unsafe {
             lapack::zheev(
@@ -98,9 +108,9 @@ impl LapackEigh for Complex64 {
                 &mut info,
             );
         }
-        panic_on_lapack_error("eigh", "zheev", info);
+        check_lapack_info("eigh", "zheev", info)?;
 
-        vec![
+        Ok(vec![
             tensor_from_vec_with_template(
                 vec![n],
                 values
@@ -110,22 +120,24 @@ impl LapackEigh for Complex64 {
                 input,
             ),
             tensor_from_vec_with_template(vec![n, n], vectors, input),
-        ]
+        ])
     }
 }
 
-fn eigh_2d<T: LapackEigh>(buffers: &mut BufferPool, input: &TypedTensor<T>) -> Vec<TypedTensor<T>> {
+fn eigh_2d<T: LapackEigh>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<Vec<TypedTensor<T>>> {
     T::eigh_2d(buffers, input)
 }
 
 pub(crate) fn eigh<T: LapackEigh>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> Vec<TypedTensor<T>> {
+) -> crate::Result<Vec<TypedTensor<T>>> {
     if has_zero_dim(&input.shape) {
-        let n = input.shape[0];
-        let batch_shape = &input.shape[2..];
-        return vec![
+        let (n, batch_shape) = square_core_and_batch_result(input, "eigh")?;
+        return Ok(vec![
             tensor_from_vec_with_template(
                 vector_with_batch_shape(n, batch_shape),
                 Vec::new(),
@@ -136,7 +148,7 @@ pub(crate) fn eigh<T: LapackEigh>(
                 Vec::new(),
                 input,
             ),
-        ];
+        ]);
     }
-    batched_multi(buffers, input, eigh_2d)
+    batched_multi("eigh", buffers, input, eigh_2d)
 }

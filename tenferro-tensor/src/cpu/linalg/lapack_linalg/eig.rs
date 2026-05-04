@@ -4,7 +4,7 @@ use crate::buffer_pool::BufferPool;
 use crate::{Tensor, TypedTensor};
 
 use super::helpers::{
-    batched_multi_convert, dim_i32, has_zero_dim, panic_on_lapack_error, square_matrix_dim,
+    batched_multi_convert, check_lapack_info, dim_i32, has_zero_dim, square_matrix_dim,
     tensor_from_vec_with_template, work_len, zero_dim_eig_outputs,
 };
 
@@ -39,9 +39,12 @@ fn real_eig_to_complex_outputs(
     (vectors, values)
 }
 
-fn eig_real_2d(_buffers: &mut BufferPool, input: &TypedTensor<f64>) -> Vec<TypedTensor<Complex64>> {
-    let n = square_matrix_dim(input, "eig");
-    let n_i32 = dim_i32(n, "eig");
+fn eig_real_2d(
+    _buffers: &mut BufferPool,
+    input: &TypedTensor<f64>,
+) -> crate::Result<Vec<TypedTensor<Complex64>>> {
+    let n = square_matrix_dim(input, "eig")?;
+    let n_i32 = dim_i32(n, "eig")?;
     let mut a = input.host_data().to_vec();
     let mut values_re = vec![0.0; n];
     let mut values_im = vec![0.0; n];
@@ -67,8 +70,8 @@ fn eig_real_2d(_buffers: &mut BufferPool, input: &TypedTensor<f64>) -> Vec<Typed
             &mut info,
         );
     }
-    panic_on_lapack_error("eig", "dgeev(work query)", info);
-    let lwork = work_len(query[0], "eig", "dgeev");
+    check_lapack_info("eig", "dgeev(work query)", info)?;
+    let lwork = work_len(query[0], "eig", "dgeev")?;
     let mut work = vec![0.0; lwork as usize];
     unsafe {
         lapack::dgeev(
@@ -88,21 +91,21 @@ fn eig_real_2d(_buffers: &mut BufferPool, input: &TypedTensor<f64>) -> Vec<Typed
             &mut info,
         );
     }
-    panic_on_lapack_error("eig", "dgeev", info);
+    check_lapack_info("eig", "dgeev", info)?;
     let (vectors, values) = real_eig_to_complex_outputs(&vectors_real, &values_re, &values_im, n);
 
-    vec![
+    Ok(vec![
         tensor_from_vec_with_template(vec![n], values, input),
         tensor_from_vec_with_template(vec![n, n], vectors, input),
-    ]
+    ])
 }
 
 fn eig_complex_2d(
     _buffers: &mut BufferPool,
     input: &TypedTensor<Complex64>,
-) -> Vec<TypedTensor<Complex64>> {
-    let n = square_matrix_dim(input, "eig");
-    let n_i32 = dim_i32(n, "eig");
+) -> crate::Result<Vec<TypedTensor<Complex64>>> {
+    let n = square_matrix_dim(input, "eig")?;
+    let n_i32 = dim_i32(n, "eig")?;
     let mut a = input.host_data().to_vec();
     let mut values = vec![Complex64::new(0.0, 0.0); n];
     let mut vl = vec![Complex64::new(0.0, 0.0); 1];
@@ -128,8 +131,8 @@ fn eig_complex_2d(
             &mut info,
         );
     }
-    panic_on_lapack_error("eig", "zgeev(work query)", info);
-    let lwork = work_len(query[0].re, "eig", "zgeev");
+    check_lapack_info("eig", "zgeev(work query)", info)?;
+    let lwork = work_len(query[0].re, "eig", "zgeev")?;
     let mut work = vec![Complex64::new(0.0, 0.0); lwork as usize];
     unsafe {
         lapack::zgeev(
@@ -149,28 +152,31 @@ fn eig_complex_2d(
             &mut info,
         );
     }
-    panic_on_lapack_error("eig", "zgeev", info);
+    check_lapack_info("eig", "zgeev", info)?;
 
-    vec![
+    Ok(vec![
         tensor_from_vec_with_template(vec![n], values, input),
         tensor_from_vec_with_template(vec![n, n], vectors, input),
-    ]
+    ])
 }
 
-pub(crate) fn eig(buffers: &mut BufferPool, input: &Tensor) -> Vec<Tensor> {
+pub(crate) fn eig(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Vec<Tensor>> {
     if has_zero_dim(input.shape()) {
         return zero_dim_eig_outputs(input);
     }
 
     match input {
-        Tensor::F64(t) => batched_multi_convert(buffers, t, eig_real_2d)
+        Tensor::F64(t) => Ok(batched_multi_convert("eig", buffers, t, eig_real_2d)?
             .into_iter()
             .map(Tensor::C64)
-            .collect(),
-        Tensor::C64(t) => batched_multi_convert(buffers, t, eig_complex_2d)
+            .collect()),
+        Tensor::C64(t) => Ok(batched_multi_convert("eig", buffers, t, eig_complex_2d)?
             .into_iter()
             .map(Tensor::C64)
-            .collect(),
-        _ => panic!("eig: unsupported dtype"),
+            .collect()),
+        _ => Err(crate::Error::BackendFailure {
+            op: "eig",
+            message: format!("unsupported dtype {:?}", input.dtype()),
+        }),
     }
 }
