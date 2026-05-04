@@ -187,10 +187,10 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
 }
 
 fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
-    TensorMeta {
-        dtype: tensor.dtype(),
-        shape: tensor.shape().iter().copied().map(SymDim::from).collect(),
-    }
+    TensorMeta::exact(
+        tensor.dtype(),
+        tensor.shape().iter().copied().map(SymDim::from).collect(),
+    )
 }
 
 fn register_fragment_metadata_for_test(
@@ -241,13 +241,13 @@ fn register_fragment_metadata_for_test(
             .iter()
             .zip(infer_output_shapes(&op_node.op, &input_shape_refs))
         {
-            let meta = TensorMeta {
-                dtype: output_dtype,
-                shape: shape
+            let meta = TensorMeta::exact(
+                output_dtype,
+                shape
                     .iter()
                     .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
                     .collect(),
-            };
+            );
             let key = fragment.vals()[output_id].key.clone();
             known.insert(key.clone(), meta.clone());
             registrations.push((key, meta));

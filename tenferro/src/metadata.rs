@@ -13,7 +13,7 @@ use tenferro_tensor::{DType, Tensor};
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_shapes};
 
 pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
-    TensorMeta { dtype, shape }
+    TensorMeta::exact(dtype, shape)
 }
 
 pub(crate) fn concrete_tensor_meta(dtype: DType, shape: &[usize]) -> TensorMeta {

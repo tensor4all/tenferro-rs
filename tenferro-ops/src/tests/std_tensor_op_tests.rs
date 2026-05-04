@@ -61,13 +61,7 @@ fn seed_dot_general_input_metadata(
         vec![SymDim::from(3usize), SymDim::from(4usize)],
     ];
     for (key, shape) in keys.iter().zip(shapes) {
-        ctx.insert_metadata(
-            key.clone(),
-            TensorMeta {
-                dtype: DType::F64,
-                shape,
-            },
-        );
+        ctx.insert_metadata(key.clone(), TensorMeta::exact(DType::F64, shape));
     }
 }
 
@@ -96,13 +90,7 @@ fn seed_uniform_ref_metadata(
                 panic!("expected external input in test helper, got local {local_id}")
             }
         };
-        ctx.insert_metadata(
-            key,
-            TensorMeta {
-                dtype: DType::F64,
-                shape: shape.clone(),
-            },
-        );
+        ctx.insert_metadata(key, TensorMeta::exact(DType::F64, shape.clone()));
     }
 }
 
@@ -207,10 +195,10 @@ fn run_transpose_case_with_input_shapes(
         };
         ad_ctx.insert_metadata(
             key.clone(),
-            TensorMeta {
-                dtype: DType::F64,
-                shape: shape.iter().copied().map(SymDim::from).collect(),
-            },
+            TensorMeta::exact(
+                DType::F64,
+                shape.iter().copied().map(SymDim::from).collect(),
+            ),
         );
     }
     let result = op.transpose_rule(
@@ -682,17 +670,11 @@ fn test_std_tensor_op_dynamic_truncate_linearize_uses_static_slice_for_narrowed_
 
     ad_ctx.insert_metadata(
         primal_in[0].clone(),
-        TensorMeta {
-            dtype: DType::F64,
-            shape: vec![SymDim::from(3usize)],
-        },
+        TensorMeta::exact(DType::F64, vec![SymDim::from(3usize)]),
     );
     ad_ctx.insert_metadata(
         primal_out[0].clone(),
-        TensorMeta {
-            dtype: DType::F64,
-            shape: vec![SymDim::from(2usize)],
-        },
+        TensorMeta::exact(DType::F64, vec![SymDim::from(2usize)]),
     );
 
     let result = StdTensorOp::DynamicTruncate { axis: 0 }.linearize(

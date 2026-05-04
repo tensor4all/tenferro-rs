@@ -15,6 +15,7 @@ use computegraph::types::{GlobalValKey, ValRef};
 use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
+use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
@@ -40,7 +41,9 @@ fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
 /// Per-value tensor metadata used by AD rules.
 ///
 /// `shape` is expressed in graph-global [`SymDim`] terms rather than op-local
-/// [`DimExpr`] references.
+/// [`DimExpr`] references. It is retained as a compatibility bound shape; use
+/// [`TensorMeta::exact_shape`] when a caller needs proof that every dimension is
+/// exact.
 ///
 /// # Examples
 ///
@@ -48,16 +51,110 @@ fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
 /// use tenferro_ops::{SymDim, TensorMeta};
 /// use tenferro_tensor::DType;
 ///
-/// let meta = TensorMeta {
-///     dtype: DType::F64,
-///     shape: vec![SymDim::from(2usize), SymDim::from(3usize)],
-/// };
+/// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
 /// assert_eq!(meta.shape.len(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TensorMeta {
+    /// Element dtype of the tensor value.
     pub dtype: DType,
+    /// Compatibility shape used by existing callers; not proof of exactness.
     pub shape: Vec<SymDim>,
+    /// Per-axis shape guarantees.
+    pub extents: Vec<ShapeExtent<SymDim>>,
+}
+
+impl TensorMeta {
+    /// Construct metadata whose every axis is exact.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]);
+    /// assert_eq!(meta.exact_shape(), Some(vec![SymDim::from(4usize)]));
+    /// ```
+    pub fn exact(dtype: DType, shape: Vec<SymDim>) -> Self {
+        let extents = shape.iter().cloned().map(ShapeExtent::exact).collect();
+        Self {
+            dtype,
+            shape,
+            extents,
+        }
+    }
+
+    /// Construct metadata from per-axis extents.
+    ///
+    /// The compatibility `shape` field is populated from each known bound. An
+    /// unknown extent is represented with a zero placeholder until all callers
+    /// consume extent metadata directly.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::with_extents(
+    ///     DType::F64,
+    ///     vec![ShapeExtent::upper_bound(SymDim::from(8usize))],
+    /// );
+    /// assert_eq!(meta.exact_shape(), None);
+    /// ```
+    pub fn with_extents(dtype: DType, extents: Vec<ShapeExtent<SymDim>>) -> Self {
+        let shape = extents
+            .iter()
+            .map(|extent| {
+                extent
+                    .bound_expr()
+                    .cloned()
+                    .unwrap_or_else(|| SymDim::from(0usize))
+            })
+            .collect();
+        Self {
+            dtype,
+            shape,
+            extents,
+        }
+    }
+
+    /// Return the per-axis shape guarantees.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]);
+    /// assert_eq!(meta.extents().len(), 1);
+    /// ```
+    pub fn extents(&self) -> &[ShapeExtent<SymDim>] {
+        &self.extents
+    }
+
+    /// Return the shape only when every axis is exact.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::with_extents(
+    ///     DType::F64,
+    ///     vec![ShapeExtent::upper_bound(SymDim::from(8usize))],
+    /// );
+    /// assert_eq!(meta.exact_shape(), None);
+    /// ```
+    pub fn exact_shape(&self) -> Option<Vec<SymDim>> {
+        self.extents
+            .iter()
+            .map(|extent| extent.as_exact().cloned())
+            .collect()
+    }
 }
 
 /// A recorded dimension comparison made during AD graph construction.
@@ -173,6 +270,28 @@ impl ShapeGuardContext {
     /// ```
     pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
         &self.metadata_of(val).shape
+    }
+
+    /// Return per-axis shape guarantees for a value reference.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let extents = ctx.extents_of(&value);
+    /// ```
+    pub fn extents_of(&mut self, val: &ValRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
+        self.metadata_of(val).extents()
+    }
+
+    /// Return the exact shape for a value reference, if all axes are exact.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let maybe_shape = ctx.exact_shape_of(&value);
+    /// ```
+    pub fn exact_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<Vec<SymDim>> {
+        self.metadata_of(val).exact_shape()
     }
 
     #[doc(hidden)]
