@@ -234,31 +234,62 @@ pub fn transpose_scatter(
     if updates_active {
         let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
         let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
-        let slice_sizes = compute_inverse_slice_sizes(&operand_shape, &updates_shape, config);
+        let inverse = compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2]);
 
-        let inverse_config = GatherConfig {
-            offset_dims: config.update_window_dims.clone(),
-            collapsed_slice_dims: config.inserted_window_dims.clone(),
-            start_index_map: config.scatter_dims_to_operand_dims.clone(),
-            index_vector_dim: config.index_vector_dim,
-            slice_sizes,
+        let out = match inverse {
+            InverseGather::Concrete(config) => emitter.add_op(
+                StdTensorOp::Gather(config),
+                vec![ValRef::Local(ct), inputs[1].clone()],
+                OpMode::Linear {
+                    active_mask: vec![true, false],
+                },
+            ),
+            InverseGather::Dynamic {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                index_vector_dim,
+                slice_sizes,
+                shape_sources,
+            } => {
+                let mut gather_inputs = vec![ValRef::Local(ct), inputs[1].clone()];
+                let mut active_mask = vec![true, false];
+                for shape_source in shape_sources {
+                    gather_inputs.push(shape_source);
+                    active_mask.push(false);
+                }
+                emitter.add_op(
+                    StdTensorOp::GatherDynamicSliceSizes {
+                        offset_dims,
+                        collapsed_slice_dims,
+                        start_index_map,
+                        index_vector_dim,
+                        slice_sizes,
+                    },
+                    gather_inputs,
+                    OpMode::Linear { active_mask },
+                )
+            }
         };
-
-        let out = emitter.add_op(
-            StdTensorOp::Gather(inverse_config),
-            vec![ValRef::Local(ct), inputs[1].clone()],
-            OpMode::Linear {
-                active_mask: vec![true, false],
-            },
-        );
         result[2] = Some(out[0]);
     }
 
     result
 }
 
-/// Build `slice_sizes` for the inverse `GatherConfig` used in
-/// `transpose_scatter`.
+enum InverseGather {
+    Concrete(GatherConfig),
+    Dynamic {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<DimExpr>,
+        shape_sources: Vec<ValRef<StdTensorOp>>,
+    },
+}
+
+/// Build the inverse gather used in `transpose_scatter`.
 ///
 /// For each operand dim `d`:
 /// - if `d ∈ inserted_window_dims`: `slice_sizes[d] = 1` (the dim is
@@ -266,11 +297,12 @@ pub fn transpose_scatter(
 /// - otherwise: `d` is the `k`-th entry of operand-window dims
 ///   `(0..rank) \ inserted_window_dims`; the size comes from the primal
 ///   updates tensor at the corresponding `update_window_dims[k]` axis
-fn compute_inverse_slice_sizes(
+fn compute_inverse_gather(
     operand_shape: &[SymDim],
     updates_shape: &[SymDim],
     config: &ScatterConfig,
-) -> Vec<usize> {
+    updates_ref: &ValRef<StdTensorOp>,
+) -> InverseGather {
     let rank = operand_shape.len();
     let operand_window_dims: Vec<usize> = (0..rank)
         .filter(|dim| !config.inserted_window_dims.contains(dim))
@@ -284,28 +316,48 @@ fn compute_inverse_slice_sizes(
         operand_window_dims.len(),
     );
 
-    let mut slice_sizes = vec![1usize; rank];
+    let mut concrete_slice_sizes = vec![1usize; rank];
+    let mut dynamic_slice_sizes = vec![DimExpr::Const(1); rank];
+    let mut has_dynamic_slice_size = false;
     for (k, &operand_dim) in operand_window_dims.iter().enumerate() {
         let update_axis = config.update_window_dims[k];
-        let dim = updates_shape
-            .get(update_axis)
-            .unwrap_or_else(|| {
-                panic!(
-                    "transpose_scatter: update_window_dims axis {} out of range for updates rank {}",
-                    update_axis,
-                    updates_shape.len()
-                )
-            })
-            .constant_value()
-            .unwrap_or_else(|| {
-                panic!(
-                    "transpose_scatter: symbolic updates dim {} cannot be used as a slice size",
-                    update_axis
-                )
-            });
-        slice_sizes[operand_dim] = dim;
+        let dim = updates_shape.get(update_axis).unwrap_or_else(|| {
+            panic!(
+                "transpose_scatter: update_window_dims axis {} out of range for updates rank {}",
+                update_axis,
+                updates_shape.len()
+            )
+        });
+        if let Some(value) = dim.constant_value() {
+            concrete_slice_sizes[operand_dim] = value;
+            dynamic_slice_sizes[operand_dim] = DimExpr::Const(value);
+        } else {
+            has_dynamic_slice_size = true;
+            dynamic_slice_sizes[operand_dim] = DimExpr::InputDim {
+                input_idx: 2,
+                axis: update_axis,
+            };
+        }
     }
-    slice_sizes
+
+    if has_dynamic_slice_size {
+        InverseGather::Dynamic {
+            offset_dims: config.update_window_dims.clone(),
+            collapsed_slice_dims: config.inserted_window_dims.clone(),
+            start_index_map: config.scatter_dims_to_operand_dims.clone(),
+            index_vector_dim: config.index_vector_dim,
+            slice_sizes: dynamic_slice_sizes,
+            shape_sources: vec![updates_ref.clone()],
+        }
+    } else {
+        InverseGather::Concrete(GatherConfig {
+            offset_dims: config.update_window_dims.clone(),
+            collapsed_slice_dims: config.inserted_window_dims.clone(),
+            start_index_map: config.scatter_dims_to_operand_dims.clone(),
+            index_vector_dim: config.index_vector_dim,
+            slice_sizes: concrete_slice_sizes,
+        })
+    }
 }
 
 /// Emit a zero tensor shaped like `anchor` (rank `anchor_rank`) with

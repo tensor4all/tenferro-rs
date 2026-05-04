@@ -6,9 +6,10 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
-use crate::TensorMeta;
+use crate::{SymDim, TensorMeta};
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -624,4 +625,70 @@ fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
         "slice_sizes must be 1 for inserted dim and updates.shape[1] for the window dim"
     );
     assert_eq!(cfg.offset_dims, vec![1]);
+}
+
+#[test]
+fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(900));
+    let operand_key = input_key(901);
+    let indices_key = input_key(902);
+    let updates_key = input_key(903);
+
+    ctx.insert_metadata(
+        operand_key.clone(),
+        TensorMeta::exact(DType::F64, vec![SymDim::from(4usize), SymDim::from(2usize)]),
+    );
+    ctx.insert_metadata(
+        indices_key.clone(),
+        TensorMeta::exact(DType::I64, vec![SymDim::from(1usize), SymDim::from(1usize)]),
+    );
+    ctx.insert_metadata(
+        updates_key.clone(),
+        TensorMeta::exact(
+            DType::F64,
+            vec![SymDim::from(1usize), SymDim::tensor_axis(903, 1)],
+        ),
+    );
+
+    let config = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let op = StdTensorOp::Scatter(config);
+    let inputs = vec![
+        ValRef::External(operand_key),
+        ValRef::External(indices_key),
+        ValRef::External(updates_key.clone()),
+    ];
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![false, false, true],
+        },
+        &mut ctx,
+    );
+
+    assert!(result[2].is_some());
+    let fragment = builder.build();
+    let gather = fragment.ops().last().expect("expected gather op");
+    match &gather.op {
+        StdTensorOp::GatherDynamicSliceSizes { slice_sizes, .. } => {
+            assert_eq!(
+                slice_sizes[1],
+                DimExpr::InputDim {
+                    input_idx: 2,
+                    axis: 1,
+                }
+            );
+            assert_eq!(gather.inputs[2], ValRef::External(updates_key));
+        }
+        other => panic!("expected GatherDynamicSliceSizes, got {other:?}"),
+    }
 }
