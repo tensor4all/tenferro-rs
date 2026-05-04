@@ -101,8 +101,9 @@ the ops are the real runtime contract:
 - Structural: `Transpose`, `Reshape`, `BroadcastInDim`, `Convert`,
   `ExtractDiag`, `EmbedDiag`, `Tril`, `Triu`
 - Reductions: `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
-- Indexing / shape: `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`,
-  `Concatenate`, `Reverse`, `ShapeOf`, `DynamicTruncate`, `PadToMatch`
+- Indexing / shape: `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
+  `DynamicSlice`, `Pad`, `Concatenate`, `Reverse`, `ShapeOf`,
+  `DynamicTruncate`, `PadToMatch`
 - Contraction: `DotGeneral`, `NaryEinsum`
 - Linalg: `Cholesky`, `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
   `TriangularSolve`, `ValidateNonsingular`
@@ -177,8 +178,8 @@ Examples:
 - elementwise ops
 - structural ops such as `Transpose`, `Reshape`, `BroadcastInDim`
 - reductions such as `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`
-- indexing ops such as `Gather`, `Scatter`, `Slice`, `DynamicSlice`, `Pad`,
-  `Concatenate`, `Reverse`
+- indexing ops such as `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
+  `DynamicSlice`, `Pad`, `Concatenate`, `Reverse`
 
 The helper that executes one such instruction is `execute_backend_op()`.
 
@@ -190,6 +191,10 @@ These are handled without calling backend kernels:
 - `DynamicTruncate`
 - `PadToMatch`
 - `Constant`
+
+`GatherDynamicSliceSizes` resolves its symbolic `slice_sizes` against concrete
+runtime tensor shapes in the execution layer, then calls the backend through the
+normal concrete `Gather` path.
 - `ValidateNonsingular`
 
 `Constant` uses `TensorBackend::upload_host_tensor()` so device-specific

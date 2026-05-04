@@ -7,6 +7,7 @@ use tenferro_tensor::{DType, DotGeneralConfig};
 use crate::ad::context::{resolve_and_guard, resolve_dim, ShapeGuard, ShapeGuardContext};
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
+use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 
@@ -22,10 +23,7 @@ fn input_key(id: u64) -> GlobalValKey<StdTensorOp> {
 }
 
 fn meta(dtype: DType, shape: &[usize]) -> TensorMeta {
-    TensorMeta {
-        dtype,
-        shape: shape.iter().copied().map(SymDim::from).collect(),
-    }
+    TensorMeta::exact(dtype, shape.iter().copied().map(SymDim::from).collect())
 }
 
 #[test]
@@ -109,16 +107,39 @@ fn shape_queries_work_for_symbolic_input_values() {
     let symbolic_shape = vec![SymDim::tensor_axis(41, 0), SymDim::tensor_axis(41, 1)];
     ctx.insert_metadata(
         key.clone(),
-        TensorMeta {
-            dtype: DType::F32,
-            shape: symbolic_shape.clone(),
-        },
+        TensorMeta::exact(DType::F32, symbolic_shape.clone()),
     );
 
     assert_eq!(
         ctx.shape_of(&ValRef::External(key)),
         symbolic_shape.as_slice()
     );
+}
+
+#[test]
+fn metadata_exposes_exact_extents() {
+    let key = input_key(700);
+    let mut ctx = ShapeGuardContext::default();
+    let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
+    ctx.insert_metadata(key.clone(), meta.clone());
+
+    let val = ValRef::External(key);
+    assert_eq!(ctx.extents_of(&val), meta.extents());
+    assert_eq!(ctx.exact_shape_of(&val), Some(meta.shape.clone()));
+}
+
+#[test]
+fn metadata_exact_shape_rejects_upper_bound() {
+    let key = input_key(701);
+    let mut ctx = ShapeGuardContext::default();
+    let meta = TensorMeta {
+        dtype: DType::F64,
+        shape: vec![SymDim::from(4usize)],
+        extents: vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
+    };
+    ctx.insert_metadata(key.clone(), meta);
+
+    assert_eq!(ctx.exact_shape_of(&ValRef::External(key)), None);
 }
 
 #[test]

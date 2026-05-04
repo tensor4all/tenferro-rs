@@ -6,10 +6,15 @@ use tenferro::compiler::{
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
+}
+
+fn exact_extents(shape: &[DimExpr]) -> Vec<ShapeExtent<DimExpr>> {
+    shape.iter().cloned().map(ShapeExtent::exact).collect()
 }
 
 fn make_exec_program(
@@ -37,6 +42,7 @@ fn make_exec_instr(
         output_slots: output_slots.clone(),
         dtype: DType::F64,
         output_shapes: vec![Vec::new(); output_slots.len()],
+        output_extents: vec![Vec::new(); output_slots.len()],
         last_use: Vec::new(),
     }
 }
@@ -359,6 +365,7 @@ fn dot_general_exec_instr(
         input_slots,
         output_slots: vec![output_slot],
         dtype: DType::F64,
+        output_extents: vec![exact_extents(&output_shape)],
         output_shapes: vec![output_shape],
         last_use: Vec::new(),
     }
@@ -485,6 +492,55 @@ fn test_dot_decomposer_multi_free_dim_emits_output_reshape() {
     assert_eq!(out_reshape.input_slots[1], 0);
     assert_eq!(out_reshape.input_slots[2], 1);
     assert_eq!(out_reshape.output_slots, vec![2]);
+}
+
+#[test]
+fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
+    let truncate_shape = dim_shape(&[5, 3, 4]);
+    let truncated_lhs = ExecInstruction {
+        op: ExecOp::DynamicTruncate { axis: 0 },
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        dtype: DType::F64,
+        output_shapes: vec![truncate_shape.clone()],
+        output_extents: vec![vec![
+            ShapeExtent::upper_bound(DimExpr::Const(5)),
+            ShapeExtent::exact(DimExpr::Const(3)),
+            ShapeExtent::exact(DimExpr::Const(4)),
+        ]],
+        last_use: Vec::new(),
+    };
+    let dot = dot_general_exec_instr(
+        vec![2],
+        vec![0],
+        vec![],
+        vec![],
+        vec![2, 3],
+        4,
+        dim_shape(&[5, 3, 2]),
+    );
+    let mut program = make_exec_program(vec![truncated_lhs, dot], vec![0, 1, 3], vec![4], 5);
+
+    dot_decomposer(
+        &mut program,
+        &[dim_shape(&[5, 3, 4]), Vec::new(), dim_shape(&[4, 2])],
+    );
+
+    let lhs_merge = program
+        .instructions
+        .iter()
+        .find(|instr| matches!(instr.op, ExecOp::Reshape { .. }) && instr.input_slots == vec![2])
+        .expect("expected LHS merge reshape from truncated input");
+
+    assert_eq!(
+        lhs_merge.output_extents[0][0],
+        ShapeExtent::upper_bound(DimExpr::mul(DimExpr::Const(5), DimExpr::Const(3))),
+        "merged free dimension must remain an upper bound"
+    );
+    assert_eq!(
+        lhs_merge.output_extents[0][1],
+        ShapeExtent::exact(DimExpr::Const(4))
+    );
 }
 
 #[test]

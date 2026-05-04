@@ -1,8 +1,7 @@
-//! Integration tests for `tenferro-ext-tropical` — Stage 4b symbolic-shape
+//! Integration tests for `tenferro-ext-tropical` symbolic-shape
 //! coverage.
 //!
-//! These tests act as the contract test for Stage 3's symbolic-AD
-//! correctness work:
+//! These tests act as the contract test for symbolic-AD correctness:
 //!
 //! - They build tropical composition graphs over fully-symbolic
 //!   `TracedTensor::input_symbolic_shape` placeholders, never calling
@@ -31,9 +30,9 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 // ---------------------------------------------------------------------------
 
 /// Build the composition graph over symbolic-shape placeholders, then
-/// bind concrete tensors at eval time. The reference matches the Stage
-/// 4a `tropical_dot_general_forward_2x2` numerics exactly; the only
-/// difference is the graph is now shape-polymorphic.
+/// bind concrete tensors at eval time. The reference matches the concrete
+/// `tropical_dot_general_forward_2x2` numerics exactly; the only difference is
+/// the graph is now shape-polymorphic.
 #[test]
 fn tropical_dot_general_forward_symbolic_2x2() {
     let a_sym = TracedTensor::input_symbolic_shape(DType::F64, 2);
@@ -41,8 +40,8 @@ fn tropical_dot_general_forward_symbolic_2x2() {
 
     let mut c = tropical_dot_general(&a_sym, &b_sym);
 
-    // out[i, j] = max_k (a[i, k] + b[k, j]) — see Stage 4a test for the
-    // derivation. Col-major flat: [23, 24, 43, 44].
+    // out[i, j] = max_k (a[i, k] + b[k, j]). Col-major flat:
+    // [23, 24, 43, 44].
     let a_data = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let b_data = Tensor::from_vec(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]);
     let expected = [23.0, 24.0, 43.0, 44.0];
@@ -117,7 +116,7 @@ fn tropical_dot_general_symbolic_shape_polymorphic_forward() {
 /// property is shape-agnostic, so it must also hold when the graph is
 /// built over symbolic-shape placeholders and evaluated later.
 ///
-/// Regression: before Stage 3's deferred zero-tangent fix,
+/// Regression: before the deferred zero-tangent fix,
 /// `loss.grad(&a_sym)` would materialise zero cotangents with a
 /// concrete `vec![0; rank]` shape for the symbolic `a_sym`, which
 /// crashed at eval. After the fix the zero is synthesised at

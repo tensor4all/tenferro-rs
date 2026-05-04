@@ -9,10 +9,10 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, ValRef};
 use num_complex::{Complex32, Complex64};
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
@@ -85,6 +85,13 @@ pub enum ExecOp {
     Expm1,
     Log1p,
     Gather(GatherConfig),
+    GatherDynamicSliceSizes {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<DimExpr>,
+    },
     Scatter(ScatterConfig),
     Slice(SliceConfig),
     DynamicSlice {
@@ -152,7 +159,8 @@ pub struct ExecInstruction {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub dtype: tenferro_tensor::DType,
-    pub output_shapes: Vec<Vec<tenferro_ops::dim_expr::DimExpr>>,
+    pub output_shapes: Vec<Vec<DimExpr>>,
+    pub output_extents: Vec<Vec<ShapeExtent<DimExpr>>>,
     pub last_use: Vec<bool>,
 }
 
@@ -402,6 +410,27 @@ pub(crate) fn execute_backend_op(
             get(slots, &inst.input_slots, 1)?,
             config,
         )?,
+        ExecOp::GatherDynamicSliceSizes {
+            offset_dims,
+            collapsed_slice_dims,
+            start_index_map,
+            index_vector_dim,
+            slice_sizes,
+        } => {
+            let slice_sizes = resolve_tensor_shape_exprs(slots, &inst.input_slots, slice_sizes)?;
+            let config = GatherConfig {
+                offset_dims: offset_dims.clone(),
+                collapsed_slice_dims: collapsed_slice_dims.clone(),
+                start_index_map: start_index_map.clone(),
+                index_vector_dim: *index_vector_dim,
+                slice_sizes,
+            };
+            exec.gather(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                &config,
+            )?
+        }
         ExecOp::Scatter(config) => exec.scatter(
             get(slots, &inst.input_slots, 0)?,
             get(slots, &inst.input_slots, 1)?,

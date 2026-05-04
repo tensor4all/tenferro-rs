@@ -2,6 +2,7 @@ use num_complex::Complex64;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -10,6 +11,10 @@ use tenferro_tensor::{
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
+}
+
+fn empty_extents(n_outputs: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    vec![Vec::new(); n_outputs]
 }
 
 fn scalar_tensor(value: f64) -> Tensor {
@@ -76,6 +81,7 @@ fn single_instruction_program(op: ExecOp, n_inputs: usize) -> ExecProgram {
             output_slots: vec![n_inputs],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -89,6 +95,7 @@ struct FakeTensorBackend {
     calls: Vec<&'static str>,
     error_on: Option<&'static str>,
     reclaimed: usize,
+    last_gather_slice_sizes: Option<Vec<usize>>,
 }
 
 impl FakeTensorBackend {
@@ -249,8 +256,9 @@ impl TensorBackend for FakeTensorBackend {
         &mut self,
         _operand: &Tensor,
         _start_indices: &Tensor,
-        _config: &GatherConfig,
+        config: &GatherConfig,
     ) -> tenferro_tensor::Result<Tensor> {
+        self.last_gather_slice_sizes = Some(config.slice_sizes.clone());
         self.result("gather", 33.0)
     }
     fn scatter(
@@ -519,6 +527,49 @@ fn eval_exec_ir_executes_nary_einsum_via_nested_program() {
 }
 
 #[test]
+fn eval_exec_ir_resolves_dynamic_gather_slice_sizes_from_shape_sources() {
+    let mut backend = FakeTensorBackend::default();
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::GatherDynamicSliceSizes {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![
+                    DimExpr::Const(1),
+                    DimExpr::InputDim {
+                        input_idx: 2,
+                        axis: 1,
+                    },
+                ],
+            },
+            input_slots: vec![0, 1, 2],
+            output_slots: vec![3],
+            dtype: DType::F64,
+            output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
+            last_use: vec![true, true, true],
+        }],
+        input_slots: vec![0, 1, 2],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+    let inputs = vec![
+        f64_tensor(vec![4, 5], vec![0.0; 20]),
+        f64_tensor(vec![1, 1], vec![0.0]),
+        f64_tensor(vec![1, 3], vec![0.0; 3]),
+    ];
+
+    let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
+
+    assert_eq!(backend.calls, vec!["gather"]);
+    assert_eq!(backend.last_gather_slice_sizes, Some(vec![1, 3]));
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(scalar_value(&outputs[0]), 33.0);
+}
+
+#[test]
 fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
     let mut backend = FakeTensorBackend::default();
     let program = ExecProgram {
@@ -531,6 +582,7 @@ fn eval_exec_ir_materializes_constant_scalars_without_backend_dispatch() {
             output_slots: vec![0],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -562,6 +614,7 @@ fn eval_exec_ir_materializes_complex_constants() {
             output_slots: vec![0],
             dtype: DType::C64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![],
         }],
         input_slots: vec![],
@@ -582,6 +635,7 @@ fn eval_exec_ir_propagates_backend_errors() {
         calls: Vec::new(),
         error_on: Some("add"),
         reclaimed: 0,
+        last_gather_slice_sizes: None,
     };
     let err = eval_exec_ir(
         &mut backend,
@@ -607,6 +661,7 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
             output_slots: vec![2],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: empty_extents(1),
             last_use: vec![false, false],
         }],
         input_slots: vec![0],
@@ -632,6 +687,7 @@ fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecPr
             output_slots: output_slots.clone(),
             dtype: DType::F64,
             output_shapes: vec![Vec::new(); n_outputs],
+            output_extents: empty_extents(n_outputs),
             last_use: vec![false; n_inputs],
         }],
         input_slots: (0..n_inputs).collect(),
@@ -715,6 +771,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 output_slots: vec![2],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: empty_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -723,6 +780,7 @@ fn eval_exec_ir_reclaims_last_use_host_buffers() {
                 output_slots: vec![3],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: empty_extents(1),
                 last_use: vec![true],
             },
         ],

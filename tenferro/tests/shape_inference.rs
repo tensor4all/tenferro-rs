@@ -1,6 +1,7 @@
-use tenferro::shape_infer::infer_output_shapes;
+use tenferro::shape_infer::{infer_output_extents, infer_output_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn cst(n: usize) -> DimExpr {
@@ -289,6 +290,44 @@ fn test_structural_indexing_and_dynamic_shapes() {
     assert_eq!(
         infer_output_shapes(&pad_to_match, &[&input, &reference]),
         vec![vec![cst(4), cst(9)]]
+    );
+}
+
+#[test]
+fn dynamic_truncate_extent_is_upper_bound_on_truncated_axis() {
+    let input = vec![cst(4), cst(7)];
+    let scalar = vec![];
+    let op = StdTensorOp::DynamicTruncate { axis: 1 };
+
+    let extents = infer_output_extents(&op, &[&input, &scalar]);
+
+    assert_eq!(extents.len(), 1);
+    assert_eq!(extents[0][0], ShapeExtent::exact(cst(4)));
+    assert_eq!(extents[0][1], ShapeExtent::upper_bound(cst(7)));
+}
+
+#[test]
+fn gather_dynamic_slice_sizes_uses_shape_source_input() {
+    let operand = vec![cst(4), cst(5)];
+    let indices = vec![cst(1), cst(1)];
+    let updates = vec![cst(1), cst(2)];
+    let op = StdTensorOp::GatherDynamicSliceSizes {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![
+            cst(1),
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 1,
+            },
+        ],
+    };
+
+    assert_eq!(
+        infer_output_shapes(&op, &[&operand, &indices, &updates]),
+        vec![vec![cst(1), cst(2)]]
     );
 }
 

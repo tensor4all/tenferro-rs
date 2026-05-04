@@ -34,6 +34,7 @@ use tenferro_tensor::{
 ///             output_slots: vec![2],
 ///             dtype: DType::F64,
 ///             output_shapes: vec![vec![]],
+///             output_extents: vec![vec![]],
 ///             last_use: vec![false, true],
 ///         },
 ///         ExecInstruction {
@@ -42,6 +43,7 @@ use tenferro_tensor::{
 ///             output_slots: vec![3],
 ///             dtype: DType::F64,
 ///             output_shapes: vec![vec![]],
+///             output_extents: vec![vec![]],
 ///             last_use: vec![true],
 ///         },
 ///     ],
@@ -82,6 +84,7 @@ pub enum Segment {
 ///             output_slots: vec![2],
 ///             dtype: DType::F64,
 ///             output_shapes: vec![vec![]],
+///             output_extents: vec![vec![]],
 ///             last_use: vec![false, true],
 ///         },
 ///         ExecInstruction {
@@ -90,6 +93,7 @@ pub enum Segment {
 ///             output_slots: vec![3],
 ///             dtype: DType::F64,
 ///             output_shapes: vec![vec![]],
+///             output_extents: vec![vec![]],
 ///             last_use: vec![true],
 ///         },
 ///     ],

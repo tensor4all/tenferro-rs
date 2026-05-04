@@ -4,6 +4,7 @@ use tenferro::compiler::compile_std_to_exec;
 use tenferro::exec::ExecOp;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
@@ -207,6 +208,74 @@ fn compile_std_to_exec_wires_indexing_ops() {
         exec.instructions[3].op,
         ExecOp::Pad(ref config) if config == &pad
     ));
+}
+
+#[test]
+fn compile_std_to_exec_does_not_treat_dynamic_truncate_bound_as_exact() {
+    let program = CompiledProgram {
+        instructions: vec![
+            make_instr(
+                StdTensorOp::DynamicTruncate { axis: 0 },
+                vec![0, 1],
+                vec![2],
+            ),
+            make_instr(
+                StdTensorOp::Reshape {
+                    to_shape: vec![DimExpr::InputDim {
+                        input_idx: 0,
+                        axis: 0,
+                    }],
+                },
+                vec![2],
+                vec![3],
+            ),
+        ],
+        input_slots: vec![0, 1],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::F64, DType::F64],
+        &[dim_shape(&[5]), Vec::new()],
+    );
+
+    assert_eq!(
+        exec.instructions[0].output_extents[0][0],
+        ShapeExtent::upper_bound(DimExpr::Const(5))
+    );
+    assert_eq!(
+        exec.instructions[1].output_extents[0][0],
+        ShapeExtent::upper_bound(DimExpr::Const(5))
+    );
+}
+
+#[test]
+fn compile_std_to_exec_marks_unresolvable_extent_unknown() {
+    let program = CompiledProgram {
+        instructions: vec![make_instr(
+            StdTensorOp::BroadcastInDim {
+                shape: vec![DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                }],
+                dims: vec![],
+            },
+            vec![0],
+            vec![1],
+        )],
+        input_slots: vec![0],
+        output_slots: vec![1],
+        n_slots: 2,
+    };
+
+    let exec = compile_std_to_exec(&program, &[DType::F64], &[Vec::new()]);
+
+    assert_eq!(
+        exec.instructions[0].output_extents[0][0],
+        ShapeExtent::unknown()
+    );
 }
 
 #[test]

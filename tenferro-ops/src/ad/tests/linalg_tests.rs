@@ -8,7 +8,7 @@ use tenferro_tensor::DType;
 use crate::ad::context::ShapeGuardContext;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{SymDim, TensorMeta};
+use crate::TensorMeta;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
@@ -19,10 +19,7 @@ fn input_key(id: u64) -> GlobalValKey<StdTensorOp> {
 }
 
 fn meta(shape: &[usize]) -> TensorMeta {
-    TensorMeta {
-        dtype: DType::F64,
-        shape: shape.iter().copied().map(SymDim::from).collect(),
-    }
+    TensorMeta::exact(DType::F64, shape.iter().copied().map(Into::into).collect())
 }
 
 #[test]

@@ -6,6 +6,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
@@ -19,10 +20,7 @@ fn input_key(id: u64) -> GlobalValKey<StdTensorOp> {
 }
 
 fn meta(shape: &[usize]) -> TensorMeta {
-    TensorMeta {
-        dtype: DType::F64,
-        shape: shape.iter().copied().map(SymDim::from).collect(),
-    }
+    TensorMeta::exact(DType::F64, shape.iter().copied().map(Into::into).collect())
 }
 
 fn seed_metadata(ctx: &mut ShapeGuardContext, entries: &[(GlobalValKey<StdTensorOp>, &[usize])]) {
@@ -101,6 +99,53 @@ fn linearize_gather_inactive_tangent_returns_none() {
     let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
     assert_eq!(result, vec![None]);
     assert!(builder.build().ops().is_empty());
+}
+
+#[test]
+fn linearize_dynamic_gather_reuses_primal_indices_and_shape_sources() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(101);
+    let indices_key = input_key(102);
+    let shape_source_key = input_key(103);
+    let operand_tangent = builder.add_input(tensor_input(104));
+
+    let slice_sizes = vec![
+        DimExpr::Const(1),
+        DimExpr::InputDim {
+            input_idx: 2,
+            axis: 1,
+        },
+    ];
+    let op = StdTensorOp::GatherDynamicSliceSizes {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: slice_sizes.clone(),
+    };
+    let primal_in = vec![operand_key, indices_key.clone(), shape_source_key.clone()];
+    let tangent_in = [Some(operand_tangent), None, None];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+
+    assert_eq!(result.len(), 1);
+    let tangent_out = result[0].expect("output tangent must be active");
+    let fragment = builder.build();
+
+    assert_eq!(fragment.ops().len(), 1);
+    let gather = &fragment.ops()[0];
+    assert_eq!(gather.op, op);
+    assert_eq!(gather.inputs[0], ValRef::Local(operand_tangent));
+    assert_eq!(gather.inputs[1], ValRef::External(indices_key));
+    assert_eq!(gather.inputs[2], ValRef::External(shape_source_key));
+    assert_eq!(
+        gather.mode,
+        OpMode::Linear {
+            active_mask: vec![true, false, false],
+        }
+    );
+    assert!(gather.outputs.contains(&tangent_out));
 }
 
 #[test]
@@ -193,6 +238,75 @@ fn transpose_gather_inactive_path_returns_all_none() {
     );
     assert_eq!(result, vec![None, None]);
     assert!(builder.build().ops().is_empty());
+}
+
+#[test]
+fn transpose_dynamic_gather_emits_scatter_and_ignores_shape_sources() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(120));
+    let operand_key = input_key(121);
+    let indices_key = input_key(122);
+    let shape_source_key = input_key(123);
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[4, 2]),
+            (indices_key.clone(), &[1, 1]),
+            (shape_source_key.clone(), &[1, 2]),
+        ],
+    );
+
+    let op = StdTensorOp::GatherDynamicSliceSizes {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![
+            DimExpr::Const(1),
+            DimExpr::InputDim {
+                input_idx: 2,
+                axis: 1,
+            },
+        ],
+    };
+    let inputs = vec![
+        ValRef::External(operand_key.clone()),
+        ValRef::External(indices_key.clone()),
+        ValRef::External(shape_source_key),
+    ];
+
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![true, false, false],
+        },
+        &mut ctx,
+    );
+
+    assert!(result[0].is_some(), "operand cotangent must be active");
+    assert_eq!(result[1], None, "indices cotangent must stay None");
+    assert_eq!(result[2], None, "shape source cotangent must stay None");
+
+    let fragment = builder.build();
+    let scatter = fragment
+        .ops()
+        .iter()
+        .find(|op_node| matches!(op_node.op, StdTensorOp::Scatter(_)))
+        .expect("expected a Scatter op in the fragment");
+    let StdTensorOp::Scatter(scatter_cfg) = &scatter.op else {
+        panic!("expected Scatter op, got {:?}", scatter.op);
+    };
+    assert_eq!(scatter_cfg.update_window_dims, vec![1]);
+    assert_eq!(scatter_cfg.inserted_window_dims, vec![0]);
+    assert_eq!(scatter_cfg.scatter_dims_to_operand_dims, vec![0]);
+    assert_eq!(scatter_cfg.index_vector_dim, 1);
+    assert!(matches!(scatter.inputs[0], ValRef::Local(_)));
+    assert_ne!(scatter.inputs[0], ValRef::External(operand_key));
+    assert_eq!(scatter.inputs[1], ValRef::External(indices_key));
+    assert_eq!(scatter.inputs[2], ValRef::Local(cot));
 }
 
 #[test]
@@ -627,4 +741,70 @@ fn transpose_scatter_window_dims_derive_slice_sizes_from_updates_shape() {
         "slice_sizes must be 1 for inserted dim and updates.shape[1] for the window dim"
     );
     assert_eq!(cfg.offset_dims, vec![1]);
+}
+
+#[test]
+fn transpose_scatter_symbolic_window_dim_emits_dynamic_gather() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(900));
+    let operand_key = input_key(901);
+    let indices_key = input_key(902);
+    let updates_key = input_key(903);
+
+    ctx.insert_metadata(
+        operand_key.clone(),
+        TensorMeta::exact(DType::F64, vec![SymDim::from(4usize), SymDim::from(2usize)]),
+    );
+    ctx.insert_metadata(
+        indices_key.clone(),
+        TensorMeta::exact(DType::I64, vec![SymDim::from(1usize), SymDim::from(1usize)]),
+    );
+    ctx.insert_metadata(
+        updates_key.clone(),
+        TensorMeta::exact(
+            DType::F64,
+            vec![SymDim::from(1usize), SymDim::tensor_axis(903, 1)],
+        ),
+    );
+
+    let config = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let op = StdTensorOp::Scatter(config);
+    let inputs = vec![
+        ValRef::External(operand_key),
+        ValRef::External(indices_key),
+        ValRef::External(updates_key.clone()),
+    ];
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![false, false, true],
+        },
+        &mut ctx,
+    );
+
+    assert!(result[2].is_some());
+    let fragment = builder.build();
+    let gather = fragment.ops().last().expect("expected gather op");
+    match &gather.op {
+        StdTensorOp::GatherDynamicSliceSizes { slice_sizes, .. } => {
+            assert_eq!(
+                slice_sizes[1],
+                DimExpr::InputDim {
+                    input_idx: 2,
+                    axis: 1,
+                }
+            );
+            assert_eq!(gather.inputs[2], ValRef::External(updates_key));
+        }
+        other => panic!("expected GatherDynamicSliceSizes, got {other:?}"),
+    }
 }

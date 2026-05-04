@@ -9,9 +9,9 @@ members = [
     "tenferro",
 ]
 exclude = [
-    # External extension crates (design_v3 Stage 4a+): depend only on the
-    # public `tenferro` facade, are NOT core workspace members, and run
-    # their own tests standalone.
+    # External extension crates depend only on the public `tenferro` facade
+    # where possible, are NOT core workspace members, and run their own tests
+    # standalone.
     "ext/tropical",
 ]
 default-members = [

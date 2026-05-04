@@ -15,6 +15,7 @@ use computegraph::types::{GlobalValKey, ValRef};
 use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
+use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
@@ -40,24 +41,120 @@ fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
 /// Per-value tensor metadata used by AD rules.
 ///
 /// `shape` is expressed in graph-global [`SymDim`] terms rather than op-local
-/// [`DimExpr`] references.
+/// [`DimExpr`] references. It is retained as a compatibility bound shape; use
+/// [`TensorMeta::exact_shape`] when a caller needs proof that every dimension is
+/// exact.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_ops::{SymDim, TensorMeta};
 /// use tenferro_tensor::DType;
 ///
-/// let meta = TensorMeta {
-///     dtype: DType::F64,
-///     shape: vec![SymDim::from(2usize), SymDim::from(3usize)],
-/// };
+/// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]);
 /// assert_eq!(meta.shape.len(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TensorMeta {
+    /// Element dtype of the tensor value.
     pub dtype: DType,
+    /// Compatibility shape used by existing callers; not proof of exactness.
     pub shape: Vec<SymDim>,
+    /// Per-axis shape guarantees.
+    pub extents: Vec<ShapeExtent<SymDim>>,
+}
+
+impl TensorMeta {
+    /// Construct metadata whose every axis is exact.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]);
+    /// assert_eq!(meta.exact_shape(), Some(vec![SymDim::from(4usize)]));
+    /// ```
+    pub fn exact(dtype: DType, shape: Vec<SymDim>) -> Self {
+        let extents = shape.iter().cloned().map(ShapeExtent::exact).collect();
+        Self {
+            dtype,
+            shape,
+            extents,
+        }
+    }
+
+    /// Construct metadata from per-axis extents.
+    ///
+    /// The compatibility `shape` field is populated from each known bound. An
+    /// unknown extent is represented with a zero placeholder until all callers
+    /// consume extent metadata directly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::with_extents(
+    ///     DType::F64,
+    ///     vec![ShapeExtent::upper_bound(SymDim::from(8usize))],
+    /// );
+    /// assert_eq!(meta.exact_shape(), None);
+    /// ```
+    pub fn with_extents(dtype: DType, extents: Vec<ShapeExtent<SymDim>>) -> Self {
+        let shape = extents
+            .iter()
+            .map(|extent| {
+                extent
+                    .bound_expr()
+                    .cloned()
+                    .unwrap_or_else(|| SymDim::from(0usize))
+            })
+            .collect();
+        Self {
+            dtype,
+            shape,
+            extents,
+        }
+    }
+
+    /// Return the per-axis shape guarantees.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::{SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]);
+    /// assert_eq!(meta.extents().len(), 1);
+    /// ```
+    pub fn extents(&self) -> &[ShapeExtent<SymDim>] {
+        &self.extents
+    }
+
+    /// Return the shape only when every axis is exact.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let meta = TensorMeta::with_extents(
+    ///     DType::F64,
+    ///     vec![ShapeExtent::upper_bound(SymDim::from(8usize))],
+    /// );
+    /// assert_eq!(meta.exact_shape(), None);
+    /// ```
+    pub fn exact_shape(&self) -> Option<Vec<SymDim>> {
+        self.extents
+            .iter()
+            .map(|extent| extent.as_exact().cloned())
+            .collect()
+    }
 }
 
 /// A recorded dimension comparison made during AD graph construction.
@@ -115,8 +212,9 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// let ctx = tenferro_ops::ShapeGuardContext::with_global_metadata();
+    /// assert!(ctx.guards().is_empty());
     /// ```
     pub fn with_global_metadata() -> Self {
         Self {
@@ -168,11 +266,75 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let shape = ctx.shape_of(&value);
+    /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
     pub fn shape_of(&mut self, val: &ValRef<StdTensorOp>) -> &[SymDim] {
         &self.metadata_of(val).shape
+    }
+
+    /// Return per-axis shape guarantees for a value reference.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(
+    ///     key,
+    ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
+    /// );
+    ///
+    /// let extents = ctx.extents_of(&value);
+    /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
+    /// ```
+    pub fn extents_of(&mut self, val: &ValRef<StdTensorOp>) -> &[ShapeExtent<SymDim>] {
+        self.metadata_of(val).extents()
+    }
+
+    /// Return the exact shape for a value reference, if all axes are exact.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(
+    ///     key,
+    ///     TensorMeta::with_extents(DType::F64, vec![ShapeExtent::upper_bound(SymDim::from(8usize))]),
+    /// );
+    ///
+    /// let maybe_shape = ctx.exact_shape_of(&value);
+    /// assert_eq!(maybe_shape, None);
+    /// ```
+    pub fn exact_shape_of(&mut self, val: &ValRef<StdTensorOp>) -> Option<Vec<SymDim>> {
+        self.metadata_of(val).exact_shape()
     }
 
     #[doc(hidden)]
@@ -184,8 +346,20 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let dtype = ctx.dtype_of(&value);
+    /// assert_eq!(dtype, DType::F64);
     /// ```
     pub fn dtype_of(&mut self, val: &ValRef<StdTensorOp>) -> DType {
         self.metadata_of(val).dtype
@@ -195,8 +369,20 @@ impl ShapeGuardContext {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use computegraph::types::{GlobalValKey, ValRef};
+    /// use tenferro_ops::input_key::TensorInputKey;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    /// use tenferro_ops::{ShapeGuardContext, SymDim, TensorMeta};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 1 });
+    /// let value = ValRef::External(key.clone());
+    /// let mut ctx = ShapeGuardContext::default();
+    /// ctx.insert_metadata(key, TensorMeta::exact(DType::F64, vec![SymDim::from(4usize)]));
+    ///
     /// let meta = ctx.metadata_of(&value);
+    /// assert_eq!(meta.dtype, DType::F64);
     /// ```
     pub fn metadata_of(&mut self, val: &ValRef<StdTensorOp>) -> &TensorMeta {
         let key = self.resolve_key(val).clone();
@@ -278,8 +464,15 @@ pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta
 ///
 /// # Examples
 ///
-/// ```ignore
-/// let meta = tenferro_ops::ad::context::lookup_global_metadata(&key);
+/// ```
+/// use computegraph::types::GlobalValKey;
+/// use tenferro_ops::ad::context::lookup_global_metadata;
+/// use tenferro_ops::input_key::TensorInputKey;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+///
+/// let key = GlobalValKey::<StdTensorOp>::Input(TensorInputKey::User { id: 99 });
+/// let meta = lookup_global_metadata(&key);
+/// assert!(meta.is_none());
 /// ```
 pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorMeta> {
     let guard = global_metadata_registry()

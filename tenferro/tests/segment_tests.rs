@@ -14,6 +14,12 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
 }
 
+fn scalar_extents(
+    n_outputs: usize,
+) -> Vec<Vec<tenferro_ops::ShapeExtent<tenferro_ops::dim_expr::DimExpr>>> {
+    vec![Vec::new(); n_outputs]
+}
+
 fn cpu_parity_program() -> ExecProgram {
     ExecProgram {
         instructions: vec![
@@ -23,6 +29,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![4],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false, true],
             },
             ExecInstruction {
@@ -31,6 +38,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![5],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -39,6 +47,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![6],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false],
             },
             ExecInstruction {
@@ -47,6 +56,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![7],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -55,6 +65,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![8],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -63,6 +74,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![9],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false],
             },
             ExecInstruction {
@@ -71,6 +83,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![10],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -79,6 +92,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![11],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -90,6 +104,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![12],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![],
             },
             ExecInstruction {
@@ -98,6 +113,7 @@ fn cpu_parity_program() -> ExecProgram {
                 output_slots: vec![13, 14],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new(); 2],
+                output_extents: scalar_extents(2),
                 last_use: vec![true],
             },
         ],
@@ -125,6 +141,7 @@ fn segment_classification_program() -> ExecProgram {
                 output_slots: vec![2],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false, false],
             },
             ExecInstruction {
@@ -133,6 +150,7 @@ fn segment_classification_program() -> ExecProgram {
                 output_slots: vec![3],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false],
             },
             ExecInstruction {
@@ -141,6 +159,7 @@ fn segment_classification_program() -> ExecProgram {
                 output_slots: vec![4],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -149,6 +168,7 @@ fn segment_classification_program() -> ExecProgram {
                 output_slots: vec![5, 6],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new(); 2],
+                output_extents: scalar_extents(2),
                 last_use: vec![true],
             },
         ],
@@ -242,6 +262,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![3],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -250,6 +271,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![4],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -258,6 +280,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![5],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -266,6 +289,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![6],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false],
             },
             ExecInstruction {
@@ -274,6 +298,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![7],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![false],
             },
             ExecInstruction {
@@ -282,6 +307,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![8],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true, true],
             },
             ExecInstruction {
@@ -290,6 +316,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![9],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -301,6 +328,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 output_slots: vec![10],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
                 last_use: vec![],
             },
         ],
@@ -330,6 +358,7 @@ fn gpu_nary_einsum_program() -> ExecProgram {
             output_slots: vec![2],
             dtype: DType::F64,
             output_shapes: vec![Vec::new()],
+            output_extents: scalar_extents(1),
             last_use: vec![true, true],
         }],
         input_slots: vec![0, 1],

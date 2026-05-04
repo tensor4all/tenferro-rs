@@ -11,4 +11,4 @@ link here rather than re-stating.
 | [ad-contract.md](./ad-contract.md) | PrimitiveOp trait signature, linearize/transpose_rule requirements |
 | [optimizer-passes.md](./optimizer-passes.md) | Optimization pass algorithms and ordering |
 | [tensor-semantics.md](./tensor-semantics.md) | Tensor type semantics, stride model, contiguity rules |
-| [extension-op.md](./extension-op.md) | ExtensionOp trait contract (identity, AD, dispatch, registry) — design_v3 Stage 5 |
+| [extension-op.md](./extension-op.md) | ExtensionOp trait contract (identity, AD, dispatch, registry) |

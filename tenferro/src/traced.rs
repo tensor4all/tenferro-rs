@@ -635,8 +635,8 @@ impl TracedTensor {
                         // Deferred zero-tangent: `k` is a tangent input whose
                         // primal root was provided as a user binding. The
                         // zero tensor inherits the primal's concrete shape and
-                        // dtype. See "Deferred Zero-Tangent Policy" in
-                        // `docs/design/design_v3/10-ad-model.md`.
+                        // dtype. This is the deferred zero-tangent policy used
+                        // for symbolic-shape placeholder gradients.
                         input_dtypes.push(zero.dtype());
                         input_shapes.push(DimExpr::from_concrete(zero.shape()));
                         input_tensors.push(zero);
@@ -927,8 +927,8 @@ impl TracedTensor {
         // (shape_hint == None) we leave those tangent input keys absent from
         // `inputs_map`; `eval_with_inputs` will synthesise the zeros at
         // evaluation time once the concrete shape is known from the caller's
-        // binding. See "Deferred Zero-Tangent Policy" in
-        // `docs/design/design_v3/10-ad-model.md`.
+        // binding. This is the deferred zero-tangent policy used for
+        // symbolic-shape placeholder gradients.
         if let Some(concrete_shape) = try_concrete_shape(wrt) {
             let zero_tangent = Arc::new(zeros_tensor(wrt.dtype, concrete_shape));
             for (_, local_id) in &transposed.tangent_inputs {

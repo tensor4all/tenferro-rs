@@ -63,6 +63,47 @@ pub fn linearize_gather(
     }
 }
 
+/// Forward-mode AD rule for `GatherDynamicSliceSizes`.
+///
+/// The operand tangent flows through the same gather. Start indices and all
+/// shape-source inputs are non-differentiable and are reused from the primal.
+#[allow(clippy::too_many_arguments)]
+pub fn linearize_gather_dynamic_slice_sizes(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    offset_dims: &[usize],
+    collapsed_slice_dims: &[usize],
+    start_index_map: &[usize],
+    index_vector_dim: usize,
+    slice_sizes: &[DimExpr],
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(d_operand) => {
+            let mut inputs = Vec::with_capacity(primal_in.len());
+            inputs.push(ValRef::Local(d_operand));
+            inputs.extend(primal_in.iter().skip(1).cloned().map(ValRef::External));
+
+            let mut active_mask = vec![false; primal_in.len()];
+            active_mask[0] = true;
+
+            let out = builder.add_op(
+                StdTensorOp::GatherDynamicSliceSizes {
+                    offset_dims: offset_dims.to_vec(),
+                    collapsed_slice_dims: collapsed_slice_dims.to_vec(),
+                    start_index_map: start_index_map.to_vec(),
+                    index_vector_dim,
+                    slice_sizes: slice_sizes.to_vec(),
+                },
+                inputs,
+                OpMode::Linear { active_mask },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
 /// Reverse-mode AD rule for `Gather(operand, start_indices, config)`.
 ///
 /// Emits a `Scatter` whose config inverts the `GatherConfig` so that the
@@ -120,6 +161,66 @@ pub fn transpose_gather(
     );
 
     vec![Some(out[0]), None]
+}
+
+/// Reverse-mode AD rule for `GatherDynamicSliceSizes`.
+///
+/// The operand cotangent is the same inverse scatter as for concrete
+/// `Gather`. Shape-source inputs only parameterize the primal slice sizes, so
+/// their cotangents are always inactive.
+#[allow(clippy::too_many_arguments)]
+pub fn transpose_gather_dynamic_slice_sizes(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    offset_dims: &[usize],
+    collapsed_slice_dims: &[usize],
+    start_index_map: &[usize],
+    index_vector_dim: usize,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let mut result = vec![None; inputs.len()];
+    let ct = match cotangent_out[0] {
+        Some(ct) => ct,
+        None => return result,
+    };
+
+    let active_mask = match mode {
+        OpMode::Linear { active_mask } => active_mask,
+        OpMode::Primal => return result,
+    };
+
+    if !active_mask.first().copied().unwrap_or(false) {
+        return result;
+    }
+
+    let inverse_config = ScatterConfig {
+        update_window_dims: offset_dims.to_vec(),
+        inserted_window_dims: collapsed_slice_dims.to_vec(),
+        scatter_dims_to_operand_dims: start_index_map.to_vec(),
+        index_vector_dim,
+    };
+
+    let operand_meta = ctx.metadata_of(&inputs[0]);
+    let operand_rank = operand_meta.shape.len();
+    let operand_dtype = operand_meta.dtype;
+    let zero_operand = build_zero_like(emitter, operand_dtype, inputs[0].clone(), operand_rank);
+
+    let out = emitter.add_op(
+        StdTensorOp::Scatter(inverse_config),
+        vec![
+            ValRef::Local(zero_operand),
+            inputs[1].clone(),
+            ValRef::Local(ct),
+        ],
+        OpMode::Linear {
+            active_mask: vec![false, false, true],
+        },
+    );
+
+    result[0] = Some(out[0]);
+    result
 }
 
 /// Forward-mode AD rule for `Scatter(operand, scatter_indices, updates, config)`.
@@ -234,31 +335,62 @@ pub fn transpose_scatter(
     if updates_active {
         let operand_shape = ctx.shape_of(&inputs[0]).to_vec();
         let updates_shape = ctx.shape_of(&inputs[2]).to_vec();
-        let slice_sizes = compute_inverse_slice_sizes(&operand_shape, &updates_shape, config);
+        let inverse = compute_inverse_gather(&operand_shape, &updates_shape, config, &inputs[2]);
 
-        let inverse_config = GatherConfig {
-            offset_dims: config.update_window_dims.clone(),
-            collapsed_slice_dims: config.inserted_window_dims.clone(),
-            start_index_map: config.scatter_dims_to_operand_dims.clone(),
-            index_vector_dim: config.index_vector_dim,
-            slice_sizes,
+        let out = match inverse {
+            InverseGather::Concrete(config) => emitter.add_op(
+                StdTensorOp::Gather(config),
+                vec![ValRef::Local(ct), inputs[1].clone()],
+                OpMode::Linear {
+                    active_mask: vec![true, false],
+                },
+            ),
+            InverseGather::Dynamic {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                index_vector_dim,
+                slice_sizes,
+                shape_sources,
+            } => {
+                let mut gather_inputs = vec![ValRef::Local(ct), inputs[1].clone()];
+                let mut active_mask = vec![true, false];
+                for shape_source in shape_sources {
+                    gather_inputs.push(shape_source);
+                    active_mask.push(false);
+                }
+                emitter.add_op(
+                    StdTensorOp::GatherDynamicSliceSizes {
+                        offset_dims,
+                        collapsed_slice_dims,
+                        start_index_map,
+                        index_vector_dim,
+                        slice_sizes,
+                    },
+                    gather_inputs,
+                    OpMode::Linear { active_mask },
+                )
+            }
         };
-
-        let out = emitter.add_op(
-            StdTensorOp::Gather(inverse_config),
-            vec![ValRef::Local(ct), inputs[1].clone()],
-            OpMode::Linear {
-                active_mask: vec![true, false],
-            },
-        );
         result[2] = Some(out[0]);
     }
 
     result
 }
 
-/// Build `slice_sizes` for the inverse `GatherConfig` used in
-/// `transpose_scatter`.
+enum InverseGather {
+    Concrete(GatherConfig),
+    Dynamic {
+        offset_dims: Vec<usize>,
+        collapsed_slice_dims: Vec<usize>,
+        start_index_map: Vec<usize>,
+        index_vector_dim: usize,
+        slice_sizes: Vec<DimExpr>,
+        shape_sources: Vec<ValRef<StdTensorOp>>,
+    },
+}
+
+/// Build the inverse gather used in `transpose_scatter`.
 ///
 /// For each operand dim `d`:
 /// - if `d ∈ inserted_window_dims`: `slice_sizes[d] = 1` (the dim is
@@ -266,11 +398,12 @@ pub fn transpose_scatter(
 /// - otherwise: `d` is the `k`-th entry of operand-window dims
 ///   `(0..rank) \ inserted_window_dims`; the size comes from the primal
 ///   updates tensor at the corresponding `update_window_dims[k]` axis
-fn compute_inverse_slice_sizes(
+fn compute_inverse_gather(
     operand_shape: &[SymDim],
     updates_shape: &[SymDim],
     config: &ScatterConfig,
-) -> Vec<usize> {
+    updates_ref: &ValRef<StdTensorOp>,
+) -> InverseGather {
     let rank = operand_shape.len();
     let operand_window_dims: Vec<usize> = (0..rank)
         .filter(|dim| !config.inserted_window_dims.contains(dim))
@@ -284,28 +417,48 @@ fn compute_inverse_slice_sizes(
         operand_window_dims.len(),
     );
 
-    let mut slice_sizes = vec![1usize; rank];
+    let mut concrete_slice_sizes = vec![1usize; rank];
+    let mut dynamic_slice_sizes = vec![DimExpr::Const(1); rank];
+    let mut has_dynamic_slice_size = false;
     for (k, &operand_dim) in operand_window_dims.iter().enumerate() {
         let update_axis = config.update_window_dims[k];
-        let dim = updates_shape
-            .get(update_axis)
-            .unwrap_or_else(|| {
-                panic!(
-                    "transpose_scatter: update_window_dims axis {} out of range for updates rank {}",
-                    update_axis,
-                    updates_shape.len()
-                )
-            })
-            .constant_value()
-            .unwrap_or_else(|| {
-                panic!(
-                    "transpose_scatter: symbolic updates dim {} cannot be used as a slice size",
-                    update_axis
-                )
-            });
-        slice_sizes[operand_dim] = dim;
+        let dim = updates_shape.get(update_axis).unwrap_or_else(|| {
+            panic!(
+                "transpose_scatter: update_window_dims axis {} out of range for updates rank {}",
+                update_axis,
+                updates_shape.len()
+            )
+        });
+        if let Some(value) = dim.constant_value() {
+            concrete_slice_sizes[operand_dim] = value;
+            dynamic_slice_sizes[operand_dim] = DimExpr::Const(value);
+        } else {
+            has_dynamic_slice_size = true;
+            dynamic_slice_sizes[operand_dim] = DimExpr::InputDim {
+                input_idx: 2,
+                axis: update_axis,
+            };
+        }
     }
-    slice_sizes
+
+    if has_dynamic_slice_size {
+        InverseGather::Dynamic {
+            offset_dims: config.update_window_dims.clone(),
+            collapsed_slice_dims: config.inserted_window_dims.clone(),
+            start_index_map: config.scatter_dims_to_operand_dims.clone(),
+            index_vector_dim: config.index_vector_dim,
+            slice_sizes: dynamic_slice_sizes,
+            shape_sources: vec![updates_ref.clone()],
+        }
+    } else {
+        InverseGather::Concrete(GatherConfig {
+            offset_dims: config.update_window_dims.clone(),
+            collapsed_slice_dims: config.inserted_window_dims.clone(),
+            start_index_map: config.scatter_dims_to_operand_dims.clone(),
+            index_vector_dim: config.index_vector_dim,
+            slice_sizes: concrete_slice_sizes,
+        })
+    }
 }
 
 /// Emit a zero tensor shaped like `anchor` (rank `anchor_rank`) with

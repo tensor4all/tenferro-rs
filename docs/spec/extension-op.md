@@ -2,20 +2,20 @@
 
 **Date:** 2026-04-19
 **Parent:** [`../index.md`](../index.md)
-**Related:** [`ad-contract.md`](ad-contract.md), [`primitive-catalog.md`](primitive-catalog.md), [`backend-contract.md`](backend-contract.md), [`tensor-semantics.md`](tensor-semantics.md), [`../design/design_v3/40-extension-boundary.md`](../design/design_v3/40-extension-boundary.md), [`../design/design_v3/90-migration-plan.md`](../design/design_v3/90-migration-plan.md), [`../design/design_v3/30-algebra-and-tropical.md`](../design/design_v3/30-algebra-and-tropical.md), [`../design/design_v3/10-ad-model.md`](../design/design_v3/10-ad-model.md)
+**Related:** [`ad-contract.md`](ad-contract.md), [`primitive-catalog.md`](primitive-catalog.md), [`backend-contract.md`](backend-contract.md), [`tensor-semantics.md`](tensor-semantics.md), [`../design/dynamic-symbolic-shapes.md`](../design/dynamic-symbolic-shapes.md)
 
 ---
 
 ## 1. Scope and Status
 
 This document is the normative specification for the `ExtensionOp` contract
-that Stage 6 of the `design_v3` migration will implement. `ExtensionOp`
-enables out-of-tree extension primitives (e.g. `FusedTropicalDotGeneral`) to
-participate in the traced `StdTensorOp` graph as `StdTensorOp::Extension(Arc<dyn
-ExtensionOp>)` variants without modifying the core workspace.
+implemented by the traced `StdTensorOp` graph. `ExtensionOp` enables out-of-tree
+extension primitives (e.g. `FusedTropicalDotGeneral`) to participate in the
+graph as `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` variants without
+modifying the core workspace.
 
-Status: **normative, to be ratified at Stage 5 exit**. Stage 6 implements
-exactly this contract; the contract does not get renegotiated there.
+Status: **normative**. Implementations must preserve this contract unless this
+document is revised first.
 
 The vocabulary (`MUST` / `SHOULD` / `MAY`) follows RFC 2119 conventions used
 by the rest of `docs/spec/`. Unless explicitly marked *informative* (e.g. the
@@ -23,15 +23,9 @@ worked example in Section 14), every statement in this document is part of
 the contract.
 
 Where this document fixes a precise Rust signature in a code block, that
-signature is part of the contract. Stage 6 is permitted to refine names and
-module paths to match the surrounding codebase, but it is not permitted to
-change the semantic shape (arguments, return types, blanket bounds) of any
-signature fixed here.
-
-See [`../design/design_v3/40-extension-boundary.md`](../design/design_v3/40-extension-boundary.md)
-for the design-level narrative that motivated this spec, and
-[`../design/design_v3/90-migration-plan.md`](../design/design_v3/90-migration-plan.md)
-Stage 5 for the acceptance criteria this document must meet.
+signature is part of the contract. Implementations may refine names and module
+paths to match the surrounding codebase, but they may not change the semantic
+shape (arguments, return types, blanket bounds) of any signature fixed here.
 
 ---
 
@@ -73,11 +67,10 @@ This document does **not** own:
 
 ## 3. Why a spec is needed before implementation
 
-Per [`40-extension-boundary.md`](../design/design_v3/40-extension-boundary.md)
-"Why A Raw Trait Object Needs A Spec First", writing
-`StdTensorOp::Extension(Arc<dyn ExtensionOp>)` is simple but underspecified.
-The Stage 5 deliverable exists to answer five questions before any carrier
-lands:
+A raw `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` carrier is simple to add
+but underspecified on its own. This specification answers five questions that
+must be fixed for graph interning, AD caching, serialization boundaries, and
+runtime dispatch to remain deterministic:
 
 1. **What makes two extension ops equal?** Answered normatively in
    Section 5.
@@ -92,19 +85,17 @@ lands:
    normatively in Section 11 (serialization compatibility) and
    Section 12 (failure modes).
 
-Stage 6 MUST NOT begin until every one of these has a ratified normative
-answer. This document is that ratification.
+This document is the normative answer for all five.
 
 ---
 
 ## 4. Trait shape: `ExtensionOp`
 
 The `ExtensionOp` trait is the Rust trait that every extension
-implementation MUST satisfy. Stage 6 adds one variant to the core op
-enum:
+implementation MUST satisfy. The core op enum carries one extension variant:
 
 ```rust
-// In tenferro-ops/src/std_tensor_op.rs (Stage 6):
+// In tenferro-ops/src/std_tensor_op.rs:
 pub enum StdTensorOp {
     // ... existing variants ...
     Extension(std::sync::Arc<dyn ExtensionOp>),
@@ -118,7 +109,7 @@ required unless explicitly marked `provided`.
 /// An out-of-tree operation that participates in the `StdTensorOp` graph
 /// via the `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` carrier.
 ///
-/// Every method on this trait is part of the Stage 5 contract. See
+/// Every method on this trait is part of the ExtensionOp contract. See
 /// `docs/spec/extension-op.md` for normative requirements.
 pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     // ----- Identity, hashing, equality (Section 5) -----
@@ -261,8 +252,7 @@ these through delegation:
   ```
 
   The `DynHasherProxy` wraps a generic `H: Hasher` behind `&mut dyn Hasher`
-  to satisfy `ExtensionOp::payload_hash`'s object-safe signature. Stage 6
-  provides this adapter.
+  to satisfy `ExtensionOp::payload_hash`'s object-safe signature.
 
 - `PartialEq` / `Eq` via a family-id shortcut then `payload_eq`:
 
@@ -291,8 +281,7 @@ Identity / hash / eq MUST live on the trait rather than on a concrete
 type because a `Box<dyn ExtensionOp>` has no visible payload type from
 the carrier's perspective. If these methods were not on the trait, the
 carrier could not implement `Hash` or `Eq`, which would break computegraph's
-op interner, AD rule caching, and structural graph comparison — the exact
-determinism guarantees `40-extension-boundary.md` identifies as at risk.
+op interner, AD rule caching, and structural graph comparison.
 
 ### Failure signature
 
@@ -304,7 +293,7 @@ determinism guarantees `40-extension-boundary.md` identifies as at risk.
   breaks `HashMap`-keyed caches. Symptom: AD caches return wrong
   cotangents or miss.
 - An implementer whose `linearize` emits a nested `Extension` variant
-  breaks AD closure. Symptom: Stage 7 panic in `todo_linearize` / cache
+  breaks AD closure. Symptom: downstream panic in `todo_linearize` / cache
   corruption.
 
 ---
@@ -329,7 +318,7 @@ Every `family_id` MUST follow the namespaced format:
   or numerical semantics. It MUST NOT be bumped for pure refactors that
   preserve all contract-visible behaviour.
 
-Example (Stage 7):
+Example:
 
 ```
 "tenferro-ext-tropical.fused_dot_general.v1"
@@ -388,8 +377,8 @@ fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
 
 Note: for `(other as &dyn Any).downcast_ref` to work, `ExtensionOp`
 implementations MUST add `std::any::Any` as a supertrait bound or carry
-a `fn as_any(&self) -> &dyn Any` helper method. Stage 6 SHOULD choose
-one convention and document it in the trait definition comment; the
+a `fn as_any(&self) -> &dyn Any` helper method. The implementation SHOULD
+choose one convention and document it in the trait definition comment; the
 default choice is to add `Any` via a method-based helper to keep
 `ExtensionOp` object-safe.
 
@@ -481,11 +470,9 @@ extension.
 
 ### Symbolic-shape interaction
 
-Per Stage 4b (see [`90-migration-plan.md`](../design/design_v3/90-migration-plan.md)
-Stage 4b and [`../design/design_v3/20-shape-metadata.md`]
-(../design/design_v3/20-shape-metadata.md)), every extension's
-`infer_output_meta` MUST be **total** over both concrete and symbolic
-inputs. Total means:
+Per [`../design/dynamic-symbolic-shapes.md`](../design/dynamic-symbolic-shapes.md),
+every extension's `infer_output_meta` MUST be **total** over both concrete and
+symbolic inputs. Total means:
 
 - The method returns without panicking for any `input_shapes` that would
   also be accepted by the ambient core ops this extension composes with.
@@ -501,8 +488,7 @@ inputs. Total means:
   `tenferro/src/compiler/mod.rs:61-68`). The same panic applies to
   extensions.
 - An implementer that panics on valid symbolic inputs surfaces as a
-  hard crash in Stage 4b-style composition tests. This is a contract
-  violation.
+  hard crash in symbolic-shape composition tests. This is a contract violation.
 
 ---
 
@@ -514,12 +500,12 @@ both, with a normatively-split responsibility.
 ### Eager path
 
 The eager path runs through `tenferro/src/eager_exec.rs::exec_op_on_tensors`
-and `tenferro/src/eager_emitter.rs::EagerEmitter::add_op`. Stage 6 MUST
-add a single match arm in `exec_op_on_tensors` that routes
+and `tenferro/src/eager_emitter.rs::EagerEmitter::add_op`. The implementation
+MUST include a single match arm in `exec_op_on_tensors` that routes
 `StdTensorOp::Extension(op)` to `op.eager_execute(inputs)`:
 
 ```rust
-// Stage 6 addition in exec_op_on_tensors (conceptual):
+// Conceptual:
 StdTensorOp::Extension(ext) => ext.eager_execute(inputs)?,
 ```
 
@@ -532,7 +518,7 @@ and may choose to open its own session internally if needed.
 
 The compiled path runs through
 `tenferro/src/compiler/mod.rs::compile_std_to_exec` and
-`tenferro/src/exec.rs`. Stage 6 MUST add:
+`tenferro/src/exec.rs`. The compiled path MUST include:
 
 1. An `ExecOp::Extension(Arc<dyn ExtensionOp>)` variant (or an
    equivalent carrier) in the execution IR, mirroring the `StdTensorOp`
@@ -588,7 +574,7 @@ the single-method design keeps the two paths congruent.
 
 The extension registry is a process-local
 `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionFactory>>>>`,
-keyed by `family_id`. Stage 6 MUST implement this surface in
+keyed by `family_id`. The implementation MUST provide this surface in
 `tenferro-ops` (a new module, e.g. `tenferro_ops::extension::registry`)
 and re-export it through `tenferro`.
 
@@ -603,7 +589,7 @@ distributed-slice:
 - **No new build dependency**: `linkme` would add a workspace
   dependency that is non-trivial to support on every target (notably
   wasm). `OnceLock<RwLock<HashMap>>` is in std.
-- **Stage 6 can evolve**: the Open Questions list (Section 15) allows a
+- **Extensible implementation**: the Open Questions list (Section 15) allows a
   later migration to `linkme` if evidence supports it.
 
 ### Factory trait
@@ -620,8 +606,8 @@ pub trait ExtensionFactory: Send + Sync + 'static {
     fn version(&self) -> u32;
 
     /// Optional: produce a default / zero-payload `ExtensionOp` instance
-    /// for diagnostic or cross-process reconstruction purposes. Stage 6
-    /// MAY omit this in the initial impl; Stage 7 does not require it.
+    /// for diagnostic or cross-process reconstruction purposes. Implementations
+    /// MAY omit this when no consumer requires it.
     fn instantiate_default(&self) -> Option<std::sync::Arc<dyn ExtensionOp>> {
         None
     }
@@ -630,8 +616,8 @@ pub trait ExtensionFactory: Send + Sync + 'static {
 
 ### User-facing registration API
 
-Stage 6 MUST expose the following public function (the crate path is
-illustrative; final placement is Stage 6's choice):
+The public API MUST expose the following function (the crate path is
+illustrative):
 
 ```rust
 pub fn register_extension(
@@ -658,7 +644,7 @@ pub enum RegistrationError {
 
 ### Lookup
 
-Stage 6 MUST expose a lookup function:
+The public API MUST expose a lookup function:
 
 ```rust
 pub fn lookup_extension_factory(family_id: &str) -> Option<std::sync::Arc<dyn ExtensionFactory>>;
@@ -678,7 +664,7 @@ graph-building or execution work begins on the `family_id` they added.
 
 When a graph carries an `Extension` whose `family_id`'s version segment
 does not match the `version()` returned by the currently-registered
-factory, Stage 6 MUST:
+factory, implementations MUST:
 
 - in the in-process case, detect the mismatch at serialization boundaries
   (Section 11);
@@ -713,7 +699,7 @@ signatures. They mirror `PrimitiveOp::linearize` and
    methods via a dispatcher in `tenferro-ops/src/ad/mod.rs`:
 
    ```rust
-   // Stage 6 addition (conceptual):
+   // Conceptual:
    pub fn linearize(
        op: &StdTensorOp,
        builder: &mut FragmentBuilder<StdTensorOp>,
@@ -748,11 +734,9 @@ variant.
 
 Rationale: nesting extensions in AD would make AD closure contingent
 on the registry state at AD-time rather than at graph-build time,
-breaking determinism. The restriction to core ops matches
-[`10-ad-model.md`](../design/design_v3/10-ad-model.md):
-> Invariant: every arrow emits values only in the core op vocabulary.
-> Tropical, ExtensionOp, and any future extension mechanism lower to
-> this same vocabulary for the backward pass.
+breaking determinism. The restriction to core ops is the AD closure
+invariant: every arrow emits values only in the core op vocabulary, and
+extension mechanisms lower to this same vocabulary for the backward pass.
 
 ### `ShapeGuardContext` interaction
 
@@ -769,13 +753,11 @@ comparisons.
 
 ### Deferred zero-tangent policy
 
-Per [`10-ad-model.md`](../design/design_v3/10-ad-model.md)
-"Deferred Zero-Tangent Policy", extensions MUST NOT materialise zero
-cotangents for symbolic-shape inputs at linearize time. A tangent slot
-that is inactive MUST be represented as `None` in both `tangent_in`
-and the returned tangent-output vector. Zero synthesis happens at the
-evaluation boundary in `TracedTensor::eval_with_inputs`, not inside
-the extension's AD rules.
+Extensions MUST NOT materialise zero cotangents for symbolic-shape inputs at
+linearize time. A tangent slot that is inactive MUST be represented as `None`
+in both `tangent_in` and the returned tangent-output vector. Zero synthesis
+happens at the evaluation boundary in `TracedTensor::eval_with_inputs`, not
+inside the extension's AD rules.
 
 ### Failure signature
 
@@ -794,7 +776,7 @@ the extension's AD rules.
 
 ### Scope
 
-Stage 6 does not mandate a cross-process graph serialization format;
+This document does not mandate a cross-process graph serialization format;
 that is an Open Question (Section 15). However, any implementation
 that does serialize graphs containing `StdTensorOp::Extension` nodes
 MUST respect the following invariants.
@@ -844,7 +826,7 @@ Serialization adds no new in-process constraints.
 
 ## 12. Failure modes
 
-Every failure mode below is normative. Stage 6 MUST surface exactly
+Every failure mode below is normative. Implementations MUST surface exactly
 these error types / behaviours in the listed scenarios.
 
 | Scenario | Required behaviour |
@@ -863,7 +845,7 @@ these error types / behaviours in the listed scenarios.
 ### Constants for `op` field
 
 Where the table specifies `op: "extension"`, that is the recommended
-constant. Stage 6 MAY refine it (e.g. `op: "ExtensionOp::linearize"` vs
+constant. Implementations MAY refine it (e.g. `op: "ExtensionOp::linearize"` vs
 `op: "ExtensionOp::eager_execute"`) to give better error messages, as
 long as every `Error` value for an extension includes the `family_id`
 somewhere in its message or fields.
@@ -884,22 +866,20 @@ The legacy semiring pipeline, specifically:
 - `eval_semiring_ir`
 - the in-tree `tenferro/tests/tropical.rs`
 
-…was retired in pre-Stage-3 cleanup (commit `39f1b60` on
-`refactor_ad_v3`), with additional cleanup of ad module renaming
-(`e1af8e9`), compile-path isolation (`d134763`), and docs demotion
-(`0258531`). Equivalent test coverage for tropical moved to the
-external crate `tenferro-ext-tropical` under Stages 4a / 4b, commits
-`7317268` and `188a278`.
+...was retired during extension-substrate cleanup (commit `39f1b60` on
+`refactor_ad_v3`), with additional cleanup of ad module renaming (`e1af8e9`),
+compile-path isolation (`d134763`), and docs demotion (`0258531`). Equivalent
+test coverage for tropical moved to the external crate `tenferro-ext-tropical`
+in commits `7317268` and `188a278`.
 
 ### What `ExtensionOp` is NOT
 
-`ExtensionOp` is **not** a replacement for `SemiringOp<Alg>`. The
-design-v3 commitments make this explicit:
+`ExtensionOp` is **not** a replacement for `SemiringOp<Alg>`:
 
 - The graph is no longer algebra-parameterized. Tropical and other
   non-standard-arithmetic paths live outside the core graph, either as
-  compositions of core primitives (Stage 4: Recipe A) or as fused
-  extensions (Stage 7: Recipe B — `FusedTropicalDotGeneral`).
+  compositions of core primitives or as fused extensions such as
+  `FusedTropicalDotGeneral`.
 - `ExtensionOp` provides a single variant `StdTensorOp::Extension(Arc<dyn
   ExtensionOp>)` carrying arbitrary payloads. It does not bring back a
   parallel graph vocabulary keyed on an algebra type parameter.
@@ -916,27 +896,26 @@ docs, or out-of-tree code lands here first. The short form:
 
 > `SemiringOp` / `SemiringBackend` is gone. `ExtensionOp` is a different
 > mechanism for a narrower purpose: single-variant carrier for out-of-tree
-> fused ops. Tropical lives as composition first (Stage 4) and as a
-> fused `ExtensionOp` second (Stage 7), not as a second graph vocabulary.
+> fused ops. Tropical lives as core-op composition or as a fused
+> `ExtensionOp`, not as a second graph vocabulary.
 
-Stage 6 therefore does **not** re-introduce a `SemiringOp`-shaped layer,
-nor does it tie `ExtensionOp` identity to an algebra type parameter.
-Identity is carried by `family_id`, per Section 5.
+`ExtensionOp` therefore does **not** re-introduce a `SemiringOp`-shaped layer,
+nor does it tie identity to an algebra type parameter. Identity is carried by
+`family_id`, per Section 5.
 
 ---
 
 ## 14. Worked example: `FusedTropicalDotGeneral` (informative)
 
 This section is **informative** (non-normative). It exists to
-cross-validate the normative contract against the Stage 7 consumer. If
+cross-validate the normative contract against an external consumer. If
 the spec above is insufficient to guide a working `FusedTropicalDotGeneral`
-implementation, the spec is wrong and MUST be revised before Stage 6
-continues (per `40-extension-boundary.md` "Relation To Tropical").
+implementation, the spec is wrong and MUST be revised.
 
 ### Sketch
 
 ```rust
-// In tenferro-ext-tropical (Stage 7):
+// In tenferro-ext-tropical:
 
 use std::sync::Arc;
 use tenferro_ops::{ExtensionOp, StdTensorOp};
@@ -1051,27 +1030,25 @@ pub fn register() -> Result<(), RegistrationError> {
   closure rule.
 - Registration is explicit (Section 9).
 
-If Stage 7 cannot be implemented from this spec, the spec is
-insufficient and MUST be revised before Stage 6 proceeds.
+If an external fused op cannot be implemented from this spec, the spec is
+insufficient and MUST be revised.
 
-### Note — reconciliation with the Stage 7 implementation
+### Note — reconciliation with the external implementation
 
-The Stage 7 deliverable in `tenferro-ext-tropical`
-(`ext/tropical/src/fused.rs`) lands the op shape described above with two
-deviations from this informative sketch, both within the spec's
-flexibility:
+The `tenferro-ext-tropical` implementation (`ext/tropical/src/fused.rs`) lands
+the op shape described above with two deviations from this informative sketch,
+both within the spec's flexibility:
 
 - **Payload**: the actual `FusedTropicalDotGeneralOp` carries a small
   `TropicalKind { MaxPlus, MinPlus }` enum instead of a
-  `DotGeneralConfig`. Stage 7 is scoped to rank-2 inputs with fixed
-  contracting axes, so the full `DotGeneralConfig` is not needed; a
+  `DotGeneralConfig`. The current external implementation is scoped to rank-2
+  inputs with fixed contracting axes, so the full `DotGeneralConfig` is not needed; a
   richer payload is a straightforward later bump to
   `tenferro-ext-tropical.fused_dot_general.v2` (Section 5 versioning).
 - **AD emission**: the sketch suggests `Gather` / `Scatter` on saved
   argmax indices. The core op vocabulary intentionally does not
-  include an `ArgMax` variant, and Stage 7 is forbidden from adding
-  one (Section 10 / migration-plan Stage 7 scope). The implementation
-  therefore uses the mathematically equivalent **indicator-mask**
+  include an `ArgMax` variant, so the implementation uses the mathematically
+  equivalent **indicator-mask**
   construction (the same `Compare(Eq) + Mul + ReduceSum + Div` pattern
   used by the core `ReduceMax` / `ReduceMin` AD rule in
   `tenferro-ops/src/ad/contraction.rs`). The two are two expressions
@@ -1086,15 +1063,15 @@ versioning, and failure modes all hold unchanged.
 
 ## 15. Open questions
 
-The following are explicitly deferred. Stage 6 and Stage 7 are
-permitted to decide these without revisiting this document.
+The following are explicitly deferred. Future implementations may decide these
+without revisiting this document.
 
 1. **Exact registry data structure.** Section 9 normatively picks
    `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionFactory>>>>`.
    A future evidence-driven migration to `linkme`-style distributed
-   slices is permitted but out of scope for Stage 6.
+   slices is permitted but out of scope for the current contract.
 
-2. **`no_std` / wasm targets.** The initial Stage 6 implementation
+2. **`no_std` / wasm targets.** The initial implementation
    MAY restrict `ExtensionOp` to `std`-targets. Widening to `no_std`
    (e.g. for embedded or wasm backends) is deferred until a concrete
    consumer appears.
@@ -1102,39 +1079,38 @@ permitted to decide these without revisiting this document.
 3. **Cross-process graph serialization format.** Section 11 fixes
    required invariants for any future serializer, but does not
    mandate a specific format. Choosing one (e.g. a bincode / StableHLO
-   / protobuf encoding) is out of scope for Stage 6.
+   / protobuf encoding) is out of scope for this contract.
 
 4. **Deep-clone semantics for `Arc<dyn ExtensionOp>`.** Section 4's
-   `clone_arc` is intended to be rarely invoked. If a Stage 6 consumer
+   `clone_arc` is intended to be rarely invoked. If a future consumer
    needs a principled "split one Arc into two independent Arcs" path
    (e.g. for cross-thread isolation), the concrete semantics of that
    split are open.
 
 5. **Downcast convention.** Section 5 allows either `Any`
-   supertrait or `fn as_any(&self) -> &dyn Any`. Stage 6 picks one
-   and documents it on the trait.
+   supertrait or `fn as_any(&self) -> &dyn Any`. Implementations pick one
+   convention and document it on the trait.
 
 6. **Metrics / observability hooks.** Whether `eager_execute` should
    emit tracing spans (via `tracing` crate or similar) is deferred.
    Extensions MAY emit their own; the core pipeline does not
-   instrument extension calls as of Stage 6.
+   instrument extension calls today.
 
 ---
 
 ## 16. Change log
 
-- 2026-04-19: Initial draft — Stage 5 deliverable, landed in commit
-  `efd91a7` on `refactor_ad_v3`.
-- 2026-04-20: Stage 6 implementation — `ExtensionOp` trait, registry,
+- 2026-04-19: Initial draft landed in commit `efd91a7` on `refactor_ad_v3`.
+- 2026-04-20: Implementation — `ExtensionOp` trait, registry,
   `StdTensorOp::Extension` carrier, and full forward / AD / shape-infer
   / compile / eager wiring landed in commit `2c7e26c` on
   `codex-stage-6` (branched from `efd91a7`). Public `tenferro::extension`
   facade (including `apply(op, inputs)`) and nine smoke tests landed in
   commit `be9f985`.
-- 2026-04-20: Stage 7 self-test — `FusedTropicalDotGeneralOp` landed in
+- 2026-04-20: External tropical self-test — `FusedTropicalDotGeneralOp` landed in
   `tenferro-ext-tropical` on branch `codex-stage-7` (branched from
   `c9266f9`). The fused op and public traced wrappers landed in commit
-  `e03ea60`; the AD parity and Stage 5 contract self-tests in commit
+  `e03ea60`; the AD parity and contract self-tests in commit
   `1d9c343`. Section 14 was updated in the same branch to reconcile its
   informative sketch with the realised implementation (payload is
   `TropicalKind`, AD emits indicator-mask rather than Gather/Scatter —

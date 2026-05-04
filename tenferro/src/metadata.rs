@@ -10,10 +10,10 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_tensor::{DType, Tensor};
 
-use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_shapes};
+use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
 
 pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
-    TensorMeta { dtype, shape }
+    TensorMeta::exact(dtype, shape)
 }
 
 pub(crate) fn concrete_tensor_meta(dtype: DType, shape: &[usize]) -> TensorMeta {
@@ -120,20 +120,18 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<Tenso
     }
 
     let output_dtype = infer_output_dtype(op, &input_dtypes);
-    infer_output_shapes(op, &input_shape_refs)
+    infer_output_extents(op, &input_shape_refs)
         .into_iter()
-        .map(|shape| {
+        .map(|extents| {
             let resolved_inputs: Vec<&[SymDim]> = input_metas
                 .iter()
                 .map(|meta| meta.shape.as_slice())
                 .collect();
-            tensor_meta(
-                output_dtype,
-                shape
-                    .iter()
-                    .map(|dim| SymDim::from_dim_expr(dim, &resolved_inputs))
-                    .collect(),
-            )
+            let resolved_extents = extents
+                .into_iter()
+                .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, &resolved_inputs)))
+                .collect();
+            TensorMeta::with_extents(output_dtype, resolved_extents)
         })
         .collect()
 }

@@ -1,14 +1,13 @@
-# Stage 8 Evidence: Tropical Matmul Benchmark Results
+# Tropical Matmul Benchmark Results
 
-This document records the benchmark evidence gathered for **design_v3
-Stage 8** (core-owned fused primitives). Stage 8 is explicitly
-evidence-gated in `docs/design/design_v3/90-migration-plan.md`: it should
-only proceed if benchmarks show a composition or `ExtensionOp` pattern is
-measurably slow enough to justify a core op variant.
+This document records benchmark evidence for deciding whether a core-owned
+fused tropical primitive is justified. Such a primitive should only proceed if
+benchmarks show a composition or `ExtensionOp` pattern is measurably slow
+enough to justify a core op variant.
 
 The workload under test is **forward-only** max-plus matmul
 (`out[i, j] = max_k (a[i, k] + b[k, j])`) expressed two ways over the
-existing Stage 4a / Stage 7 surface.
+existing composition and fused `ExtensionOp` surfaces.
 
 ## Hardware and toolchain
 
@@ -25,7 +24,7 @@ All benches ran single-threaded (Criterion default). The tropical crate
 is a standalone cargo workspace excluded from the core `tenferro-rs`
 workspace, so the bench binary links through the public `tenferro`
 facade plus `tenferro-ops` for the `ExtensionOp` surface — the same
-boundaries the Stage 4a / 7 contract imposes on end users.
+composition and fused-extension boundaries imposed on end users.
 
 ## Bench method
 
@@ -87,7 +86,7 @@ tropical_matmul/fused_ext/384     [152.81 ms 155.73 ms  158.35 ms]
   CI agree on the direction at every size).
 
 - **The composition path is bottlenecked by intermediate memory, not
-  compute.** The Stage 4a lowering allocates three full-sized 3D
+  compute.** The composition lowering allocates three full-sized 3D
   tensors (`a_b`, `b_b`, `sum_3d`), each of shape `[M, K, N]`. At
   N=384 that is `384^3 * 8 bytes ≈ 452 MiB` per tensor, ≈ 1.35 GiB of
   working set per evaluation. That pushes memory-bandwidth, not
@@ -114,12 +113,11 @@ tropical_matmul/fused_ext/384     [152.81 ms 155.73 ms  158.35 ms]
   62 ms is well-separated from the fused median of 43 ms, and the
   subsequent N=64 number rules out any per-call overhead pathology.
 
-## Interpretation through the Stage 8 trigger condition
+## Interpretation
 
-> Stage 8 trigger (from `docs/design/design_v3/90-migration-plan.md`):
-> "composition-based or `ExtensionOp`-based implementations of a
-> repeatedly needed pattern are measurably slow in production
-> workloads".
+Core-owned fused primitives are justified when composition-based or
+`ExtensionOp`-based implementations of a repeatedly needed pattern are
+measurably slow in production workloads.
 
 The composition path is not just "measurably slow" — it is
 asymptotically slow by a factor that grows with problem size, for
@@ -134,10 +132,10 @@ reasons intrinsic to the decomposition:
   computations, and fused-argmax contractions. Any tropical-heavy
   workload will hit exactly this bottleneck.
 
-The Stage 7 `ExtensionOp` packaging already fixes the memory-scaling
-problem for **eager** execution (its `eager_execute` computes directly
-from host data), so out-of-tree crates can ship today with acceptable
-performance. But the `ExtensionOp` carrier cannot express a
+The fused `ExtensionOp` packaging already fixes the memory-scaling problem for
+**eager** execution (its `eager_execute` computes directly from host data), so
+out-of-tree crates can ship today with acceptable performance. But the
+`ExtensionOp` carrier cannot express a
 cache-blocked / SIMD / parallel kernel without either:
 
 1. duplicating significant kernel infrastructure inside each external
@@ -145,17 +143,16 @@ cache-blocked / SIMD / parallel kernel without either:
 2. routing through a core-owned primitive that can dispatch to the
    same backend abstractions used by `dot_general`, `reduce_max`, etc.
 
-Option (2) is exactly what Stage 8 contemplates.
+Option (2) is the core-op follow-up this benchmark is meant to inform.
 
-## Recommendation: **GO** — Stage 8 is justified
+## Recommendation: **GO** — core fusion is justified
 
-Proceed with Stage 8 and introduce a core-owned fused tropical
-dot-general variant.
+Proceed with a core-owned fused tropical dot-general variant.
 
 ### Suggested shape of the core op
 
 A sketch (non-binding) consistent with the existing `StdTensorOp` enum
-conventions and with the Stage 7 fused `ExtensionOp` semantics:
+conventions and with the fused `ExtensionOp` semantics:
 
 ```rust
 // In tenferro-ops/src/std_tensor_op.rs:
@@ -185,27 +182,27 @@ Dispatch targets:
   cuTENSOR does not expose a max-plus path, so this is a native cubecl
   kernel rather than an FFI wrapper.
 
-AD remains as specified in `40-extension-boundary.md` / spec Section 14:
-the linearization and transpose rules still lower to core
+AD remains as specified in `docs/spec/extension-op.md` Section 14: the
+linearization and transpose rules still lower to core
 `BroadcastInDim + Add + ReduceMax + Compare(Eq) + Select + ReduceSum +
-Mul + Div` — i.e. Stage 8 adds a new primal op but does **not** touch
+Mul + Div` — i.e. the core fused op adds a new primal op but does **not** touch
 the AD closure contract. The AD rule can keep the O(MKN) working set
 for now because AD is already memory-heavy for other structural reasons;
 if profiling later shows AD is also a bottleneck, that becomes a
-separate Stage 8 sub-task.
+separate follow-up.
 
 ### What this bench does NOT prove
 
 - This bench only covers **rank-2 square** inputs. Batched tropical
   contraction and non-square shapes are plausible but untested. The
-  Stage 8 op design should accept the same axis specification as
+  core op design should accept the same axis specification as
   `DotGeneral` so those fall out naturally.
-- The bench is CPU-only; no GPU data here. Stage 8 GPU dispatch is a
+- The bench is CPU-only; no GPU data here. GPU dispatch is a
   separate follow-up — the CPU evidence alone is enough to justify
   introducing the core op.
 - The bench measures forward only, not AD. AD performance under
-  Stage 4 composition vs Stage 7 `ExtensionOp` vs hypothetical Stage 8
-  core op is a separate investigation.
+  composition vs fused `ExtensionOp` vs a hypothetical core op is a separate
+  investigation.
 
 ## Reproducing
 

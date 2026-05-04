@@ -1,9 +1,9 @@
 //! Out-of-tree extension-operation mechanism.
 //!
-//! This module implements design_v3 Stage 6: the [`ExtensionOp`] trait and its
-//! process-local registry. Together they let external crates contribute
-//! fused primitives that participate in the [`crate::std_tensor_op::StdTensorOp`]
-//! graph through the single carrier variant
+//! This module implements the [`ExtensionOp`] trait and its process-local
+//! registry. Together they let external crates contribute fused primitives
+//! that participate in the [`crate::std_tensor_op::StdTensorOp`] graph through
+//! the single carrier variant
 //! `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`.
 //!
 //! See `docs/spec/extension-op.md` for the normative contract. Key points:
@@ -54,7 +54,7 @@ use crate::sym_dim::SymDim;
 ///
 /// Implementations appear in the core graph as
 /// `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`. Every method is part of the
-/// Stage 5 spec (`docs/spec/extension-op.md`); the short form:
+/// `ExtensionOp` spec (`docs/spec/extension-op.md`); the short form:
 ///
 /// - identity via [`family_id`][Self::family_id] + [`payload_hash`][Self::payload_hash]
 ///   + [`payload_eq`][Self::payload_eq];

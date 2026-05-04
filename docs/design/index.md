@@ -12,9 +12,10 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [device.md](./device.md) | tenferro-device: memory spaces, compute devices, error types |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
-| [algebra.md](./algebra.md) | HasAlgebra, Semiring, tropical and user-defined algebra |
+| [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
+| [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape metadata contract |
 | [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration for einsum + frontend |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |
@@ -26,18 +27,6 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [capi.md](./capi.md) | C-API: opaque handles, DLPack, einsum + SVD + AD |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy |
 | [testing.md](./testing.md) | Testing and performance verification strategy |
-
-## Proposal Sets
-
-| Document | Description |
-|----------|-------------|
-| [design_v3/README.md](./design_v3/README.md) | Non-canonical proposal set for traced graph, AD, shape metadata, and tropical externalization |
-
-Per design_v3, the `SemiringOp` / `SemiringBackend` graph substrate is
-**non-mainline** and scheduled for removal in Stage 6; see
-[`design_v3/30-algebra-and-tropical.md`](./design_v3/30-algebra-and-tropical.md)
-and [`design_v3/90-migration-plan.md`](./design_v3/90-migration-plan.md) Stage
-6. The mainline traced op vocabulary is `StdTensorOp` in `tenferro-ops`.
 
 ## Reference
 
