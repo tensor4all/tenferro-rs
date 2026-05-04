@@ -149,6 +149,203 @@ fn linearize_dynamic_gather_reuses_primal_indices_and_shape_sources() {
 }
 
 #[test]
+fn linearize_dynamic_slice_reuses_primal_starts() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(105);
+    let starts_key = input_key(106);
+    let operand_tangent = builder.add_input(tensor_input(107));
+
+    let slice_sizes = vec![3];
+    let op = StdTensorOp::DynamicSlice {
+        slice_sizes: slice_sizes.clone(),
+    };
+    let primal_in = vec![operand_key, starts_key.clone()];
+    let tangent_in = [Some(operand_tangent), None];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+
+    assert_eq!(result.len(), 1);
+    let tangent_out = result[0].expect("output tangent must be active");
+    let fragment = builder.build();
+
+    assert_eq!(fragment.ops().len(), 1);
+    let dynamic_slice = &fragment.ops()[0];
+    assert_eq!(dynamic_slice.op, StdTensorOp::DynamicSlice { slice_sizes });
+    assert_eq!(dynamic_slice.inputs[0], ValRef::Local(operand_tangent));
+    assert_eq!(dynamic_slice.inputs[1], ValRef::External(starts_key));
+    assert_eq!(
+        dynamic_slice.mode,
+        OpMode::Linear {
+            active_mask: vec![true, false],
+        }
+    );
+    assert!(dynamic_slice.outputs.contains(&tangent_out));
+}
+
+#[test]
+fn linearize_dynamic_slice_inactive_tangent_returns_none() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(108);
+    let starts_key = input_key(109);
+
+    let op = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![3],
+    };
+    let primal_in = vec![operand_key, starts_key];
+    let tangent_in: [Option<LocalValId>; 2] = [None, None];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+    assert_eq!(result, vec![None]);
+    assert!(builder.build().ops().is_empty());
+}
+
+#[test]
+fn linearize_dynamic_update_slice_reuses_primal_starts() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let operand_key = input_key(110);
+    let update_key = input_key(111);
+    let starts_key = input_key(112);
+    let operand_tangent = builder.add_input(tensor_input(113));
+    let update_tangent = builder.add_input(tensor_input(114));
+
+    let op = StdTensorOp::DynamicUpdateSlice;
+    let primal_in = vec![operand_key, update_key, starts_key.clone()];
+    let tangent_in = [Some(operand_tangent), Some(update_tangent), None];
+
+    let result = op.linearize(&mut builder, &primal_in, &[], &tangent_in, &mut ctx);
+
+    assert_eq!(result.len(), 1);
+    let tangent_out = result[0].expect("output tangent must be active");
+    let fragment = builder.build();
+
+    assert_eq!(fragment.ops().len(), 1);
+    let update_slice = &fragment.ops()[0];
+    assert_eq!(update_slice.op, StdTensorOp::DynamicUpdateSlice);
+    assert_eq!(update_slice.inputs[0], ValRef::Local(operand_tangent));
+    assert_eq!(update_slice.inputs[1], ValRef::Local(update_tangent));
+    assert_eq!(update_slice.inputs[2], ValRef::External(starts_key));
+    assert_eq!(
+        update_slice.mode,
+        OpMode::Linear {
+            active_mask: vec![true, true, false],
+        }
+    );
+    assert!(update_slice.outputs.contains(&tangent_out));
+}
+
+#[test]
+fn transpose_dynamic_slice_emits_dynamic_update_slice() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(115));
+    let operand_key = input_key(116);
+    let starts_key = input_key(117);
+    seed_metadata(
+        &mut ctx,
+        &[(operand_key.clone(), &[5]), (starts_key.clone(), &[1])],
+    );
+
+    let inputs = vec![
+        ValRef::External(operand_key.clone()),
+        ValRef::External(starts_key.clone()),
+    ];
+    let result = (StdTensorOp::DynamicSlice {
+        slice_sizes: vec![3],
+    })
+    .transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![true, false],
+        },
+        &mut ctx,
+    );
+
+    assert!(result[0].is_some(), "operand cotangent must be active");
+    assert_eq!(result[1], None, "starts cotangent must stay None");
+
+    let fragment = builder.build();
+    let update_slice = fragment
+        .ops()
+        .iter()
+        .find(|op_node| matches!(op_node.op, StdTensorOp::DynamicUpdateSlice))
+        .expect("expected a DynamicUpdateSlice op");
+    assert!(matches!(update_slice.inputs[0], ValRef::Local(_)));
+    assert_ne!(update_slice.inputs[0], ValRef::External(operand_key));
+    assert_eq!(update_slice.inputs[1], ValRef::Local(cot));
+    assert_eq!(update_slice.inputs[2], ValRef::External(starts_key));
+    assert_eq!(
+        update_slice.mode,
+        OpMode::Linear {
+            active_mask: vec![false, true, false],
+        }
+    );
+}
+
+#[test]
+fn transpose_dynamic_update_slice_returns_operand_and_update_cotangents() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ctx = ShapeGuardContext::default();
+    let cot = builder.add_input(tensor_input(118));
+    let operand_key = input_key(119);
+    let update_key = input_key(120);
+    let starts_key = input_key(121);
+    seed_metadata(
+        &mut ctx,
+        &[
+            (operand_key.clone(), &[5]),
+            (update_key.clone(), &[3]),
+            (starts_key.clone(), &[1]),
+        ],
+    );
+
+    let inputs = vec![
+        ValRef::External(operand_key),
+        ValRef::External(update_key),
+        ValRef::External(starts_key.clone()),
+    ];
+    let result = StdTensorOp::DynamicUpdateSlice.transpose_rule(
+        &mut builder,
+        &[Some(cot)],
+        &inputs,
+        &OpMode::Linear {
+            active_mask: vec![true, true, false],
+        },
+        &mut ctx,
+    );
+
+    assert!(result[0].is_some(), "operand cotangent must be active");
+    assert!(result[1].is_some(), "update cotangent must be active");
+    assert_eq!(result[2], None, "starts cotangent must stay None");
+
+    let fragment = builder.build();
+    assert!(
+        fragment
+            .ops()
+            .iter()
+            .any(|op_node| matches!(op_node.op, StdTensorOp::DynamicUpdateSlice)),
+        "operand cotangent should be masked by DynamicUpdateSlice"
+    );
+    let update_ct = fragment
+        .ops()
+        .iter()
+        .find(|op_node| matches!(op_node.op, StdTensorOp::DynamicSlice { .. }))
+        .expect("expected a DynamicSlice op for update cotangent");
+    assert_eq!(
+        update_ct.op,
+        StdTensorOp::DynamicSlice {
+            slice_sizes: vec![3],
+        }
+    );
+    assert_eq!(update_ct.inputs[0], ValRef::Local(cot));
+    assert_eq!(update_ct.inputs[1], ValRef::External(starts_key));
+}
+
+#[test]
 fn transpose_gather_emits_scatter_with_inverted_config() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ctx = ShapeGuardContext::default();

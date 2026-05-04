@@ -825,6 +825,39 @@ fn build_full_piv_lu_solve_sum_fragment() -> (
     (Arc::new(builder.build()), a_key, b_key, loss_key)
 }
 
+fn build_full_piv_lu_lu_sum_fragment() -> (
+    Arc<Fragment<StdTensorOp>>,
+    TensorInputKey,
+    GlobalValKey<StdTensorOp>,
+) {
+    let input_key = tensor_input_key(38_100);
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let a = builder.add_input(input_key.clone());
+    let lu = builder.add_op(
+        StdTensorOp::FullPivLu,
+        vec![ValRef::Local(a)],
+        OpMode::Primal,
+    );
+    let l_sum = builder.add_op(
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
+        vec![ValRef::Local(lu[1])],
+        OpMode::Primal,
+    )[0];
+    let u_sum = builder.add_op(
+        StdTensorOp::ReduceSum { axes: vec![0, 1] },
+        vec![ValRef::Local(lu[2])],
+        OpMode::Primal,
+    )[0];
+    let loss = builder.add_op(
+        StdTensorOp::Add,
+        vec![ValRef::Local(l_sum), ValRef::Local(u_sum)],
+        OpMode::Primal,
+    )[0];
+    let loss_key = builder.global_key(loss).clone();
+    builder.set_outputs(vec![loss]);
+    (Arc::new(builder.build()), input_key, loss_key)
+}
+
 fn build_solve_real_sum_fragment() -> (
     Arc<Fragment<StdTensorOp>>,
     TensorInputKey,
@@ -1289,6 +1322,13 @@ fn sum_full_piv_lu_solve(a: &[f64], b: &[f64]) -> f64 {
     let b_tensor = f64_tensor(vec![2, 1], b.to_vec());
     let out = TensorBackend::full_piv_lu_solve(&mut backend, &a_tensor, &b_tensor, false).unwrap();
     get_f64_data(&out).iter().sum()
+}
+
+fn sum_full_piv_lu_lu(data: &[f64]) -> f64 {
+    let mut backend = CpuBackend::new();
+    let input = f64_tensor(vec![2, 2], data.to_vec());
+    let outputs = TensorBackend::full_piv_lu(&mut backend, &input).unwrap();
+    get_f64_data(&outputs[1]).iter().sum::<f64>() + get_f64_data(&outputs[2]).iter().sum::<f64>()
 }
 
 fn sum_cholesky(data: &[f64]) -> f64 {
@@ -2652,6 +2692,42 @@ fn grad_full_piv_lu_solve_matches_finite_diff() {
 }
 
 #[test]
+fn jvp_full_piv_lu_lu_matches_finite_diff() {
+    let a_data = vec![0.2, 2.0, 1.0, 3.0];
+    let tangent_data = vec![0.5, -1.0, 1.5, -0.25];
+    let (fragment, input_key, loss_key) = build_full_piv_lu_lu_sum_fragment();
+
+    let mut inputs = HashMap::new();
+    inputs.insert(input_key.clone(), f64_tensor(vec![2, 2], a_data.clone()));
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        loss_key,
+        input_key,
+        inputs,
+        f64_tensor(vec![2, 2], tangent_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &a_data, &tangent_data, |xs| {
+        vec![sum_full_piv_lu_lu(xs)]
+    });
+}
+
+#[test]
+fn grad_full_piv_lu_lu_matches_finite_diff() {
+    let a_data = vec![0.2, 2.0, 1.0, 3.0];
+    let (fragment, input_key, loss_key) = build_full_piv_lu_lu_sum_fragment();
+
+    let grad = grad_from_fragment(
+        fragment,
+        loss_key,
+        input_key,
+        f64_tensor(vec![2, 2], a_data.clone()),
+    );
+
+    assert_grad_matches_finite_diff(get_f64_data(&grad), &a_data, sum_full_piv_lu_lu);
+}
+
+#[test]
 fn grad_triangular_solve_rhs_matches_finite_diff() {
     let a_data = vec![2.0, -1.0, 0.0, 3.0];
     let b_data = vec![1.0, 4.0];
@@ -3148,6 +3224,47 @@ fn build_weighted_unary_sum_fragment(
     (Arc::new(builder.build()), loss_key)
 }
 
+fn build_dynamic_slice_fragment(
+    input_key: TensorInputKey,
+    starts_key: TensorInputKey,
+    slice_sizes: Vec<usize>,
+) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let input = builder.add_input(input_key);
+    let starts = builder.add_input(starts_key);
+    let output = builder.add_op(
+        StdTensorOp::DynamicSlice { slice_sizes },
+        vec![ValRef::Local(input), ValRef::Local(starts)],
+        OpMode::Primal,
+    )[0];
+    let output_key = builder.global_key(output).clone();
+    builder.set_outputs(vec![output]);
+    (Arc::new(builder.build()), output_key)
+}
+
+fn build_dynamic_update_slice_fragment(
+    operand_key: TensorInputKey,
+    update_key: TensorInputKey,
+    starts_key: TensorInputKey,
+) -> (Arc<Fragment<StdTensorOp>>, GlobalValKey<StdTensorOp>) {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let operand = builder.add_input(operand_key);
+    let update = builder.add_input(update_key);
+    let starts = builder.add_input(starts_key);
+    let output = builder.add_op(
+        StdTensorOp::DynamicUpdateSlice,
+        vec![
+            ValRef::Local(operand),
+            ValRef::Local(update),
+            ValRef::Local(starts),
+        ],
+        OpMode::Primal,
+    )[0];
+    let output_key = builder.global_key(output).clone();
+    builder.set_outputs(vec![output]);
+    (Arc::new(builder.build()), output_key)
+}
+
 #[test]
 fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
     // `y = reduce_sum(scatter(operand, indices, updates, config))`. The
@@ -3187,6 +3304,164 @@ fn grad_scatter_reduce_sum_wrt_updates_is_ones() {
     // reduce_sum over the scatter output contributes a 1 to each updated
     // slot; the inverse Gather reads one value for each `indices` entry.
     assert_close_slice(get_f64_data(&grad), &[1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn jvp_dynamic_slice_matches_finite_diff() {
+    let input_key = tensor_input_key(61_500);
+    let starts_key = tensor_input_key(61_501);
+    let (fragment, output_key) =
+        build_dynamic_slice_fragment(input_key.clone(), starts_key.clone(), vec![3]);
+
+    let input_data = vec![0.5_f64, -1.0, 2.5, 4.0, -3.0];
+    let starts_data = vec![1_i64];
+    let tangent_data = vec![1.25_f64, -0.75, 3.0, 2.5, -1.0];
+    let inputs_map = HashMap::from([
+        (input_key.clone(), f64_tensor(vec![5], input_data.clone())),
+        (starts_key, i64_tensor(vec![1], starts_data)),
+    ]);
+
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(vec![5], tangent_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &input_data, &tangent_data, |xs| {
+        xs[1..4].to_vec()
+    });
+}
+
+#[test]
+fn grad_dynamic_slice_clamped_start_matches_finite_diff() {
+    let input_key = tensor_input_key(61_510);
+    let starts_key = tensor_input_key(61_511);
+    let (fragment, output_key) =
+        build_dynamic_slice_fragment(input_key.clone(), starts_key.clone(), vec![3]);
+
+    let input_data = vec![0.5_f64, -1.0, 2.5, 4.0, -3.0];
+    let starts_data = vec![4_i64];
+    let cotangent_data = vec![0.5_f64, -1.0, 2.0];
+    let inputs_map = HashMap::from([
+        (input_key.clone(), f64_tensor(vec![5], input_data.clone())),
+        (starts_key, i64_tensor(vec![1], starts_data)),
+    ]);
+
+    let grad = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        output_key,
+        input_key,
+        inputs_map,
+        f64_tensor(vec![3], cotangent_data.clone()),
+    );
+
+    let loss = |xs: &[f64]| {
+        xs[2..5]
+            .iter()
+            .zip(cotangent_data.iter())
+            .map(|(&value, &weight)| value * weight)
+            .sum()
+    };
+    let expected: Vec<f64> = (0..input_data.len())
+        .map(|idx| finite_diff_scalar(loss, &input_data, idx, 1.0e-6))
+        .collect();
+    assert_close_slice(get_f64_data(&grad), &expected);
+}
+
+#[test]
+fn jvp_dynamic_update_slice_update_matches_finite_diff() {
+    let operand_key = tensor_input_key(61_520);
+    let update_key = tensor_input_key(61_521);
+    let starts_key = tensor_input_key(61_522);
+    let (fragment, output_key) = build_dynamic_update_slice_fragment(
+        operand_key.clone(),
+        update_key.clone(),
+        starts_key.clone(),
+    );
+
+    let operand_data = vec![10.0_f64, 11.0, 12.0, 13.0, 14.0];
+    let update_data = vec![1.0_f64, 2.0, 3.0];
+    let starts_data = vec![4_i64];
+    let tangent_data = vec![0.5_f64, -1.0, 2.0];
+    let inputs_map = HashMap::from([
+        (operand_key, f64_tensor(vec![5], operand_data.clone())),
+        (update_key.clone(), f64_tensor(vec![3], update_data.clone())),
+        (starts_key, i64_tensor(vec![1], starts_data)),
+    ]);
+
+    let tangent = jvp_from_fragment_with_inputs(
+        fragment,
+        output_key,
+        update_key,
+        inputs_map,
+        f64_tensor(vec![3], tangent_data.clone()),
+    );
+
+    assert_jvp_matches_finite_diff(get_f64_data(&tangent), &update_data, &tangent_data, |upd| {
+        let mut out = operand_data.clone();
+        out[2..5].copy_from_slice(upd);
+        out
+    });
+}
+
+#[test]
+fn grad_dynamic_update_slice_matches_finite_diff() {
+    let operand_key = tensor_input_key(61_530);
+    let update_key = tensor_input_key(61_531);
+    let starts_key = tensor_input_key(61_532);
+    let (fragment, output_key) = build_dynamic_update_slice_fragment(
+        operand_key.clone(),
+        update_key.clone(),
+        starts_key.clone(),
+    );
+
+    let operand_data = vec![10.0_f64, 11.0, 12.0, 13.0, 14.0];
+    let update_data = vec![1.0_f64, 2.0, 3.0];
+    let starts_data = vec![4_i64];
+    let cotangent_data = vec![0.5_f64, -0.25, 1.0, 2.0, -1.5];
+    let inputs_map = HashMap::from([
+        (
+            operand_key.clone(),
+            f64_tensor(vec![5], operand_data.clone()),
+        ),
+        (update_key.clone(), f64_tensor(vec![3], update_data.clone())),
+        (starts_key, i64_tensor(vec![1], starts_data)),
+    ]);
+
+    let grad_operand = grad_from_fragment_with_inputs_and_cotangent(
+        fragment.clone(),
+        output_key.clone(),
+        operand_key,
+        inputs_map.clone(),
+        f64_tensor(vec![5], cotangent_data.clone()),
+    );
+    let grad_update = grad_from_fragment_with_inputs_and_cotangent(
+        fragment,
+        output_key,
+        update_key,
+        inputs_map,
+        f64_tensor(vec![5], cotangent_data.clone()),
+    );
+
+    let loss_with = |operand: &[f64], update: &[f64]| {
+        let mut out = operand.to_vec();
+        out[2..5].copy_from_slice(update);
+        out.iter()
+            .zip(cotangent_data.iter())
+            .map(|(&value, &weight)| value * weight)
+            .sum()
+    };
+    let expected_operand: Vec<f64> = (0..operand_data.len())
+        .map(|idx| finite_diff_scalar_lhs(loss_with, &operand_data, &update_data, idx, 1.0e-6))
+        .collect();
+    let expected_update: Vec<f64> = (0..update_data.len())
+        .map(|idx| finite_diff_scalar_rhs(loss_with, &operand_data, &update_data, idx, 1.0e-6))
+        .collect();
+
+    assert_close_slice(get_f64_data(&grad_operand), &expected_operand);
+    assert_close_slice(get_f64_data(&grad_update), &expected_update);
 }
 
 #[test]

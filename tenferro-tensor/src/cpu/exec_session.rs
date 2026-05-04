@@ -229,6 +229,7 @@ impl TensorExec for CpuExecSession<'_> {
     delegate!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter(operand, indices, updates, config));
     delegate!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice(input, config));
     delegate!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice(input, starts, slice_sizes));
+    delegate!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice(operand, update, starts));
     delegate!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad(input, config));
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
         indexing::try_concatenate(inputs, axis)

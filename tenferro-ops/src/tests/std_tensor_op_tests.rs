@@ -275,6 +275,7 @@ fn test_std_tensor_op_input_output_counts() {
         .n_inputs(),
         2
     );
+    assert_eq!(StdTensorOp::DynamicUpdateSlice.n_inputs(), 3);
     assert_eq!(
         StdTensorOp::NaryEinsum {
             subscripts: "ij,jk,kl->il".into(),
@@ -346,6 +347,7 @@ fn test_std_tensor_op_input_output_counts() {
         .n_outputs(),
         1
     );
+    assert_eq!(StdTensorOp::DynamicUpdateSlice.n_outputs(), 1);
     assert_eq!(
         StdTensorOp::Pad(PadConfig {
             edge_padding_low: vec![1],
@@ -546,6 +548,7 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
         StdTensorOp::DynamicSlice {
             slice_sizes: vec![1],
         },
+        StdTensorOp::DynamicUpdateSlice,
         StdTensorOp::Pad(PadConfig {
             edge_padding_low: vec![0],
             edge_padding_high: vec![0],
@@ -1328,22 +1331,14 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
 }
 
 #[test]
-#[should_panic(expected = "linearize not implemented for Maximum")]
-fn test_std_tensor_op_linearize_panics_for_unimplemented_variant() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default();
-    let _ = StdTensorOp::Maximum.linearize(&mut builder, &[], &[], &[None, None], &mut ad_ctx);
-}
-
-#[test]
-#[should_panic(expected = "transpose_rule not implemented for Maximum")]
+#[should_panic(expected = "transpose_rule not implemented for FullPivLu")]
 fn test_std_tensor_op_transpose_rule_panics_for_unimplemented_variant() {
     let mut builder = FragmentBuilder::<StdTensorOp>::new();
     let mut ad_ctx = ShapeGuardContext::default();
-    let _ = StdTensorOp::Maximum.transpose_rule(
+    let _ = StdTensorOp::FullPivLu.transpose_rule(
         &mut builder,
-        &[None],
-        &external_inputs(950, 2),
+        &[None, None, None, None, None],
+        &external_inputs(950, 1),
         &OpMode::Primal,
         &mut ad_ctx,
     );

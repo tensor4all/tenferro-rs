@@ -2689,6 +2689,18 @@ impl TensorBackend for CubeclBackend {
         }
     }
 
+    fn dynamic_update_slice(
+        &mut self,
+        _operand: &Tensor,
+        _update: &Tensor,
+        _starts: &Tensor,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::BackendFailure {
+            op: "dynamic_update_slice",
+            message: "dynamic_update_slice is not implemented for the CubeCL backend".into(),
+        })
+    }
+
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
         match input {
             Tensor::F32(t) => self.pad_typed(t, config).map(Tensor::F32),

@@ -266,4 +266,22 @@ impl<B: TensorBackend> EagerTensor<B> {
     pub fn select(condition: &Self, on_true: &Self, on_false: &Self) -> Result<Self> {
         condition.ternary_op(on_true, on_false, StdTensorOp::Select)
     }
+
+    /// Clamp values elementwise between lower and upper bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{EagerTensor, Tensor};
+    ///
+    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![-2.0_f64, 0.5, 5.0]));
+    /// let lower = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![-1.0_f64, 0.0, 1.0]));
+    /// let upper = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 4.0]));
+    /// let y = x.clamp(&lower, &upper).unwrap();
+    ///
+    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[-1.0, 0.5, 4.0]);
+    /// ```
+    pub fn clamp(&self, lower: &Self, upper: &Self) -> Result<Self> {
+        self.ternary_op(lower, upper, StdTensorOp::Clamp)
+    }
 }

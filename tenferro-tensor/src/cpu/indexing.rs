@@ -136,6 +136,53 @@ pub fn dynamic_slice(
     }
 }
 
+/// Return `operand` with `update` written at dynamic `starts`.
+///
+/// Starts are clamped so the whole update window fits inside the operand,
+/// matching `dynamic_slice` behavior.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{cpu, Tensor, TypedTensor};
+///
+/// let operand = Tensor::F64(TypedTensor::from_vec(vec![5], vec![0.0; 5]));
+/// let update = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+/// let starts = Tensor::I64(TypedTensor::from_vec(vec![1], vec![4]));
+///
+/// let out = cpu::dynamic_update_slice(&operand, &update, &starts).unwrap();
+/// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 0.0, 0.0, 3.0, 4.0]);
+/// ```
+pub fn dynamic_update_slice(
+    operand: &Tensor,
+    update: &Tensor,
+    starts: &Tensor,
+) -> crate::Result<Tensor> {
+    let starts = try_index_tensor(starts)?;
+    match (operand, update) {
+        (Tensor::F32(op), Tensor::F32(upd)) => {
+            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::F32)
+        }
+        (Tensor::F64(op), Tensor::F64(upd)) => {
+            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::F64)
+        }
+        (Tensor::I64(op), Tensor::I64(upd)) => {
+            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::I64)
+        }
+        (Tensor::C32(op), Tensor::C32(upd)) => {
+            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::C32)
+        }
+        (Tensor::C64(op), Tensor::C64(upd)) => {
+            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::C64)
+        }
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "dynamic_update_slice",
+            lhs: operand.dtype(),
+            rhs: update.dtype(),
+        }),
+    }
+}
+
 pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     try_pad(input, config)
 }
@@ -1086,6 +1133,60 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
             input_idx[axis] = clamped_starts[axis] + out_idx[axis];
         }
         *out.get_mut(&out_idx) = *input.get(&input_idx);
+    }
+
+    Ok(out)
+}
+
+fn typed_dynamic_update_slice<T: Copy + Clone>(
+    operand: &TypedTensor<T>,
+    update: &TypedTensor<T>,
+    starts: &IndexTensor,
+) -> crate::Result<TypedTensor<T>> {
+    if update.shape.len() != operand.shape.len() {
+        return Err(crate::Error::RankMismatch {
+            op: "dynamic_update_slice",
+            expected: operand.shape.len(),
+            actual: update.shape.len(),
+        });
+    }
+    if starts.shape.len() != 1 {
+        return Err(crate::Error::InvalidConfig {
+            op: "dynamic_update_slice",
+            message: "starts must be a rank-1 tensor".into(),
+        });
+    }
+    if starts.values.len() != operand.shape.len() {
+        return Err(crate::Error::InvalidConfig {
+            op: "dynamic_update_slice",
+            message: format!(
+                "starts length {} must match operand rank {}",
+                starts.values.len(),
+                operand.shape.len()
+            ),
+        });
+    }
+
+    let mut clamped_starts = vec![0usize; operand.shape.len()];
+    for axis in 0..operand.shape.len() {
+        clamped_starts[axis] = clamp_window_start(
+            "dynamic_update_slice",
+            starts.values[axis],
+            operand.shape[axis],
+            update.shape[axis],
+        )?;
+    }
+
+    let mut out = operand.clone();
+    let mut update_idx = vec![0usize; update.shape.len()];
+    let mut operand_idx = vec![0usize; operand.shape.len()];
+
+    for flat in 0..update.n_elements() {
+        flat_to_multi(flat, &update.shape, &mut update_idx);
+        for axis in 0..update.shape.len() {
+            operand_idx[axis] = clamped_starts[axis] + update_idx[axis];
+        }
+        *out.get_mut(&operand_idx) = *update.get(&update_idx);
     }
 
     Ok(out)

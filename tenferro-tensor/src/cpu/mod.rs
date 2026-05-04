@@ -20,7 +20,7 @@ pub use context::CpuContext;
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
 };
-pub use indexing::{dynamic_slice, gather, pad, scatter};
+pub use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
 pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
 pub use structural::{
     broadcast_in_dim, convert, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,

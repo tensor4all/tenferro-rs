@@ -98,6 +98,7 @@ pub enum StdTensorOp {
     DynamicSlice {
         slice_sizes: Vec<usize>,
     },
+    DynamicUpdateSlice,
     Pad(PadConfig),
     /// N-ary einsum kept as a single graph node.
     /// Contraction path is optimized at execution time from actual input shapes.
@@ -286,7 +287,8 @@ impl PartialEq for StdTensorOp {
             | (Self::Lu, Self::Lu)
             | (Self::FullPivLu, Self::FullPivLu)
             | (Self::Qr, Self::Qr)
-            | (Self::ValidateNonsingular, Self::ValidateNonsingular) => true,
+            | (Self::ValidateNonsingular, Self::ValidateNonsingular)
+            | (Self::DynamicUpdateSlice, Self::DynamicUpdateSlice) => true,
             (Self::DotGeneral { config: a }, Self::DotGeneral { config: b }) => a == b,
             (Self::Transpose { perm: a }, Self::Transpose { perm: b }) => a == b,
             (Self::Reshape { to_shape: a }, Self::Reshape { to_shape: b }) => a == b,
@@ -489,6 +491,7 @@ impl Hash for StdTensorOp {
             Self::Scatter(config) => config.hash(state),
             Self::Slice(config) => config.hash(state),
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
+            Self::DynamicUpdateSlice => {}
             Self::Pad(config) => config.hash(state),
             Self::NaryEinsum { subscripts } => {
                 subscripts.hash(state);
@@ -577,7 +580,7 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceMin { .. } => 1,
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
-            Self::Scatter(_) => 3,
+            Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
             Self::NaryEinsum { subscripts } => n_inputs_from_einsum_subscripts(subscripts),
             Self::Concatenate { n_inputs, .. } => *n_inputs,
             Self::Abs
@@ -646,6 +649,7 @@ impl GraphOp for StdTensorOp {
             | Self::Scatter(_)
             | Self::Slice(_)
             | Self::DynamicSlice { .. }
+            | Self::DynamicUpdateSlice
             | Self::Pad(_)
             | Self::NaryEinsum { .. }
             | Self::Reverse { .. }

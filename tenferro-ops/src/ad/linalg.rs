@@ -147,6 +147,74 @@ pub fn linearize_lu(
     vec![None, Some(dl), Some(du), None]
 }
 
+pub fn linearize_full_piv_lu(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let Some(da) = tangent_in[0] else {
+        return vec![None, None, None, None, None];
+    };
+
+    let input_shape = primal_input_shape(ctx, primal_in);
+    let input_shape = input_shape.as_slice();
+    let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
+    let (rows_size, cols_size) = resolve_and_guard(rows, cols, ctx);
+    assert_eq!(
+        rows_size, cols_size,
+        "linearize_full_piv_lu: expected square matrix"
+    );
+
+    let rank = input_shape.len();
+    let p = ValRef::External(primal_out[0].clone());
+    let l = ValRef::External(primal_out[1].clone());
+    let u = ValRef::External(primal_out[2].clone());
+    let q = ValRef::External(primal_out[3].clone());
+    let q_t = transpose_matrix_fixed(builder, q, rank);
+
+    let pd_a = matmul_linear(builder, p, ValRef::Local(da), vec![false, true], rank);
+    let pd_a_qt = matmul_linear(
+        builder,
+        ValRef::Local(pd_a),
+        ValRef::Local(q_t),
+        vec![true, false],
+        rank,
+    );
+    let la = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: true,
+            lower: true,
+            transpose_a: false,
+            unit_diagonal: true,
+        },
+        vec![l.clone(), ValRef::Local(pd_a_qt)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0];
+    let x = builder.add_op(
+        StdTensorOp::TriangularSolve {
+            left_side: false,
+            lower: false,
+            transpose_a: false,
+            unit_diagonal: false,
+        },
+        vec![u.clone(), ValRef::Local(la)],
+        OpMode::Linear {
+            active_mask: vec![false, true],
+        },
+    )[0];
+
+    let x_lower = linear_unary(builder, StdTensorOp::Tril { k: -1 }, x);
+    let x_upper = linear_unary(builder, StdTensorOp::Triu { k: 0 }, x);
+    let dl = matmul_linear(builder, l, ValRef::Local(x_lower), vec![false, true], rank);
+    let du = matmul_linear(builder, ValRef::Local(x_upper), u, vec![true, false], rank);
+
+    vec![None, Some(dl), Some(du), None, None]
+}
+
 pub fn linearize_eig(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],

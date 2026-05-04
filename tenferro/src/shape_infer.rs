@@ -67,6 +67,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Scatter(_)
         | StdTensorOp::Slice(_)
         | StdTensorOp::DynamicSlice { .. }
+        | StdTensorOp::DynamicUpdateSlice
         | StdTensorOp::Pad(_)
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::Reverse { .. }
@@ -187,6 +188,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         StdTensorOp::DynamicSlice { slice_sizes } => {
             vec![slice_sizes.iter().copied().map(DimExpr::Const).collect()]
         }
+        StdTensorOp::DynamicUpdateSlice => vec![require_input(op, input_shapes, 0).to_vec()],
         StdTensorOp::Pad(config) => vec![pad_shape(require_input(op, input_shapes, 0), config)],
         StdTensorOp::DotGeneral { config, .. } => vec![dot_general_shape(
             require_input(op, input_shapes, 0),

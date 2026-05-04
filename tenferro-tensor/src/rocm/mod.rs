@@ -184,6 +184,14 @@ macro_rules! impl_stub_backend {
             ) -> crate::Result<Tensor> {
                 todo!(concat!($label, " dynamic_slice"))
             }
+            fn dynamic_update_slice(
+                &mut self,
+                _operand: &Tensor,
+                _update: &Tensor,
+                _starts: &Tensor,
+            ) -> crate::Result<Tensor> {
+                todo!(concat!($label, " dynamic_update_slice"))
+            }
             fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> crate::Result<Tensor> {
                 todo!(concat!($label, " pad"))
             }

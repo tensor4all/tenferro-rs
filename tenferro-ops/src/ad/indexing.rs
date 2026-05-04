@@ -27,9 +27,10 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro_tensor::{DType, GatherConfig, ScatterConfig};
+use tenferro_tensor::{GatherConfig, ScatterConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::zeros::build_zero_like;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -102,6 +103,75 @@ pub fn linearize_gather_dynamic_slice_sizes(
         }
         None => vec![None],
     }
+}
+
+/// Forward-mode AD rule for `DynamicSlice`.
+///
+/// The source tensor tangent flows through the same dynamic slice. Runtime
+/// start indices are integer-valued and non-differentiable.
+pub fn linearize_dynamic_slice(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    slice_sizes: &[usize],
+) -> Vec<Option<LocalValId>> {
+    match tangent_in[0] {
+        Some(d_operand) => {
+            let out = builder.add_op(
+                StdTensorOp::DynamicSlice {
+                    slice_sizes: slice_sizes.to_vec(),
+                },
+                vec![
+                    ValRef::Local(d_operand),
+                    ValRef::External(primal_in[1].clone()),
+                ],
+                OpMode::Linear {
+                    active_mask: vec![true, false],
+                },
+            );
+            vec![Some(out[0])]
+        }
+        None => vec![None],
+    }
+}
+
+/// Forward-mode AD rule for `DynamicUpdateSlice`.
+///
+/// The operand and update inputs are differentiable. Runtime start indices are
+/// integer-valued and non-differentiable.
+pub fn linearize_dynamic_update_slice(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    if tangent_in[0].is_none() && tangent_in[1].is_none() {
+        return vec![None];
+    }
+
+    let operand = ValRef::External(primal_in[0].clone());
+    let update = ValRef::External(primal_in[1].clone());
+    let d_operand = tangent_in[0].unwrap_or_else(|| {
+        let meta = ctx.metadata_of(&operand);
+        build_zero_like(builder, meta.dtype, operand, meta.shape.len())
+    });
+    let d_update = tangent_in[1].unwrap_or_else(|| {
+        let meta = ctx.metadata_of(&update);
+        build_zero_like(builder, meta.dtype, update, meta.shape.len())
+    });
+
+    let out = builder.add_op(
+        StdTensorOp::DynamicUpdateSlice,
+        vec![
+            ValRef::Local(d_operand),
+            ValRef::Local(d_update),
+            ValRef::External(primal_in[2].clone()),
+        ],
+        OpMode::Linear {
+            active_mask: vec![tangent_in[0].is_some(), tangent_in[1].is_some(), false],
+        },
+    );
+    vec![Some(out[0])]
 }
 
 /// Reverse-mode AD rule for `Gather(operand, start_indices, config)`.
@@ -220,6 +290,113 @@ pub fn transpose_gather_dynamic_slice_sizes(
     );
 
     result[0] = Some(out[0]);
+    result
+}
+
+/// Reverse-mode AD rule for `DynamicSlice`.
+///
+/// The transpose of `DynamicSlice(x, starts, sizes)` writes the cotangent back
+/// into a zero tensor shaped like `x` using the same start-adjustment semantics.
+pub fn transpose_dynamic_slice(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let ct = match cotangent_out[0] {
+        Some(ct) => ct,
+        None => return vec![None, None],
+    };
+
+    let active_mask = match mode {
+        OpMode::Linear { active_mask } => active_mask,
+        OpMode::Primal => return vec![None, None],
+    };
+    if !active_mask.first().copied().unwrap_or(false) {
+        return vec![None, None];
+    }
+
+    let operand_meta = ctx.metadata_of(&inputs[0]);
+    let zero_operand = build_zero_like(
+        emitter,
+        operand_meta.dtype,
+        inputs[0].clone(),
+        operand_meta.shape.len(),
+    );
+    let out = emitter.add_op(
+        StdTensorOp::DynamicUpdateSlice,
+        vec![
+            ValRef::Local(zero_operand),
+            ValRef::Local(ct),
+            inputs[1].clone(),
+        ],
+        OpMode::Linear {
+            active_mask: vec![false, true, false],
+        },
+    );
+    vec![Some(out[0]), None]
+}
+
+/// Reverse-mode AD rule for `DynamicUpdateSlice`.
+///
+/// Operand cotangent keeps the output cotangent outside the update window and
+/// zeros the updated window. Update cotangent is the matching dynamic slice of
+/// the output cotangent.
+pub fn transpose_dynamic_update_slice(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    let ct = match cotangent_out[0] {
+        Some(ct) => ct,
+        None => return vec![None, None, None],
+    };
+
+    let active_mask = match mode {
+        OpMode::Linear { active_mask } => active_mask,
+        OpMode::Primal => return vec![None, None, None],
+    };
+
+    let mut result = vec![None, None, None];
+    if active_mask.first().copied().unwrap_or(false) {
+        let update_meta = ctx.metadata_of(&inputs[1]);
+        let zero_update = build_zero_like(
+            emitter,
+            update_meta.dtype,
+            inputs[1].clone(),
+            update_meta.shape.len(),
+        );
+        let operand_ct = emitter.add_op(
+            StdTensorOp::DynamicUpdateSlice,
+            vec![
+                ValRef::Local(ct),
+                ValRef::Local(zero_update),
+                inputs[2].clone(),
+            ],
+            OpMode::Linear {
+                active_mask: vec![true, false, false],
+            },
+        )[0];
+        result[0] = Some(operand_ct);
+    }
+
+    if active_mask.get(1).copied().unwrap_or(false) {
+        let update_shape = exact_usize_shape(ctx, &inputs[1], "DynamicUpdateSlice transpose");
+        let update_ct = emitter.add_op(
+            StdTensorOp::DynamicSlice {
+                slice_sizes: update_shape,
+            },
+            vec![ValRef::Local(ct), inputs[2].clone()],
+            OpMode::Linear {
+                active_mask: vec![true, false],
+            },
+        )[0];
+        result[1] = Some(update_ct);
+    }
+
     result
 }
 
@@ -461,63 +638,17 @@ fn compute_inverse_gather(
     }
 }
 
-/// Emit a zero tensor shaped like `anchor` (rank `anchor_rank`) with
-/// dtype `dtype`. Uses `StdTensorOp::Constant { bytes: zeros }` for the
-/// scalar, then `BroadcastInDim` reading axis sizes from `anchor`.
-///
-/// When `anchor_rank == 0` returns the scalar `Constant` directly.
-fn build_zero_like(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    dtype: DType,
-    anchor: ValRef<StdTensorOp>,
-    anchor_rank: usize,
-) -> LocalValId {
-    let zero_scalar = emitter.add_op(
-        StdTensorOp::Constant {
-            dtype,
-            bytes: zero_bytes(dtype),
-        },
-        vec![],
-        OpMode::Primal,
-    )[0];
-    if anchor_rank == 0 {
-        return zero_scalar;
-    }
-    // `BroadcastInDim` evaluates `DimExpr::InputDim { input_idx, axis }`
-    // against its own inputs at execution time. Input 0 is the scalar
-    // `zero_scalar`; input 1 is the anchor, whose shape we match.
-    let shape: Vec<DimExpr> = (0..anchor_rank)
-        .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
-        .collect();
-    let out = emitter.add_op(
-        StdTensorOp::BroadcastInDim {
-            shape,
-            dims: vec![],
-        },
-        vec![ValRef::Local(zero_scalar), anchor],
-        OpMode::Primal,
-    );
-    out[0]
-}
-
-/// Bytes for a zero value of the given dtype (little-endian, matching
-/// the repr `Constant { dtype, bytes }` expects).
-fn zero_bytes(dtype: DType) -> Vec<u8> {
-    match dtype {
-        DType::F32 => 0.0_f32.to_le_bytes().to_vec(),
-        DType::F64 => 0.0_f64.to_le_bytes().to_vec(),
-        DType::I64 => 0_i64.to_le_bytes().to_vec(),
-        DType::C32 => {
-            let mut bytes = Vec::with_capacity(8);
-            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
-            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
-            bytes
-        }
-        DType::C64 => {
-            let mut bytes = Vec::with_capacity(16);
-            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
-            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
-            bytes
-        }
-    }
+fn exact_usize_shape(
+    ctx: &mut ShapeGuardContext,
+    value: &ValRef<StdTensorOp>,
+    op_name: &'static str,
+) -> Vec<usize> {
+    ctx.exact_shape_of(value)
+        .unwrap_or_else(|| panic!("{op_name} requires exact update shape metadata"))
+        .into_iter()
+        .map(|dim| {
+            dim.constant_value()
+                .unwrap_or_else(|| panic!("{op_name} requires concrete update shape metadata"))
+        })
+        .collect()
 }
