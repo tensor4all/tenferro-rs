@@ -9,7 +9,7 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorBackend};
 use tidu::{
-    backward_dag, topo_sort_grad_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
+    topo_sort_grad_dag, try_backward_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
     LinearFragment,
 };
 
@@ -532,7 +532,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             backend: &mut *backend,
         };
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        let cotangents = backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx);
+        let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)?;
         self.ctx.store_grads(&cotangents, &mut *backend)?;
         Ok(cotangents)
     }
@@ -639,6 +639,35 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
             .into_iter()
             .map(|maybe_id| maybe_id.map(|id| emitter.tensor(id)))
             .collect()
+    }
+
+    fn try_eager_transpose(
+        &mut self,
+        linear: &LinearFragment<StdTensorOp>,
+        cotangent_out: &[Option<Arc<Tensor>>],
+        external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+        ctx: &mut ShapeGuardContext,
+    ) -> chainrules_core::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
+        let mut emitter = EagerEmitter::new(self.backend);
+        emitter.external_data = external_data.clone();
+        let cotangent_seed_ids = cotangent_out
+            .iter()
+            .map(|maybe_seed| {
+                maybe_seed
+                    .as_ref()
+                    .map(|seed| emitter.push_tensor(Arc::clone(seed)))
+            })
+            .collect::<Vec<_>>();
+
+        ctx.refresh_global_metadata();
+        tidu::try_eager_transpose_fragment(linear, &mut emitter, &cotangent_seed_ids, ctx).map(
+            |cotangent_ids| {
+                cotangent_ids
+                    .into_iter()
+                    .map(|maybe_id| maybe_id.map(|id| emitter.tensor(id)))
+                    .collect()
+            },
+        )
     }
 
     fn add_operands(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> Arc<Tensor> {

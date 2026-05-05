@@ -25,6 +25,9 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
+use chainrules_core::ADRuleResult;
+
+use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
 use crate::std_tensor_op::StdTensorOp;
 
 fn todo_transpose_rule(op: &StdTensorOp) -> ! {
@@ -55,7 +58,22 @@ pub fn linearize(
     tangent_in: &[Option<LocalValId>],
     ctx: &mut context::ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    match op {
+    match try_linearize(op, builder, primal_in, primal_out, tangent_in, ctx) {
+        Ok(tangents) => tangents,
+        Err(err) => panic!("{err}"),
+    }
+}
+
+/// Fallible forward-mode AD (JVP) for `StdTensorOp`.
+pub fn try_linearize(
+    op: &StdTensorOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    ctx: &mut context::ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    let tangents = match op {
         // Semiring-arithmetic family (Add/Mul/Neg/Conj form a commutative
         // semiring over the supported scalar dtypes).
         StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
@@ -225,9 +243,17 @@ pub fn linearize(
 
         // Extension substrate.
         StdTensorOp::Extension(ext) => {
-            ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
+            return linearize_extension_rule(
+                ext.as_ref(),
+                builder,
+                primal_in,
+                primal_out,
+                tangent_in,
+                ctx,
+            );
         }
-    }
+    };
+    Ok(tangents)
 }
 
 /// Reverse-mode AD (VJP) for `StdTensorOp`: given the primal op, its
@@ -244,7 +270,22 @@ pub fn transpose_rule(
     mode: &OpMode,
     ctx: &mut context::ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
-    match op {
+    match try_transpose_rule(op, emitter, cotangent_out, inputs, mode, ctx) {
+        Ok(cotangents) => cotangents,
+        Err(err) => panic!("{err}"),
+    }
+}
+
+/// Fallible reverse-mode AD (VJP) for `StdTensorOp`.
+pub fn try_transpose_rule(
+    op: &StdTensorOp,
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    ctx: &mut context::ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    let cotangents = match op {
         // Semiring-arithmetic family.
         StdTensorOp::Add => semiring::transpose_add(cotangent_out),
         StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode),
@@ -407,11 +448,19 @@ pub fn transpose_rule(
         // Extension substrate.
         StdTensorOp::Extension(ext) => {
             let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
-            ext.transpose_rule(emitter_dyn, cotangent_out, inputs, mode, ctx)
+            return transpose_extension_rule(
+                ext.as_ref(),
+                emitter_dyn,
+                cotangent_out,
+                inputs,
+                mode,
+                ctx,
+            );
         }
 
         _ => todo_transpose_rule(op),
-    }
+    };
+    Ok(cotangents)
 }
 
 #[cfg(test)]

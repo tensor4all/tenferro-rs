@@ -8,11 +8,14 @@ pub mod sym_dim;
 
 pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
 pub use ext_op::{
-    is_extension_registered, lookup_extension_factory, register_extension, ExtensionFactory,
-    ExtensionOp, ExtensionRegistryError,
+    is_extension_registered, is_extension_rule_registered, linearize_extension_rule,
+    lookup_extension_factory, lookup_extension_rule, register_extension, register_extension_rule,
+    transpose_extension_rule, ExtensionAdRule, ExtensionFactory, ExtensionOp,
+    ExtensionRegistryError,
 };
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;
+pub use tenferro_extension_macros::ExtensionFamilyId;
 pub use tenferro_tensor::config;
 
 #[cfg(test)]

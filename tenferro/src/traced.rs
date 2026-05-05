@@ -14,7 +14,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
-use tidu::{differentiate, transpose};
+use tidu::{try_differentiate, try_transpose};
 
 use super::compiler::compile_std_to_exec;
 use super::engine::Engine;
@@ -677,7 +677,12 @@ impl TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![]);
         let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        Ok(self.vjp(wrt, &seed))
+        self.try_vjp_result(wrt, &seed)?.ok_or_else(|| {
+            Error::Internal(format!(
+                "grad output is inactive for {:?}",
+                leaf_input_key(wrt)
+            ))
+        })
     }
 
     /// Like [`grad`](Self::grad) but returns `None` when the scalar output does
@@ -697,7 +702,7 @@ impl TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![]);
         let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        Ok(self.try_vjp(wrt, &seed))
+        self.try_vjp_result(wrt, &seed)
     }
 
     /// Evaluate this tensor and replace its graph with a concrete leaf.
@@ -775,6 +780,19 @@ impl TracedTensor {
     /// Like [`jvp`](Self::jvp) but returns `None` when the output does not
     /// depend on `wrt` (i.e. the tangent is structurally zero).
     pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
+        self.try_jvp_result(wrt, tangent)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    /// Fallible variant of [`try_jvp`](Self::try_jvp).
+    ///
+    /// This returns an error when a primitive or extension cannot emit its
+    /// linearization rule.
+    pub fn try_jvp_result(
+        &self,
+        wrt: &TracedTensor,
+        tangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let aliases = self
@@ -791,15 +809,17 @@ impl TracedTensor {
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        let linear = differentiate(
+        let linear = try_differentiate(
             &view,
             std::slice::from_ref(&output_key),
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
             &aliases,
-        );
-        let tangent_output = linear.tangent_outputs[0]?;
+        )?;
+        let Some(tangent_output) = linear.tangent_outputs[0] else {
+            return Ok(None);
+        };
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
         register_fragment_metadata(
             &linear.fragment,
@@ -831,7 +851,7 @@ impl TracedTensor {
         extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
-        Some(TracedTensor {
+        Ok(Some(TracedTensor {
             id: next_traced_id(),
             rank: self.rank,
             dtype: self.dtype,
@@ -842,15 +862,27 @@ impl TracedTensor {
             inputs_map: Arc::new(inputs_map),
             extra_roots,
             checkpoint_chain: self.checkpoint_chain.clone(),
-        })
+        }))
     }
 
     pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
-        self.try_vjp(wrt, cotangent)
-            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)))
+        match self.try_vjp_result(wrt, cotangent) {
+            Ok(Some(vjp)) => vjp,
+            Ok(None) => panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)),
+            Err(err) => panic!("{err}"),
+        }
     }
 
-    fn try_vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
+    /// Fallible reverse-mode product helper.
+    ///
+    /// This returns `Ok(None)` when the cotangent for `wrt` is structurally
+    /// inactive, and returns an error when a primitive or extension is missing
+    /// the required AD rule.
+    pub fn try_vjp_result(
+        &self,
+        wrt: &TracedTensor,
+        cotangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
         let wrt_input_key = leaf_input_key(wrt);
         let output_key = self.fragment.vals()[self.val].key.clone();
         let aliases = self
@@ -867,15 +899,17 @@ impl TracedTensor {
         roots.extend(checkpoint_fragments.iter().cloned());
         let view = resolve(roots);
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        let linear = differentiate(
+        let linear = try_differentiate(
             &view,
             std::slice::from_ref(&output_key),
             std::slice::from_ref(&wrt_input_key),
             next_pass_id(),
             &mut ad_ctx,
             &aliases,
-        );
-        linear.tangent_outputs[0]?;
+        )?;
+        if linear.tangent_outputs[0].is_none() {
+            return Ok(None);
+        }
         let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
         register_fragment_metadata(
             &linear.fragment,
@@ -890,7 +924,7 @@ impl TracedTensor {
             .iter()
             .map(|(_, local_id)| *local_id)
             .collect();
-        let transposed = transpose(&linear, &mut ad_ctx);
+        let transposed = try_transpose(&linear, &mut ad_ctx)?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
         register_fragment_metadata(
@@ -907,7 +941,9 @@ impl TracedTensor {
             )],
         );
         let linear_fragment = Arc::new(linear.fragment);
-        let cotangent_output = transposed.tangent_outputs[0]?;
+        let Some(cotangent_output) = transposed.tangent_outputs[0] else {
+            return Ok(None);
+        };
 
         let mut inputs_map = (*self.inputs_map).clone();
         if let Some(chain) = &self.checkpoint_chain {
@@ -950,7 +986,7 @@ impl TracedTensor {
         extra_roots.extend(checkpoint_fragments);
         extra_roots.extend(self.extra_roots.iter().cloned());
 
-        Some(TracedTensor {
+        Ok(Some(TracedTensor {
             id: next_traced_id(),
             rank: wrt.rank,
             dtype: wrt.dtype,
@@ -961,7 +997,7 @@ impl TracedTensor {
             inputs_map: Arc::new(inputs_map),
             extra_roots,
             checkpoint_chain: self.checkpoint_chain.clone(),
-        })
+        }))
     }
 
     /// Elementwise addition with NumPy-style broadcasting.

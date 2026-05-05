@@ -1,12 +1,16 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
+use crate::ext_op::{register_extension_rule, ExtensionAdRule, ExtensionOp};
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
-use chainrules_core::PrimitiveOp;
+use chainrules_core::{ADRuleKind, ADRuleResult, PrimitiveOp};
 use computegraph::fragment::{Fragment, FragmentBuilder};
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::GraphOp;
+use computegraph::{GraphOp, OpEmitter};
 use num_complex::{Complex32, Complex64};
+use std::any::Any;
+use std::hash::Hasher;
+use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
@@ -1344,4 +1348,141 @@ fn test_std_tensor_op_transpose_rule_panics_for_unimplemented_variant() {
         &OpMode::Primal,
         &mut ad_ctx,
     );
+}
+
+#[derive(Clone, Debug)]
+struct RuleOnlyExt {
+    family: &'static str,
+}
+
+impl ExtensionOp for RuleOnlyExt {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<RuleOnlyExt>()
+            .is_some_and(|rhs| rhs.family == self.family)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        1
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(
+        &self,
+        inputs: &[&tenferro_tensor::Tensor],
+    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Debug)]
+struct RuleOnlyIdentityAd {
+    family: &'static str,
+}
+
+impl ExtensionAdRule for RuleOnlyIdentityAd {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![tangent_in[0]])
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        _emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        _inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![cotangent_out[0]])
+    }
+}
+
+#[test]
+fn extension_try_linearize_uses_registered_rule() {
+    let family = "stdtensor.rule_only_identity.v1";
+    let _ = register_extension_rule(Arc::new(RuleOnlyIdentityAd { family }));
+    let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let dx = builder.add_input(tensor_input_key(900));
+    let result = op
+        .try_linearize(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .expect("registered extension rule should linearize");
+
+    assert_eq!(result, vec![Some(dx)]);
+}
+
+#[test]
+fn extension_try_transpose_uses_registered_rule() {
+    let family = "stdtensor.rule_only_transpose.v1";
+    let _ = register_extension_rule(Arc::new(RuleOnlyIdentityAd { family }));
+    let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let ct = builder.add_input(tensor_input_key(901));
+    let result = op
+        .try_transpose_rule(
+            &mut builder,
+            &[Some(ct)],
+            &external_inputs(910, 1),
+            &linear_mode(&[true]),
+            &mut ad_ctx,
+        )
+        .expect("registered extension rule should transpose");
+
+    assert_eq!(result, vec![Some(ct)]);
+}
+
+#[test]
+fn extension_try_linearize_reports_missing_rule() {
+    let family = "stdtensor.missing_rule.v1";
+    let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let dx = builder.add_input(tensor_input_key(920));
+    let err = op
+        .try_linearize(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
+        .expect_err("missing extension rule should be an AD error");
+
+    assert_eq!(err.rule(), ADRuleKind::Linearize);
+    assert!(err.to_string().contains(family));
 }

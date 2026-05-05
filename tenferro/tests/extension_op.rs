@@ -15,13 +15,18 @@
 
 use std::any::Any;
 use std::hash::Hasher;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro::extension::{apply, register_extension, ExtensionFactory};
-use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+use tenferro::extension::{
+    apply, apply_eager, register_extension, register_extension_rule, ExtensionAdRuleTrait,
+    ExtensionFactory,
+};
+use tenferro::{CpuBackend, EagerContext, EagerTensor, Engine, Tensor, TracedTensor};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
@@ -45,6 +50,23 @@ fn register_once(factory: Arc<dyn ExtensionFactory>) {
                 // Already registered by another parallel test binary — fine.
             }
             other => panic!("register_extension failed: {other}"),
+        }
+    }
+    ids.push(family_id);
+}
+
+fn register_rule_once(rule: Arc<dyn ExtensionAdRuleTrait>) {
+    static REGISTERED: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
+    let guard = REGISTERED.get_or_init(|| Mutex::new(Vec::new()));
+    let mut ids = guard.lock().expect("test rule registry mutex");
+    let family_id = rule.family_id();
+    if ids.contains(&family_id) {
+        return;
+    }
+    if let Err(err) = register_extension_rule(rule) {
+        match err {
+            tenferro::extension::ExtensionRegistryError::DuplicateRule { .. } => {}
+            other => panic!("register_extension_rule failed: {other}"),
         }
     }
     ids.push(family_id);
@@ -181,6 +203,64 @@ impl ExtensionFactory for TestScaleBy2Factory {
 
 fn ensure_scale_by_2_registered() {
     register_once(Arc::new(TestScaleBy2Factory));
+    register_rule_once(Arc::new(TestScaleBy2Rule));
+}
+
+#[derive(Debug)]
+struct TestScaleBy2Rule;
+
+impl ExtensionAdRuleTrait for TestScaleBy2Rule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.scale_by_2.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        match tangent_in[0] {
+            Some(dx) => {
+                let sum = builder.add_op(
+                    StdTensorOp::Add,
+                    vec![ValRef::Local(dx), ValRef::Local(dx)],
+                    OpMode::Linear {
+                        active_mask: vec![true, true],
+                    },
+                );
+                Ok(vec![Some(sum[0])])
+            }
+            None => Ok(vec![None]),
+        }
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        _inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        match cotangent_out[0] {
+            Some(ct) => {
+                let sum = emitter.add_op(
+                    StdTensorOp::Add,
+                    vec![ValRef::Local(ct), ValRef::Local(ct)],
+                    OpMode::Linear {
+                        active_mask: vec![true, true],
+                    },
+                );
+                Ok(vec![Some(sum[0])])
+            }
+            None => Ok(vec![None]),
+        }
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -277,6 +357,137 @@ impl ExtensionFactory for TestSwapFactory {
 
 fn ensure_swap_registered() {
     register_once(Arc::new(TestSwapFactory));
+    register_rule_once(Arc::new(TestSwapRule));
+}
+
+#[derive(Debug)]
+struct TestSwapRule;
+
+impl ExtensionAdRuleTrait for TestSwapRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.swap.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![tangent_in[1], tangent_in[0]])
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        _emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        _inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![cotangent_out[1], cotangent_out[0]])
+    }
+}
+
+// ----------------------------------------------------------------------
+// TestNoAd: forward-only extension. Missing AD must be reported as Error.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestNoAd;
+
+impl ExtensionOp for TestNoAd {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.no_ad.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<TestNoAd>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        1
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+// ----------------------------------------------------------------------
+// TestBadOutputCount: malformed extension for facade validation paths.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestBadOutputCount;
+
+impl ExtensionOp for TestBadOutputCount {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.bad_output_count.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<TestBadOutputCount>()
+            .is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        1
+    }
+
+    fn n_outputs(&self) -> usize {
+        2
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -328,6 +539,136 @@ fn scale_by_2_grad_against_reduce_sum() {
 
     assert_eq!(grad_out.shape(), &[4]);
     assert_eq!(f64_slice(grad_out), &[2.0, 2.0, 2.0, 2.0]);
+}
+
+#[test]
+fn scale_by_2_eager_backward_uses_registered_rule() {
+    ensure_scale_by_2_registered();
+
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]), ctx);
+    let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
+        .expect("eager extension apply")
+        .into_iter()
+        .next()
+        .expect("single extension output");
+    let loss = scaled.reduce_sum(&[0]).expect("loss");
+
+    let _ = loss.backward().expect("eager backward");
+
+    assert_eq!(
+        x.grad().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 2.0, 2.0, 2.0]
+    );
+}
+
+#[test]
+fn missing_extension_rule_errors_in_traced_grad() {
+    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let y = apply(Arc::new(TestNoAd), &[&x])
+        .into_iter()
+        .next()
+        .expect("single output");
+    let loss = y.reduce_sum(&[0]);
+
+    let err = match loss.grad(&x) {
+        Ok(_) => panic!("missing extension AD rule unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("tenferro-tests.no_ad.v1"));
+}
+
+#[test]
+fn missing_extension_rule_errors_in_eager_backward() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let y = apply_eager(Arc::new(TestNoAd), &[&x])
+        .expect("forward-only eager extension apply")
+        .into_iter()
+        .next()
+        .expect("single output");
+    let loss = y.reduce_sum(&[0]).expect("loss");
+
+    let err = loss
+        .backward()
+        .expect_err("missing extension AD rule should error");
+
+    assert!(err.to_string().contains("tenferro-tests.no_ad.v1"));
+}
+
+#[test]
+fn apply_rejects_wrong_input_count() {
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        let _ = apply(Arc::new(TestScaleBy2), &[]);
+    }));
+
+    assert!(panic.is_err());
+}
+
+#[test]
+fn apply_rejects_mismatched_output_metadata_count() {
+    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        let _ = apply(Arc::new(TestBadOutputCount), &[&x]);
+    }));
+
+    assert!(panic.is_err());
+}
+
+#[test]
+fn apply_eager_rejects_empty_input_list() {
+    let err = match apply_eager::<CpuBackend>(Arc::new(TestScaleBy2), &[]) {
+        Ok(_) => panic!("empty eager extension input list unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("requires at least one input"));
+}
+
+#[test]
+fn apply_eager_rejects_wrong_input_count() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+
+    let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
+        Ok(_) => panic!("wrong eager extension input count unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("expects 2 inputs, got 1"));
+}
+
+#[test]
+fn apply_eager_rejects_cross_context_inputs() {
+    let lhs_ctx = EagerContext::with_backend(CpuBackend::new());
+    let rhs_ctx = EagerContext::with_backend(CpuBackend::new());
+    let lhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), lhs_ctx);
+    let rhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![2.0_f64]), rhs_ctx);
+
+    let err = match apply_eager(Arc::new(TestSwap), &[&lhs, &rhs]) {
+        Ok(_) => panic!("cross-context eager extension inputs unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        tenferro::error::Error::ContextMismatch { .. }
+    ));
+}
+
+#[test]
+fn apply_eager_rejects_mismatched_output_count() {
+    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+
+    let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {
+        Ok(_) => panic!("bad eager extension output count unexpectedly succeeded"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("expected 2 eager outputs"));
 }
 
 #[test]

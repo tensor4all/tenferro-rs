@@ -12,9 +12,10 @@
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
 //!   `Clone + Hash + Eq + Send + Sync + 'static` (computegraph's
 //!   `GraphOp` requirements).
-//! - AD rules ([`ExtensionOp::linearize`] and [`ExtensionOp::transpose_rule`])
-//!   MUST emit only core [`StdTensorOp`] values — never another `Extension`
-//!   variant — preserving ad-contract.md's closure invariant.
+//! - AD rules are registered separately through [`ExtensionAdRule`] and
+//!   [`register_extension_rule`]. A rule may emit core [`StdTensorOp`] values
+//!   and registered `Extension` values so out-of-tree operations remain in the
+//!   same graph.
 //! - [`ExtensionFactory`] is registered at program start via
 //!   [`register_extension`]; the registry is an
 //!   `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionFactory>>>>`
@@ -41,6 +42,7 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock, RwLock};
 
+use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
@@ -62,9 +64,7 @@ use crate::sym_dim::SymDim;
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
 /// - forward dispatch via [`eager_execute`][Self::eager_execute] (used by both
 ///   the eager and compiled paths);
-/// - AD via [`linearize`][Self::linearize] and
-///   [`transpose_rule`][Self::transpose_rule], which MUST emit only core
-///   [`StdTensorOp`] values.
+/// - AD via a separately registered [`ExtensionAdRule`].
 ///
 /// # Downcast convention
 ///
@@ -188,32 +188,77 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 
     /// Emit the linear (JVP) rule.
     ///
-    /// MUST only emit ops in the core [`StdTensorOp`] vocabulary. MUST NOT
-    /// emit nested `StdTensorOp::Extension` variants. MUST respect
-    /// `OpMode::Linear { active_mask }` on every emitted op.
+    /// This legacy inline hook is retained so existing impl blocks remain
+    /// source-compatible. AD dispatch uses registered [`ExtensionAdRule`]
+    /// providers; new extension crates should register a rule instead of
+    /// relying on this method.
     fn linearize(
         &self,
+        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        _tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> Vec<Option<LocalValId>> {
+        panic!(
+            "extension family {:?} has no inline linearize rule; register an ExtensionAdRule",
+            self.family_id()
+        )
+    }
+
+    /// Emit the transpose (VJP) rule.
+    ///
+    /// This legacy inline hook is retained so existing impl blocks remain
+    /// source-compatible. AD dispatch uses registered [`ExtensionAdRule`]
+    /// providers; new extension crates should register a rule instead of
+    /// relying on this method.
+    fn transpose_rule(
+        &self,
+        _emitter: &mut dyn OpEmitter<StdTensorOp>,
+        _cotangent_out: &[Option<LocalValId>],
+        _inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> Vec<Option<LocalValId>> {
+        panic!(
+            "extension family {:?} has no inline transpose rule; register an ExtensionAdRule",
+            self.family_id()
+        )
+    }
+}
+
+/// AD rule provider for an extension family.
+///
+/// Rules are registered independently from [`ExtensionFactory`] so an
+/// out-of-tree crate can provide a primal operation and AD behavior as separate
+/// components. Rule methods receive the concrete [`ExtensionOp`] payload as a
+/// trait object; implementations should downcast through [`ExtensionOp::as_any`]
+/// when they need payload-specific parameters.
+pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
+    /// The extension family this rule handles.
+    fn family_id(&self) -> &'static str;
+
+    /// Emit the linear (JVP) rule.
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
         builder: &mut FragmentBuilder<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
         primal_out: &[GlobalValKey<StdTensorOp>],
         tangent_in: &[Option<LocalValId>],
         ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>>;
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 
     /// Emit the transpose (VJP) rule.
-    ///
-    /// MUST only emit ops in the core [`StdTensorOp`] vocabulary. The returned
-    /// vector MUST have length `self.n_inputs()` (one entry per primal input,
-    /// with `None` for inactive tangent slots). The `inputs` slice provides
-    /// [`ValRef`] handles that AD rules resolve through `ShapeGuardContext`.
     fn transpose_rule(
         &self,
+        op: &dyn ExtensionOp,
         emitter: &mut dyn OpEmitter<StdTensorOp>,
         cotangent_out: &[Option<LocalValId>],
         inputs: &[ValRef<StdTensorOp>],
         mode: &OpMode,
         ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>>;
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 }
 
 /// Factory trait used at registration time.
@@ -257,6 +302,9 @@ pub enum ExtensionRegistryError {
     /// A factory with the same `family_id` was already registered.
     #[error("family_id {family_id:?} already registered")]
     Duplicate { family_id: &'static str },
+    /// An AD rule with the same `family_id` was already registered.
+    #[error("AD rule for family_id {family_id:?} already registered")]
+    DuplicateRule { family_id: &'static str },
     /// The `family_id` does not match the namespaced format
     /// `"<crate-name>.<op-name>.v<major>"`.
     #[error("family_id {family_id:?} does not match the namespaced format")]
@@ -264,9 +312,15 @@ pub enum ExtensionRegistryError {
 }
 
 type FactoryMap = HashMap<&'static str, Arc<dyn ExtensionFactory>>;
+type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
 
 fn registry() -> &'static RwLock<FactoryMap> {
     static REG: OnceLock<RwLock<FactoryMap>> = OnceLock::new();
+    REG.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn rule_registry() -> &'static RwLock<RuleMap> {
+    static REG: OnceLock<RwLock<RuleMap>> = OnceLock::new();
     REG.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -341,6 +395,29 @@ pub fn register_extension(
     Ok(())
 }
 
+/// Register a new extension AD rule.
+///
+/// The rule's `family_id` uses the same validation as
+/// [`register_extension`]. Registering a rule does not require registering a
+/// factory first; this lets crates split primal construction and AD support
+/// across modules or optional features.
+pub fn register_extension_rule(
+    rule: Arc<dyn ExtensionAdRule>,
+) -> Result<(), ExtensionRegistryError> {
+    let family_id = rule.family_id();
+    if !is_valid_family_id(family_id) {
+        return Err(ExtensionRegistryError::MalformedFamilyId { family_id });
+    }
+    let mut guard = rule_registry()
+        .write()
+        .expect("extension rule registry RwLock poisoned");
+    if guard.contains_key(family_id) {
+        return Err(ExtensionRegistryError::DuplicateRule { family_id });
+    }
+    guard.insert(family_id, rule);
+    Ok(())
+}
+
 /// Look up a factory by `family_id`.
 ///
 /// Returns `None` if no factory is registered for the given identifier.
@@ -361,6 +438,51 @@ pub fn lookup_extension_factory(family_id: &str) -> Option<Arc<dyn ExtensionFact
         .cloned()
 }
 
+/// Look up an extension AD rule by `family_id`.
+pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
+    rule_registry()
+        .read()
+        .expect("extension rule registry RwLock poisoned")
+        .get(family_id)
+        .cloned()
+}
+
+/// Emit a registered extension linearization rule.
+pub fn linearize_extension_rule(
+    op: &dyn ExtensionOp,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    match lookup_extension_rule(op.family_id()) {
+        Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
+        None => Err(ADRuleError::unsupported(
+            op.family_id(),
+            ADRuleKind::Linearize,
+        )),
+    }
+}
+
+/// Emit a registered extension transpose rule.
+pub fn transpose_extension_rule(
+    op: &dyn ExtensionOp,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    match lookup_extension_rule(op.family_id()) {
+        Some(rule) => rule.transpose_rule(op, emitter, cotangent_out, inputs, mode, ctx),
+        None => Err(ADRuleError::unsupported(
+            op.family_id(),
+            ADRuleKind::Transpose,
+        )),
+    }
+}
+
 /// Returns `true` when a factory with `family_id` is currently registered.
 ///
 /// # Examples
@@ -372,6 +494,11 @@ pub fn lookup_extension_factory(family_id: &str) -> Option<Arc<dyn ExtensionFact
 /// ```
 pub fn is_extension_registered(family_id: &str) -> bool {
     lookup_extension_factory(family_id).is_some()
+}
+
+/// Returns `true` when an AD rule with `family_id` is currently registered.
+pub fn is_extension_rule_registered(family_id: &str) -> bool {
+    lookup_extension_rule(family_id).is_some()
 }
 
 /// Thin adapter that lets a generic `H: Hasher` satisfy the object-safe
