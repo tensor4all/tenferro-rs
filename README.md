@@ -6,6 +6,12 @@ tenferro provides both eager tensor operations with scalar-loss reverse-mode
 autodiff and lazy traced execution with einsum, linear algebra, and transform
 AD (VJP/JVP/HVP) on CPU and CUDA GPU (via CubeCL + cuTENSOR + cuSOLVER).
 
+AD shape and dtype metadata is owned by the live eager/traced tensor handles
+that need it. The backing lookup table is process-global, but entries are
+scope-owned and are removed when the final graph or tensor handle using them is
+dropped, so retrace-heavy long-running processes do not need a manual metadata
+reset step.
+
 ## Workspace Crates
 
 | Crate | Role |
