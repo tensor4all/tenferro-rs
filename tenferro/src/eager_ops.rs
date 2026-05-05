@@ -555,8 +555,11 @@ impl<B: TensorBackend> EagerTensor<B> {
 
         let ctx = Arc::clone(&first.ctx);
         for tensor in tensors.iter().skip(1) {
-            if !Arc::ptr_eq(&ctx, &tensor.ctx) {
-                ctx.absorb_from(&tensor.ctx);
+            if !first.same_context(tensor) {
+                return Err(Error::ContextMismatch {
+                    lhs: first.ctx_id(),
+                    rhs: tensor.ctx_id(),
+                });
             }
         }
 

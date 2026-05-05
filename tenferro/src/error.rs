@@ -82,9 +82,34 @@ pub enum Error {
     )]
     PlaceholderRankMismatch { expected: usize, actual: usize },
 
+    /// Operation attempted to mix tensors from different eager contexts.
+    #[error(
+        "tensors belong to different eager contexts ({lhs} vs {rhs}); \
+         use EagerTensor::detach_into or EagerContext::constant_from"
+    )]
+    ContextMismatch { lhs: ContextId, rhs: ContextId },
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+/// Opaque identifier for an [`EagerContext`], used in [`Error::ContextMismatch`].
+///
+/// [`EagerContext`]: crate::EagerContext
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContextId(usize);
+
+impl ContextId {
+    pub(crate) fn from_ptr<T>(ptr: *const T) -> Self {
+        Self(ptr as usize)
+    }
+}
+
+impl std::fmt::Display for ContextId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ctx@{:x}", self.0)
+    }
 }
 
 /// Result type alias for tenferro operations.
