@@ -6,6 +6,30 @@ use tenferro_tensor::{DType, PadConfig, SliceConfig, Tensor, TensorBackend, Type
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
+use crate::shape_infer::promote_dtype_for_binary_op;
+
+/// If the two tensors have different dtypes, insert Convert ops so they
+/// both match the promoted result dtype. Returns the (possibly converted)
+/// tensors.
+fn promote_binary(
+    exec: &mut dyn tenferro_tensor::TensorExec,
+    a: &Tensor,
+    b: &Tensor,
+    op: &StdTensorOp,
+) -> Result<(Tensor, Tensor)> {
+    let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
+    let a = if a.dtype() != promoted {
+        exec.convert(a, promoted).map_err(Error::from)?
+    } else {
+        a.clone()
+    };
+    let b = if b.dtype() != promoted {
+        exec.convert(b, promoted).map_err(Error::from)?
+    } else {
+        b.clone()
+    };
+    Ok((a, b))
+}
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.
 ///
@@ -37,10 +61,19 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
 
     backend.with_exec_session(|exec| {
         let result = match op {
-            StdTensorOp::Add => vec![exec.add(inputs[0], inputs[1])?],
-            StdTensorOp::Mul => vec![exec.mul(inputs[0], inputs[1])?],
+            StdTensorOp::Add => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.add(&a, &b)?]
+            }
+            StdTensorOp::Mul => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.mul(&a, &b)?]
+            }
             StdTensorOp::Neg => vec![exec.neg(inputs[0])?],
-            StdTensorOp::Div => vec![exec.div(inputs[0], inputs[1])?],
+            StdTensorOp::Div => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.div(&a, &b)?]
+            }
             StdTensorOp::Exp => vec![exec.exp(inputs[0])?],
             StdTensorOp::Log => vec![exec.log(inputs[0])?],
             StdTensorOp::Sin => vec![exec.sin(inputs[0])?],
@@ -48,17 +81,30 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Tanh => vec![exec.tanh(inputs[0])?],
             StdTensorOp::Sqrt => vec![exec.sqrt(inputs[0])?],
             StdTensorOp::Rsqrt => vec![exec.rsqrt(inputs[0])?],
-            StdTensorOp::Pow => vec![exec.pow(inputs[0], inputs[1])?],
+            StdTensorOp::Pow => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.pow(&a, &b)?]
+            }
             StdTensorOp::Abs => vec![exec.abs(inputs[0])?],
             StdTensorOp::Sign => vec![exec.sign(inputs[0])?],
             StdTensorOp::Conj => vec![exec.conj(inputs[0])?],
-            StdTensorOp::Maximum => vec![exec.maximum(inputs[0], inputs[1])?],
-            StdTensorOp::Minimum => vec![exec.minimum(inputs[0], inputs[1])?],
-            StdTensorOp::Compare(dir) => vec![exec.compare(inputs[0], inputs[1], dir)?],
+            StdTensorOp::Maximum => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.maximum(&a, &b)?]
+            }
+            StdTensorOp::Minimum => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.minimum(&a, &b)?]
+            }
+            StdTensorOp::Compare(dir) => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.compare(&a, &b, dir)?]
+            }
             StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
             StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
             StdTensorOp::DotGeneral { config, .. } => {
-                vec![exec.dot_general(inputs[0], inputs[1], config)?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.dot_general(&a, &b, config)?]
             }
             StdTensorOp::Reshape { to_shape, .. } => {
                 let shape = resolve_tensor_shape_exprs(inputs, to_shape);
@@ -86,15 +132,36 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Log1p => vec![exec.log1p(inputs[0])?],
             StdTensorOp::Convert { to, .. } => vec![exec.convert(inputs[0], *to)?],
             StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
-            StdTensorOp::Select => vec![exec.select(inputs[0], inputs[1], inputs[2])?],
-            StdTensorOp::Clamp => vec![exec.clamp(inputs[0], inputs[1], inputs[2])?],
+            StdTensorOp::Select => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
+                vec![exec.select(&a, &b, &c)?]
+            }
+            StdTensorOp::Clamp => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
+                vec![exec.clamp(&a, &b, &c)?]
+            }
             StdTensorOp::Concatenate { axis, .. } => {
-                vec![exec.concatenate(inputs, *axis)?]
+                let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
+                let mut promoted_inputs: Vec<Tensor> = Vec::with_capacity(inputs.len());
+                for t in inputs {
+                    if t.dtype() != promoted {
+                        promoted_inputs.push(exec.convert(t, promoted).map_err(Error::from)?);
+                    } else {
+                        promoted_inputs.push((*t).clone());
+                    }
+                }
+                let promoted_refs: Vec<&Tensor> = promoted_inputs.iter().collect();
+                vec![exec.concatenate(&promoted_refs, *axis)?]
             }
             StdTensorOp::NaryEinsum { .. } => {
                 unreachable!("NaryEinsum is handled before opening an exec session")
             }
-            StdTensorOp::Gather(config) => vec![exec.gather(inputs[0], inputs[1], config)?],
+            StdTensorOp::Gather(config) => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.gather(&a, &b, config)?]
+            }
             StdTensorOp::GatherDynamicSliceSizes {
                 offset_dims,
                 collapsed_slice_dims,
@@ -110,16 +177,22 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                     index_vector_dim: *index_vector_dim,
                     slice_sizes,
                 };
-                vec![exec.gather(inputs[0], inputs[1], &config)?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.gather(&a, &b, &config)?]
             }
             StdTensorOp::Scatter(config) => {
-                vec![exec.scatter(inputs[0], inputs[1], inputs[2], config)?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
+                vec![exec.scatter(&a, &b, &c, config)?]
             }
             StdTensorOp::DynamicSlice { slice_sizes } => {
-                vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.dynamic_slice(&a, &b, slice_sizes)?]
             }
             StdTensorOp::DynamicUpdateSlice => {
-                vec![exec.dynamic_update_slice(inputs[0], inputs[1], inputs[2])?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
+                vec![exec.dynamic_update_slice(&a, &b, &c)?]
             }
             StdTensorOp::Cholesky { .. } => vec![exec.cholesky(inputs[0])?],
             StdTensorOp::TriangularSolve {
@@ -129,9 +202,10 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 unit_diagonal,
                 ..
             } => {
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.triangular_solve(
-                    inputs[0],
-                    inputs[1],
+                    &a,
+                    &b,
                     *left_side,
                     *lower,
                     *transpose_a,
@@ -143,7 +217,8 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Lu { .. } => exec.lu(inputs[0])?,
             StdTensorOp::FullPivLu { .. } => exec.full_piv_lu(inputs[0])?,
             StdTensorOp::FullPivLuSolve { transpose_a } => {
-                vec![exec.full_piv_lu_solve(inputs[0], inputs[1], *transpose_a)?]
+                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.full_piv_lu_solve(&a, &b, *transpose_a)?]
             }
             StdTensorOp::Eigh { .. } => exec.eigh(inputs[0])?,
             StdTensorOp::Eig { .. } => exec.eig(inputs[0])?,
