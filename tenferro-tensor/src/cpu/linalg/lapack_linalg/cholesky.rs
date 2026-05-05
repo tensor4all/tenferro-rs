@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
@@ -17,6 +17,22 @@ impl LapackCholesky for f64 {
     fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
         unsafe {
             lapack::dpotrf(uplo, n, factor, lda, info);
+        }
+    }
+}
+
+impl LapackCholesky for f32 {
+    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        unsafe {
+            lapack::spotrf(uplo, n, factor, lda, info);
+        }
+    }
+}
+
+impl LapackCholesky for Complex32 {
+    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
+        unsafe {
+            lapack::cpotrf(uplo, n, factor, lda, info);
         }
     }
 }

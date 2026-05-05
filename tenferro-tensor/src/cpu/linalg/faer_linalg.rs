@@ -3,7 +3,7 @@ use faer::{
     diag::{Diag, DiagRef},
     Conj, Mat, MatMut, MatRef,
 };
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::ops::Range;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -119,35 +119,57 @@ fn vec_from_diag<T: Copy + PoolScalar>(buffers: &mut BufferPool, diag: DiagRef<'
     data
 }
 
-fn complex64_to_faer_slice(data: &[Complex64]) -> &[faer::c64] {
-    assert_eq!(
-        std::mem::size_of::<Complex64>(),
-        std::mem::size_of::<faer::c64>()
-    );
-    assert_eq!(
-        std::mem::align_of::<Complex64>(),
-        std::mem::align_of::<faer::c64>()
-    );
+macro_rules! impl_complex_faer_casts {
+    ($to_faer_slice:ident, $to_faer_slice_mut:ident, $complex:ty, $faer_complex:ty) => {
+        fn $to_faer_slice(data: &[$complex]) -> &[$faer_complex] {
+            assert_eq!(
+                std::mem::size_of::<$complex>(),
+                std::mem::size_of::<$faer_complex>()
+            );
+            assert_eq!(
+                std::mem::align_of::<$complex>(),
+                std::mem::align_of::<$faer_complex>()
+            );
 
-    // SAFETY: size and alignment are checked above in release builds, and
-    // both types represent one complex f64 scalar in supported builds.
-    unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<faer::c64>(), data.len()) }
+            // SAFETY: size and alignment are checked above in release builds,
+            // and both types represent one complex scalar over the same real type.
+            unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<$faer_complex>(), data.len()) }
+        }
+
+        fn $to_faer_slice_mut(data: &mut [$complex]) -> &mut [$faer_complex] {
+            assert_eq!(
+                std::mem::size_of::<$complex>(),
+                std::mem::size_of::<$faer_complex>()
+            );
+            assert_eq!(
+                std::mem::align_of::<$complex>(),
+                std::mem::align_of::<$faer_complex>()
+            );
+
+            // SAFETY: size and alignment are checked above in release builds,
+            // and both types represent one complex scalar over the same real type.
+            unsafe {
+                std::slice::from_raw_parts_mut(
+                    data.as_mut_ptr().cast::<$faer_complex>(),
+                    data.len(),
+                )
+            }
+        }
+    };
 }
 
-fn complex64_to_faer_slice_mut(data: &mut [Complex64]) -> &mut [faer::c64] {
-    assert_eq!(
-        std::mem::size_of::<Complex64>(),
-        std::mem::size_of::<faer::c64>()
-    );
-    assert_eq!(
-        std::mem::align_of::<Complex64>(),
-        std::mem::align_of::<faer::c64>()
-    );
-
-    // SAFETY: size and alignment are checked above in release builds, and
-    // both types represent one complex f64 scalar in supported builds.
-    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<faer::c64>(), data.len()) }
-}
+impl_complex_faer_casts!(
+    complex32_to_faer_slice,
+    complex32_to_faer_slice_mut,
+    Complex32,
+    faer::c32
+);
+impl_complex_faer_casts!(
+    complex64_to_faer_slice,
+    complex64_to_faer_slice_mut,
+    Complex64,
+    faer::c64
+);
 
 fn decomposition_failed(op: &'static str) -> crate::Error {
     crate::Error::BackendFailure {
@@ -195,37 +217,72 @@ fn checked_slice_range(
     Ok(start..end)
 }
 
-fn complex_vec_from_real_diag(
-    buffers: &mut BufferPool,
-    diag: DiagRef<'_, faer::c64>,
-) -> Vec<Complex64> {
-    let col = diag.column_vector();
-    let mut data = buffers.acquire_with_capacity::<Complex64>(col.nrows());
-    for i in 0..col.nrows() {
-        data.push(Complex64::new(col[i].re, 0.0));
-    }
-    data
-}
-
-fn complex_vec_from_diag(buffers: &mut BufferPool, diag: DiagRef<'_, faer::c64>) -> Vec<Complex64> {
-    let col = diag.column_vector();
-    let mut data = buffers.acquire_with_capacity::<Complex64>(col.nrows());
-    for i in 0..col.nrows() {
-        data.push(Complex64::new(col[i].re, col[i].im));
-    }
-    data
-}
-
-fn complex_vec_from_mat(buffers: &mut BufferPool, mat: MatRef<'_, faer::c64>) -> Vec<Complex64> {
-    let (rows, cols) = mat.shape();
-    let mut data = buffers.acquire_with_capacity::<Complex64>(rows * cols);
-    for j in 0..cols {
-        for i in 0..rows {
-            let value = mat[(i, j)];
-            data.push(Complex64::new(value.re, value.im));
+macro_rules! impl_complex_vec_helpers {
+    (
+        $vec_from_real_diag:ident,
+        $vec_from_diag:ident,
+        $vec_from_mat:ident,
+        $matrix_from_predicate:ident,
+        $complex:ty,
+        $faer_complex:ty
+    ) => {
+        fn $vec_from_real_diag(
+            buffers: &mut BufferPool,
+            diag: DiagRef<'_, $faer_complex>,
+        ) -> Vec<$complex> {
+            let col = diag.column_vector();
+            let mut data = buffers.acquire_with_capacity::<$complex>(col.nrows());
+            for i in 0..col.nrows() {
+                data.push(<$complex>::new(col[i].re, 0.0));
+            }
+            data
         }
-    }
-    data
+
+        fn $vec_from_diag(
+            buffers: &mut BufferPool,
+            diag: DiagRef<'_, $faer_complex>,
+        ) -> Vec<$complex> {
+            let col = diag.column_vector();
+            let mut data = buffers.acquire_with_capacity::<$complex>(col.nrows());
+            for i in 0..col.nrows() {
+                data.push(<$complex>::new(col[i].re, col[i].im));
+            }
+            data
+        }
+
+        fn $vec_from_mat(
+            buffers: &mut BufferPool,
+            mat: MatRef<'_, $faer_complex>,
+        ) -> Vec<$complex> {
+            let (rows, cols) = mat.shape();
+            let mut data = buffers.acquire_with_capacity::<$complex>(rows * cols);
+            for j in 0..cols {
+                for i in 0..rows {
+                    let value = mat[(i, j)];
+                    data.push(<$complex>::new(value.re, value.im));
+                }
+            }
+            data
+        }
+
+        fn $matrix_from_predicate(
+            mat: MatRef<'_, $faer_complex>,
+            rows: usize,
+            cols: usize,
+            predicate: impl Fn(usize, usize) -> bool,
+        ) -> Vec<$complex> {
+            let mut data = vec![<$complex>::new(0.0, 0.0); rows * cols];
+            for j in 0..cols {
+                for i in 0..rows {
+                    if predicate(i, j) {
+                        let value = mat[(i, j)];
+                        data[i + j * rows] = <$complex>::new(value.re, value.im);
+                    }
+                }
+            }
+            data
+        }
+    };
 }
 
 fn matrix_from_predicate<T: Copy + Default>(
@@ -264,55 +321,61 @@ fn permutation_matrix<T: Copy + Default>(perm: &[usize], one: T) -> Vec<T> {
     data
 }
 
-fn complex_matrix_from_predicate(
-    mat: MatRef<'_, faer::c64>,
-    rows: usize,
-    cols: usize,
-    predicate: impl Fn(usize, usize) -> bool,
-) -> Vec<Complex64> {
-    let mut data = vec![Complex64::new(0.0, 0.0); rows * cols];
-    for j in 0..cols {
-        for i in 0..rows {
-            if predicate(i, j) {
-                let value = mat[(i, j)];
-                data[i + j * rows] = Complex64::new(value.re, value.im);
+impl_complex_vec_helpers!(
+    complex32_vec_from_real_diag,
+    complex32_vec_from_diag,
+    complex32_vec_from_mat,
+    complex32_matrix_from_predicate,
+    Complex32,
+    faer::c32
+);
+impl_complex_vec_helpers!(
+    complex64_vec_from_real_diag,
+    complex64_vec_from_diag,
+    complex64_vec_from_mat,
+    complex64_matrix_from_predicate,
+    Complex64,
+    faer::c64
+);
+
+macro_rules! impl_real_eig_to_complex_outputs {
+    ($name:ident, $real:ty, $complex:ty) => {
+        fn $name(
+            buffers: &mut BufferPool,
+            u_real: MatRef<'_, $real>,
+            s_re: DiagRef<'_, $real>,
+            s_im: DiagRef<'_, $real>,
+        ) -> (Vec<$complex>, Vec<$complex>) {
+            let n = u_real.nrows();
+            // SAFETY: the loop below writes every element of `u` and `s` before any read.
+            let mut u = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, n * n) };
+            // SAFETY: the loop below writes every element of `u` and `s` before any read.
+            let mut s = unsafe { <$complex as PoolScalar>::pool_acquire(buffers, n) };
+            let mut j = 0;
+            while j < n {
+                if s_im[j] == 0.0 {
+                    s[j] = <$complex>::new(s_re[j], 0.0);
+                    for i in 0..n {
+                        u[i + j * n] = <$complex>::new(u_real[(i, j)], 0.0);
+                    }
+                    j += 1;
+                } else {
+                    s[j] = <$complex>::new(s_re[j], s_im[j]);
+                    s[j + 1] = <$complex>::new(s_re[j], -s_im[j]);
+                    for i in 0..n {
+                        u[i + j * n] = <$complex>::new(u_real[(i, j)], u_real[(i, j + 1)]);
+                        u[i + (j + 1) * n] = <$complex>::new(u_real[(i, j)], -u_real[(i, j + 1)]);
+                    }
+                    j += 2;
+                }
             }
+            (u, s)
         }
-    }
-    data
+    };
 }
 
-fn real_eig_to_complex_outputs(
-    buffers: &mut BufferPool,
-    u_real: MatRef<'_, f64>,
-    s_re: DiagRef<'_, f64>,
-    s_im: DiagRef<'_, f64>,
-) -> (Vec<Complex64>, Vec<Complex64>) {
-    let n = u_real.nrows();
-    // SAFETY: the loop below writes every element of `u` and `s` before any read.
-    let mut u = unsafe { <Complex64 as PoolScalar>::pool_acquire(buffers, n * n) };
-    // SAFETY: the loop below writes every element of `u` and `s` before any read.
-    let mut s = unsafe { <Complex64 as PoolScalar>::pool_acquire(buffers, n) };
-    let mut j = 0;
-    while j < n {
-        if s_im[j] == 0.0 {
-            s[j] = Complex64::new(s_re[j], 0.0);
-            for i in 0..n {
-                u[i + j * n] = Complex64::new(u_real[(i, j)], 0.0);
-            }
-            j += 1;
-        } else {
-            s[j] = Complex64::new(s_re[j], s_im[j]);
-            s[j + 1] = Complex64::new(s_re[j], -s_im[j]);
-            for i in 0..n {
-                u[i + j * n] = Complex64::new(u_real[(i, j)], u_real[(i, j + 1)]);
-                u[i + (j + 1) * n] = Complex64::new(u_real[(i, j)], -u_real[(i, j + 1)]);
-            }
-            j += 2;
-        }
-    }
-    (u, s)
-}
+impl_real_eig_to_complex_outputs!(real32_eig_to_complex_outputs, f32, Complex32);
+impl_real_eig_to_complex_outputs!(real64_eig_to_complex_outputs, f64, Complex64);
 
 fn split_shape_core_and_batch<'a>(
     shape: &'a [usize],
@@ -703,7 +766,9 @@ where
     Ok(tensor_from_vec_with_template(out_shape, out_data, b))
 }
 
-impl FaerLinalg for f64 {
+macro_rules! impl_faer_linalg_for_real {
+    ($scalar:ty) => {
+        impl FaerLinalg for $scalar {
     fn parity_one() -> Self {
         1.0
     }
@@ -1239,11 +1304,27 @@ impl FaerLinalg for f64 {
 
         Ok(vec![values, vectors])
     }
+        }
+    };
 }
 
-impl FaerLinalg for Complex64 {
+impl_faer_linalg_for_real!(f32);
+impl_faer_linalg_for_real!(f64);
+
+macro_rules! impl_faer_linalg_for_complex {
+    (
+        $complex:ty,
+        $faer_complex:ty,
+        $to_faer_slice:ident,
+        $to_faer_slice_mut:ident,
+        $vec_from_real_diag:ident,
+        $vec_from_diag:ident,
+        $vec_from_mat:ident,
+        $matrix_from_predicate:ident
+    ) => {
+        impl FaerLinalg for $complex {
     fn parity_one() -> Self {
-        Complex64::new(1.0, 0.0)
+        <$complex>::new(1.0, 0.0)
     }
 
     fn cholesky_2d(
@@ -1254,12 +1335,12 @@ impl FaerLinalg for Complex64 {
         let n = square_matrix_dim(input, "cholesky")?;
         let mut l = Mat::zeros(n, n);
         l.copy_from(MatRef::from_column_major_slice(
-            complex64_to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()),
             n,
             n,
         ));
         let mut mem = MemBuffer::new(
-            faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<faer::c64>(
+            faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<$faer_complex>(
                 n,
                 ctx.faer_par(),
                 Default::default(),
@@ -1279,7 +1360,7 @@ impl FaerLinalg for Complex64 {
         })?;
         Ok(tensor_from_vec_with_template(
             vec![n, n],
-            complex_matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col),
+            $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col),
             input,
         ))
     }
@@ -1293,14 +1374,14 @@ impl FaerLinalg for Complex64 {
         let k = m.min(n);
         let mut lu = Mat::zeros(m, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            complex64_to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()),
             m,
             n,
         ));
         let mut perm = vec![0usize; m];
         let mut perm_inv = vec![0usize; m];
         let mut mem = MemBuffer::new(
-            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, faer::c64>(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 m,
                 n,
                 ctx.faer_par(),
@@ -1318,20 +1399,20 @@ impl FaerLinalg for Complex64 {
         )
         .0;
 
-        let mut p_data = vec![Complex64::new(0.0, 0.0); m * m];
+        let mut p_data = vec![<$complex>::new(0.0, 0.0); m * m];
         for (row, &col) in perm.iter().enumerate() {
-            p_data[row + col * m] = Complex64::new(1.0, 0.0);
+            p_data[row + col * m] = <$complex>::new(1.0, 0.0);
         }
         let parity = if info.transposition_count % 2 == 0 {
-            Complex64::new(1.0, 0.0)
+            <$complex>::new(1.0, 0.0)
         } else {
-            Complex64::new(-1.0, 0.0)
+            <$complex>::new(-1.0, 0.0)
         };
-        let mut l_data = complex_matrix_from_predicate(lu.as_ref(), m, k, |row, col| row >= col);
+        let mut l_data = $matrix_from_predicate(lu.as_ref(), m, k, |row, col| row >= col);
         for i in 0..k {
-            l_data[i + i * m] = Complex64::new(1.0, 0.0);
+            l_data[i + i * m] = <$complex>::new(1.0, 0.0);
         }
-        let u_data = complex_matrix_from_predicate(lu.as_ref(), k, n, |row, col| row <= col);
+        let u_data = $matrix_from_predicate(lu.as_ref(), k, n, |row, col| row <= col);
 
         Ok(vec![
             tensor_from_vec_with_template(vec![m, m], p_data, input),
@@ -1349,7 +1430,7 @@ impl FaerLinalg for Complex64 {
         let n = square_matrix_dim(input, "full_piv_lu")?;
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            complex64_to_faer_slice(input.host_data()),
+            $to_faer_slice(input.host_data()),
             n,
             n,
         ));
@@ -1358,7 +1439,7 @@ impl FaerLinalg for Complex64 {
         let mut col_perm = vec![0usize; n];
         let mut col_perm_inv = vec![0usize; n];
         let mut mem = MemBuffer::new(
-            faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, faer::c64>(
+            faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 n,
                 n,
                 ctx.faer_par(),
@@ -1378,16 +1459,16 @@ impl FaerLinalg for Complex64 {
         )
         .0;
 
-        let mut l_data = complex_matrix_from_predicate(lu.as_ref(), n, n, |row, col| row >= col);
+        let mut l_data = $matrix_from_predicate(lu.as_ref(), n, n, |row, col| row >= col);
         for i in 0..n {
-            l_data[i + i * n] = Complex64::new(1.0, 0.0);
+            l_data[i + i * n] = <$complex>::new(1.0, 0.0);
         }
-        let u_data = complex_matrix_from_predicate(lu.as_ref(), n, n, |row, col| row <= col);
-        let one = Complex64::new(1.0, 0.0);
+        let u_data = $matrix_from_predicate(lu.as_ref(), n, n, |row, col| row <= col);
+        let one = <$complex>::new(1.0, 0.0);
         let parity = if info.transposition_count % 2 == 0 {
             one
         } else {
-            Complex64::new(-1.0, 0.0)
+            <$complex>::new(-1.0, 0.0)
         };
 
         Ok(vec![
@@ -1418,7 +1499,7 @@ impl FaerLinalg for Complex64 {
 
         let mut lu = Mat::zeros(n, n);
         lu.copy_from(MatRef::from_column_major_slice(
-            complex64_to_faer_slice(a.host_data()),
+            $to_faer_slice(a.host_data()),
             n,
             n,
         ));
@@ -1427,7 +1508,7 @@ impl FaerLinalg for Complex64 {
         let mut col_perm = vec![0usize; n];
         let mut col_perm_inv = vec![0usize; n];
         let mut mem = MemBuffer::new(
-            faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, faer::c64>(
+            faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 n,
                 n,
                 ctx.faer_par(),
@@ -1458,12 +1539,12 @@ impl FaerLinalg for Complex64 {
         let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
         rhs_data.extend_from_slice(b.host_data());
         let rhs = MatMut::from_column_major_slice_mut(
-            complex64_to_faer_slice_mut(&mut rhs_data),
+            $to_faer_slice_mut(&mut rhs_data),
             n,
             b_cols,
         );
         let mut mem = MemBuffer::new(
-            faer::linalg::lu::full_pivoting::solve::solve_in_place_scratch::<usize, faer::c64>(
+            faer::linalg::lu::full_pivoting::solve::solve_in_place_scratch::<usize, $faer_complex>(
                 n,
                 b_cols,
                 ctx.faer_par(),
@@ -1506,7 +1587,7 @@ impl FaerLinalg for Complex64 {
     ) -> crate::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(a, "triangular_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
-        let a_mat = MatRef::from_column_major_slice(complex64_to_faer_slice(a.host_data()), n, n);
+        let a_mat = MatRef::from_column_major_slice($to_faer_slice(a.host_data()), n, n);
 
         if left_side {
             if b_rows != n {
@@ -1519,7 +1600,7 @@ impl FaerLinalg for Complex64 {
             let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
             rhs_data.extend_from_slice(b.host_data());
             let rhs = MatMut::from_column_major_slice_mut(
-                complex64_to_faer_slice_mut(&mut rhs_data),
+                $to_faer_slice_mut(&mut rhs_data),
                 n,
                 b_cols,
             );
@@ -1593,7 +1674,7 @@ impl FaerLinalg for Complex64 {
             let nrhs = b_rows;
             let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data(), nrhs, n);
             let rhs = MatMut::from_column_major_slice_mut(
-                complex64_to_faer_slice_mut(&mut rhs_transposed),
+                $to_faer_slice_mut(&mut rhs_transposed),
                 n,
                 nrhs,
             );
@@ -1668,11 +1749,11 @@ impl FaerLinalg for Complex64 {
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
         let mut u = Mat::zeros(m, k);
         let mut v = Mat::zeros(n, k);
         let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<faer::c64>(
+        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
             m,
             n,
             faer::linalg::svd::ComputeSvdVectors::Thin,
@@ -1694,12 +1775,12 @@ impl FaerLinalg for Complex64 {
 
         let u = tensor_from_vec_with_template(
             vec![m, k],
-            complex_vec_from_mat(buffers, u.as_ref()),
+            $vec_from_mat(buffers, u.as_ref()),
             input,
         );
         let s = tensor_from_vec_with_template(
             vec![k],
-            complex_vec_from_real_diag(buffers, s.as_ref()),
+            $vec_from_real_diag(buffers, s.as_ref()),
             input,
         );
         let mut vt_data = buffers.acquire_with_capacity::<Self>(k * n);
@@ -1720,14 +1801,14 @@ impl FaerLinalg for Complex64 {
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "qr")?;
         let k = m.min(n);
-        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), m, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), m, n);
         let block_size =
-            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<faer::c64>(m, n);
+            faer::linalg::qr::no_pivoting::factor::recommended_block_size::<$faer_complex>(m, n);
         let mut qr = Mat::zeros(m, n);
         qr.copy_from(mat);
         let mut coeff = Mat::zeros(block_size, k);
         let mut mem = MemBuffer::new(
-            faer::linalg::qr::no_pivoting::factor::qr_in_place_scratch::<faer::c64>(
+            faer::linalg::qr::no_pivoting::factor::qr_in_place_scratch::<$faer_complex>(
                 m,
                 n,
                 block_size,
@@ -1745,7 +1826,7 @@ impl FaerLinalg for Complex64 {
         );
         let mut q = Mat::identity(m, k);
         let mut mem = MemBuffer::new(
-            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<faer::c64>(
+            faer::linalg::householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<$faer_complex>(
                 m,
                 block_size,
                 k,
@@ -1762,12 +1843,12 @@ impl FaerLinalg for Complex64 {
         );
         let q = tensor_from_vec_with_template(
             vec![m, k],
-            complex_vec_from_mat(buffers, q.as_ref()),
+            $vec_from_mat(buffers, q.as_ref()),
             input,
         );
         let r = tensor_from_vec_with_template(
             vec![k, n],
-            complex_matrix_from_predicate(qr.as_ref(), k, n, |row, col| row <= col),
+            $matrix_from_predicate(qr.as_ref(), k, n, |row, col| row <= col),
             input,
         );
 
@@ -1780,10 +1861,10 @@ impl FaerLinalg for Complex64 {
         input: &TypedTensor<Self>,
     ) -> crate::Result<Vec<TypedTensor<Self>>> {
         let n = square_matrix_dim(input, "eigh")?;
-        let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
+        let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
         let mut values = Diag::zeros(n);
         let mut vectors = Mat::zeros(n, n);
-        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<faer::c64>(
+        let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
             n,
             faer::linalg::evd::ComputeEigenvectors::Yes,
             ctx.faer_par(),
@@ -1802,18 +1883,41 @@ impl FaerLinalg for Complex64 {
 
         let values = tensor_from_vec_with_template(
             vec![n],
-            complex_vec_from_real_diag(buffers, values.as_ref()),
+            $vec_from_real_diag(buffers, values.as_ref()),
             input,
         );
         let vectors = tensor_from_vec_with_template(
             vec![n, n],
-            complex_vec_from_mat(buffers, vectors.as_ref()),
+            $vec_from_mat(buffers, vectors.as_ref()),
             input,
         );
 
         Ok(vec![values, vectors])
     }
+        }
+    };
 }
+
+impl_faer_linalg_for_complex!(
+    Complex32,
+    faer::c32,
+    complex32_to_faer_slice,
+    complex32_to_faer_slice_mut,
+    complex32_vec_from_real_diag,
+    complex32_vec_from_diag,
+    complex32_vec_from_mat,
+    complex32_matrix_from_predicate
+);
+impl_faer_linalg_for_complex!(
+    Complex64,
+    faer::c64,
+    complex64_to_faer_slice,
+    complex64_to_faer_slice_mut,
+    complex64_vec_from_real_diag,
+    complex64_vec_from_diag,
+    complex64_vec_from_mat,
+    complex64_matrix_from_predicate
+);
 
 pub(crate) fn cholesky<T: FaerLinalg>(
     ctx: &CpuContext,
@@ -2076,77 +2180,119 @@ pub(crate) fn eigh<T: FaerLinalg>(
     })
 }
 
-fn eig_real_2d(
-    ctx: &CpuContext,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<f64>,
-) -> crate::Result<Vec<TypedTensor<Complex64>>> {
-    let n = square_matrix_dim(input, "eig")?;
-    let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
-    let mut u_real = Mat::zeros(n, n);
-    let mut s_re = Diag::zeros(n);
-    let mut s_im = Diag::zeros(n);
-    let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<f64>(
-        n,
-        faer::linalg::evd::ComputeEigenvectors::No,
-        faer::linalg::evd::ComputeEigenvectors::Yes,
-        ctx.faer_par(),
-        Default::default(),
-    ));
-    let stack = MemStack::new(&mut mem);
-    faer::linalg::evd::evd_real(
-        mat,
-        s_re.as_mut(),
-        s_im.as_mut(),
-        None,
-        Some(u_real.as_mut()),
-        ctx.faer_par(),
-        stack,
-        Default::default(),
-    )
-    .map_err(|_| decomposition_failed("eig"))?;
-    let (u, s) =
-        real_eig_to_complex_outputs(buffers, u_real.as_ref(), s_re.as_ref(), s_im.as_ref());
+macro_rules! impl_eig_real_2d {
+    ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_outputs:ident) => {
+        fn $name(
+            ctx: &CpuContext,
+            buffers: &mut BufferPool,
+            input: &TypedTensor<$real>,
+        ) -> crate::Result<Vec<TypedTensor<$complex>>> {
+            let n = square_matrix_dim(input, "eig")?;
+            let mat = MatRef::from_column_major_slice(input.host_data(), n, n);
+            let mut u_real = Mat::zeros(n, n);
+            let mut s_re = Diag::zeros(n);
+            let mut s_im = Diag::zeros(n);
+            let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$real>(
+                n,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                faer::linalg::evd::ComputeEigenvectors::Yes,
+                ctx.faer_par(),
+                Default::default(),
+            ));
+            let stack = MemStack::new(&mut mem);
+            faer::linalg::evd::evd_real(
+                mat,
+                s_re.as_mut(),
+                s_im.as_mut(),
+                None,
+                Some(u_real.as_mut()),
+                ctx.faer_par(),
+                stack,
+                Default::default(),
+            )
+            .map_err(|_| decomposition_failed("eig"))?;
+            let (u, s) = $real_eig_to_complex_outputs(
+                buffers,
+                u_real.as_ref(),
+                s_re.as_ref(),
+                s_im.as_ref(),
+            );
 
-    Ok(vec![
-        tensor_from_vec_with_template(vec![n], s, input),
-        tensor_from_vec_with_template(vec![n, n], u, input),
-    ])
+            Ok(vec![
+                tensor_from_vec_with_template(vec![n], s, input),
+                tensor_from_vec_with_template(vec![n, n], u, input),
+            ])
+        }
+    };
 }
 
-fn eig_complex_2d(
-    ctx: &CpuContext,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<Complex64>,
-) -> crate::Result<Vec<TypedTensor<Complex64>>> {
-    let n = square_matrix_dim(input, "eig")?;
-    let mat = MatRef::from_column_major_slice(complex64_to_faer_slice(input.host_data()), n, n);
-    let mut u = Mat::zeros(n, n);
-    let mut s = Diag::zeros(n);
-    let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<faer::c64>(
-        n,
-        faer::linalg::evd::ComputeEigenvectors::No,
-        faer::linalg::evd::ComputeEigenvectors::Yes,
-        ctx.faer_par(),
-        Default::default(),
-    ));
-    let stack = MemStack::new(&mut mem);
-    faer::linalg::evd::evd_cplx(
-        mat,
-        s.as_mut(),
-        None,
-        Some(u.as_mut()),
-        ctx.faer_par(),
-        stack,
-        Default::default(),
-    )
-    .map_err(|_| decomposition_failed("eig"))?;
+macro_rules! impl_eig_complex_2d {
+    (
+        $name:ident,
+        $complex:ty,
+        $faer_complex:ty,
+        $to_faer_slice:ident,
+        $vec_from_diag:ident,
+        $vec_from_mat:ident
+    ) => {
+        fn $name(
+            ctx: &CpuContext,
+            buffers: &mut BufferPool,
+            input: &TypedTensor<$complex>,
+        ) -> crate::Result<Vec<TypedTensor<$complex>>> {
+            let n = square_matrix_dim(input, "eig")?;
+            let mat = MatRef::from_column_major_slice($to_faer_slice(input.host_data()), n, n);
+            let mut u = Mat::zeros(n, n);
+            let mut s = Diag::zeros(n);
+            let mut mem = MemBuffer::new(faer::linalg::evd::evd_scratch::<$faer_complex>(
+                n,
+                faer::linalg::evd::ComputeEigenvectors::No,
+                faer::linalg::evd::ComputeEigenvectors::Yes,
+                ctx.faer_par(),
+                Default::default(),
+            ));
+            let stack = MemStack::new(&mut mem);
+            faer::linalg::evd::evd_cplx(
+                mat,
+                s.as_mut(),
+                None,
+                Some(u.as_mut()),
+                ctx.faer_par(),
+                stack,
+                Default::default(),
+            )
+            .map_err(|_| decomposition_failed("eig"))?;
 
-    Ok(vec![
-        tensor_from_vec_with_template(vec![n], complex_vec_from_diag(buffers, s.as_ref()), input),
-        tensor_from_vec_with_template(vec![n, n], complex_vec_from_mat(buffers, u.as_ref()), input),
-    ])
+            Ok(vec![
+                tensor_from_vec_with_template(vec![n], $vec_from_diag(buffers, s.as_ref()), input),
+                tensor_from_vec_with_template(
+                    vec![n, n],
+                    $vec_from_mat(buffers, u.as_ref()),
+                    input,
+                ),
+            ])
+        }
+    };
 }
+
+impl_eig_real_2d!(eig_real32_2d, f32, Complex32, real32_eig_to_complex_outputs);
+impl_eig_real_2d!(eig_real64_2d, f64, Complex64, real64_eig_to_complex_outputs);
+impl_eig_complex_2d!(
+    eig_complex32_2d,
+    Complex32,
+    faer::c32,
+    complex32_to_faer_slice,
+    complex32_vec_from_diag,
+    complex32_vec_from_mat
+);
+impl_eig_complex_2d!(
+    eig_complex64_2d,
+    Complex64,
+    faer::c64,
+    complex64_to_faer_slice,
+    complex64_vec_from_diag,
+    complex64_vec_from_mat
+);
 
 pub(crate) fn eig(
     ctx: &CpuContext,
@@ -2163,33 +2309,59 @@ pub(crate) fn eig(
                 rhs: vec![matrix_shape[1]],
             });
         }
-        return Ok(vec![
-            Tensor::C64(TypedTensor::from_vec(
-                vector_with_batch_shape(n, batch_shape),
-                Vec::new(),
-            )),
-            Tensor::C64(TypedTensor::from_vec(
-                matrix_with_batch_shape(n, n, batch_shape),
-                Vec::new(),
-            )),
-        ]);
+        let value_shape = vector_with_batch_shape(n, batch_shape);
+        let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
+        return match input {
+            Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
+                Tensor::C32(TypedTensor::from_vec(value_shape, Vec::new())),
+                Tensor::C32(TypedTensor::from_vec(vector_shape, Vec::new())),
+            ]),
+            Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
+                Tensor::C64(TypedTensor::from_vec(value_shape, Vec::new())),
+                Tensor::C64(TypedTensor::from_vec(vector_shape, Vec::new())),
+            ]),
+            _ => Err(crate::Error::BackendFailure {
+                op: "eig",
+                message: format!("unsupported dtype {:?}", input.dtype()),
+            }),
+        };
     }
 
     match input {
+        Tensor::F32(t) => {
+            Ok(
+                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
+                    eig_real32_2d(ctx, buffers, batch)
+                })?
+                .into_iter()
+                .map(Tensor::C32)
+                .collect(),
+            )
+        }
         Tensor::F64(t) => {
             Ok(
                 batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_real_2d(ctx, buffers, batch)
+                    eig_real64_2d(ctx, buffers, batch)
                 })?
                 .into_iter()
                 .map(Tensor::C64)
                 .collect(),
             )
         }
+        Tensor::C32(t) => {
+            Ok(
+                batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
+                    eig_complex32_2d(ctx, buffers, batch)
+                })?
+                .into_iter()
+                .map(Tensor::C32)
+                .collect(),
+            )
+        }
         Tensor::C64(t) => {
             Ok(
                 batched_multi_convert_result("eig", buffers, t, 2, |buffers, batch| {
-                    eig_complex_2d(ctx, buffers, batch)
+                    eig_complex64_2d(ctx, buffers, batch)
                 })?
                 .into_iter()
                 .map(Tensor::C64)

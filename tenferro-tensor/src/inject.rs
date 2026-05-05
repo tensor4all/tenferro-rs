@@ -31,7 +31,10 @@
 use std::ffi::c_void;
 
 use cblas_inject::{CgemmFnPtr, DgemmFnPtr, SgemmFnPtr, ZgemmFnPtr};
-use lapack_inject::{Dgesc2Lp64FnPtr, Dgetc2Lp64FnPtr, Zgesc2Lp64FnPtr, Zgetc2Lp64FnPtr};
+use lapack_inject::{
+    Cgesc2Lp64FnPtr, Cgetc2Lp64FnPtr, Dgesc2Lp64FnPtr, Dgetc2Lp64FnPtr, Sgesc2Lp64FnPtr,
+    Sgetc2Lp64FnPtr, Zgesc2Lp64FnPtr, Zgetc2Lp64FnPtr,
+};
 
 // --- Public types --------------------------------------------------------
 
@@ -147,44 +150,84 @@ impl BlasGemmProviderPtrSet {
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LapackProviderPtrSet {
+    /// Fortran `sgesvd` raw function pointer.
+    pub sgesvd: Option<*const c_void>,
     /// Fortran `dgesvd` raw function pointer.
     pub dgesvd: Option<*const c_void>,
+    /// Fortran `cgesvd` raw function pointer.
+    pub cgesvd: Option<*const c_void>,
     /// Fortran `zgesvd` raw function pointer.
     pub zgesvd: Option<*const c_void>,
+    /// Fortran `sgeqrf` raw function pointer.
+    pub sgeqrf: Option<*const c_void>,
     /// Fortran `dgeqrf` raw function pointer.
     pub dgeqrf: Option<*const c_void>,
+    /// Fortran `cgeqrf` raw function pointer.
+    pub cgeqrf: Option<*const c_void>,
     /// Fortran `zgeqrf` raw function pointer.
     pub zgeqrf: Option<*const c_void>,
+    /// Fortran `sorgqr` raw function pointer.
+    pub sorgqr: Option<*const c_void>,
     /// Fortran `dorgqr` raw function pointer.
     pub dorgqr: Option<*const c_void>,
+    /// Fortran `cungqr` raw function pointer.
+    pub cungqr: Option<*const c_void>,
     /// Fortran `zungqr` raw function pointer.
     pub zungqr: Option<*const c_void>,
+    /// Fortran `strtrs` raw function pointer.
+    pub strtrs: Option<*const c_void>,
     /// Fortran `dtrtrs` raw function pointer.
     pub dtrtrs: Option<*const c_void>,
+    /// Fortran `ctrtrs` raw function pointer.
+    pub ctrtrs: Option<*const c_void>,
     /// Fortran `ztrtrs` raw function pointer.
     pub ztrtrs: Option<*const c_void>,
+    /// Fortran `spotrf` raw function pointer.
+    pub spotrf: Option<*const c_void>,
     /// Fortran `dpotrf` raw function pointer.
     pub dpotrf: Option<*const c_void>,
+    /// Fortran `cpotrf` raw function pointer.
+    pub cpotrf: Option<*const c_void>,
     /// Fortran `zpotrf` raw function pointer.
     pub zpotrf: Option<*const c_void>,
+    /// Fortran `sgetrf` raw function pointer.
+    pub sgetrf: Option<*const c_void>,
     /// Fortran `dgetrf` raw function pointer.
     pub dgetrf: Option<*const c_void>,
+    /// Fortran `cgetrf` raw function pointer.
+    pub cgetrf: Option<*const c_void>,
     /// Fortran `zgetrf` raw function pointer.
     pub zgetrf: Option<*const c_void>,
+    /// Fortran `ssyev` raw function pointer.
+    pub ssyev: Option<*const c_void>,
     /// Fortran `dsyev` raw function pointer.
     pub dsyev: Option<*const c_void>,
+    /// Fortran `cheev` raw function pointer.
+    pub cheev: Option<*const c_void>,
     /// Fortran `zheev` raw function pointer.
     pub zheev: Option<*const c_void>,
+    /// Fortran `sgeev` raw function pointer.
+    pub sgeev: Option<*const c_void>,
     /// Fortran `dgeev` raw function pointer.
     pub dgeev: Option<*const c_void>,
+    /// Fortran `cgeev` raw function pointer.
+    pub cgeev: Option<*const c_void>,
     /// Fortran `zgeev` raw function pointer.
     pub zgeev: Option<*const c_void>,
+    /// Fortran `sgetc2` raw function pointer.
+    pub sgetc2: Option<*const c_void>,
     /// Fortran `dgetc2` raw function pointer.
     pub dgetc2: Option<*const c_void>,
+    /// Fortran `sgesc2` raw function pointer.
+    pub sgesc2: Option<*const c_void>,
     /// Fortran `dgesc2` raw function pointer.
     pub dgesc2: Option<*const c_void>,
+    /// Fortran `cgetc2` raw function pointer.
+    pub cgetc2: Option<*const c_void>,
     /// Fortran `zgetc2` raw function pointer.
     pub zgetc2: Option<*const c_void>,
+    /// Fortran `cgesc2` raw function pointer.
+    pub cgesc2: Option<*const c_void>,
     /// Fortran `zgesc2` raw function pointer.
     pub zgesc2: Option<*const c_void>,
 }
@@ -202,25 +245,45 @@ impl LapackProviderPtrSet {
     /// ```
     pub const fn new() -> Self {
         Self {
+            sgesvd: None,
             dgesvd: None,
+            cgesvd: None,
             zgesvd: None,
+            sgeqrf: None,
             dgeqrf: None,
+            cgeqrf: None,
             zgeqrf: None,
+            sorgqr: None,
             dorgqr: None,
+            cungqr: None,
             zungqr: None,
+            strtrs: None,
             dtrtrs: None,
+            ctrtrs: None,
             ztrtrs: None,
+            spotrf: None,
             dpotrf: None,
+            cpotrf: None,
             zpotrf: None,
+            sgetrf: None,
             dgetrf: None,
+            cgetrf: None,
             zgetrf: None,
+            ssyev: None,
             dsyev: None,
+            cheev: None,
             zheev: None,
+            sgeev: None,
             dgeev: None,
+            cgeev: None,
             zgeev: None,
+            sgetc2: None,
             dgetc2: None,
+            sgesc2: None,
             dgesc2: None,
+            cgetc2: None,
             zgetc2: None,
+            cgesc2: None,
             zgesc2: None,
         }
     }
@@ -300,10 +363,18 @@ impl BlasGemmFnPtrSet {
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LapackFullPivLuFnPtrSet {
+    /// Fortran `sgetc2` LP64 function pointer.
+    pub sgetc2: Option<Sgetc2Lp64FnPtr>,
+    /// Fortran `sgesc2` LP64 function pointer.
+    pub sgesc2: Option<Sgesc2Lp64FnPtr>,
     /// Fortran `dgetc2` LP64 function pointer.
     pub dgetc2: Option<Dgetc2Lp64FnPtr>,
     /// Fortran `dgesc2` LP64 function pointer.
     pub dgesc2: Option<Dgesc2Lp64FnPtr>,
+    /// Fortran `cgetc2` LP64 function pointer.
+    pub cgetc2: Option<Cgetc2Lp64FnPtr>,
+    /// Fortran `cgesc2` LP64 function pointer.
+    pub cgesc2: Option<Cgesc2Lp64FnPtr>,
     /// Fortran `zgetc2` LP64 function pointer.
     pub zgetc2: Option<Zgetc2Lp64FnPtr>,
     /// Fortran `zgesc2` LP64 function pointer.
@@ -323,8 +394,12 @@ impl LapackFullPivLuFnPtrSet {
     /// ```
     pub const fn new() -> Self {
         Self {
+            sgetc2: None,
+            sgesc2: None,
             dgetc2: None,
             dgesc2: None,
+            cgetc2: None,
+            cgesc2: None,
             zgetc2: None,
             zgesc2: None,
         }
@@ -430,11 +505,23 @@ pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
 /// }
 /// ```
 pub unsafe fn register_lapack_full_piv_lu_fn_ptrs(ptrs: LapackFullPivLuFnPtrSet) {
+    if let Some(f) = ptrs.sgetc2 {
+        unsafe { lapack_inject::register_sgetc2_lp64(f) };
+    }
+    if let Some(f) = ptrs.sgesc2 {
+        unsafe { lapack_inject::register_sgesc2_lp64(f) };
+    }
     if let Some(f) = ptrs.dgetc2 {
         unsafe { lapack_inject::register_dgetc2_lp64(f) };
     }
     if let Some(f) = ptrs.dgesc2 {
         unsafe { lapack_inject::register_dgesc2_lp64(f) };
+    }
+    if let Some(f) = ptrs.cgetc2 {
+        unsafe { lapack_inject::register_cgetc2_lp64(f) };
+    }
+    if let Some(f) = ptrs.cgesc2 {
+        unsafe { lapack_inject::register_cgesc2_lp64(f) };
     }
     if let Some(f) = ptrs.zgetc2 {
         unsafe { lapack_inject::register_zgetc2_lp64(f) };
@@ -593,26 +680,7 @@ pub unsafe fn register_lapack_provider_ptrs(
     abi: ProviderAbi,
     ptrs: LapackProviderPtrSet,
 ) -> Result<(), ProviderRegistrationError> {
-    use lapack_inject::{
-        register_dgeev_ilp64, register_dgeev_lp64, register_dgeqrf_ilp64, register_dgeqrf_lp64,
-        register_dgesc2_ilp64, register_dgesc2_lp64, register_dgesvd_ilp64, register_dgesvd_lp64,
-        register_dgetc2_ilp64, register_dgetc2_lp64, register_dgetrf_ilp64, register_dgetrf_lp64,
-        register_dorgqr_ilp64, register_dorgqr_lp64, register_dpotrf_ilp64, register_dpotrf_lp64,
-        register_dsyev_ilp64, register_dsyev_lp64, register_dtrtrs_ilp64, register_dtrtrs_lp64,
-        register_zgeev_ilp64, register_zgeev_lp64, register_zgeqrf_ilp64, register_zgeqrf_lp64,
-        register_zgesc2_ilp64, register_zgesc2_lp64, register_zgesvd_ilp64, register_zgesvd_lp64,
-        register_zgetc2_ilp64, register_zgetc2_lp64, register_zgetrf_ilp64, register_zgetrf_lp64,
-        register_zheev_ilp64, register_zheev_lp64, register_zpotrf_ilp64, register_zpotrf_lp64,
-        register_ztrtrs_ilp64, register_ztrtrs_lp64, register_zungqr_ilp64, register_zungqr_lp64,
-        DgeevIlp64FnPtr, DgeevLp64FnPtr, DgeqrfIlp64FnPtr, DgeqrfLp64FnPtr, Dgesc2Ilp64FnPtr,
-        Dgesc2Lp64FnPtr, DgesvdIlp64FnPtr, DgesvdLp64FnPtr, Dgetc2Ilp64FnPtr, Dgetc2Lp64FnPtr,
-        DgetrfIlp64FnPtr, DgetrfLp64FnPtr, DorgqrIlp64FnPtr, DorgqrLp64FnPtr, DpotrfIlp64FnPtr,
-        DpotrfLp64FnPtr, DsyevIlp64FnPtr, DsyevLp64FnPtr, DtrtrsIlp64FnPtr, DtrtrsLp64FnPtr,
-        ZgeevIlp64FnPtr, ZgeevLp64FnPtr, ZgeqrfIlp64FnPtr, ZgeqrfLp64FnPtr, Zgesc2Ilp64FnPtr,
-        Zgesc2Lp64FnPtr, ZgesvdIlp64FnPtr, ZgesvdLp64FnPtr, Zgetc2Ilp64FnPtr, Zgetc2Lp64FnPtr,
-        ZgetrfIlp64FnPtr, ZgetrfLp64FnPtr, ZheevIlp64FnPtr, ZheevLp64FnPtr, ZpotrfIlp64FnPtr,
-        ZpotrfLp64FnPtr, ZtrtrsIlp64FnPtr, ZtrtrsLp64FnPtr, ZungqrIlp64FnPtr, ZungqrLp64FnPtr,
-    };
+    use lapack_inject::*;
 
     macro_rules! register_field {
         ($field:ident, $symbol:literal,
@@ -627,12 +695,28 @@ pub unsafe fn register_lapack_provider_ptrs(
     }
 
     register_field!(
+        sgesvd,
+        "sgesvd",
+        SgesvdLp64FnPtr,
+        SgesvdIlp64FnPtr,
+        register_sgesvd_lp64,
+        register_sgesvd_ilp64
+    );
+    register_field!(
         dgesvd,
         "dgesvd",
         DgesvdLp64FnPtr,
         DgesvdIlp64FnPtr,
         register_dgesvd_lp64,
         register_dgesvd_ilp64
+    );
+    register_field!(
+        cgesvd,
+        "cgesvd",
+        CgesvdLp64FnPtr,
+        CgesvdIlp64FnPtr,
+        register_cgesvd_lp64,
+        register_cgesvd_ilp64
     );
     register_field!(
         zgesvd,
@@ -643,12 +727,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zgesvd_ilp64
     );
     register_field!(
+        sgeqrf,
+        "sgeqrf",
+        SgeqrfLp64FnPtr,
+        SgeqrfIlp64FnPtr,
+        register_sgeqrf_lp64,
+        register_sgeqrf_ilp64
+    );
+    register_field!(
         dgeqrf,
         "dgeqrf",
         DgeqrfLp64FnPtr,
         DgeqrfIlp64FnPtr,
         register_dgeqrf_lp64,
         register_dgeqrf_ilp64
+    );
+    register_field!(
+        cgeqrf,
+        "cgeqrf",
+        CgeqrfLp64FnPtr,
+        CgeqrfIlp64FnPtr,
+        register_cgeqrf_lp64,
+        register_cgeqrf_ilp64
     );
     register_field!(
         zgeqrf,
@@ -659,12 +759,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zgeqrf_ilp64
     );
     register_field!(
+        sorgqr,
+        "sorgqr",
+        SorgqrLp64FnPtr,
+        SorgqrIlp64FnPtr,
+        register_sorgqr_lp64,
+        register_sorgqr_ilp64
+    );
+    register_field!(
         dorgqr,
         "dorgqr",
         DorgqrLp64FnPtr,
         DorgqrIlp64FnPtr,
         register_dorgqr_lp64,
         register_dorgqr_ilp64
+    );
+    register_field!(
+        cungqr,
+        "cungqr",
+        CungqrLp64FnPtr,
+        CungqrIlp64FnPtr,
+        register_cungqr_lp64,
+        register_cungqr_ilp64
     );
     register_field!(
         zungqr,
@@ -675,12 +791,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zungqr_ilp64
     );
     register_field!(
+        strtrs,
+        "strtrs",
+        StrtrsLp64FnPtr,
+        StrtrsIlp64FnPtr,
+        register_strtrs_lp64,
+        register_strtrs_ilp64
+    );
+    register_field!(
         dtrtrs,
         "dtrtrs",
         DtrtrsLp64FnPtr,
         DtrtrsIlp64FnPtr,
         register_dtrtrs_lp64,
         register_dtrtrs_ilp64
+    );
+    register_field!(
+        ctrtrs,
+        "ctrtrs",
+        CtrtrsLp64FnPtr,
+        CtrtrsIlp64FnPtr,
+        register_ctrtrs_lp64,
+        register_ctrtrs_ilp64
     );
     register_field!(
         ztrtrs,
@@ -691,12 +823,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_ztrtrs_ilp64
     );
     register_field!(
+        spotrf,
+        "spotrf",
+        SpotrfLp64FnPtr,
+        SpotrfIlp64FnPtr,
+        register_spotrf_lp64,
+        register_spotrf_ilp64
+    );
+    register_field!(
         dpotrf,
         "dpotrf",
         DpotrfLp64FnPtr,
         DpotrfIlp64FnPtr,
         register_dpotrf_lp64,
         register_dpotrf_ilp64
+    );
+    register_field!(
+        cpotrf,
+        "cpotrf",
+        CpotrfLp64FnPtr,
+        CpotrfIlp64FnPtr,
+        register_cpotrf_lp64,
+        register_cpotrf_ilp64
     );
     register_field!(
         zpotrf,
@@ -707,12 +855,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zpotrf_ilp64
     );
     register_field!(
+        sgetrf,
+        "sgetrf",
+        SgetrfLp64FnPtr,
+        SgetrfIlp64FnPtr,
+        register_sgetrf_lp64,
+        register_sgetrf_ilp64
+    );
+    register_field!(
         dgetrf,
         "dgetrf",
         DgetrfLp64FnPtr,
         DgetrfIlp64FnPtr,
         register_dgetrf_lp64,
         register_dgetrf_ilp64
+    );
+    register_field!(
+        cgetrf,
+        "cgetrf",
+        CgetrfLp64FnPtr,
+        CgetrfIlp64FnPtr,
+        register_cgetrf_lp64,
+        register_cgetrf_ilp64
     );
     register_field!(
         zgetrf,
@@ -723,12 +887,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zgetrf_ilp64
     );
     register_field!(
+        ssyev,
+        "ssyev",
+        SsyevLp64FnPtr,
+        SsyevIlp64FnPtr,
+        register_ssyev_lp64,
+        register_ssyev_ilp64
+    );
+    register_field!(
         dsyev,
         "dsyev",
         DsyevLp64FnPtr,
         DsyevIlp64FnPtr,
         register_dsyev_lp64,
         register_dsyev_ilp64
+    );
+    register_field!(
+        cheev,
+        "cheev",
+        CheevLp64FnPtr,
+        CheevIlp64FnPtr,
+        register_cheev_lp64,
+        register_cheev_ilp64
     );
     register_field!(
         zheev,
@@ -739,12 +919,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zheev_ilp64
     );
     register_field!(
+        sgeev,
+        "sgeev",
+        SgeevLp64FnPtr,
+        SgeevIlp64FnPtr,
+        register_sgeev_lp64,
+        register_sgeev_ilp64
+    );
+    register_field!(
         dgeev,
         "dgeev",
         DgeevLp64FnPtr,
         DgeevIlp64FnPtr,
         register_dgeev_lp64,
         register_dgeev_ilp64
+    );
+    register_field!(
+        cgeev,
+        "cgeev",
+        CgeevLp64FnPtr,
+        CgeevIlp64FnPtr,
+        register_cgeev_lp64,
+        register_cgeev_ilp64
     );
     register_field!(
         zgeev,
@@ -755,12 +951,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zgeev_ilp64
     );
     register_field!(
+        sgetc2,
+        "sgetc2",
+        Sgetc2Lp64FnPtr,
+        Sgetc2Ilp64FnPtr,
+        register_sgetc2_lp64,
+        register_sgetc2_ilp64
+    );
+    register_field!(
         dgetc2,
         "dgetc2",
         Dgetc2Lp64FnPtr,
         Dgetc2Ilp64FnPtr,
         register_dgetc2_lp64,
         register_dgetc2_ilp64
+    );
+    register_field!(
+        sgesc2,
+        "sgesc2",
+        Sgesc2Lp64FnPtr,
+        Sgesc2Ilp64FnPtr,
+        register_sgesc2_lp64,
+        register_sgesc2_ilp64
     );
     register_field!(
         dgesc2,
@@ -771,12 +983,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_dgesc2_ilp64
     );
     register_field!(
+        cgetc2,
+        "cgetc2",
+        Cgetc2Lp64FnPtr,
+        Cgetc2Ilp64FnPtr,
+        register_cgetc2_lp64,
+        register_cgetc2_ilp64
+    );
+    register_field!(
         zgetc2,
         "zgetc2",
         Zgetc2Lp64FnPtr,
         Zgetc2Ilp64FnPtr,
         register_zgetc2_lp64,
         register_zgetc2_ilp64
+    );
+    register_field!(
+        cgesc2,
+        "cgesc2",
+        Cgesc2Lp64FnPtr,
+        Cgesc2Ilp64FnPtr,
+        register_cgesc2_lp64,
+        register_cgesc2_ilp64
     );
     register_field!(
         zgesc2,

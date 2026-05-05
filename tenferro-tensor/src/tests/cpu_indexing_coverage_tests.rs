@@ -599,19 +599,20 @@ fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
         assert_eq!(exec.eig(&eye).unwrap().len(), 2);
 
         let f32_vec = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+        let i64_vec = Tensor::I64(TypedTensor::from_vec(vec![2], vec![1_i64, 2]));
         assert!(matches!(
-            exec.eig(&f32_vec),
+            exec.eig(&i64_vec),
             Err(crate::Error::BackendFailure { op: "eig", .. })
         ));
         assert!(matches!(
-            exec.triangular_solve(&f32_vec, &f32_vec, true, true, false, false),
+            exec.triangular_solve(&i64_vec, &i64_vec, true, true, false, false),
             Err(crate::Error::BackendFailure {
                 op: "triangular_solve",
                 ..
             })
         ));
         assert!(matches!(
-            exec.full_piv_lu_solve(&f32_vec, &f32_vec, false),
+            exec.full_piv_lu_solve(&i64_vec, &i64_vec, false),
             Err(crate::Error::BackendFailure {
                 op: "full_piv_lu_solve",
                 ..

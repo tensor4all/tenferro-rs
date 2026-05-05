@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
@@ -27,6 +27,38 @@ impl LapackLu for f64 {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
         unsafe {
             lapack::dgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+impl LapackLu for f32 {
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::sgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+impl LapackLu for Complex32 {
+    fn one() -> Self {
+        Complex32::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex32::new(-1.0, 0.0)
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::cgetrf(m, n, data, lda, ipiv, info);
         }
     }
 }

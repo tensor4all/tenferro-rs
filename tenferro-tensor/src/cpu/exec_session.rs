@@ -27,7 +27,9 @@ macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             match input {
+                Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::F32),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::F64),
+                Tensor::C32(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::C32),
                 Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::C64),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
@@ -41,7 +43,9 @@ macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
             match input {
+                Tensor::F32(t) => linalg::$name(self.buffers, t).map(Tensor::F32),
                 Tensor::F64(t) => linalg::$name(self.buffers, t).map(Tensor::F64),
+                Tensor::C32(t) => linalg::$name(self.buffers, t).map(Tensor::C32),
                 Tensor::C64(t) => linalg::$name(self.buffers, t).map(Tensor::C64),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
             }
@@ -55,8 +59,12 @@ macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
+                Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C32(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
                 Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
@@ -71,8 +79,12 @@ macro_rules! linalg_multi_result {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
+                Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C32(t) => linalg::$name(self.ctx, self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
                 Tensor::C64(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
@@ -87,8 +99,12 @@ macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
             match input {
+                Tensor::F32(t) => linalg::$name(self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                Tensor::C32(t) => linalg::$name(self.buffers, t)
+                    .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
                 Tensor::C64(t) => linalg::$name(self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
                 _ => Err(unsupported_dtype(stringify!($name), input.dtype())),
@@ -217,7 +233,10 @@ impl TensorExec for CpuExecSession<'_> {
     linalg_multi!(eigh);
 
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        if !matches!(input, Tensor::F64(_) | Tensor::C64(_)) {
+        if !matches!(
+            input,
+            Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
+        ) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
         #[cfg(feature = "cpu-faer")]
@@ -241,6 +260,18 @@ impl TensorExec for CpuExecSession<'_> {
     ) -> crate::Result<Tensor> {
         match (a, b) {
             #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
+                self.ctx,
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
                 self.ctx,
                 self.buffers,
@@ -252,6 +283,18 @@ impl TensorExec for CpuExecSession<'_> {
                 unit_diagonal,
             )
             .map(Tensor::F64),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
+                self.ctx,
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C32),
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
                 self.ctx,
@@ -265,6 +308,17 @@ impl TensorExec for CpuExecSession<'_> {
             )
             .map(Tensor::C64),
             #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
                 self.buffers,
                 a,
@@ -275,6 +329,17 @@ impl TensorExec for CpuExecSession<'_> {
                 unit_diagonal,
             )
             .map(Tensor::F64),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
+                self.buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C32),
             #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
                 self.buffers,
@@ -308,9 +373,19 @@ impl TensorExec for CpuExecSession<'_> {
     ) -> crate::Result<Tensor> {
         match (a, b) {
             #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
+                    .map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
                     .map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)
+                    .map(Tensor::C32)
             }
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => {
@@ -318,8 +393,16 @@ impl TensorExec for CpuExecSession<'_> {
                     .map(Tensor::C64)
             }
             #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::full_piv_lu_solve(self.buffers, a, b, transpose_a).map(Tensor::C32)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => {
