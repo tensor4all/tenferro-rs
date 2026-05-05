@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tenferro::eager_einsum::eager_einsum_ad;
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 
@@ -5,16 +7,21 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
 }
 
+fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
+    EagerContext::with_backend(CpuBackend::new())
+}
+
 #[test]
 fn eager_einsum_ad_matmul_primal_matches_expected_values() {
-    let a = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
-    let b = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![3, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let ctx = test_ctx();
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
 
     let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
 
@@ -24,14 +31,15 @@ fn eager_einsum_ad_matmul_primal_matches_expected_values() {
 
 #[test]
 fn eager_einsum_ad_backward_populates_input_grads() {
-    let a = EagerTensor::requires_grad(Tensor::from_vec(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
-    let b = EagerTensor::requires_grad(Tensor::from_vec(
-        vec![3, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let ctx = test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
 
     let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
@@ -48,14 +56,15 @@ fn eager_einsum_ad_backward_populates_input_grads() {
 
 #[test]
 fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
-    let a = EagerTensor::requires_grad(Tensor::from_vec(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
-    let b = EagerTensor::requires_grad(Tensor::from_vec(
-        vec![3, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let ctx = test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
 
     let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();

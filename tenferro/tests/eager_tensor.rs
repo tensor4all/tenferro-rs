@@ -1,3 +1,5 @@
+use std::sync::{Arc, OnceLock};
+
 use num_complex::Complex64;
 use tenferro::{
     CpuBackend, DotGeneralConfig, EagerContext, EagerTensor, GatherConfig, PadConfig, SliceConfig,
@@ -72,8 +74,8 @@ fn matmul_config() -> DotGeneralConfig {
 }
 
 fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
-    let a = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 3], lhs.to_vec()));
-    let b = EagerTensor::from_tensor(Tensor::from_vec(vec![3, 2], rhs.to_vec()));
+    let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 3], lhs.to_vec()), test_ctx());
+    let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3, 2], rhs.to_vec()), test_ctx());
     let loss = a
         .dot_general(&b, matmul_config())
         .unwrap()
@@ -82,10 +84,16 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
     f64_data(loss.data())[0]
 }
 
+fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
+    static CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
+    CTX.get_or_init(|| EagerContext::with_backend(CpuBackend::new()))
+        .clone()
+}
+
 #[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
-    let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], x_data.clone()));
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());
     let loss = (&x * &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap();
@@ -105,7 +113,10 @@ fn eager_x_squared_gradient_matches_finite_difference() {
 
 #[test]
 fn eager_repeated_backward_accumulates_across_calls() {
-    let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
 
     let loss = (&x * &x).reduce_sum(&[0]).unwrap();
     let _ = loss.backward().unwrap();
@@ -121,8 +132,8 @@ fn eager_matmul_gradients_match_finite_difference() {
     let a_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let b_data = vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
 
-    let a = EagerTensor::requires_grad(Tensor::from_vec(vec![2, 3], a_data.clone()));
-    let b = EagerTensor::requires_grad(Tensor::from_vec(vec![3, 2], b_data.clone()));
+    let a = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2, 3], a_data.clone()), test_ctx());
+    let b = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3, 2], b_data.clone()), test_ctx());
     let loss = a
         .dot_general(&b, matmul_config())
         .unwrap()
@@ -148,7 +159,8 @@ fn eager_matmul_gradients_match_finite_difference() {
 
 #[test]
 fn eager_exp_gradient_matches_primal() {
-    let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![0.0, 1.0, 2.0]));
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![0.0, 1.0, 2.0]), test_ctx());
     let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -159,7 +171,8 @@ fn eager_exp_gradient_matches_primal() {
 
 #[test]
 fn eager_fan_out_accumulates_gradient() {
-    let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]), test_ctx());
     let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -271,7 +284,8 @@ fn eager_send_sync_contracts_compile() {
 
 #[test]
 fn eager_detach_cuts_one_gradient_path() {
-    let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]), test_ctx());
     let detached = x.detach();
     let loss = (&detached * &x).reduce_sum(&[0]).unwrap();
     let _cotangents = loss.backward().unwrap();
@@ -283,8 +297,8 @@ fn eager_detach_cuts_one_gradient_path() {
 
 #[test]
 fn eager_untracked_tensor_behaves_like_plain_tensor() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let y = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]));
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]), test_ctx());
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]), test_ctx());
     let z = &x * &y;
 
     assert_close_slice(f64_data(z.data()), &[4.0, 10.0, 18.0], TOL);
@@ -295,10 +309,10 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
 
 #[test]
 fn eager_structural_primal_ops_transpose_and_reshape() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    ));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        test_ctx(),
+    );
 
     let transposed = x.transpose(&[1, 0]).unwrap();
     assert_eq!(transposed.data().shape(), &[3, 2]);
@@ -319,8 +333,14 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
 
 #[test]
 fn eager_elementwise_primal_ops_div_abs_and_sin() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![8.0_f64, -6.0, 9.0]));
-    let y = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![2.0_f64, 3.0, 3.0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![8.0_f64, -6.0, 9.0]),
+        test_ctx(),
+    );
+    let y = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![2.0_f64, 3.0, 3.0]),
+        test_ctx(),
+    );
 
     let div = x.div(&y).unwrap();
     assert_close_slice(f64_data(div.data()), &[4.0, -2.0, 3.0], TOL);
@@ -328,33 +348,41 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     let abs = x.abs().unwrap();
     assert_close_slice(f64_data(abs.data()), &[8.0, 6.0, 9.0], TOL);
 
-    let angles = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2],
-        vec![0.0_f64, std::f64::consts::FRAC_PI_2],
-    ));
+    let angles = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2], vec![0.0_f64, std::f64::consts::FRAC_PI_2]),
+        test_ctx(),
+    );
     let sin = angles.sin().unwrap();
     assert_close_slice(f64_data(sin.data()), &[0.0, 1.0], TOL);
 }
 
 #[test]
 fn eager_diagonal_primal_ops_extract_diag_and_tril() {
-    let matrix = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![3, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    ));
+    let matrix = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3, 3],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        ),
+        test_ctx(),
+    );
     let diag = matrix.extract_diag(0, 1).unwrap();
     assert_close_slice(f64_data(diag.data()), &[1.0, 5.0, 9.0], TOL);
 
-    let lower =
-        EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]))
-            .tril(0)
-            .unwrap();
+    let lower = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        test_ctx(),
+    )
+    .tril(0)
+    .unwrap();
     assert_close_slice(f64_data(lower.data()), &[1.0, 2.0, 0.0, 4.0], TOL);
 }
 
 #[test]
 fn eager_reduction_primal_ops_reduce_prod() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        test_ctx(),
+    );
 
     let prod = x.reduce_prod(&[0, 1]).unwrap();
     assert_close_slice(f64_data(prod.data()), &[24.0], TOL);
@@ -368,12 +396,15 @@ fn eager_reduction_primal_ops_reduce_prod() {
 
 #[test]
 fn eager_slice_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![4, 3],
-        vec![
-            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-        ],
-    ));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![4, 3],
+            vec![
+                1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        ),
+        test_ctx(),
+    );
 
     let y = x
         .slice(SliceConfig {
@@ -389,7 +420,10 @@ fn eager_slice_primal() {
 
 #[test]
 fn eager_broadcast_in_dim_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
     let y = x.broadcast_in_dim(&[3, 2], &[0]).unwrap();
 
     assert_eq!(y.data().shape(), &[3, 2]);
@@ -398,7 +432,7 @@ fn eager_broadcast_in_dim_primal() {
 
 #[test]
 fn eager_pad_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
     let y = x
         .pad(PadConfig {
             edge_padding_low: vec![1],
@@ -413,7 +447,10 @@ fn eager_pad_primal() {
 
 #[test]
 fn eager_reverse_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        test_ctx(),
+    );
     let y = x.reverse(&[0]).unwrap();
 
     assert_close_slice(f64_data(y.data()), &[4.0, 3.0, 2.0, 1.0], TOL);
@@ -421,8 +458,8 @@ fn eager_reverse_primal() {
 
 #[test]
 fn eager_concatenate_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
-    let y = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]));
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), test_ctx());
     let z = EagerTensor::concatenate(&[&x, &y], 0).unwrap();
 
     assert_eq!(z.data().shape(), &[4]);
@@ -431,11 +468,12 @@ fn eager_concatenate_primal() {
 
 #[test]
 fn eager_gather_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![5],
-        vec![10.0_f64, 20.0, 30.0, 40.0, 50.0],
-    ));
-    let indices = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![4_i64, 1, 0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]),
+        test_ctx(),
+    );
+    let indices =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![4_i64, 1, 0]), test_ctx());
     let y = x
         .gather(
             &indices,
@@ -455,14 +493,17 @@ fn eager_gather_primal() {
 
 #[test]
 fn eager_dynamic_slice_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![4, 4],
-        vec![
-            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-            16.0,
-        ],
-    ));
-    let starts = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![2_i64, 3]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![4, 4],
+            vec![
+                1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+                15.0, 16.0,
+            ],
+        ),
+        test_ctx(),
+    );
+    let starts = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![2_i64, 3]), test_ctx());
     let y = x.dynamic_slice(&starts, &[2, 2]).unwrap();
 
     assert_eq!(y.data().shape(), &[2, 2]);
@@ -471,10 +512,13 @@ fn eager_dynamic_slice_primal() {
 
 #[test]
 fn eager_conj_primal() {
-    let x = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2],
-        vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
-    ));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![2],
+            vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+        ),
+        test_ctx(),
+    );
     let y = x.conj().unwrap();
 
     assert_eq!(
@@ -485,52 +529,67 @@ fn eager_conj_primal() {
 
 #[test]
 fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
-    let sign_input = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![-2.0_f64, 0.0, 3.0]));
+    let sign_input = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![-2.0_f64, 0.0, 3.0]),
+        test_ctx(),
+    );
     let sign = sign_input.sign().unwrap();
     assert_close_slice(f64_data(sign.data()), &[-1.0, 0.0, 1.0], TOL);
 
-    let log_input = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2],
-        vec![1.0_f64, std::f64::consts::E],
-    ));
+    let log_input = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2], vec![1.0_f64, std::f64::consts::E]),
+        test_ctx(),
+    );
     let log = log_input.log().unwrap();
     assert_close_slice(f64_data(log.data()), &[0.0, 1.0], TOL);
 
-    let sqrt_input = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 4.0]));
+    let sqrt_input =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 4.0]), test_ctx());
     let sqrt = sqrt_input.sqrt().unwrap();
     let rsqrt = sqrt_input.rsqrt().unwrap();
     assert_close_slice(f64_data(sqrt.data()), &[1.0, 2.0], TOL);
     assert_close_slice(f64_data(rsqrt.data()), &[1.0, 0.5], TOL);
 
-    let angles = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![2],
-        vec![0.0_f64, std::f64::consts::PI],
-    ));
+    let angles = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2], vec![0.0_f64, std::f64::consts::PI]),
+        test_ctx(),
+    );
     let cos = angles.cos().unwrap();
     assert_close_slice(f64_data(cos.data()), &[1.0, -1.0], TOL);
 
-    let tanh_input = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![0.0_f64, 1.0]));
+    let tanh_input =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![0.0_f64, 1.0]), test_ctx());
     let tanh = tanh_input.tanh().unwrap();
     assert_close_slice(f64_data(tanh.data()), &[0.0, 1.0_f64.tanh()], TOL);
 
-    let expm1_input = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![0.0_f64, 1.0]));
+    let expm1_input =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![0.0_f64, 1.0]), test_ctx());
     let expm1 = expm1_input.expm1().unwrap();
     assert_close_slice(f64_data(expm1.data()), &[0.0, 1.0_f64.exp_m1()], TOL);
 
-    let log1p_input = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 4.0]));
+    let log1p_input =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 4.0]), test_ctx());
     let log1p = log1p_input.log1p().unwrap();
     assert_close_slice(f64_data(log1p.data()), &[2.0_f64.ln(), 5.0_f64.ln()], TOL);
 }
 
 #[test]
 fn eager_pow_maximum_and_minimum_primal() {
-    let base = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![2.0_f64, 9.0]));
-    let exp = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![3.0_f64, 0.5]));
+    let base =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![2.0_f64, 9.0]), test_ctx());
+    let exp =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 0.5]), test_ctx());
     let pow = base.pow(&exp).unwrap();
     assert_close_slice(f64_data(pow.data()), &[8.0, 3.0], TOL);
 
-    let x = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![8.0_f64, -2.0, 9.0]));
-    let y = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![2.0_f64, 5.0, 3.0]));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![8.0_f64, -2.0, 9.0]),
+        test_ctx(),
+    );
+    let y = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![2.0_f64, 5.0, 3.0]),
+        test_ctx(),
+    );
     let maximum = x.maximum(&y).unwrap();
     let minimum = x.minimum(&y).unwrap();
     assert_close_slice(f64_data(maximum.data()), &[8.0, 5.0, 9.0], TOL);
@@ -539,9 +598,18 @@ fn eager_pow_maximum_and_minimum_primal() {
 
 #[test]
 fn eager_select_primal() {
-    let condition = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![0.0_f64, -1.0, 2.0]));
-    let on_true = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]));
-    let on_false = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let condition = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![0.0_f64, -1.0, 2.0]),
+        test_ctx(),
+    );
+    let on_true = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
+        test_ctx(),
+    );
+    let on_false = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
     let y = EagerTensor::select(&condition, &on_true, &on_false).unwrap();
 
     assert_close_slice(f64_data(y.data()), &[1.0, 20.0, 30.0], TOL);
@@ -549,7 +617,10 @@ fn eager_select_primal() {
 
 #[test]
 fn eager_embed_diag_and_triu_primal() {
-    let diagonal = EagerTensor::from_tensor(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    let diagonal = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
     let embedded = diagonal.embed_diag(0, 1).unwrap();
     assert_eq!(embedded.data().shape(), &[3, 3]);
     assert_close_slice(
@@ -558,10 +629,13 @@ fn eager_embed_diag_and_triu_primal() {
         TOL,
     );
 
-    let matrix = EagerTensor::from_tensor(Tensor::from_vec(
-        vec![3, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    ));
+    let matrix = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3, 3],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        ),
+        test_ctx(),
+    );
     let upper = matrix.triu(0).unwrap();
     assert_close_slice(
         f64_data(upper.data()),

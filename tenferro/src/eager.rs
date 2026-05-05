@@ -216,9 +216,10 @@ impl<B: TensorBackend> EagerContext<B> {
 /// # Examples
 ///
 /// ```
-/// use tenferro::{EagerTensor, Tensor};
+/// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 ///
-/// let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let ctx = EagerContext::with_backend(CpuBackend::new());
+/// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
 /// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 /// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
@@ -260,49 +261,6 @@ impl<B: TensorBackend> std::ops::Neg for &EagerTensor<B> {
 
     fn neg(self) -> Self::Output {
         EagerTensor::neg(self).unwrap_or_else(|err| panic!("eager neg failed: {}", err))
-    }
-}
-
-impl EagerTensor<CpuBackend> {
-    fn default_ctx() -> Arc<EagerContext<CpuBackend>> {
-        use std::sync::OnceLock;
-        static DEFAULT_CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
-        Arc::clone(DEFAULT_CTX.get_or_init(|| EagerContext::with_backend(CpuBackend::new())))
-    }
-
-    /// Create an untracked eager tensor on the default CPU backend.
-    ///
-    /// All tensors created via this constructor share a single default context,
-    /// so they can participate in operations with each other.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
-    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-    /// assert!(x.grad().is_none());
-    /// ```
-    pub fn from_tensor(tensor: Tensor) -> Self {
-        Self::from_tensor_in(tensor, Self::default_ctx())
-    }
-
-    /// Create a tracked eager leaf on the default CPU backend.
-    ///
-    /// All tensors created via this constructor share a single default context,
-    /// so gradients can flow between them.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{EagerTensor, Tensor};
-    ///
-    /// let x = EagerTensor::requires_grad(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
-    /// assert!(x.grad().is_none());
-    /// ```
-    pub fn requires_grad(tensor: Tensor) -> Self {
-        Self::requires_grad_in(tensor, Self::default_ctx())
     }
 }
 
@@ -388,9 +346,10 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{EagerTensor, Tensor};
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::requires_grad(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     /// let y = x.detach();
     ///
     /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
@@ -425,9 +384,10 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{EagerTensor, Tensor};
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::from_tensor(Tensor::from_vec(vec![1], vec![3.0_f64]));
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![3.0_f64]), ctx);
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
     pub fn data(&self) -> &Tensor {
@@ -442,9 +402,10 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{EagerTensor, Tensor};
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::requires_grad(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     /// let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
@@ -546,9 +507,10 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{EagerTensor, Tensor};
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
     /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
