@@ -4,6 +4,7 @@ members = [
     "tenferro-device",
     "tenferro-tensor",
     "tenferro-cubecl",
+    "tenferro-extension-macros",
     "tenferro-ops",
     "tenferro-einsum",
     "tenferro",
@@ -35,9 +36,12 @@ criterion = "0.5"
 serde = "1"
 serde_json = "1"
 lru = "0.12"
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "cba354d", package = "chainrules" }
-chainrules = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "cba354d" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "97e4ae1" }
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "da3f2b50ba2e6a0738737e4e4b2ec8f5c8243469", package = "chainrules" }
+chainrules = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "da3f2b50ba2e6a0738737e4e4b2ec8f5c8243469" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "1d4a4c1d1c3923b79a509467ea4af4be2a148aaf" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }

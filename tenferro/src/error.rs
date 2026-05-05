@@ -42,6 +42,10 @@ pub enum Error {
     #[error(transparent)]
     TensorRuntime(#[from] tenferro_tensor::Error),
 
+    /// Automatic differentiation rule emission failed.
+    #[error(transparent)]
+    ADRule(#[from] chainrules_core::ADRuleError),
+
     /// A `TracedTensor` passed to `eval_with_inputs` bindings is not a
     /// placeholder (has attached data).
     #[error(

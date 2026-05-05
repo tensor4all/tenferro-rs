@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use chainrules_core::PrimitiveOp;
+use chainrules_core::{ADRuleResult, PrimitiveOp};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::{GraphOp, OpEmitter};
@@ -703,6 +703,17 @@ impl PrimitiveOp for StdTensorOp {
         crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
     }
 
+    fn try_linearize(
+        &self,
+        builder: &mut FragmentBuilder<Self>,
+        primal_in: &[GlobalValKey<Self>],
+        primal_out: &[GlobalValKey<Self>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut Self::ADContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        crate::ad::try_linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
+    }
+
     fn transpose_rule(
         &self,
         emitter: &mut impl OpEmitter<Self>,
@@ -712,5 +723,16 @@ impl PrimitiveOp for StdTensorOp {
         ctx: &mut Self::ADContext,
     ) -> Vec<Option<LocalValId>> {
         crate::ad::transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
+    }
+
+    fn try_transpose_rule(
+        &self,
+        emitter: &mut impl OpEmitter<Self>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<Self>],
+        mode: &OpMode,
+        ctx: &mut Self::ADContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        crate::ad::try_transpose_rule(self, emitter, cotangent_out, inputs, mode, ctx)
     }
 }

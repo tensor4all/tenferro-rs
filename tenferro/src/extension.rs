@@ -3,8 +3,9 @@
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
 //! `tenferro` facade. External crates implement
 //! [`tenferro_ops::ext_op::ExtensionOp`], register an
-//! [`ExtensionFactory`] through [`register_extension`], and build traced
-//! graphs containing the extension via [`apply`].
+//! [`ExtensionFactory`] through [`register_extension`], register AD rules
+//! through [`register_extension_rule`], and build traced or eager graphs
+//! containing the extension via [`apply`] / [`apply_eager`].
 //!
 //! See `docs/spec/extension-op.md` for the normative contract.
 //!
@@ -29,23 +30,32 @@ use std::sync::Arc;
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
+use computegraph::GraphOp;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
+use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
+use crate::eager::{record_eager_outputs, EagerTensor};
+use crate::eager_exec::exec_op_on_tensors;
+use crate::error::{Error, Result};
 use crate::metadata::register_fragment_metadata;
 use crate::traced::{next_traced_id, TracedTensor};
 
 pub use tenferro_ops::ext_op::{
-    is_extension_registered, lookup_extension_factory, register_extension, ExtensionFactory,
+    is_extension_registered, is_extension_rule_registered, lookup_extension_factory,
+    lookup_extension_rule, register_extension, register_extension_rule,
+    ExtensionAdRule as _ExtensionAdRuleReexport, ExtensionFactory,
     ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError,
 };
 
 // Re-export under a canonical name (the `_ExtensionOpReexport` alias above
 // exists only so the macro-generated doc-test type bounds can find the
 // trait; downstream callers should use this name).
+pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
+pub use tenferro_ops::ExtensionFamilyId;
 
 /// Apply an extension op in the traced graph.
 ///
@@ -172,4 +182,79 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
             }
         })
         .collect()
+}
+
+/// Apply an extension op to eager tensors.
+///
+/// The forward pass delegates to [`ExtensionOp::eager_execute`] through the
+/// usual eager execution path, then records the same `StdTensorOp::Extension`
+/// node used by traced graphs. Eager backward therefore uses registered
+/// [`ExtensionAdRuleTrait`] rules through the same AD source of truth.
+pub fn apply_eager<B: TensorBackend>(
+    op: Arc<dyn ExtensionOp>,
+    inputs: &[&EagerTensor<B>],
+) -> Result<Vec<EagerTensor<B>>> {
+    let Some(first) = inputs.first() else {
+        return Err(Error::Internal(
+            "extension::apply_eager requires at least one input tensor".to_string(),
+        ));
+    };
+    if inputs.len() != op.n_inputs() {
+        return Err(Error::Internal(format!(
+            "extension::apply_eager: op family {:?} expects {} inputs, got {}",
+            op.family_id(),
+            op.n_inputs(),
+            inputs.len()
+        )));
+    }
+
+    let ctx = Arc::clone(&first.ctx);
+    for tensor in inputs.iter().skip(1) {
+        if !first.same_context(tensor) {
+            return Err(Error::ContextMismatch {
+                lhs: first.ctx_id(),
+                rhs: tensor.ctx_id(),
+            });
+        }
+    }
+
+    let op = StdTensorOp::Extension(op);
+    let concrete_inputs: Vec<&Tensor> = inputs.iter().map(|tensor| tensor.data.as_ref()).collect();
+    let outputs = {
+        let mut backend = ctx.backend.lock().unwrap();
+        exec_op_on_tensors(&op, &concrete_inputs, &mut *backend)?
+    };
+    if outputs.len() != op.n_outputs() {
+        return Err(Error::Internal(format!(
+            "expected {} eager outputs for {:?}, got {}",
+            op.n_outputs(),
+            op,
+            outputs.len()
+        )));
+    }
+
+    let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
+    let traces = record_eager_outputs(&op, &outputs, inputs);
+    if traces.len() != outputs.len() {
+        return Err(Error::Internal(format!(
+            "expected {} eager traces for {:?}, got {}",
+            outputs.len(),
+            op,
+            traces.len()
+        )));
+    }
+
+    Ok(traces
+        .into_iter()
+        .zip(outputs)
+        .map(|(trace, output)| {
+            EagerTensor::new_result(
+                Arc::clone(&ctx),
+                trace.key,
+                output.as_ref().clone(),
+                trace.requires_grad,
+                trace.node,
+            )
+        })
+        .collect())
 }

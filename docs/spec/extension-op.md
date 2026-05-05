@@ -188,16 +188,13 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         inputs: &[&tenferro_tensor::Tensor],
     ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>>;
 
-    // ----- AD: linearize and transpose_rule (Section 10) -----
+    // ----- Backwards-compatible inline AD hooks (Section 10) -----
 
     /// Emit the linear (JVP) rule.
     ///
-    /// MUST only emit ops in the core `StdTensorOp` vocabulary (the
-    /// `PrimitiveOp`-implementing set). MUST NOT emit nested
-    /// `StdTensorOp::Extension` variants (no extension-to-extension
-    /// lowering in AD). MUST respect `OpMode::Linear { active_mask }`
-    /// on every emitted op, following the same convention as core
-    /// primitives (see `tenferro-ops/src/ad/semiring.rs`).
+    /// Legacy source-compatible inline hook. AD dispatch uses registered
+    /// `ExtensionAdRule` providers; new extension crates SHOULD register a
+    /// rule instead of relying on this method.
     fn linearize(
         &self,
         builder: &mut computegraph::fragment::FragmentBuilder<StdTensorOp>,
@@ -209,12 +206,9 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
 
     /// Emit the transpose (VJP) rule.
     ///
-    /// MUST only emit ops in the core `StdTensorOp` vocabulary. The
-    /// returned vector MUST have length `self.n_inputs()`: one entry
-    /// per primal input (with `None` for inactive tangent slots). The
-    /// `inputs` slice provides `ValRef` handles that AD rules resolve
-    /// through `ShapeGuardContext::shape_of` / `dtype_of` /
-    /// `metadata_of`.
+    /// Legacy source-compatible inline hook. AD dispatch uses registered
+    /// `ExtensionAdRule` providers; new extension crates SHOULD register a
+    /// rule instead of relying on this method.
     fn transpose_rule(
         &self,
         emitter: &mut dyn computegraph::OpEmitter<StdTensorOp>,
@@ -292,9 +286,9 @@ op interner, AD rule caching, and structural graph comparison.
 - An implementer whose `payload_hash` disagrees with `payload_eq`
   breaks `HashMap`-keyed caches. Symptom: AD caches return wrong
   cotangents or miss.
-- An implementer whose `linearize` emits a nested `Extension` variant
-  breaks AD closure. Symptom: downstream panic in `todo_linearize` / cache
-  corruption.
+- An implementer whose registered AD rule emits an `Extension` whose family
+  has no registered AD rule gets `ADRuleError::Unsupported` on the next AD
+  pass.
 
 ---
 
@@ -322,6 +316,20 @@ Example:
 
 ```
 "tenferro-ext-tropical.fused_dot_general.v1"
+```
+
+Extension crates MAY use the `ExtensionFamilyId` derive macro re-exported by
+`tenferro::extension` / `tenferro_ops` to generate this string as an inherent
+`FAMILY_ID` constant:
+
+```rust
+use tenferro_ops::ExtensionFamilyId;
+
+#[derive(ExtensionFamilyId)]
+#[tenferro_extension(namespace = "my-crate", name = "fft", version = 1)]
+struct FftOp;
+
+assert_eq!(FftOp::FAMILY_ID, "my-crate.fft.v1");
 ```
 
 ### Uniqueness
@@ -690,53 +698,47 @@ required failure mode.
 
 ### Method signatures
 
-See Section 4 for the canonical `linearize` and `transpose_rule`
-signatures. They mirror `PrimitiveOp::linearize` and
-`PrimitiveOp::transpose_rule` in `ad-contract.md`, with two differences:
+Extension AD is registered independently from the primal factory through
+`register_extension_rule(Arc<dyn ExtensionAdRule>)`. Rule signatures mirror
+`PrimitiveOp::try_linearize` and `PrimitiveOp::try_transpose_rule` and return
+`ADRuleResult<_>` so missing rules can propagate without panic:
 
-1. They are methods on `ExtensionOp` rather than on `PrimitiveOp`. The
-   core enum's `PrimitiveOp` impl routes the `Extension` arm to these
-   methods via a dispatcher in `tenferro-ops/src/ad/mod.rs`:
+```rust
+pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
+    fn family_id(&self) -> &'static str;
 
-   ```rust
-   // Conceptual:
-   pub fn linearize(
-       op: &StdTensorOp,
-       builder: &mut FragmentBuilder<StdTensorOp>,
-       primal_in: &[GlobalValKey<StdTensorOp>],
-       primal_out: &[GlobalValKey<StdTensorOp>],
-       tangent_in: &[Option<LocalValId>],
-       ctx: &mut context::ShapeGuardContext,
-   ) -> Vec<Option<LocalValId>> {
-       match op {
-           // ... existing arms ...
-           StdTensorOp::Extension(ext) => {
-               ext.linearize(builder, primal_in, primal_out, tangent_in, ctx)
-           }
-           _ => todo_linearize(op),
-       }
-   }
-   ```
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 
-2. They accept `&mut dyn OpEmitter<StdTensorOp>` rather than `&mut impl
-   OpEmitter<StdTensorOp>` for object safety. The dispatcher boxes the
-   generic emitter as `&mut dyn` at the call site so trait objects can
-   work through the vtable.
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+}
+```
+
+The `op` argument is the concrete extension payload as a trait object.
+Rules that need payload parameters should downcast via `op.as_any()`.
 
 ### AD closure
 
-`linearize` and `transpose_rule` MUST only emit values in the core
-`StdTensorOp` vocabulary. They MUST NOT emit `StdTensorOp::Extension`
-nodes, either their own or any other extension's. This preserves the
-`ad-contract.md` closure rule: every op in a cotangent graph
-implements `PrimitiveOp`, because every such op is a core `StdTensorOp`
-variant.
-
-Rationale: nesting extensions in AD would make AD closure contingent
-on the registry state at AD-time rather than at graph-build time,
-breaking determinism. The restriction to core ops is the AD closure
-invariant: every arrow emits values only in the core op vocabulary, and
-extension mechanisms lower to this same vocabulary for the backward pass.
+`linearize` and `transpose_rule` may emit core `StdTensorOp` values and
+`StdTensorOp::Extension` values. Emitted extension families MUST have their
+own registered `ExtensionAdRule` before a subsequent AD pass reaches them.
+This keeps out-of-tree operations in the same compute graph while preserving
+the `PrimitiveOp` closure invariant at the `StdTensorOp` carrier level.
 
 ### `ShapeGuardContext` interaction
 
@@ -761,14 +763,9 @@ inside the extension's AD rules.
 
 ### Failure signature
 
-- Emitting a nested `Extension` from `linearize` is caught at the next
-  AD pass; depending on cache state it may surface as a `todo!` panic
-  in `todo_linearize`, or as a wrong-cotangent on the next gradient
-  call. Extensions MUST NOT do this.
 - Dispatcher reaching a `StdTensorOp::Extension` variant for an
-  `ExtensionOp` whose `linearize` / `transpose_rule` is missing (for
-  example because the trait was impl'd with `todo!()`) is treated as
-  a programming error and is permitted to panic — see Section 12.
+  `family_id` with no registered `ExtensionAdRule` returns
+  `ADRuleError::Unsupported` with the family ID and rule kind.
 
 ---
 
@@ -835,7 +832,7 @@ these error types / behaviours in the listed scenarios.
 | Backend lacks a capability the extension needs | The extension's `eager_execute` SHOULD return `Error::BackendFailure` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
 | Graph references an unregistered `family_id` at eager-execute time | Return `Error::Unsupported { op: "extension", message: "<family_id>: not registered" }`. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` whose implementation is missing the AD method (e.g. `todo!()`) | **Panic** with `family_id` in the panic message. This is a programming error in the extension crate, not a recoverable runtime condition. |
+| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no registered `ExtensionAdRule` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through `tenferro::Error`. |
 | Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
