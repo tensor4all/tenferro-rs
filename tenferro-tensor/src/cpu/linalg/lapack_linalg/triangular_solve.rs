@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
@@ -39,6 +39,44 @@ impl LapackTriangularSolve for f64 {
     ) {
         unsafe {
             lapack::dtrtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
+        }
+    }
+}
+
+impl LapackTriangularSolve for f32 {
+    fn trtrs(
+        uplo: u8,
+        trans: u8,
+        diag: u8,
+        n: i32,
+        nrhs: i32,
+        a: &[Self],
+        lda: i32,
+        b: &mut [Self],
+        ldb: i32,
+        info: &mut i32,
+    ) {
+        unsafe {
+            lapack::strtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
+        }
+    }
+}
+
+impl LapackTriangularSolve for Complex32 {
+    fn trtrs(
+        uplo: u8,
+        trans: u8,
+        diag: u8,
+        n: i32,
+        nrhs: i32,
+        a: &[Self],
+        lda: i32,
+        b: &mut [Self],
+        ldb: i32,
+        info: &mut i32,
+    ) {
+        unsafe {
+            lapack::ctrtrs(uplo, trans, diag, n, nrhs, a, lda, b, ldb, info);
         }
     }
 }

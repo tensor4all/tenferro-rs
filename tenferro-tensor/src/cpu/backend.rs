@@ -440,6 +440,14 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => linalg::cholesky(buffers, t).map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => linalg::cholesky(buffers, t).map(Tensor::C32),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::C32),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => linalg::cholesky(buffers, t).map(Tensor::F64),
@@ -464,6 +472,18 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match (a, b) {
             #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
+                ctx.as_ref(),
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
                 ctx.as_ref(),
                 buffers,
@@ -476,6 +496,17 @@ impl TensorBackend for CpuBackend {
             )
             .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
                 buffers,
                 a,
@@ -487,6 +518,17 @@ impl TensorBackend for CpuBackend {
             )
             .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C32),
+            #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
                 buffers,
                 a,
@@ -497,6 +539,18 @@ impl TensorBackend for CpuBackend {
                 unit_diagonal,
             )
             .map(Tensor::C64),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
+                ctx.as_ref(),
+                buffers,
+                a,
+                b,
+                left_side,
+                lower,
+                transpose_a,
+                unit_diagonal,
+            )
+            .map(Tensor::C32),
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
                 ctx.as_ref(),
@@ -528,16 +582,30 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => {
+                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F32).collect())
+            }
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => {
                 linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
             }
             #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => {
+                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C32).collect())
+            }
+            #[cfg(feature = "cpu-blas")]
             Tensor::C64(t) => {
                 linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
             }
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
@@ -550,14 +618,26 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => linalg::full_piv_lu(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => linalg::full_piv_lu(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => linalg::full_piv_lu(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+            #[cfg(feature = "cpu-blas")]
             Tensor::C64(t) => linalg::full_piv_lu(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
@@ -588,16 +668,32 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         let result = self.install_with_pool(|buffers| match (a, &rhs) {
             #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F32)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => {
                 linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F64)
             }
             #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C32)
+            }
+            #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => {
                 linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C64)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::C32)
             }
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => {
@@ -628,14 +724,26 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::svd(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::svd(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => linalg::svd(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => linalg::svd(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => linalg::svd(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+            #[cfg(feature = "cpu-blas")]
             Tensor::C64(t) => linalg::svd(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::svd(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::svd(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
@@ -648,16 +756,30 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::qr(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::qr(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => {
+                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F32).collect())
+            }
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => {
                 linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
             }
             #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => {
+                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C32).collect())
+            }
+            #[cfg(feature = "cpu-blas")]
             Tensor::C64(t) => {
                 linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
             }
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::qr(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::qr(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
@@ -670,14 +792,26 @@ impl TensorBackend for CpuBackend {
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| match input {
             #[cfg(feature = "cpu-faer")]
+            Tensor::F32(t) => linalg::eigh(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+            #[cfg(feature = "cpu-faer")]
             Tensor::F64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+            #[cfg(feature = "cpu-blas")]
+            Tensor::F32(t) => linalg::eigh(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
             #[cfg(feature = "cpu-blas")]
             Tensor::F64(t) => linalg::eigh(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
             #[cfg(feature = "cpu-blas")]
+            Tensor::C32(t) => linalg::eigh(buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
+            #[cfg(feature = "cpu-blas")]
             Tensor::C64(t) => linalg::eigh(buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
+            #[cfg(feature = "cpu-faer")]
+            Tensor::C32(t) => linalg::eigh(ctx.as_ref(), buffers, t)
+                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
             #[cfg(feature = "cpu-faer")]
             Tensor::C64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
@@ -686,7 +820,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        if !matches!(input, Tensor::F64(_) | Tensor::C64(_)) {
+        if !matches!(
+            input,
+            Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
+        ) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
         #[cfg(feature = "cpu-faer")]

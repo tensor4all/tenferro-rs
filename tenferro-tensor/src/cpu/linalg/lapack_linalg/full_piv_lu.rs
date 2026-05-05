@@ -1,4 +1,4 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 use crate::buffer_pool::BufferPool;
 use crate::TypedTensor;
@@ -11,6 +11,27 @@ use super::helpers::{
 };
 
 extern "C" {
+    #[link_name = "sgetc2_"]
+    fn sgetc2_ffi(
+        n: *const i32,
+        a: *mut f32,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "sgesc2_"]
+    fn sgesc2_ffi(
+        n: *const i32,
+        a: *const f32,
+        lda: *const i32,
+        rhs: *mut f32,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f32,
+    );
+
     #[link_name = "dgetc2_"]
     fn dgetc2_ffi(
         n: *const i32,
@@ -30,6 +51,27 @@ extern "C" {
         ipiv: *const i32,
         jpiv: *const i32,
         scale: *mut f64,
+    );
+
+    #[link_name = "cgetc2_"]
+    fn cgetc2_ffi(
+        n: *const i32,
+        a: *mut Complex32,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "cgesc2_"]
+    fn cgesc2_ffi(
+        n: *const i32,
+        a: *const Complex32,
+        lda: *const i32,
+        rhs: *mut Complex32,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f32,
     );
 
     #[link_name = "zgetc2_"]
@@ -55,8 +97,11 @@ extern "C" {
 }
 
 pub(crate) trait LapackFullPivLu: Clone + Copy + Default {
+    type Scale: Copy;
+
     fn one() -> Self;
     fn negative_one() -> Self;
+    fn scale_one() -> Self::Scale;
     fn getc2(
         n: i32,
         data: &mut [Self],
@@ -72,18 +117,90 @@ pub(crate) trait LapackFullPivLu: Clone + Copy + Default {
         rhs: &mut [Self],
         ipiv: &[i32],
         jpiv: &[i32],
-        scale: &mut f64,
+        scale: &mut Self::Scale,
     );
-    fn apply_inverse_scale(rhs: &mut [Self], scale: f64);
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale);
 }
 
-impl LapackFullPivLu for f64 {
+impl LapackFullPivLu for f32 {
+    type Scale = f32;
+
     fn one() -> Self {
         1.0
     }
 
     fn negative_one() -> Self {
         -1.0
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        unsafe {
+            sgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        unsafe {
+            sgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+impl LapackFullPivLu for f64 {
+    type Scale = f64;
+
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
     }
 
     fn getc2(
@@ -116,7 +233,7 @@ impl LapackFullPivLu for f64 {
         rhs: &mut [Self],
         ipiv: &[i32],
         jpiv: &[i32],
-        scale: &mut f64,
+        scale: &mut Self::Scale,
     ) {
         // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
         // length at least `n`, pivot arrays have length at least `n`, and
@@ -134,7 +251,73 @@ impl LapackFullPivLu for f64 {
         }
     }
 
-    fn apply_inverse_scale(rhs: &mut [Self], scale: f64) {
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+impl LapackFullPivLu for Complex32 {
+    type Scale = f32;
+
+    fn one() -> Self {
+        Complex32::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex32::new(-1.0, 0.0)
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        unsafe {
+            cgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        unsafe {
+            cgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
         if scale != 1.0 {
             for value in rhs {
                 *value /= scale;
@@ -144,12 +327,18 @@ impl LapackFullPivLu for f64 {
 }
 
 impl LapackFullPivLu for Complex64 {
+    type Scale = f64;
+
     fn one() -> Self {
         Complex64::new(1.0, 0.0)
     }
 
     fn negative_one() -> Self {
         Complex64::new(-1.0, 0.0)
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
     }
 
     fn getc2(
@@ -182,7 +371,7 @@ impl LapackFullPivLu for Complex64 {
         rhs: &mut [Self],
         ipiv: &[i32],
         jpiv: &[i32],
-        scale: &mut f64,
+        scale: &mut Self::Scale,
     ) {
         // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
         // length at least `n`, pivot arrays have length at least `n`, and
@@ -200,7 +389,7 @@ impl LapackFullPivLu for Complex64 {
         }
     }
 
-    fn apply_inverse_scale(rhs: &mut [Self], scale: f64) {
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
         if scale != 1.0 {
             for value in rhs {
                 *value /= scale;
@@ -327,7 +516,7 @@ fn solve_2d<T: LapackFullPivLu>(
     for col in 0..b_cols {
         let start = col * n;
         let end = start + n;
-        let mut scale = 1.0;
+        let mut scale = T::scale_one();
         T::gesc2(
             n_i32,
             &lu,

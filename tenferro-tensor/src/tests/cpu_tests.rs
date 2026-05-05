@@ -3014,31 +3014,18 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
 #[test]
 fn test_backend_linalg_returns_errors_for_unsupported_dtypes() {
     let mut backend = CpuBackend::new();
-    let f32_matrix = Tensor::F32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0_f32, 0.0, 0.0, 1.0],
-    ));
-    let f32_rhs = Tensor::F32(TypedTensor::from_vec(vec![2, 1], vec![1.0_f32, 2.0]));
-    let c32_matrix = Tensor::C32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![
-            Complex32::new(1.0, 0.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(1.0, 0.0),
-        ],
-    ));
+    let i64_matrix = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
+    let i64_rhs = Tensor::I64(TypedTensor::from_vec(vec![2, 1], vec![1_i64, 2]));
 
-    assert!(backend.cholesky(&f32_matrix).is_err());
-    assert!(backend.svd(&f32_matrix).is_err());
-    assert!(backend.qr(&f32_matrix).is_err());
-    assert!(backend.eigh(&f32_matrix).is_err());
-    assert!(backend.eig(&f32_matrix).is_err());
-    assert!(backend.solve(&f32_matrix, &f32_rhs).is_err());
+    assert!(backend.cholesky(&i64_matrix).is_err());
+    assert!(backend.svd(&i64_matrix).is_err());
+    assert!(backend.qr(&i64_matrix).is_err());
+    assert!(backend.eigh(&i64_matrix).is_err());
+    assert!(backend.eig(&i64_matrix).is_err());
+    assert!(backend.solve(&i64_matrix, &i64_rhs).is_err());
     assert!(backend
-        .triangular_solve(&f32_matrix, &f32_rhs, true, true, false, false)
+        .triangular_solve(&i64_matrix, &i64_rhs, true, true, false, false)
         .is_err());
-    assert!(backend.cholesky(&c32_matrix).is_err());
 }
 
 #[test]
@@ -3247,13 +3234,10 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
         }
     ));
 
-    let a_f32 = Tensor::F32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0f32, 0.0, 0.0, 1.0],
-    ));
-    let b_f32 = Tensor::F32(TypedTensor::from_vec(vec![2, 1], vec![1.0f32, 2.0]));
+    let a_i64 = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
+    let b_i64 = Tensor::I64(TypedTensor::from_vec(vec![2, 1], vec![1_i64, 2]));
     let err = backend
-        .triangular_solve(&a_f32, &b_f32, true, true, false, false)
+        .triangular_solve(&a_i64, &b_i64, true, true, false, false)
         .unwrap_err();
     assert!(matches!(
         err,
@@ -3339,10 +3323,7 @@ fn test_solve_with_regular_matrix_rhs() {
 
 #[test]
 fn test_lu_unsupported_dtype_returns_error() {
-    let input = Tensor::F32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0f32, 0.0, 0.0, 1.0],
-    ));
+    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
     let mut backend = CpuBackend::new();
     assert!(backend.lu(&input).is_err());
 }
@@ -3368,10 +3349,7 @@ fn test_lu_zero_sized_batch_outputs_empty_parity() {
 
 #[test]
 fn test_svd_unsupported_dtype_returns_error() {
-    let input = Tensor::F32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0f32, 0.0, 0.0, 1.0],
-    ));
+    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
     let mut backend = CpuBackend::new();
     assert!(backend.svd(&input).is_err());
 }
@@ -3405,10 +3383,7 @@ fn test_faer_eig_decomposition_failure_returns_error() {
 
 #[test]
 fn test_qr_unsupported_dtype_returns_error() {
-    let input = Tensor::F32(TypedTensor::from_vec(
-        vec![2, 2],
-        vec![1.0f32, 0.0, 0.0, 1.0],
-    ));
+    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
     let mut backend = CpuBackend::new();
     assert!(backend.qr(&input).is_err());
 }
