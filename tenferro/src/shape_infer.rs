@@ -13,6 +13,81 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
 
+/// Promote two dtypes to the narrowest common dtype that avoids silent
+/// precision loss, following the policy defined in [#811].
+///
+/// Rules:
+/// - I64 + I64 → I64 (integer-preserving; Div/Pow use [`promote_dtype_div_like`])
+/// - I64 + F32/F64 → F64 (F32 does not have enough mantissa bits for arbitrary I64)
+/// - I64 + C32/C64 → C64
+/// - F32 + F64 → F64
+/// - F32 + C32 → C32
+/// - F32/C32 + C64 → C64
+/// - F64 + C32 → C64
+///
+/// [#811]: https://github.com/tensor4all/tenferro-rs/issues/811
+pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
+    use DType::*;
+    if lhs == rhs {
+        return lhs;
+    }
+    // Reorder so smaller-promotion-rank type comes first.
+    let (a, b) = if promotion_rank(lhs) <= promotion_rank(rhs) {
+        (lhs, rhs)
+    } else {
+        (rhs, lhs)
+    };
+    match (a, b) {
+        (I64, F32 | F64) => F64, // I64 → F64 (F32 can't represent all I64)
+        (I64, C32 | C64) => C64, // I64 → C64
+        (F32, F64) => F64,       // F32 → F64
+        (F32, C32) => C32,       // F32 + C32 → C32
+        (F32, C64) => C64,       // F32 + C64 → C64
+        (F64, C32) => C64,       // F64 + C32 → C64
+        (F64, C64) => C64,       // F64 + C64 → C64
+        (C32, C64) => C64,       // C32 → C64
+        _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
+    }
+}
+
+/// Promote an arbitrary number of dtypes by folding [`promote_dtype`].
+///
+/// Returns `DType::F64` for an empty iterator (the safest default).
+pub fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {
+    dtypes
+        .into_iter()
+        .reduce(|a, b| promote_dtype(a, b))
+        .unwrap_or(DType::F64)
+}
+
+/// Convenience wrapper that picks the right promotion rule for a binary op.
+pub fn promote_dtype_for_binary_op(op: &StdTensorOp, lhs: DType, rhs: DType) -> DType {
+    match op {
+        StdTensorOp::Div | StdTensorOp::Pow => promote_dtype_div_like(lhs, rhs),
+        _ => promote_dtype(lhs, rhs),
+    }
+}
+
+/// Internal promotion ordering: I64 < F32 < F64 < C32 < C64.
+fn promotion_rank(dt: DType) -> u8 {
+    match dt {
+        DType::I64 => 0,
+        DType::F32 => 1,
+        DType::F64 => 2,
+        DType::C32 => 3,
+        DType::C64 => 4,
+    }
+}
+
+/// Like [`promote_dtype`], but for division-like ops where I64 / I64
+/// should produce F64 to avoid integer truncation.
+pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
+    if lhs == DType::I64 && rhs == DType::I64 {
+        return DType::F64;
+    }
+    promote_dtype(lhs, rhs)
+}
+
 /// Infer output dtype for a single instruction given its op and input dtypes.
 ///
 /// Panics if the input dtypes are inconsistent for the op (shouldn't happen
@@ -30,17 +105,35 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
             DType::I64 => DType::C64,
         },
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
+        // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
         | StdTensorOp::Mul
-        | StdTensorOp::Neg
-        | StdTensorOp::Conj
-        | StdTensorOp::Div
-        | StdTensorOp::Abs
-        | StdTensorOp::Sign
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
         | StdTensorOp::Select
         | StdTensorOp::Clamp
+        | StdTensorOp::DotGeneral { .. }
+        | StdTensorOp::NaryEinsum { .. }
+        | StdTensorOp::TriangularSolve { .. }
+        | StdTensorOp::FullPivLuSolve { .. }
+        | StdTensorOp::DynamicSlice { .. }
+        | StdTensorOp::DynamicUpdateSlice
+        | StdTensorOp::Concatenate { .. }
+        | StdTensorOp::PadToMatch { .. }
+        | StdTensorOp::DynamicTruncate { .. }
+        | StdTensorOp::Compare(_) => promote_dtype(input_dtypes[0], input_dtypes[1]),
+        StdTensorOp::Div | StdTensorOp::Pow => {
+            promote_dtype_div_like(input_dtypes[0], input_dtypes[1])
+        }
+        StdTensorOp::Scatter(_) => promote_dtype(
+            promote_dtype(input_dtypes[0], input_dtypes[1]),
+            input_dtypes[2],
+        ),
+        // Unary / structural — output dtype equals input dtype.
+        StdTensorOp::Neg
+        | StdTensorOp::Conj
+        | StdTensorOp::Abs
+        | StdTensorOp::Sign
         | StdTensorOp::Exp
         | StdTensorOp::Log
         | StdTensorOp::Sin
@@ -48,7 +141,6 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Tanh
         | StdTensorOp::Sqrt
         | StdTensorOp::Rsqrt
-        | StdTensorOp::Pow
         | StdTensorOp::Expm1
         | StdTensorOp::Log1p
         | StdTensorOp::Transpose { .. }
@@ -64,27 +156,16 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Triu { .. }
         | StdTensorOp::Gather(_)
         | StdTensorOp::GatherDynamicSliceSizes { .. }
-        | StdTensorOp::Scatter(_)
         | StdTensorOp::Slice(_)
-        | StdTensorOp::DynamicSlice { .. }
-        | StdTensorOp::DynamicUpdateSlice
         | StdTensorOp::Pad(_)
-        | StdTensorOp::Concatenate { .. }
         | StdTensorOp::Reverse { .. }
-        | StdTensorOp::DotGeneral { .. }
-        | StdTensorOp::NaryEinsum { .. }
         | StdTensorOp::Cholesky { .. }
         | StdTensorOp::Lu { .. }
         | StdTensorOp::FullPivLu { .. }
-        | StdTensorOp::FullPivLuSolve { .. }
         | StdTensorOp::Svd { .. }
         | StdTensorOp::Qr { .. }
         | StdTensorOp::Eigh { .. }
-        | StdTensorOp::TriangularSolve { .. }
-        | StdTensorOp::ValidateNonsingular { .. }
-        | StdTensorOp::DynamicTruncate { .. }
-        | StdTensorOp::PadToMatch { .. } => input_dtypes[0],
-        StdTensorOp::Compare(_) => input_dtypes[0],
+        | StdTensorOp::ValidateNonsingular { .. } => input_dtypes[0],
         StdTensorOp::ShapeOf { .. } => DType::F64,
     }
 }
@@ -860,5 +941,78 @@ fn dim_max(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
     match (lhs, rhs) {
         (DimExpr::Const(lhs), DimExpr::Const(rhs)) => DimExpr::Const(lhs.max(rhs)),
         (lhs, rhs) => DimExpr::max(lhs, rhs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn promote_same_returns_same() {
+        assert_eq!(promote_dtype(DType::F64, DType::F64), DType::F64);
+        assert_eq!(promote_dtype(DType::C64, DType::C64), DType::C64);
+        assert_eq!(promote_dtype(DType::I64, DType::I64), DType::I64);
+    }
+
+    #[test]
+    fn promote_i64_to_float() {
+        assert_eq!(promote_dtype(DType::I64, DType::F64), DType::F64);
+        assert_eq!(promote_dtype(DType::F64, DType::I64), DType::F64);
+        assert_eq!(promote_dtype(DType::I64, DType::F32), DType::F64);
+        assert_eq!(promote_dtype(DType::F32, DType::I64), DType::F64);
+    }
+
+    #[test]
+    fn promote_i64_to_complex() {
+        assert_eq!(promote_dtype(DType::I64, DType::C64), DType::C64);
+        assert_eq!(promote_dtype(DType::C64, DType::I64), DType::C64);
+        assert_eq!(promote_dtype(DType::I64, DType::C32), DType::C64);
+        assert_eq!(promote_dtype(DType::C32, DType::I64), DType::C64);
+    }
+
+    #[test]
+    fn promote_float_to_wider_float() {
+        assert_eq!(promote_dtype(DType::F32, DType::F64), DType::F64);
+        assert_eq!(promote_dtype(DType::F64, DType::F32), DType::F64);
+    }
+
+    #[test]
+    fn promote_float_to_complex() {
+        assert_eq!(promote_dtype(DType::F32, DType::C32), DType::C32);
+        assert_eq!(promote_dtype(DType::F64, DType::C64), DType::C64);
+        assert_eq!(promote_dtype(DType::F64, DType::C32), DType::C64);
+        assert_eq!(promote_dtype(DType::F32, DType::C64), DType::C64);
+    }
+
+    #[test]
+    fn promote_complex_to_wider_complex() {
+        assert_eq!(promote_dtype(DType::C32, DType::C64), DType::C64);
+        assert_eq!(promote_dtype(DType::C64, DType::C32), DType::C64);
+    }
+
+    #[test]
+    fn promote_dtype_div_like_i64_to_f64() {
+        assert_eq!(promote_dtype_div_like(DType::I64, DType::I64), DType::F64);
+        assert_eq!(promote_dtype_div_like(DType::F64, DType::F64), DType::F64);
+        assert_eq!(promote_dtype_div_like(DType::I64, DType::F64), DType::F64);
+    }
+
+    #[test]
+    fn promote_dtypes_fold() {
+        assert_eq!(
+            promote_dtypes([DType::I64, DType::F32, DType::C64]),
+            DType::C64
+        );
+        assert_eq!(promote_dtypes([DType::F32, DType::F64]), DType::F64);
+        assert_eq!(promote_dtypes([]), DType::F64); // empty → F64 default
+    }
+
+    #[test]
+    fn promotion_rank_ordering() {
+        assert!(promotion_rank(DType::I64) < promotion_rank(DType::F32));
+        assert!(promotion_rank(DType::F32) < promotion_rank(DType::F64));
+        assert!(promotion_rank(DType::F64) < promotion_rank(DType::C32));
+        assert!(promotion_rank(DType::C32) < promotion_rank(DType::C64));
     }
 }

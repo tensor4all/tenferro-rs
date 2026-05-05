@@ -1997,11 +1997,26 @@ pub(crate) fn apply_binary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
+    let out_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
+
+    // Insert Convert ops when an input dtype differs from the promoted result.
+    let lhs = if lhs.dtype != out_dtype {
+        lhs.convert(out_dtype)
+    } else {
+        lhs.clone()
+    };
+    let rhs = if rhs.dtype != out_dtype {
+        rhs.convert(out_dtype)
+    } else {
+        rhs.clone()
+    };
+
+    let lhs_ref = ValRef::External(lhs.fragment.vals()[lhs.val].key.clone());
+    let rhs_ref = ValRef::External(rhs.fragment.vals()[rhs.val].key.clone());
+
     let mut builder = FragmentBuilder::new();
     builder.add_parent(lhs.fragment.clone());
     builder.add_parent(rhs.fragment.clone());
-    let lhs_ref = ValRef::External(lhs.fragment.vals()[lhs.val].key.clone());
-    let rhs_ref = ValRef::External(rhs.fragment.vals()[rhs.val].key.clone());
     let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
@@ -2015,7 +2030,7 @@ pub(crate) fn apply_binary(
     TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
-        dtype: lhs.dtype,
+        dtype: out_dtype,
         fragment,
         val: outputs[0],
         data: None,

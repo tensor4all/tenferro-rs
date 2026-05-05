@@ -332,7 +332,7 @@ fn build_symbolic_nary_einsum(
     TracedTensor {
         id: next_traced_id(),
         rank: parsed.output.len(),
-        dtype: inputs[0].dtype,
+        dtype: crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype)),
         fragment,
         val: outputs[0],
         data: None,
@@ -496,7 +496,7 @@ fn build_traced_from_tree(
             Ok(TracedTensor {
                 id: next_traced_id(),
                 rank: out_shape.len(),
-                dtype: inputs[0].dtype,
+                dtype: crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype)),
                 fragment,
                 val: result_local,
                 data: None,
