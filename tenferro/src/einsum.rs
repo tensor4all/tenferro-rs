@@ -34,7 +34,9 @@ use tenferro_tensor::TensorBackend;
 use super::checkpoint::CheckpointNode;
 use super::engine::Engine;
 use super::error::{Error, Result};
-use super::metadata::register_fragment_metadata;
+use super::metadata::{
+    metadata_scopes_with_new, push_metadata_scope, register_scoped_fragment_metadata,
+};
 use super::sym_dim::SymDim;
 use super::traced::{concrete_shape, next_traced_id, try_concrete_shape, TracedTensor};
 
@@ -327,7 +329,13 @@ fn build_symbolic_nary_einsum(
     );
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let mut metadata_scopes = metadata_scopes_with_new(metadata_scope, []);
+    for input in inputs {
+        for scope in &input.metadata_scopes {
+            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+        }
+    }
 
     TracedTensor {
         id: next_traced_id(),
@@ -340,6 +348,7 @@ fn build_symbolic_nary_einsum(
         inputs_map: Arc::new(merged),
         extra_roots,
         checkpoint_chain: None,
+        metadata_scopes,
     }
 }
 
@@ -480,13 +489,18 @@ fn build_traced_from_tree(
         ValRef::Local(result_local) => {
             builder.set_outputs(vec![result_local]);
             let fragment = Arc::new(builder.build());
-            register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+            let metadata_scope =
+                register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
             let mut merged = HashMap::new();
             let mut extra_roots = Vec::new();
+            let mut metadata_scopes = metadata_scopes_with_new(metadata_scope, []);
             for input in inputs {
                 merged.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
                 extra_roots.extend(input.extra_roots.iter().cloned());
+                for scope in &input.metadata_scopes {
+                    push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+                }
             }
 
             let merged_chain = inputs.iter().fold(None, |acc, input| {
@@ -504,6 +518,7 @@ fn build_traced_from_tree(
                 inputs_map: Arc::new(merged),
                 extra_roots,
                 checkpoint_chain: merged_chain,
+                metadata_scopes,
             })
         }
         ValRef::External(_) => {
@@ -522,6 +537,7 @@ fn build_traced_from_tree(
                         inputs_map: inputs[i].inputs_map.clone(),
                         extra_roots: inputs[i].extra_roots.clone(),
                         checkpoint_chain: inputs[i].checkpoint_chain.clone(),
+                        metadata_scopes: inputs[i].metadata_scopes.clone(),
                     });
                 }
             }

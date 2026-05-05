@@ -22,8 +22,10 @@ use super::error::{Error, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
-    concrete_tensor_meta, register_fragment_metadata, register_value_metadata, registered_meta,
-    symbolic_input_meta, tensor_meta_from_tensor,
+    concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new,
+    metadata_scopes_with_scope, push_metadata_scope, register_scoped_fragment_metadata,
+    register_scoped_value_metadata, registered_meta, symbolic_input_meta, tensor_meta_from_tensor,
+    MetadataScope,
 };
 use crate::scalar_semantics::round_real_to_i64;
 
@@ -59,6 +61,7 @@ pub struct TracedTensor {
     pub(crate) inputs_map: Arc<HashMap<TensorInputKey, Arc<Tensor>>>,
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
+    pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
 /// Compute a broadcast output shape following NumPy rules.
@@ -271,7 +274,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
-        register_value_metadata(
+        let metadata_scope = register_scoped_value_metadata(
             fragment.vals()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         );
@@ -290,6 +293,7 @@ impl TracedTensor {
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
         }
     }
 
@@ -326,7 +330,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
-        register_value_metadata(
+        let metadata_scope = register_scoped_value_metadata(
             fragment.vals()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         );
@@ -345,6 +349,7 @@ impl TracedTensor {
             inputs_map: Arc::new(map),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
         }
     }
 
@@ -374,7 +379,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
-        register_value_metadata(
+        let metadata_scope = register_scoped_value_metadata(
             fragment.vals()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         );
@@ -390,6 +395,7 @@ impl TracedTensor {
             inputs_map: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
         }
     }
 
@@ -420,7 +426,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let fragment = Arc::new(builder.build());
-        register_value_metadata(
+        let metadata_scope = register_scoped_value_metadata(
             fragment.vals()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         );
@@ -436,6 +442,7 @@ impl TracedTensor {
             inputs_map: Arc::new(HashMap::new()),
             extra_roots: Vec::new(),
             checkpoint_chain: None,
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
         }
     }
 
@@ -739,14 +746,15 @@ impl TracedTensor {
         let leaf_val = builder.add_input(new_key.clone());
         builder.set_outputs(vec![leaf_val]);
         let new_fragment = Arc::new(builder.build());
-        register_value_metadata(
+        let new_metadata_scope = register_scoped_value_metadata(
             new_fragment.vals()[leaf_val].key.clone(),
             concrete_meta.clone(),
         );
         // Dynamic shape ops may have conservative static metadata on their
         // graph output. A checkpoint has evaluated the concrete tensor, so AD
         // alias resolution should see the runtime shape on both sides.
-        register_value_metadata(old_output_key.clone(), concrete_meta);
+        let old_output_metadata_scope =
+            register_scoped_value_metadata(old_output_key.clone(), concrete_meta);
 
         let node = CheckpointNode {
             fragment: old_fragment,
@@ -761,6 +769,11 @@ impl TracedTensor {
         self.extra_roots.clear();
         self.shape_hint = concrete_shape_hint;
         self.checkpoint_chain = Some(Arc::new(node));
+        push_metadata_scope(&mut self.metadata_scopes, Arc::new(new_metadata_scope));
+        push_metadata_scope(
+            &mut self.metadata_scopes,
+            Arc::new(old_output_metadata_scope),
+        );
 
         let mut merged = HashMap::new();
         if let Some(chain) = &self.checkpoint_chain {
@@ -821,7 +834,7 @@ impl TracedTensor {
             return Ok(None);
         };
         let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
-        register_fragment_metadata(
+        let metadata_scope = register_scoped_fragment_metadata(
             &linear.fragment,
             vec![(
                 GlobalValKey::Input(tangent_input_key.clone()),
@@ -862,6 +875,14 @@ impl TracedTensor {
             inputs_map: Arc::new(inputs_map),
             extra_roots,
             checkpoint_chain: self.checkpoint_chain.clone(),
+            metadata_scopes: metadata_scopes_with_new(
+                metadata_scope,
+                [
+                    self.metadata_scopes.as_slice(),
+                    wrt.metadata_scopes.as_slice(),
+                    tangent.metadata_scopes.as_slice(),
+                ],
+            ),
         }))
     }
 
@@ -911,7 +932,7 @@ impl TracedTensor {
             return Ok(None);
         }
         let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
-        register_fragment_metadata(
+        let linear_metadata_scope = register_scoped_fragment_metadata(
             &linear.fragment,
             vec![(
                 GlobalValKey::Input(linear_seed_key),
@@ -927,7 +948,7 @@ impl TracedTensor {
         let transposed = try_transpose(&linear, &mut ad_ctx)?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
-        register_fragment_metadata(
+        let transposed_metadata_scope = register_scoped_fragment_metadata(
             &transposed.fragment,
             vec![(
                 GlobalValKey::Input(cotangent_input_key.clone()),
@@ -997,6 +1018,18 @@ impl TracedTensor {
             inputs_map: Arc::new(inputs_map),
             extra_roots,
             checkpoint_chain: self.checkpoint_chain.clone(),
+            metadata_scopes: {
+                let mut scopes = metadata_scopes_with_new(
+                    linear_metadata_scope,
+                    [
+                        self.metadata_scopes.as_slice(),
+                        wrt.metadata_scopes.as_slice(),
+                        cotangent.metadata_scopes.as_slice(),
+                    ],
+                );
+                push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));
+                scopes
+            },
         }))
     }
 
@@ -1922,7 +1955,7 @@ pub(crate) fn apply_unary_with_dtype(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -1935,6 +1968,10 @@ pub(crate) fn apply_unary_with_dtype(
         inputs_map: input.inputs_map.clone(),
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
+        metadata_scopes: metadata_scopes_with_new(
+            metadata_scope,
+            [input.metadata_scopes.as_slice()],
+        ),
     }
 }
 
@@ -1968,7 +2005,7 @@ pub(crate) fn apply_unary_with_shape_refs(
     let outputs = builder.add_op(op, op_inputs, OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     let mut merged = (*input.inputs_map).clone();
     for t in shape_refs {
@@ -1997,6 +2034,16 @@ pub(crate) fn apply_unary_with_shape_refs(
         inputs_map: Arc::new(merged),
         extra_roots,
         checkpoint_chain,
+        metadata_scopes: {
+            let mut scopes =
+                metadata_scopes_with_new(metadata_scope, [input.metadata_scopes.as_slice()]);
+            for t in shape_refs {
+                for scope in &t.metadata_scopes {
+                    push_metadata_scope(&mut scopes, Arc::clone(scope));
+                }
+            }
+            scopes
+        },
     }
 }
 
@@ -2010,7 +2057,7 @@ pub(crate) fn apply_nullary(
     let outputs = builder.add_op(op, vec![], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     TracedTensor {
         id: next_traced_id(),
@@ -2023,6 +2070,7 @@ pub(crate) fn apply_nullary(
         inputs_map: Arc::new(HashMap::new()),
         extra_roots: Vec::new(),
         checkpoint_chain: None,
+        metadata_scopes: metadata_scopes_for_scope(metadata_scope),
     }
 }
 
@@ -2056,7 +2104,7 @@ pub(crate) fn apply_binary(
     let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -2077,6 +2125,13 @@ pub(crate) fn apply_binary(
             lhs.checkpoint_chain.clone(),
             rhs.checkpoint_chain.clone(),
         ),
+        metadata_scopes: metadata_scopes_with_new(
+            metadata_scope,
+            [
+                lhs.metadata_scopes.as_slice(),
+                rhs.metadata_scopes.as_slice(),
+            ],
+        ),
     }
 }
 
@@ -2091,7 +2146,10 @@ pub(crate) fn apply_multi_output(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = Arc::new(register_scoped_fragment_metadata(
+        fragment.as_ref(),
+        std::iter::empty(),
+    ));
     assert_eq!(
         outputs.len(),
         output_shapes.len(),
@@ -2112,6 +2170,10 @@ pub(crate) fn apply_multi_output(
             inputs_map: input.inputs_map.clone(),
             extra_roots: input.extra_roots.clone(),
             checkpoint_chain: input.checkpoint_chain.clone(),
+            metadata_scopes: metadata_scopes_with_scope(
+                Arc::clone(&metadata_scope),
+                [input.metadata_scopes.as_slice()],
+            ),
         })
         .collect()
 }

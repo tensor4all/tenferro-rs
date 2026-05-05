@@ -17,7 +17,9 @@ use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
-    register_fragment_metadata, register_value_metadata, tensor_meta_from_tensor,
+    metadata_scopes_for_scope, push_metadata_scope, register_scoped_fragment_metadata,
+    register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
+    MetadataScope,
 };
 use crate::traced::next_input_key;
 
@@ -237,6 +239,7 @@ pub struct EagerTensor<B: TensorBackend = CpuBackend> {
     pub(crate) grad_node: Option<Arc<GradNode<StdTensorOp>>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
+    pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
     pub(crate) ctx: Arc<EagerContext<B>>,
 }
 
@@ -299,7 +302,8 @@ impl<B: TensorBackend> EagerTensor<B> {
 
     pub(crate) fn new_leaf(ctx: Arc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
         let key = eager_val_key();
-        register_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
+        let metadata_scope =
+            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
@@ -311,6 +315,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             grad_node: None,
             requires_grad,
             grad_slot,
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
             ctx,
         }
     }
@@ -321,8 +326,8 @@ impl<B: TensorBackend> EagerTensor<B> {
         tensor: Tensor,
         requires_grad: bool,
         grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+        metadata_scopes: Vec<Arc<MetadataScope>>,
     ) -> Self {
-        register_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
@@ -334,6 +339,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             grad_node,
             requires_grad,
             grad_slot,
+            metadata_scopes,
             ctx,
         }
     }
@@ -530,6 +536,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         let seed = Arc::new(one_like_tensor(self.data.as_ref(), &mut *backend));
         let mut callbacks = TenferroBackwardCallbacks {
             backend: &mut *backend,
+            metadata_scopes: self.metadata_scopes.clone(),
         };
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)?;
@@ -540,6 +547,7 @@ impl<B: TensorBackend> EagerTensor<B> {
 
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend> {
     backend: &'a mut B,
+    metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
 impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallbacks<'_, B> {
@@ -597,7 +605,7 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
             }
         }
 
-        register_fragment_metadata(
+        let metadata_scope = register_scoped_fragment_metadata(
             fragment,
             fragment.inputs().iter().map(|input_id| {
                 let key = fragment.vals()[*input_id].key.clone();
@@ -612,6 +620,7 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
                 (key, meta)
             }),
         );
+        push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
 
         all_values
     }
@@ -700,28 +709,37 @@ pub(crate) fn eager_value<B: TensorBackend>(tensor: &EagerTensor<B>) -> EagerVal
     }
 }
 
+pub(crate) struct RecordedEagerOutputs {
+    pub(crate) traces: Vec<EagerOutput<StdTensorOp>>,
+    pub(crate) metadata_scope: Arc<MetadataScope>,
+}
+
 pub(crate) fn record_eager_outputs<B: TensorBackend>(
     op: &StdTensorOp,
     outputs: &[Arc<Tensor>],
     inputs: &[&EagerTensor<B>],
-) -> Vec<EagerOutput<StdTensorOp>> {
+) -> RecordedEagerOutputs {
     let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(*tensor)).collect();
     let mut key_source = EagerTensorKeySource;
     let traces = tidu::record_eager_op(&mut key_source, op.clone(), &input_values, outputs);
 
+    let mut registrations = Vec::new();
     for trace in &traces {
         if let Some(output) = outputs.get(trace.output_slot) {
-            register_value_metadata(trace.key.clone(), tensor_meta_from_tensor(output.as_ref()));
+            registrations.push((trace.key.clone(), tensor_meta_from_tensor(output.as_ref())));
         }
     }
 
     if let Some(node) = traces.iter().find_map(|trace| trace.node.as_ref()) {
         for (key, value) in node.saved_data() {
-            register_value_metadata(key.clone(), tensor_meta_from_tensor(value.as_ref()));
+            registrations.push((key.clone(), tensor_meta_from_tensor(value.as_ref())));
         }
     }
 
-    traces
+    RecordedEagerOutputs {
+        traces,
+        metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)),
+    }
 }
 
 pub(crate) fn exec_single_output<B: TensorBackend>(
