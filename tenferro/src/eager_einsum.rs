@@ -7,7 +7,7 @@
 //!
 //! ```rust
 //! use tenferro::eager_einsum::{eager_einsum, eager_einsum_ad, eager_einsum_owned};
-//! use tenferro::{CpuBackend, EagerTensor, Tensor};
+//! use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 //!
 //! let mut backend = CpuBackend::new();
 //! let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -20,8 +20,9 @@
 //!
 //! assert_eq!(owned_dot.as_slice::<f64>().unwrap(), &[32.0]);
 //!
-//! let x = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
-//! let y = EagerTensor::requires_grad(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+//! let ctx = EagerContext::with_backend(CpuBackend::new());
+//! let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+//! let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
 //! let loss = eager_einsum_ad(&[&x, &y], "i,i->").unwrap();
 //! let _ = loss.backward().unwrap();
 //!
@@ -43,16 +44,17 @@ pub use tenferro_einsum::{eager_einsum, eager_einsum_owned};
 ///
 /// ```
 /// use tenferro::eager_einsum::eager_einsum_ad;
-/// use tenferro::{EagerTensor, Tensor};
+/// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 ///
-/// let a = EagerTensor::from_tensor(Tensor::from_vec(
+/// let ctx = EagerContext::with_backend(CpuBackend::new());
+/// let a = EagerTensor::from_tensor_in(Tensor::from_vec(
 ///     vec![2, 3],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-/// ));
-/// let b = EagerTensor::from_tensor(Tensor::from_vec(
+/// ), ctx.clone());
+/// let b = EagerTensor::from_tensor_in(Tensor::from_vec(
 ///     vec![3, 2],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-/// ));
+/// ), ctx.clone());
 /// let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// assert_eq!(c.data().shape(), &[2, 2]);
