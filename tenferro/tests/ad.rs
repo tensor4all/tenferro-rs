@@ -15,7 +15,7 @@ use tenferro::exec::eval_exec_ir;
 use tenferro::shape_infer::{infer_output_dtype, infer_output_extents};
 use tenferro::{matmul, Engine, TracedTensor};
 use tenferro_ops::ad::context::{
-    lookup_global_metadata, register_global_metadata_batch, TensorMeta,
+    lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
@@ -196,7 +196,7 @@ fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
 fn register_fragment_metadata_for_test(
     fragment: &Fragment<StdTensorOp>,
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
-) {
+) -> GlobalMetadataScope {
     let seeded: Vec<_> = seeded.into_iter().collect();
     let mut known: HashMap<_, _> = seeded.iter().cloned().collect();
 
@@ -252,7 +252,7 @@ fn register_fragment_metadata_for_test(
         }
     }
 
-    register_global_metadata_batch(registrations);
+    register_scoped_global_metadata_batch(registrations)
 }
 
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
@@ -988,7 +988,7 @@ fn grad_from_fragment_with_inputs_and_cotangent(
     mut inputs_map: HashMap<TensorInputKey, Tensor>,
     cotangent: Tensor,
 ) -> Tensor {
-    register_fragment_metadata_for_test(
+    let _primal_metadata_scope = register_fragment_metadata_for_test(
         fragment.as_ref(),
         inputs_map.iter().map(|(key, tensor)| {
             (
@@ -1007,7 +1007,7 @@ fn grad_from_fragment_with_inputs_and_cotangent(
         &mut ad_ctx,
         &HashMap::new(),
     );
-    register_fragment_metadata_for_test(
+    let _linear_metadata_scope = register_fragment_metadata_for_test(
         &linear.fragment,
         vec![(
             GlobalValKey::Input(input_key.tangent_of(0)),
@@ -1104,7 +1104,7 @@ fn jvp_from_fragment_with_inputs(
     mut inputs_map: HashMap<TensorInputKey, Tensor>,
     tangent: Tensor,
 ) -> Tensor {
-    register_fragment_metadata_for_test(
+    let _primal_metadata_scope = register_fragment_metadata_for_test(
         fragment.as_ref(),
         inputs_map.iter().map(|(key, tensor)| {
             (
@@ -1123,7 +1123,7 @@ fn jvp_from_fragment_with_inputs(
         &mut ad_ctx,
         &HashMap::new(),
     );
-    register_fragment_metadata_for_test(
+    let _linear_metadata_scope = register_fragment_metadata_for_test(
         &linear.fragment,
         vec![(
             GlobalValKey::Input(input_key.tangent_of(0)),
@@ -1200,7 +1200,7 @@ fn transpose_primal_unary_op_with_inputs(
         tangent_inputs: vec![(input_key, tangent_input)],
         tangent_outputs: vec![Some(output)],
     };
-    register_fragment_metadata_for_test(
+    let _linear_metadata_scope = register_fragment_metadata_for_test(
         &linear.fragment,
         vec![(
             GlobalValKey::Input(tangent_input_key.clone()),
@@ -3547,4 +3547,30 @@ fn grad_reverse_weighted_sum_matches_finite_diff() {
             + xs[2] * weights_data[1]
             + xs[3] * weights_data[0]
     });
+}
+
+#[test]
+fn dropped_traced_graph_releases_registered_metadata() {
+    let leaf_key;
+    let derived_key;
+    let y;
+
+    {
+        let x = TracedTensor::from_vec(vec![1], vec![2.0_f64]);
+        leaf_key = GlobalValKey::Input(x.input_key().expect("leaf input key"));
+
+        y = &x + &x;
+        derived_key = y.fragment.vals()[y.val].key.clone();
+
+        assert!(lookup_global_metadata(&leaf_key).is_some());
+        assert!(lookup_global_metadata(&derived_key).is_some());
+    }
+
+    assert!(lookup_global_metadata(&leaf_key).is_some());
+    assert!(lookup_global_metadata(&derived_key).is_some());
+
+    drop(y);
+
+    assert!(lookup_global_metadata(&leaf_key).is_none());
+    assert!(lookup_global_metadata(&derived_key).is_none());
 }

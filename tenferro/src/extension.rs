@@ -40,7 +40,7 @@ use crate::checkpoint::CheckpointNode;
 use crate::eager::{record_eager_outputs, EagerTensor};
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
-use crate::metadata::register_fragment_metadata;
+use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
 pub use tenferro_ops::ext_op::{
@@ -135,17 +135,24 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     let outputs = builder.add_op(carrier, op_inputs, OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    register_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = Arc::new(register_scoped_fragment_metadata(
+        fragment.as_ref(),
+        std::iter::empty(),
+    ));
 
     // Merge shared-state across all parent TracedTensors.
     let mut merged_map = HashMap::new();
     let mut extra_roots = Vec::new();
     let mut checkpoint_chain = None;
+    let mut metadata_scopes = vec![Arc::clone(&metadata_scope)];
     for input in inputs {
         merged_map.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
         extra_roots.extend(input.extra_roots.iter().cloned());
         checkpoint_chain =
             CheckpointNode::merge_chains(checkpoint_chain, input.checkpoint_chain.clone());
+        for scope in &input.metadata_scopes {
+            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+        }
     }
     let merged_map = Arc::new(merged_map);
 
@@ -179,6 +186,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
                 inputs_map: merged_map.clone(),
                 extra_roots: extra_roots.clone(),
                 checkpoint_chain: checkpoint_chain.clone(),
+                metadata_scopes: metadata_scopes.clone(),
             }
         })
         .collect()
@@ -234,17 +242,24 @@ pub fn apply_eager<B: TensorBackend>(
     }
 
     let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-    let traces = record_eager_outputs(&op, &outputs, inputs);
-    if traces.len() != outputs.len() {
+    let recorded = record_eager_outputs(&op, &outputs, inputs);
+    if recorded.traces.len() != outputs.len() {
         return Err(Error::Internal(format!(
             "expected {} eager traces for {:?}, got {}",
             outputs.len(),
             op,
-            traces.len()
+            recorded.traces.len()
         )));
     }
+    let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
+    for input in inputs {
+        for scope in &input.metadata_scopes {
+            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+        }
+    }
 
-    Ok(traces
+    Ok(recorded
+        .traces
         .into_iter()
         .zip(outputs)
         .map(|(trace, output)| {
@@ -254,6 +269,7 @@ pub fn apply_eager<B: TensorBackend>(
                 output.as_ref().clone(),
                 trace.requires_grad,
                 trace.node,
+                metadata_scopes.clone(),
             )
         })
         .collect())

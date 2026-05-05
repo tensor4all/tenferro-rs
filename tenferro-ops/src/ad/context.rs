@@ -21,6 +21,14 @@ use crate::sym_dim::SymDim;
 
 type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
 
+type GlobalMetadataMap = HashMap<GlobalValKey<StdTensorOp>, GlobalMetadataEntry>;
+
+#[derive(Clone, Debug)]
+struct GlobalMetadataEntry {
+    meta: TensorMeta,
+    scoped_refs: usize,
+}
+
 /// Global metadata registry.
 ///
 /// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
@@ -32,10 +40,26 @@ type MetadataMap = HashMap<GlobalValKey<StdTensorOp>, TensorMeta>;
 /// `ShapeGuardContext` or kept the map in an `Arc` and cloned on every write.
 /// Both variants were quadratic across the monotonically growing registry and
 /// dominated oracle_replay runtime.
-static GLOBAL_METADATA: OnceLock<Mutex<MetadataMap>> = OnceLock::new();
+static GLOBAL_METADATA: OnceLock<Mutex<GlobalMetadataMap>> = OnceLock::new();
 
-fn global_metadata_registry() -> &'static Mutex<MetadataMap> {
+fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
     GLOBAL_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Lifetime token for graph-scoped global metadata.
+///
+/// Dropping the last frontend owner of a traced graph drops this scope and
+/// releases the metadata keys that were registered for that graph fragment.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct GlobalMetadataScope {
+    keys: Vec<GlobalValKey<StdTensorOp>>,
+}
+
+impl Drop for GlobalMetadataScope {
+    fn drop(&mut self) {
+        release_scoped_global_metadata(&self.keys);
+    }
 }
 
 /// Per-value tensor metadata used by AD rules.
@@ -450,14 +474,6 @@ impl ShapeGuardContext {
     }
 }
 
-#[doc(hidden)]
-pub fn register_global_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
-    let mut guard = global_metadata_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.insert(key, meta);
-}
-
 /// Look up a single metadata entry from the global registry.
 ///
 /// Locks the registry briefly for a single `HashMap::get` + clone.
@@ -478,18 +494,45 @@ pub fn lookup_global_metadata(key: &GlobalValKey<StdTensorOp>) -> Option<TensorM
     let guard = global_metadata_registry()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.get(key).cloned()
+    guard.get(key).map(|entry| entry.meta.clone())
 }
 
 #[doc(hidden)]
-pub fn register_global_metadata_batch<I>(entries: I)
+pub fn register_scoped_global_metadata_batch<I>(entries: I) -> GlobalMetadataScope
 where
     I: IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 {
     let mut guard = global_metadata_registry()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    guard.extend(entries);
+    let mut keys = Vec::new();
+    for (key, meta) in entries {
+        let entry = guard.entry(key.clone()).or_insert(GlobalMetadataEntry {
+            meta: meta.clone(),
+            scoped_refs: 0,
+        });
+        entry.meta = meta;
+        entry.scoped_refs += 1;
+        keys.push(key);
+    }
+    GlobalMetadataScope { keys }
+}
+
+fn release_scoped_global_metadata(keys: &[GlobalValKey<StdTensorOp>]) {
+    let mut guard = global_metadata_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for key in keys {
+        let should_remove = if let Some(entry) = guard.get_mut(key) {
+            entry.scoped_refs = entry.scoped_refs.saturating_sub(1);
+            entry.scoped_refs == 0
+        } else {
+            false
+        };
+        if should_remove {
+            guard.remove(key);
+        }
+    }
 }
 
 /// Resolve a [`DimExpr`] to a concrete `usize`.

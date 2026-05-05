@@ -1,9 +1,10 @@
 use computegraph::fragment::Fragment;
 use computegraph::types::{GlobalValKey, ValRef};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tenferro_ops::ad::context::{
-    lookup_global_metadata, register_global_metadata, register_global_metadata_batch, TensorMeta,
+    lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -11,6 +12,8 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_tensor::{DType, Tensor};
 
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
+
+pub(crate) type MetadataScope = GlobalMetadataScope;
 
 pub(crate) fn tensor_meta(dtype: DType, shape: Vec<SymDim>) -> TensorMeta {
     TensorMeta::exact(dtype, shape)
@@ -33,8 +36,17 @@ pub(crate) fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
     concrete_tensor_meta(tensor.dtype(), tensor.shape())
 }
 
-pub(crate) fn register_value_metadata(key: GlobalValKey<StdTensorOp>, meta: TensorMeta) {
-    register_global_metadata(key, meta);
+pub(crate) fn register_scoped_value_metadata(
+    key: GlobalValKey<StdTensorOp>,
+    meta: TensorMeta,
+) -> MetadataScope {
+    register_scoped_global_metadata_batch([(key, meta)])
+}
+
+pub(crate) fn register_scoped_metadata_batch(
+    entries: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) -> MetadataScope {
+    register_scoped_global_metadata_batch(entries)
 }
 
 pub(crate) fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
@@ -42,10 +54,56 @@ pub(crate) fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
         .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
 }
 
-pub(crate) fn register_fragment_metadata(
+pub(crate) fn register_scoped_fragment_metadata(
     fragment: &Fragment<StdTensorOp>,
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) -> MetadataScope {
+    register_scoped_global_metadata_batch(fragment_metadata_registrations(fragment, seeded))
+}
+
+pub(crate) fn metadata_scopes_with_new<'a>(
+    scope: MetadataScope,
+    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
+) -> Vec<Arc<MetadataScope>> {
+    let scope = Arc::new(scope);
+    metadata_scopes_with_scope(scope, inherited)
+}
+
+pub(crate) fn metadata_scopes_for_scope(scope: MetadataScope) -> Vec<Arc<MetadataScope>> {
+    vec![Arc::new(scope)]
+}
+
+pub(crate) fn metadata_scopes_with_scope<'a>(
+    scope: Arc<MetadataScope>,
+    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
+) -> Vec<Arc<MetadataScope>> {
+    let mut scopes = Vec::new();
+    push_metadata_scope(&mut scopes, scope);
+    extend_metadata_scopes(&mut scopes, inherited);
+    scopes
+}
+
+pub(crate) fn push_metadata_scope(scopes: &mut Vec<Arc<MetadataScope>>, scope: Arc<MetadataScope>) {
+    if scopes.iter().all(|existing| !Arc::ptr_eq(existing, &scope)) {
+        scopes.push(scope);
+    }
+}
+
+fn extend_metadata_scopes<'a>(
+    scopes: &mut Vec<Arc<MetadataScope>>,
+    inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
 ) {
+    for source in inherited {
+        for scope in source {
+            push_metadata_scope(scopes, Arc::clone(scope));
+        }
+    }
+}
+
+fn fragment_metadata_registrations(
+    fragment: &Fragment<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) -> Vec<(GlobalValKey<StdTensorOp>, TensorMeta)> {
     let seeded: Vec<_> = seeded.into_iter().collect();
     // Start from just the seeded inputs. External keys not in `seeded` are
     // resolved on demand via a single-key lookup against the global
@@ -87,7 +145,7 @@ pub(crate) fn register_fragment_metadata(
         }
     }
 
-    register_global_metadata_batch(registrations);
+    registrations
 }
 
 fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Vec<TensorMeta> {

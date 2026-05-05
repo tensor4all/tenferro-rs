@@ -10,6 +10,7 @@ use tenferro_tensor::{
 use crate::eager::{exec_single_output, record_eager_outputs, EagerTensor};
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{Error, Result};
+use crate::metadata::push_metadata_scope;
 
 impl<B: TensorBackend> EagerTensor<B> {
     /// Elementwise addition.
@@ -541,17 +542,22 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
 
         let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-        let traces = record_eager_outputs(&op, &outputs, &[self]);
-        if traces.len() != outputs.len() {
+        let recorded = record_eager_outputs(&op, &outputs, &[self]);
+        if recorded.traces.len() != outputs.len() {
             return Err(Error::Internal(format!(
                 "expected {} eager traces for {:?}, got {}",
                 outputs.len(),
                 op,
-                traces.len()
+                recorded.traces.len()
             )));
         }
+        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
+        for scope in &self.metadata_scopes {
+            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+        }
 
-        Ok(traces
+        Ok(recorded
+            .traces
             .into_iter()
             .zip(outputs)
             .map(|(trace, output)| {
@@ -561,6 +567,7 @@ impl<B: TensorBackend> EagerTensor<B> {
                     output.as_ref().clone(),
                     trace.requires_grad,
                     trace.node,
+                    metadata_scopes.clone(),
                 )
             })
             .collect())
@@ -590,10 +597,16 @@ impl<B: TensorBackend> EagerTensor<B> {
         let inputs: Vec<&Tensor> = tensors.iter().map(|tensor| tensor.data.as_ref()).collect();
         let output = Arc::new(exec_single_output(&op, &inputs, &ctx)?);
         let outputs = vec![Arc::clone(&output)];
-        let mut traces = record_eager_outputs(&op, &outputs, tensors);
-        let trace = traces.pop().ok_or_else(|| {
+        let mut recorded = record_eager_outputs(&op, &outputs, tensors);
+        let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
+        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
+        for tensor in tensors {
+            for scope in &tensor.metadata_scopes {
+                push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
+            }
+        }
 
         Ok(Self::new_result(
             ctx,
@@ -601,6 +614,7 @@ impl<B: TensorBackend> EagerTensor<B> {
             output.as_ref().clone(),
             trace.requires_grad,
             trace.node,
+            metadata_scopes,
         ))
     }
 }
