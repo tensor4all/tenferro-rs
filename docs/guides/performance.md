@@ -27,6 +27,11 @@ not:
 ```
 
 If you are porting examples from PyTorch or JAX, check the flat-data order first.
+Use `Tensor::from_vec_row_major` for row-major flat data, and use
+`to_col_major()` or `to_row_major()` when you need an owned tensor in a
+specific memory order. Owned export through `try_into_vec_col_major()`,
+`try_into_vec_row_major()`, or `try_into_vec_with_order::<T>(...)` is zero-copy
+only when the tensor already has the requested order.
 
 ## Control CPU thread count
 
@@ -49,6 +54,14 @@ let mut engine = Engine::new(CpuBackend::with_threads(4));
 ## Buffer reuse is automatic
 
 You do not need to manage scratch buffers manually. Keep your code simple, reuse the same `Engine`, and let tenferro reuse temporary storage behind the scenes.
+
+## CUDA transfer boundaries
+
+CUDA transfers are explicit. Upload once near the boundary of a CUDA workload,
+run supported operations on CUDA tensors, then download only when host
+inspection or CPU execution is needed. Repeated upload/download inside tight
+loops usually dominates runtime. See [Devices and GPU](devices-and-gpu.md) for
+the current CUDA coverage and setup commands.
 
 ## Einsum path optimization
 

@@ -30,12 +30,17 @@ website:
           - getting-started/pytorch-jax-mapping.md
       - section: "Guides"
         contents:
+          - guides/choosing-an-api.md
+          - guides/installation.md
           - guides/eager-operations.md
           - guides/tensor-operations.md
           - guides/einsum.md
           - guides/linear-algebra.md
           - guides/autodiff.md
+          - guides/devices-and-gpu.md
+          - guides/memory-order.md
           - guides/performance.md
+          - guides/troubleshooting.md
       - section: "API"
         contents:
           - api/index.md

@@ -13,6 +13,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives inside `Engine` |
+| CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro::einsum::einsum` |
 
 ## Function mapping
@@ -47,6 +48,20 @@ let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0
 ```
 
 then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
+
+Use `Tensor::from_vec_row_major` when the flat input data is already in
+PyTorch, NumPy, or JAX row-major order.
+
+### Explicit CUDA transfer
+
+tenferro follows the PyTorch convention that CPU and CUDA tensors do not move
+between devices implicitly. Upload CPU tensors with
+`tenferro::cuda::upload_tensor` before CUDA backend operations, and download
+with `tenferro::cuda::download_tensor` before inspecting values on the host.
+
+CUDA support is partial and experimental, and currently targets NVIDIA CUDA.
+See [Devices and GPU](../guides/devices-and-gpu.md) for the current coverage
+and setup commands.
 
 ### Lazy evaluation
 
