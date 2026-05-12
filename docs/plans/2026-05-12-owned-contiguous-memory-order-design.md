@@ -3,9 +3,9 @@
 ## Scope
 
 tenferro remains a dense tensor library whose runtime tensors own contiguous
-storage. The first row-major interoperability step is limited to CPU host
-buffers passed by ownership transfer. It does not add borrowed tensor views,
-strided tensor views, offset metadata, GPU placement changes, or a direct
+storage. The first row-major interoperability step is centered on host buffers
+passed by ownership transfer. It does not add borrowed tensor views, strided
+tensor views, offset metadata, device-side row-major storage, or a direct
 `ndarray` dependency.
 
 The goal is to let callers move an owned row-major `Vec<T>` into tenferro
@@ -94,7 +94,9 @@ Compilation, shape inference, AD rules, and operation descriptors remain based
 on logical shape and dtype. Backends decide how to handle physical memory order
 when executing concrete tensors. The minimal CPU implementation may materialize
 row-major inputs into column-major buffers at backend boundaries for operations
-that assume column-major layout.
+that assume column-major layout. GPU upload boundaries canonicalize row-major
+host tensors to column-major device tensors because CubeCL kernels assume dense
+column-major runtime tensors.
 
 Backend outputs should initially stay column-major unless a specific operation
 has a deliberate reason to preserve or produce row-major output. Users who need
@@ -120,6 +122,6 @@ be made contiguous before ownership transfer.
 - No `ndarray` dependency in core crates.
 - No borrowed host tensor views.
 - No runtime `strides` or `offset` fields.
-- No GPU or multi-device changes.
+- No row-major GPU storage or multi-device changes.
 - No graph-level layout metadata.
 - No implicit layout conversion during zero-copy export.
