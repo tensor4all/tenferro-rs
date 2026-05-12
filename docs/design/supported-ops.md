@@ -56,14 +56,14 @@ the `cuda` feature. Internally, the `cubecl` feature enables
 cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
 `tenferro-cubecl` crate.
 
-Implemented GPU coverage is partial:
+Implemented GPU coverage is broad, with remaining op/dtype gaps:
 
 - explicit upload/download and device pointer bridge,
-- many elementwise operations on real dtypes and selected complex operations,
+- broad elementwise coverage on real dtypes and selected complex operations,
 - reductions including sum/product for real and complex and min/max for real,
 - structural operations including transpose, reshape, broadcast, reverse,
   concatenate, diagonal extraction/embedding, and triangular masks,
-- selected indexing operations,
+- indexing operations where dtype support exists,
 - selected cuTENSOR/cuBLAS contraction paths,
 - selected cuSOLVER/cuBLAS linalg paths.
 
@@ -119,10 +119,10 @@ Implemented public surfaces include:
   paths.
 - Compiled execution through `ExecProgram` / `eval_exec_ir`.
 
-The facade is CPU-first. It can evaluate through the CUDA backend when the
-program uses GPU-supported operations and tensors are placed explicitly by the
-execution pipeline or caller. Unsupported GPU ops return errors rather than
-silently falling back to CPU.
+The facade can evaluate through `CpuBackend` or the CUDA backend when the
+program uses operations supported by that backend and tensors are placed
+explicitly by the execution pipeline or caller. Unsupported GPU ops return
+errors rather than silently falling back to CPU.
 
 ## `tenferro-device`
 

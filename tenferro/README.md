@@ -68,6 +68,6 @@ fn main() {
 
 - `Tensor` is the concrete dense runtime value at graph boundaries.
 - `TracedTensor` is the graph-aware lazy wrapper.
-- GPU support is partial and experimental.
+- CUDA GPU support is available through the feature-gated CubeCL backend.
 - The crate no longer exposes the older runtime-installation and dynamic-carrier
   API family.

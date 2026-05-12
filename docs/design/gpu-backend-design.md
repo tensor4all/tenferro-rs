@@ -7,10 +7,12 @@ surface is the CubeCL backend in `tenferro-tensor/src/cubecl/`, gated by the
 internal `cubecl` feature. It targets NVIDIA CUDA devices through CubeCL and
 CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS.
 
-GPU support is partial and experimental. CUDA allocation, explicit CPU/GPU
-transfer, many structural/elementwise/reduction kernels, selected cuTENSOR
-contractions, and selected cuSOLVER/cuBLAS linear algebra paths exist. HIP/ROCm
-is still a feature stub and is not a supported execution path.
+CUDA GPU support is implemented through the feature-gated CubeCL backend across
+the concrete tensor, eager, and traced execution surfaces. Coverage includes
+allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
+kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
+Performance optimization and exhaustive dtype/op parity are still active work,
+and HIP/ROCm is still a feature stub rather than a supported execution path.
 
 See also:
 
@@ -200,17 +202,17 @@ Error behavior:
 
 ## Implemented Coverage
 
-The public CUDA backend implements enough of `TensorBackend` to run a growing
-subset of compiled tensor programs on CUDA. Internally, that coverage is
-provided by CubeCL kernels and CUDA library calls:
+The public CUDA backend implements `TensorBackend` for the main dense CUDA
+execution surface. Internally, that coverage is provided by CubeCL kernels and
+CUDA library calls:
 
 | Category | Current status |
 | --- | --- |
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge |
-| Elementwise | many float ops; selected complex ops; unsupported complex analytic ops return `BackendFailure` |
+| Elementwise | broad real coverage; selected complex ops; unsupported complex analytic ops return `BackendFailure` |
 | Reductions | sum/prod for real and complex; min/max for real |
 | Structural | transpose, reshape, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks |
-| Indexing | selected gather/scatter/slice/pad/reverse paths through CubeCL kernels |
+| Indexing | gather/scatter/slice/pad/reverse paths through CubeCL kernels where dtype support exists |
 | Contraction | cuTENSOR/cuBLAS-backed paths for supported real dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, and triangular solve where supported |
 
@@ -228,8 +230,8 @@ The following are intentionally outside the current batch:
 - GPU benchmark work,
 - HIP/ROCm implementation,
 - replacing the CubeCL fork,
-- broad complex kernel expansion before upstream CubeCL support lands,
-- making every CPU tensor op have a GPU implementation,
+- remaining complex kernel expansion before upstream CubeCL support lands,
+- closing remaining CPU/GPU op and dtype parity gaps,
 - changing the public placement contract.
 
 ## Tests

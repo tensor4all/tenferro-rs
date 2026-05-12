@@ -2,7 +2,7 @@
   "assets": {
     "build-docs-site-script": {
       "path": "scripts/build_docs_site.sh",
-      "sha256": "f2240cf0ecedc6bdf3bb94d9e21ae323145a2c1856053e0bbe8453ab118a219d"
+      "sha256": "8265a659f3665af1d3f09275eaab51e1b1d2fac0e485d65d3882fca3905d2ac1"
     },
     "check-agent-assets-command": {
       "path": ".claude/commands/check-agent-assets.md",
@@ -14,7 +14,7 @@
     },
     "check-docs-site-script": {
       "path": "scripts/check-docs-site.py",
-      "sha256": "6d5a7b057cd11f78d6a80482b70f91cd730049c50462b86d0291de12ddbdcc18"
+      "sha256": "4ac6a6ee0e008ab6ee349f483f49913f8ecea8fe5f5a4c7a8de235d04233d645"
     },
     "check-repo-settings-script": {
       "path": "scripts/check-repo-settings.sh",

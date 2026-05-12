@@ -4,8 +4,8 @@ tenferro follows the PyTorch convention: no implicit CPU/GPU transfer. Upload
 CPU tensors before CUDA backend operations and download results before host
 inspection.
 
-CUDA support is partial and experimental. It currently targets NVIDIA CUDA.
-AMD/ROCm is not a supported execution path yet.
+CUDA support targets NVIDIA CUDA through the CubeCL backend. AMD/ROCm is not a
+supported execution path yet.
 
 ## CUDA Quickstart
 
@@ -55,8 +55,8 @@ The example downloads the result back to CPU and asserts the expected values.
 | Area | Status |
 | --- | --- |
 | Allocation and transfer | CUDA supported |
-| Elementwise and reductions | partial |
-| Structural/indexing | partial |
+| Elementwise and reductions | broad real coverage, selected complex coverage |
+| Structural/indexing | broad coverage where dtype support exists |
 | Contractions | selected cuTENSOR/cuBLAS-backed paths |
 | Linalg | selected cuSOLVER/cuBLAS-backed paths |
 | General `eig` | not supported by cuSOLVER; download to CPU |

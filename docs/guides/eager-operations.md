@@ -14,7 +14,9 @@ let mut ctx = CpuBackend::new();
 ```
 
 Every eager operation requires a backend context. `CpuBackend` is the standard
-CPU backend using the faer linear algebra library.
+CPU backend using the faer linear algebra library. With the `cuda` feature, the
+same concrete and eager APIs can execute supported operations on the CubeCL/CUDA
+backend when tensors are explicitly placed on the GPU.
 
 `EagerContext` is the gradient-owning wrapper for eager AD state. If you share
 one context across multiple tracked tensors, their gradients accumulate into
@@ -197,9 +199,9 @@ assert!(y.grad().is_none());
 
 | Scenario | Recommended |
 |----------|-------------|
-| Data preprocessing | Eager (`Tensor` + `CpuBackend`) |
+| Data preprocessing | Eager (`Tensor` + a backend) |
 | TCI inner loops | Eager |
 | Exploratory computation | Eager |
 | Need scalar-loss reverse-mode gradients | Eager (`EagerTensor::backward()`) |
-| Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `Engine`) |
-| CUDA execution for supported operations | Lazy traced or direct backend calls with explicit upload/download |
+| Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `Engine<B>`) |
+| CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor<B>`) or lazy traced (`TracedTensor` + `Engine<B>`) with explicit upload/download |
