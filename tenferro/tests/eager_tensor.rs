@@ -91,6 +91,25 @@ fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
 }
 
 #[test]
+fn row_major_eager_input_uses_logical_shape_and_values() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_row_major(
+            vec![2, 3],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        ),
+        test_ctx(),
+    );
+    let y = &x + &x;
+    let row_major = y.data().to_row_major().expect("row-major conversion");
+
+    assert_eq!(y.data().shape(), &[2, 3]);
+    assert_eq!(
+        f64_data(&row_major),
+        &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    );
+}
+
+#[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());

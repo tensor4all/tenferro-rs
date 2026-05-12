@@ -51,6 +51,28 @@ fn addition_of_two_symbolic_inputs() {
 }
 
 #[test]
+fn row_major_symbolic_input_uses_logical_shape_and_values() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut y = &x + &x;
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let bound = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+    let out = y
+        .eval_with_inputs(&mut engine, &[(&x, &bound)])
+        .expect("eval_with_inputs");
+    let row_major = out.to_row_major().expect("row-major conversion");
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(
+        f64_data(&row_major),
+        &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    );
+}
+
+#[test]
 fn same_symbolic_graph_reused_with_different_shapes() {
     // Build the graph once.
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
