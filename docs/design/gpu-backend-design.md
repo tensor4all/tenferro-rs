@@ -105,6 +105,12 @@ the logical layout; dense column-major strides are `[1, d_0, d_0 * d_1, ...]`.
 See [backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
 for the runtime layout contract.
 
+Host tensors with `MemoryOrder::RowMajor` are supported at the GPU transfer
+boundary by canonicalizing their owned host buffer to dense column-major during
+`upload_tensor()` / `upload_host_tensor()`. Device tensors themselves remain
+column-major. This keeps existing CubeCL kernels correct, including raw linear
+buffer kernels that do not consume tensor stride metadata.
+
 CubeCL kernels that perform logical tensor indexing must receive tensor
 metadata through CubeCL tensor metadata. There is no hidden row-major fallback
 and no implicit global shape state.

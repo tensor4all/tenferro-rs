@@ -213,7 +213,7 @@ fn cpu_linalg_accepts_f32_happy_paths() {
     let lu_input = Tensor::F32(TypedTensor::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
     let lu = backend.lu(&lu_input).unwrap();
     assert_eq!(lu.len(), 4);
-    assert_eq!(lu[3].shape(), &[]);
+    assert_eq!(lu[3].shape(), &[] as &[usize]);
 
     let full = backend.full_piv_lu(&lu_input).unwrap();
     assert_eq!(full.len(), 5);
@@ -349,7 +349,7 @@ fn cpu_linalg_accepts_c32_happy_paths() {
 
     let lu = backend.lu(&a).unwrap();
     assert_eq!(lu.len(), 4);
-    assert_eq!(lu[3].shape(), &[]);
+    assert_eq!(lu[3].shape(), &[] as &[usize]);
 
     let full = backend.full_piv_lu(&a).unwrap();
     assert_eq!(full.len(), 5);

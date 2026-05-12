@@ -29,7 +29,7 @@ pub use structural::{
 pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T> {
     match &tensor.buffer {
         Buffer::Host(data) => {
-            let strides = col_major_strides(&tensor.shape);
+            let strides = crate::contiguous_strides(&tensor.shape, tensor.order);
             StridedView::new(data, &tensor.shape, &strides, 0).expect("contiguous host tensor")
         }
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),

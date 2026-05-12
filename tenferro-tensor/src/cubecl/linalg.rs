@@ -1013,6 +1013,7 @@ fn upload_host_tensor<T>(
 where
     T: CubeElement + Clone,
 {
+    let tensor = tensor.to_col_major()?;
     let (shape, data) = match tensor.buffer {
         crate::Buffer::Host(data) => (tensor.shape, data),
         crate::Buffer::Backend(_) | crate::Buffer::Cubecl(_) => {

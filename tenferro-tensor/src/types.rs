@@ -147,7 +147,7 @@ impl<T> CubeclBuffer<T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tensor::TypedTensor;
 ///
 /// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
@@ -158,6 +158,26 @@ pub struct TypedTensor<T> {
     pub buffer: Buffer<T>,
     pub shape: Vec<usize>,
     pub placement: Placement,
+    pub order: MemoryOrder,
+}
+
+/// Physical memory order for contiguous tensor storage.
+///
+/// The tensor shape is always logical. This tag records how logical indices
+/// are laid out in the owned contiguous buffer.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::MemoryOrder;
+///
+/// assert_eq!(MemoryOrder::ColMajor, MemoryOrder::ColMajor);
+/// assert_ne!(MemoryOrder::ColMajor, MemoryOrder::RowMajor);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MemoryOrder {
+    ColMajor,
+    RowMajor,
 }
 
 /// Runtime scalar dtype tag.
@@ -207,8 +227,14 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     fn dtype() -> DType;
 
-    /// Wrap typed data into a [`Tensor`] enum variant.
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
+    /// Wrap typed column-major data into a [`Tensor`] enum variant.
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Self::into_tensor_with_order(shape, data, MemoryOrder::ColMajor)
+    }
+
+    /// Wrap typed data with an explicit memory order into a [`Tensor`] enum
+    /// variant.
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor;
 
     /// Try to borrow the host data from a [`Tensor`].
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
@@ -247,8 +273,8 @@ impl TensorScalar for f64 {
         DType::F64
     }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F64(TypedTensor::from_vec(shape, data))
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor {
+        Tensor::F64(TypedTensor::from_vec_with_order(shape, data, order))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -273,8 +299,8 @@ impl TensorScalar for f32 {
         DType::F32
     }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F32(TypedTensor::from_vec(shape, data))
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor {
+        Tensor::F32(TypedTensor::from_vec_with_order(shape, data, order))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -299,8 +325,8 @@ impl TensorScalar for i64 {
         DType::I64
     }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::I64(TypedTensor::from_vec(shape, data))
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor {
+        Tensor::I64(TypedTensor::from_vec_with_order(shape, data, order))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -325,8 +351,8 @@ impl TensorScalar for Complex64 {
         DType::C64
     }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C64(TypedTensor::from_vec(shape, data))
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor {
+        Tensor::C64(TypedTensor::from_vec_with_order(shape, data, order))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -351,8 +377,8 @@ impl TensorScalar for Complex32 {
         DType::C32
     }
 
-    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C32(TypedTensor::from_vec(shape, data))
+    fn into_tensor_with_order(shape: Vec<usize>, data: Vec<Self>, order: MemoryOrder) -> Tensor {
+        Tensor::C32(TypedTensor::from_vec_with_order(shape, data, order))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -505,6 +531,90 @@ pub fn col_major_strides(shape: &[usize]) -> Vec<isize> {
     strides
 }
 
+/// Row-major strides derived from a shape.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::row_major_strides;
+///
+/// assert_eq!(row_major_strides(&[2, 3]), vec![3, 1]);
+/// ```
+pub fn row_major_strides(shape: &[usize]) -> Vec<isize> {
+    if shape.is_empty() {
+        return vec![];
+    }
+    let mut strides = vec![1isize; shape.len()];
+    for i in (0..shape.len() - 1).rev() {
+        strides[i] = strides[i + 1] * shape[i + 1] as isize;
+    }
+    strides
+}
+
+/// Contiguous strides derived from a shape and memory order.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{contiguous_strides, MemoryOrder};
+///
+/// assert_eq!(contiguous_strides(&[2, 3], MemoryOrder::ColMajor), vec![1, 2]);
+/// assert_eq!(contiguous_strides(&[2, 3], MemoryOrder::RowMajor), vec![3, 1]);
+/// ```
+pub fn contiguous_strides(shape: &[usize], order: MemoryOrder) -> Vec<isize> {
+    match order {
+        MemoryOrder::ColMajor => col_major_strides(shape),
+        MemoryOrder::RowMajor => row_major_strides(shape),
+    }
+}
+
+fn linear_offset_for_order(shape: &[usize], indices: &[usize], order: MemoryOrder) -> usize {
+    assert_eq!(indices.len(), shape.len());
+    let strides = contiguous_strides(shape, order);
+    let mut offset = 0usize;
+    for (axis, (&idx, &extent)) in indices.iter().zip(shape).enumerate() {
+        assert!(idx < extent, "index out of bounds");
+        offset += idx * strides[axis] as usize;
+    }
+    offset
+}
+
+fn flat_to_multi_for_order(flat: usize, shape: &[usize], order: MemoryOrder, out: &mut [usize]) {
+    assert_eq!(shape.len(), out.len());
+    if shape.is_empty() {
+        return;
+    }
+    let strides = contiguous_strides(shape, order);
+    let mut remaining = flat;
+    let mut axes: Vec<usize> = (0..shape.len()).collect();
+    axes.sort_by_key(|&axis| std::cmp::Reverse(strides[axis]));
+    for axis in axes {
+        let stride = strides[axis] as usize;
+        out[axis] = remaining / stride;
+        remaining %= stride;
+    }
+}
+
+fn reorder_contiguous<T: Clone>(
+    shape: &[usize],
+    data: &[T],
+    from: MemoryOrder,
+    to: MemoryOrder,
+) -> Vec<T> {
+    if from == to {
+        return data.to_vec();
+    }
+    let total: usize = shape.iter().product();
+    let mut out = Vec::with_capacity(total);
+    let mut idx = vec![0usize; shape.len()];
+    for dst_flat in 0..total {
+        flat_to_multi_for_order(dst_flat, shape, to, &mut idx);
+        let src = linear_offset_for_order(shape, &idx, from);
+        out.push(data[src].clone());
+    }
+    out
+}
+
 pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
@@ -529,6 +639,7 @@ impl<T: Clone + Zero> TypedTensor<T> {
             buffer: Buffer::Host(vec![T::zero(); n]),
             shape,
             placement: default_placement(),
+            order: MemoryOrder::ColMajor,
         }
     }
 }
@@ -550,6 +661,7 @@ impl<T: Clone + One + Zero> TypedTensor<T> {
             buffer: Buffer::Host(vec![T::one(); n]),
             shape,
             placement: default_placement(),
+            order: MemoryOrder::ColMajor,
         }
     }
 }
@@ -566,6 +678,52 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.get(&[1, 0]), &2.0);
     /// ```
     pub fn from_vec(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_vec_col_major(shape, data)
+    }
+
+    /// Create a tensor from a contiguous column-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn from_vec_col_major(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_vec_with_order(shape, data, MemoryOrder::ColMajor)
+    }
+
+    /// Create a tensor from a contiguous row-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn from_vec_row_major(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_vec_with_order(shape, data, MemoryOrder::RowMajor)
+    }
+
+    /// Create a tensor from a contiguous buffer with an explicit memory order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_with_order(
+    ///     vec![2],
+    ///     vec![1.0, 2.0],
+    ///     MemoryOrder::RowMajor,
+    /// );
+    /// assert_eq!(t.order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn from_vec_with_order(shape: Vec<usize>, data: Vec<T>, order: MemoryOrder) -> Self {
         let n: usize = shape.iter().product();
         assert_eq!(
             data.len(),
@@ -578,7 +736,160 @@ impl<T: Clone> TypedTensor<T> {
             buffer: Buffer::Host(data),
             shape,
             placement: default_placement(),
+            order,
         }
+    }
+
+    /// Return the physical memory order of this contiguous tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec(vec![1], vec![1.0]);
+    /// assert_eq!(t.order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn order(&self) -> MemoryOrder {
+        self.order
+    }
+
+    /// Consume this tensor and return its owned buffer if the memory order
+    /// matches `order`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2], vec![1.0, 2.0]);
+    /// let (shape, data) = t.try_into_vec_with_order(MemoryOrder::RowMajor).unwrap();
+    /// assert_eq!(shape, vec![2]);
+    /// assert_eq!(data, vec![1.0, 2.0]);
+    /// ```
+    pub fn try_into_vec_with_order(
+        self,
+        order: MemoryOrder,
+    ) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        if self.order != order {
+            return Err(crate::Error::InvalidConfig {
+                op: "try_into_vec_with_order",
+                message: format!(
+                    "memory order mismatch: tensor is {:?}, requested {:?}",
+                    self.order, order
+                ),
+            });
+        }
+        match self.buffer {
+            Buffer::Host(data) => Ok((self.shape, data)),
+            Buffer::Backend(_) => Err(crate::Error::BackendFailure {
+                op: "try_into_vec_with_order",
+                message: "backend buffers cannot be exported as host Vec".into(),
+            }),
+            #[cfg(feature = "cubecl")]
+            Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
+                op: "try_into_vec_with_order",
+                message: "GPU buffers cannot be exported as host Vec".into(),
+            }),
+        }
+    }
+
+    /// Consume this tensor and return its owned column-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]);
+    /// assert_eq!(t.try_into_vec_col_major().unwrap().1, vec![3.0]);
+    /// ```
+    pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        self.try_into_vec_with_order(MemoryOrder::ColMajor)
+    }
+
+    /// Consume this tensor and return its owned row-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![1], vec![3.0]);
+    /// assert_eq!(t.try_into_vec_row_major().unwrap().1, vec![3.0]);
+    /// ```
+    pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        self.try_into_vec_with_order(MemoryOrder::RowMajor)
+    }
+
+    /// Return a tensor with the requested contiguous memory order.
+    ///
+    /// This clones the tensor when the order already matches and allocates a
+    /// reordered host buffer when conversion is required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.to_order(MemoryOrder::ColMajor).unwrap().order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn to_order(&self, order: MemoryOrder) -> crate::Result<Self> {
+        if self.order == order {
+            return Ok(self.clone());
+        }
+        let data = match &self.buffer {
+            Buffer::Host(data) => reorder_contiguous(&self.shape, data, self.order, order),
+            Buffer::Backend(_) => {
+                return Err(crate::Error::BackendFailure {
+                    op: "to_order",
+                    message: "backend buffers cannot be reordered on host".into(),
+                })
+            }
+            #[cfg(feature = "cubecl")]
+            Buffer::Cubecl(_) => {
+                return Err(crate::Error::BackendFailure {
+                    op: "to_order",
+                    message: "GPU buffers cannot be reordered on host".into(),
+                })
+            }
+        };
+        Ok(Self {
+            buffer: Buffer::Host(data),
+            shape: self.shape.clone(),
+            placement: self.placement.clone(),
+            order,
+        })
+    }
+
+    /// Return a column-major tensor, allocating only when conversion is
+    /// required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.to_col_major().unwrap().order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn to_col_major(&self) -> crate::Result<Self> {
+        self.to_order(MemoryOrder::ColMajor)
+    }
+
+    /// Return a row-major tensor, allocating only when conversion is required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, TypedTensor};
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.to_row_major().unwrap().order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn to_row_major(&self) -> crate::Result<Self> {
+        self.to_order(MemoryOrder::RowMajor)
     }
 
     /// Number of elements in the tensor.
@@ -672,15 +983,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.linear_offset(&[1, 2]), 5);
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> usize {
-        assert_eq!(indices.len(), self.shape.len());
-        let mut offset = 0usize;
-        let mut stride = 1usize;
-        for (i, &idx) in indices.iter().enumerate() {
-            assert!(idx < self.shape[i], "index out of bounds");
-            offset += idx * stride;
-            stride *= self.shape[i];
-        }
-        offset
+        linear_offset_for_order(&self.shape, indices, self.order)
     }
 
     /// Borrow a single element by multi-index.
@@ -762,6 +1065,52 @@ impl Tensor {
         T::into_tensor(shape, data)
     }
 
+    /// Create a tensor from a contiguous column-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(t.order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        T::into_tensor_with_order(shape, data, MemoryOrder::ColMajor)
+    }
+
+    /// Create a tensor from a contiguous row-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_row_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(t.order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        T::into_tensor_with_order(shape, data, MemoryOrder::RowMajor)
+    }
+
+    /// Create a tensor from a contiguous buffer with an explicit memory order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_with_order(vec![1], vec![4.0_f64], MemoryOrder::RowMajor);
+    /// assert_eq!(t.order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn from_vec_with_order<T: TensorScalar>(
+        shape: Vec<usize>,
+        data: Vec<T>,
+        order: MemoryOrder,
+    ) -> Self {
+        T::into_tensor_with_order(shape, data, order)
+    }
+
     /// Tensor shape.
     ///
     /// # Examples
@@ -802,6 +1151,26 @@ impl Tensor {
         }
     }
 
+    /// Physical memory order of the underlying contiguous buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec(vec![1], vec![1.0_f64]);
+    /// assert_eq!(t.order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn order(&self) -> MemoryOrder {
+        match self {
+            Tensor::F32(t) => t.order(),
+            Tensor::F64(t) => t.order(),
+            Tensor::I64(t) => t.order(),
+            Tensor::C32(t) => t.order(),
+            Tensor::C64(t) => t.order(),
+        }
+    }
+
     /// Try to borrow the host data as a typed slice.
     ///
     /// Returns `None` if the tensor dtype does not match `T`.
@@ -817,6 +1186,112 @@ impl Tensor {
     /// ```
     pub fn as_slice<T: TensorScalar>(&self) -> Option<&[T]> {
         T::try_as_slice(self)
+    }
+
+    /// Consume this tensor and return its owned column-major buffer when the
+    /// dtype and memory order match.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// assert_eq!(t.try_into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
+    /// ```
+    pub fn try_into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        self.try_into_vec_with_order::<T>(MemoryOrder::ColMajor)
+    }
+
+    /// Consume this tensor and return its owned row-major buffer when the
+    /// dtype and memory order match.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_row_major(vec![1], vec![2.0_f64]);
+    /// assert_eq!(t.try_into_vec_row_major::<f64>().unwrap().1, vec![2.0]);
+    /// ```
+    pub fn try_into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        self.try_into_vec_with_order::<T>(MemoryOrder::RowMajor)
+    }
+
+    /// Consume this tensor and return its owned buffer when dtype and memory
+    /// order match.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// assert_eq!(
+    ///     t.try_into_vec_with_order::<f64>(MemoryOrder::ColMajor).unwrap().1,
+    ///     vec![2.0],
+    /// );
+    /// ```
+    pub fn try_into_vec_with_order<T: TensorScalar>(
+        self,
+        order: MemoryOrder,
+    ) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let actual = self.dtype();
+        let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
+            op: "try_into_vec_with_order",
+            lhs: T::dtype(),
+            rhs: actual,
+        })?;
+        typed.try_into_vec_with_order(order)
+    }
+
+    /// Return a tensor with the requested contiguous memory order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_row_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(t.to_col_major().unwrap().order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn to_order(&self, order: MemoryOrder) -> crate::Result<Self> {
+        match self {
+            Tensor::F32(t) => Ok(Tensor::F32(t.to_order(order)?)),
+            Tensor::F64(t) => Ok(Tensor::F64(t.to_order(order)?)),
+            Tensor::I64(t) => Ok(Tensor::I64(t.to_order(order)?)),
+            Tensor::C32(t) => Ok(Tensor::C32(t.to_order(order)?)),
+            Tensor::C64(t) => Ok(Tensor::C64(t.to_order(order)?)),
+        }
+    }
+
+    /// Return a column-major tensor, allocating only when conversion is
+    /// required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_row_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(t.to_col_major().unwrap().order(), MemoryOrder::ColMajor);
+    /// ```
+    pub fn to_col_major(&self) -> crate::Result<Self> {
+        self.to_order(MemoryOrder::ColMajor)
+    }
+
+    /// Return a row-major tensor, allocating only when conversion is required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(t.to_row_major().unwrap().order(), MemoryOrder::RowMajor);
+    /// ```
+    pub fn to_row_major(&self) -> crate::Result<Self> {
+        self.to_order(MemoryOrder::RowMajor)
     }
 
     /// Singular value decomposition: `A = U diag(S) Vt`.
