@@ -56,7 +56,6 @@ cubecl = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96", fea
 cubecl-cuda = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
 cubecl-runtime = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
 tenferro-cubecl = { path = "tenferro-cubecl" }
-ndarray = "0.17.2"
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "8306196" }

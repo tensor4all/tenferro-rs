@@ -261,8 +261,12 @@ fn analyse_gemm<T>(
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&lhs.shape, lhs.order).into_iter().collect();
-    let rhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&rhs.shape, rhs.order).into_iter().collect();
+    let lhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&lhs.shape, lhs.order)
+        .into_iter()
+        .collect();
+    let rhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&rhs.shape, rhs.order)
+        .into_iter()
+        .collect();
 
     let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims

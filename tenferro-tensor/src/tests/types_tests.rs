@@ -85,10 +85,8 @@ fn tensor_owned_export_is_zero_copy_only_for_matching_order() {
 
 #[test]
 fn row_major_typed_tensor_uses_logical_indices() {
-    let tensor = TypedTensor::from_vec_row_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    let tensor =
+        TypedTensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     assert_eq!(*tensor.get(&[0, 2]), 3.0);
     assert_eq!(*tensor.get(&[1, 0]), 4.0);
@@ -96,10 +94,7 @@ fn row_major_typed_tensor_uses_logical_indices() {
 
 #[test]
 fn row_major_to_col_major_reorders_owned_buffer() {
-    let tensor = Tensor::from_vec_row_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    let tensor = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let converted = tensor.to_col_major().unwrap();
 

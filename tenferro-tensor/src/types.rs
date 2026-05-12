@@ -1199,9 +1199,7 @@ impl Tensor {
     /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// assert_eq!(t.try_into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
     /// ```
-    pub fn try_into_vec_col_major<T: TensorScalar>(
-        self,
-    ) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    pub fn try_into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         self.try_into_vec_with_order::<T>(MemoryOrder::ColMajor)
     }
 
@@ -1216,9 +1214,7 @@ impl Tensor {
     /// let t = Tensor::from_vec_row_major(vec![1], vec![2.0_f64]);
     /// assert_eq!(t.try_into_vec_row_major::<f64>().unwrap().1, vec![2.0]);
     /// ```
-    pub fn try_into_vec_row_major<T: TensorScalar>(
-        self,
-    ) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    pub fn try_into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         self.try_into_vec_with_order::<T>(MemoryOrder::RowMajor)
     }
 

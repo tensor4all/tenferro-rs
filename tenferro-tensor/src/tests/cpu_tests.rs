@@ -188,14 +188,8 @@ fn matrix_f64_from_tensor(t: &Tensor, rows: usize, cols: usize) -> Vec<f64> {
 
 #[test]
 fn row_major_inputs_preserve_logical_elementwise_semantics() {
-    let lhs = Tensor::from_vec_row_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
-    let rhs = Tensor::from_vec_row_major(
-        vec![2, 3],
-        vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
-    );
+    let lhs = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = Tensor::from_vec_row_major(vec![2, 3], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0]);
 
     let out = add(&lhs, &rhs).unwrap();
 
@@ -207,14 +201,8 @@ fn row_major_inputs_preserve_logical_elementwise_semantics() {
 #[test]
 fn row_major_inputs_preserve_logical_dot_general_semantics() {
     let mut backend = CpuBackend::with_threads(1);
-    let lhs = Tensor::from_vec_row_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
-    let rhs = Tensor::from_vec_row_major(
-        vec![3, 2],
-        vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
-    );
+    let lhs = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = Tensor::from_vec_row_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
 
     let out = backend
         .dot_general(
@@ -235,10 +223,7 @@ fn row_major_inputs_preserve_logical_dot_general_semantics() {
 
 #[test]
 fn row_major_input_preserves_logical_broadcast_semantics() {
-    let input = Tensor::from_vec_row_major(
-        vec![2, 3],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    let input = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let out = broadcast_in_dim(&input, &[2, 3, 2], &[0, 1]).unwrap();
     let row_major = out.to_row_major().unwrap();
