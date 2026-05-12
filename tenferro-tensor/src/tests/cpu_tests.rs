@@ -233,6 +233,57 @@ fn row_major_inputs_preserve_logical_dot_general_semantics() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[58.0, 139.0, 64.0, 154.0]);
 }
 
+#[test]
+fn row_major_input_preserves_logical_broadcast_semantics() {
+    let input = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+
+    let out = broadcast_in_dim(&input, &[2, 3, 2], &[0, 1]).unwrap();
+    let row_major = out.to_row_major().unwrap();
+
+    assert_eq!(out.shape(), &[2, 3, 2]);
+    assert_eq!(
+        row_major.as_slice::<f64>().unwrap(),
+        &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0]
+    );
+}
+
+#[test]
+fn row_major_index_tensor_preserves_logical_gather_indices() {
+    let operand = Tensor::from_vec(
+        vec![3, 3],
+        vec![1.0_f64, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0],
+    );
+    let start_indices = Tensor::from_vec_row_major(vec![2, 2], vec![0_i64, 2, 1, 0]);
+    let config = GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0, 1],
+        start_index_map: vec![0, 1],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 1],
+    };
+
+    let out = gather(&operand, &start_indices, &config).unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+}
+
+#[test]
+fn row_major_linalg_input_preserves_logical_solve_semantics() {
+    let mut backend = CpuBackend::with_threads(1);
+    let a = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let b = Tensor::from_vec(vec![2], vec![5.0_f64, 11.0]);
+
+    let out = backend.solve(&a, &b).unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_f64_close_tol(get_f64(&out, &[0]), 1.0, 1.0e-10);
+    assert_f64_close_tol(get_f64(&out, &[1]), 2.0, 1.0e-10);
+}
+
 fn batch_vector_f64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec<f64> {
     let mut out = vec![0.0; len];
     for i in 0..len {

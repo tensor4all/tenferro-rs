@@ -436,9 +436,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F32),
             #[cfg(feature = "cpu-blas")]
@@ -468,9 +469,11 @@ impl TensorBackend for CpuBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> crate::Result<Tensor> {
+        let a = a.to_col_major()?;
+        let b = b.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match (a, b) {
+        self.install_with_pool(|buffers| match (&a, &b) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
                 ctx.as_ref(),
@@ -578,9 +581,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
@@ -614,9 +618,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
@@ -666,7 +671,9 @@ impl TensorBackend for CpuBackend {
 
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        let result = self.install_with_pool(|buffers| match (a, &rhs) {
+        let a = a.to_col_major()?;
+        let rhs = rhs.to_col_major()?;
+        let result = self.install_with_pool(|buffers| match (&a, &rhs) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F32(a), Tensor::F32(b)) => {
                 linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F32)
@@ -720,9 +727,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::svd(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
@@ -752,9 +760,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::qr(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
@@ -788,9 +797,10 @@ impl TensorBackend for CpuBackend {
     }
 
     fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match input {
+        self.install_with_pool(|buffers| match &input {
             #[cfg(feature = "cpu-faer")]
             Tensor::F32(t) => linalg::eigh(ctx.as_ref(), buffers, t)
                 .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
@@ -826,16 +836,17 @@ impl TensorBackend for CpuBackend {
         ) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
+        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
         self.install_with_pool(|buffers| {
             #[cfg(feature = "cpu-faer")]
             {
-                linalg::eig(ctx.as_ref(), buffers, input)
+                linalg::eig(ctx.as_ref(), buffers, &input)
             }
             #[cfg(feature = "cpu-blas")]
             {
-                linalg::eig(buffers, input)
+                linalg::eig(buffers, &input)
             }
         })
     }
