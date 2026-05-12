@@ -231,6 +231,7 @@ pub fn typed_reshape<T: Clone>(
         buffer: tensor.buffer.clone(),
         shape: shape.to_vec(),
         placement: tensor.placement.clone(),
+        order: tensor.order,
     })
 }
 

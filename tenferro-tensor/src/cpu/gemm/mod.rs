@@ -412,6 +412,7 @@ where
             buffer: Buffer::Host(vec![T::zero(); out_n]),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
+            order: crate::MemoryOrder::ColMajor,
         });
     }
 
@@ -461,6 +462,7 @@ where
         buffer: Buffer::Host(out_data),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
+        order: crate::MemoryOrder::ColMajor,
     })
 }
 
@@ -521,6 +523,7 @@ where
             buffer: Buffer::Host(vec![T::zero(); out_n]),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
+            order: crate::MemoryOrder::ColMajor,
         }));
     }
 
@@ -595,6 +598,7 @@ where
         buffer: Buffer::Host(out),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
+        order: crate::MemoryOrder::ColMajor,
     }))
 }
 

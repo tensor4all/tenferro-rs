@@ -4,7 +4,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, Tensor, TensorScalar, TypedTensor,
+    MemoryKind, MemoryOrder, Placement, Tensor, TensorScalar, TypedTensor,
 };
 use crate::Error;
 
@@ -54,6 +54,36 @@ fn typed_tensor_rank_zero_access_and_mutation_work() {
 }
 
 #[test]
+fn typed_tensor_explicit_memory_order_constructors_set_order() {
+    let col = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let row = TypedTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+
+    assert_eq!(col.order(), MemoryOrder::ColMajor);
+    assert_eq!(row.order(), MemoryOrder::RowMajor);
+    assert_eq!(
+        TypedTensor::from_vec(vec![1], vec![1.0_f64]).order(),
+        MemoryOrder::ColMajor
+    );
+}
+
+#[test]
+fn tensor_owned_export_is_zero_copy_only_for_matching_order() {
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let ptr = data.as_ptr();
+    let tensor = Tensor::from_vec_row_major(vec![2, 2], data);
+
+    let (shape, out) = tensor.try_into_vec_row_major::<f64>().unwrap();
+
+    assert_eq!(shape, vec![2, 2]);
+    assert_eq!(out.as_ptr(), ptr);
+
+    let mismatch = Tensor::from_vec_row_major(vec![1], vec![1.0_f64])
+        .try_into_vec_col_major::<f64>()
+        .unwrap_err();
+    assert!(mismatch.to_string().contains("memory order"));
+}
+
+#[test]
 fn typed_tensor_panics_cover_length_and_indexing_errors() {
     let mismatched = catch_unwind(|| TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0]));
     assert!(mismatched.is_err());
@@ -79,6 +109,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         buffer: Buffer::Backend(BufferHandle::<f64>::new(7)),
         shape: vec![1],
         placement: placement.clone(),
+        order: MemoryOrder::ColMajor,
     };
     assert_eq!(
         tensor.placement.resident_device.as_ref().unwrap().ordinal,
@@ -92,6 +123,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         buffer: Buffer::Backend(BufferHandle::<f64>::new(8)),
         shape: vec![1],
         placement,
+        order: MemoryOrder::ColMajor,
     };
     let host_data_mut = catch_unwind(AssertUnwindSafe(|| {
         let _ = mutable_tensor.host_data_mut();

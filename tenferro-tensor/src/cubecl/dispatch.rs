@@ -141,6 +141,7 @@ pub(crate) fn typed_from_cubecl<T>(
                 ordinal: device_ordinal,
             }),
         },
+        order: crate::MemoryOrder::ColMajor,
     }
 }
 

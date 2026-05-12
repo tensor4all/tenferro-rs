@@ -110,6 +110,7 @@ fn upload_typed<T: CubeElement + Clone>(
                 ordinal: device_ordinal,
             }),
         },
+        order: typed.order,
     })
 }
 

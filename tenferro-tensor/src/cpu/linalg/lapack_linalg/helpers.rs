@@ -39,6 +39,7 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
         buffer: crate::Buffer::Host(data),
         shape,
         placement: template.placement.clone(),
+        order: crate::MemoryOrder::ColMajor,
     }
 }
 

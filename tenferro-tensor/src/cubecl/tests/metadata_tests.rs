@@ -59,5 +59,6 @@ fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
                 ordinal: 0,
             }),
         },
+        order: crate::MemoryOrder::ColMajor,
     }
 }
