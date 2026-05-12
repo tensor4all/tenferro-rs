@@ -56,18 +56,28 @@ the `cuda` feature. Internally, the `cubecl` feature enables
 cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
 `tenferro-cubecl` crate.
 
-Implemented GPU coverage is broad, with remaining op/dtype gaps:
+Implemented GPU coverage is broad. The user-facing
+[`Devices and GPU`](../guides/devices-and-gpu.md) guide contains the current
+CUDA operation and dtype matrix. The high-level categories are:
 
 - explicit upload/download and device pointer bridge,
-- broad elementwise coverage on real dtypes and selected complex operations,
-- reductions including sum/product for real and complex and min/max for real,
+- `F32`/`F64` elementwise arithmetic, comparison, selection, clamp, and
+  analytic unary operations, plus `C32`/`C64` add/mul/div/neg/conj,
+- reductions including sum/product for all tensor dtypes and min/max for
+  `F32`/`F64`,
 - structural operations including transpose, reshape, broadcast, reverse,
-  concatenate, diagonal extraction/embedding, and triangular masks,
-- indexing operations where dtype support exists,
-- selected cuTENSOR/cuBLAS contraction paths,
-- selected cuSOLVER/cuBLAS linalg paths.
+  concatenate, diagonal extraction/embedding, and triangular masks for all
+  tensor dtypes,
+- slice/pad/concatenate/reverse for all tensor dtypes and
+  gather/scatter/dynamic_slice for floating and complex data with numeric
+  index tensors,
+- cuTENSOR-backed contraction paths for real and complex floating dtypes,
+- cuSOLVER/cuBLAS linalg paths for real and complex floating dtypes.
 
 Unsupported GPU operations and unsupported dtypes return `BackendFailure`.
+Known CUDA backend limitations are operation-specific: `eig`,
+`full_piv_lu`, `full_piv_lu_solve`, `dynamic_update_slice`, `I64`
+numeric/linalg gaps, and selected complex analytic or ordering operations.
 `eig` is not provided by cuSOLVER and permanently returns `BackendFailure` on
 CubeCL. ROCm is only a feature stub.
 
