@@ -52,6 +52,17 @@ pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{DType, MemoryOrder, Tensor, TensorBackend, TensorScalar, TypedTensor};
 pub use traced::TracedTensor;
 
+#[cfg(feature = "cubecl")]
+/// CUDA GPU backend facade.
+///
+/// This module exposes the public CUDA names for tenferro's GPU backend.
+/// See `tenferro/examples/cuda_quickstart.rs` for a checked end-to-end example.
+pub mod cuda {
+    pub use tenferro_tensor::cubecl::{
+        download_tensor, gpu_available, upload_tensor, CubeclBackend as CudaBackend,
+    };
+}
+
 /// Matrix multiplication helper for rank-2 traced tensors.
 ///
 /// This contracts the last dimension of `a` with the first dimension of `b`.

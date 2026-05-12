@@ -10,29 +10,34 @@ For contributors, internal crate APIs are also available in the
 
 ## Workspace Crates
 
-- [tenferro](../rustdoc/tenferro/index.html): traced frontend, execution engine, public
-  einsum API, public linalg API, and AD entry points (VJP/JVP/HVP)
-- [tenferro-tensor](../rustdoc/tenferro_tensor/index.html): concrete dense `Tensor` /
-  `TypedTensor` values, backend traits, CPU backend, and GPU backend stubs
-- [tenferro-einsum](../rustdoc/tenferro_einsum/index.html): subscripts, contraction trees,
-  contraction optimization, and fragment-building helpers
-- [tenferro-ops](../rustdoc/tenferro_ops/index.html): graph op vocabulary and AD rule
-  implementations for `StdTensorOp`
-- [tenferro-algebra](../rustdoc/tenferro_algebra/index.html): semiring and algebra traits
-- [tenferro-device](../rustdoc/tenferro_device/index.html): shared device and error types
+- [tenferro](../rustdoc/tenferro/index.html): user-facing facade for eager
+  tensors, traced tensors, einsum, linalg, AD, and backend selection
+- [tenferro-tensor](../rustdoc/tenferro_tensor/index.html): dense runtime
+  tensors, backend traits, CPU backend, and internal CUDA backend integration
+- [tenferro-einsum](../rustdoc/tenferro_einsum/index.html): subscripts,
+  contraction planning, and lowering helpers
+- [tenferro-ops](../rustdoc/tenferro_ops/index.html): graph op vocabulary and
+  AD rule implementations
+- [tenferro-device](../rustdoc/tenferro_device/index.html): shared device and
+  error infrastructure
+- [tenferro-cubecl](../rustdoc/tenferro_cubecl/index.html): internal CubeCL
+  kernel crate used by the CUDA backend
+- [tenferro-extension-macros](../rustdoc/tenferro_extension_macros/index.html):
+  procedural macros for extension-op registration
 
 ## Architecture Summary
 
 ```text
 tenferro-device
     |
-tenferro-algebra
-    |
 tenferro-tensor   -- dense runtime tensors, TensorBackend, CpuBackend
     |
-tenferro-ops      -- StdTensorOp / SemiringOp, PrimitiveOp rules
+tenferro-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
     |
 tenferro-einsum   -- subscripts + contraction planning + fragment builder
     |
 tenferro          -- Engine, TracedTensor, lowering, execution, public APIs
+
+tenferro-cubecl              -- internal CUDA kernel definitions
+tenferro-extension-macros    -- extension-op registration macros
 ```

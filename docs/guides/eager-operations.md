@@ -202,4 +202,4 @@ assert!(y.grad().is_none());
 | Exploratory computation | Eager |
 | Need scalar-loss reverse-mode gradients | Eager (`EagerTensor::backward()`) |
 | Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `Engine`) |
-| GPU execution (future) | Lazy |
+| CUDA execution for supported operations | Lazy traced or direct backend calls with explicit upload/download |

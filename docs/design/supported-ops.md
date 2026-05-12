@@ -9,7 +9,9 @@ explicitly. The public user docs still focus on the `tenferro` facade crate.
 ## `tenferro-tensor`
 
 `tenferro-tensor` owns dense tensor storage, dtype dispatch, backend traits, CPU
-execution, and the optional CubeCL GPU backend.
+execution, and the internal CUDA backend integration. Public user docs should
+call this the CUDA backend through the `tenferro::cuda` facade; this
+implementation-facing page also names the CubeCL layer that backs it.
 
 ### Tensor Values
 
@@ -46,10 +48,13 @@ enabled:
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
 dense linalg are implemented on CPU for the supported dtype subset of each op.
 
-### CubeCL/CUDA Status
+### CUDA/CubeCL Status
 
-The `cubecl` feature enables `cubecl::CubeclBackend`, backed by CubeCL/CubeCL-CUDA
-and runtime-loaded cuTENSOR, cuSOLVER, and cuBLAS.
+The public facade exposes this backend as `tenferro::cuda::CudaBackend` behind
+the `cuda` feature. Internally, the `cubecl` feature enables
+`cubecl::CubeclBackend`, backed by CubeCL/CubeCL-CUDA and runtime-loaded
+cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
+`tenferro-cubecl` crate.
 
 Implemented GPU coverage is partial:
 
@@ -114,7 +119,7 @@ Implemented public surfaces include:
   paths.
 - Compiled execution through `ExecProgram` / `eval_exec_ir`.
 
-The facade is CPU-first. It can evaluate through `CubeclBackend` when the
+The facade is CPU-first. It can evaluate through the CUDA backend when the
 program uses GPU-supported operations and tensors are placed explicitly by the
 execution pipeline or caller. Unsupported GPU ops return errors rather than
 silently falling back to CPU.

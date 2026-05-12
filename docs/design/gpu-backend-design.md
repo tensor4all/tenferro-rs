@@ -1,8 +1,10 @@
 # GPU Backend Design
 
-This document describes the current GPU backend in tenferro-rs. The active
-implementation is the CubeCL backend in `tenferro-tensor/src/cubecl/`, gated by
-the `cubecl` feature. It targets NVIDIA CUDA devices through CubeCL and
+This document is developer-facing. Public user docs should describe the GPU
+surface as the CUDA backend, exposed through `tenferro::cuda::{CudaBackend,
+upload_tensor, download_tensor}`. The active implementation behind that public
+surface is the CubeCL backend in `tenferro-tensor/src/cubecl/`, gated by the
+internal `cubecl` feature. It targets NVIDIA CUDA devices through CubeCL and
 CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS.
 
 GPU support is partial and experimental. CUDA allocation, explicit CPU/GPU
@@ -43,17 +45,18 @@ tenferro-tensor/src/cubecl/
     tests/                 ignored GPU tests
 ```
 
-The backend type is `CubeclBackend`. There are no separate in-tree
-`CudaBackend` and `RocmBackend` implementations. CUDA is selected by enabling
-the `cubecl` feature, which depends on the workspace-pinned CubeCL fork and the
+The internal backend type is `CubeclBackend`; the public facade re-exports it as
+`tenferro::cuda::CudaBackend`. There are no separate in-tree `CudaBackend` and
+`RocmBackend` implementations. CUDA is selected internally by enabling the
+`cubecl` feature, which depends on the workspace-pinned CubeCL fork and the
 CubeCL CUDA runtime.
 
 ## Kernel Ownership
 
-Static CubeCL kernel definitions live in `tenferro-cubecl`. The tensor backend
-crate must not keep duplicate static kernels once they have been moved. This
-keeps copied/adapted CubeK-derived code, tenferro-specific kernel definitions,
-and third-party notices in one crate.
+Static CubeCL kernel definitions live in the internal `tenferro-cubecl` kernel
+crate. The tensor backend crate must not keep duplicate static kernels once they
+have been moved. This keeps copied/adapted CubeK-derived code,
+tenferro-specific kernel definitions, and third-party notices in one crate.
 
 `tenferro-tensor/src/cubecl/` still owns tensor values, device placement,
 allocation, upload/download, CUDA library FFI, TensorBackend dispatch, and
@@ -169,10 +172,10 @@ API boundaries. Callers upload tensors before GPU backend operations and
 download results explicitly when host access is needed.
 
 ```rust,ignore
-use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro::cuda::{download_tensor, upload_tensor, CudaBackend};
+use tenferro::{Tensor, TensorBackend};
 
-let mut backend = CubeclBackend::new(0)?;
+let mut backend = CudaBackend::new(0)?;
 let a = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
 let b = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
 
@@ -197,8 +200,9 @@ Error behavior:
 
 ## Implemented Coverage
 
-The CubeCL backend implements enough of `TensorBackend` to run a growing subset
-of compiled tensor programs on CUDA. Coverage includes:
+The public CUDA backend implements enough of `TensorBackend` to run a growing
+subset of compiled tensor programs on CUDA. Internally, that coverage is
+provided by CubeCL kernels and CUDA library calls:
 
 | Category | Current status |
 | --- | --- |
@@ -211,7 +215,7 @@ of compiled tensor programs on CUDA. Coverage includes:
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, and triangular solve where supported |
 
 General eigendecomposition (`eig`, LAPACK `dgeev` style) is not provided by
-cuSOLVER. `CubeclBackend::eig` returns `BackendFailure`; users must explicitly
+cuSOLVER. The CUDA backend returns `BackendFailure`; users must explicitly
 download to CPU and call the CPU backend.
 
 Complex CubeCL support is intentionally not expanded in this batch because the

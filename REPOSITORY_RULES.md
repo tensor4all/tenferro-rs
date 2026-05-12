@@ -72,6 +72,25 @@
 - Do NOT expose internal jargon (Fragment, StableHLO, ExecOp, ValRef, etc.) in user-facing pages.
 - Provide PyTorch/JAX equivalents when introducing tenferro concepts.
 
+### User-Facing Code Snippet Consistency
+
+- Non-trivial user-facing code snippets must have an executable source of truth:
+  prefer including a checked example, test, or doctest instead of copying code
+  into Markdown by hand.
+- If a Markdown page must contain a copied snippet, add an automated sync or
+  extraction check that fails when the snippet drifts from the executable
+  source.
+- Guide code that demonstrates a workflow should compile in CI. When runtime
+  execution requires special hardware or external libraries, CI must still
+  compile-check the example with the required feature flags, and the guide must
+  document the command that runs the example on a correctly configured machine.
+- CPU and GPU workflow examples should include meaningful assertions on shapes,
+  dtypes, or values whenever the result is deterministic. Avoid examples that
+  only print output unless the output itself is the documented behavior.
+- GPU quickstart examples must use the same executable source as the guide,
+  explicitly show upload/download boundaries, and assert downloaded CPU results
+  for at least one supported operation.
+
 ### Doc Examples
 
 - Doc examples (`/// # Examples`) must NOT use `ignore` or `no_run` attributes.

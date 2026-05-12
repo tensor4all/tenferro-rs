@@ -1,20 +1,22 @@
 # Core Concepts
 
-## Three tensor layers
+## Four tensor layers
 
-tenferro provides three tensor types for different use cases:
+tenferro provides four tensor types for different use cases:
 
 | Layer | Type | Use case | Requires Engine? |
 |-------|------|----------|-----------------|
-| `TypedTensor<T>` | Statically typed | Direct computation, compile-time dtype safety | No (needs `CpuBackend`) |
-| `Tensor` | Dynamic dtype enum | Mixed-dtype workflows, FFI | No (needs `CpuBackend`) |
-| `TracedTensor` | Lazy graph handle | Automatic differentiation, graph optimization | Yes |
+| `TypedTensor<T>` | Statically typed | Direct computation, compile-time dtype safety | No (needs a backend) |
+| `Tensor` | Dynamic dtype enum | Mixed-dtype workflows, FFI | No (needs a backend) |
+| `EagerTensor` | Eager AD handle | PyTorch-style scalar-loss backward | No (needs `EagerContext`) |
+| `TracedTensor` | Lazy graph handle | Transform AD, graph reuse, graph optimization | Yes |
 
 Choose the simplest layer that meets your needs:
 
+- **Compile-time dtype safety** -> `TypedTensor<T>` + a backend such as `CpuBackend`
 - **No AD needed** -> `Tensor` + `CpuBackend`
-- **AD (grad/vjp/jvp) needed** -> `TracedTensor` + `Engine`
-- **Compile-time dtype safety** -> `TypedTensor<T>` + `CpuBackend`
+- **PyTorch-style scalar-loss backward** -> `EagerTensor` + `EagerContext`
+- **Transform AD or graph reuse** -> `TracedTensor` + `Engine`
 
 ## TypedTensor<T>: statically typed storage
 
@@ -23,7 +25,7 @@ Use it when you want dtype safety in Rust code and you do not want runtime
 dtype dispatch.
 
 ```rust
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro::{Tensor, TypedTensor};
 
 // Column-major buffer: columns are [1, 2], [3, 4], [5, 6].
 let typed = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -41,7 +43,7 @@ operation takes a backend context (`&mut impl TensorBackend`) and returns
 results immediately.
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor, TensorBackend};
 
 let mut ctx = CpuBackend::new();
 
@@ -57,6 +59,12 @@ assert_eq!(s.shape(), &[2]); // min(2, 3) singular values
 ```
 
 If you have used NumPy or PyTorch in eager mode, this is the familiar pattern.
+
+## EagerTensor: PyTorch-style scalar-loss backward
+
+`EagerTensor` wraps immediate tensor values in an `EagerContext` that records
+operations for scalar-loss reverse-mode autodiff. Use it when you want the
+familiar PyTorch pattern of computing a loss and calling `.backward()` on it.
 
 ## TracedTensor: lazy computation with AD
 
@@ -92,7 +100,7 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 | Library | Mental model | tenferro equivalent |
 |---|---|---|
 | NumPy | Eager, no AD | `Tensor` + `CpuBackend` |
-| PyTorch (eager) | Eager with autograd | `TracedTensor` + `Engine` |
+| PyTorch (eager) | Eager with autograd | `EagerTensor` + `EagerContext` |
 | JAX (`jit`) | Staged/lazy computation | `TracedTensor` + `Engine` |
 
 ## Minimal examples
@@ -100,7 +108,7 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 ### Eager (no AD)
 
 ```rust
-use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
+use tenferro::{CpuBackend, Tensor, TensorBackend};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);

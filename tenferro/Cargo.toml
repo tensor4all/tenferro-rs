@@ -10,6 +10,10 @@ description = "AD-aware ergonomic tensor wrapper on top of tenferro APIs."
 [lib]
 test = false
 
+[[example]]
+name = "cuda_quickstart"
+required-features = ["cuda"]
+
 [features]
 default = ["cpu-faer"]
 cpu-faer = [
@@ -34,6 +38,7 @@ cubecl = [
     "tenferro-ops/cubecl",
     "tenferro-tensor/cubecl",
 ]
+cuda = ["cubecl"]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }

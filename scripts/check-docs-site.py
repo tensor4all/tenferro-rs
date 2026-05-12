@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import re
+import subprocess
 import sys
 import tomllib
 from html.parser import HTMLParser
@@ -65,6 +66,20 @@ def html_links(path: pathlib.Path) -> set[str]:
 def main() -> int:
     args = parse_args()
     root = pathlib.Path(args.root_dir).resolve()
+    snippet_check = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "check-doc-snippets.py"),
+            "--root-dir",
+            str(root),
+            "--check",
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL if args.quiet else None,
+    )
+    if snippet_check.returncode != 0:
+        return snippet_check.returncode
+
     doc_root = pathlib.Path(args.doc_root) if args.doc_root else root / "target" / "doc"
     api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api_index.md"
     site_index = pathlib.Path(args.site_index) if args.site_index else root / "target" / "docs-site" / "api" / "index.html"

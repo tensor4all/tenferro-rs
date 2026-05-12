@@ -1,33 +1,52 @@
 # tenferro
 
-tenferro-rs is a dense tensor computation workspace in Rust, inspired by
-PyTorch and JAX. It provides:
+tenferro is a dense tensor computation library for Rust users who want
+PyTorch- and JAX-style tensor workflows with explicit Rust ownership and
+backend control.
 
-- **Eager execution** — `Tensor`, `TypedTensor`, `EagerTensor`, and
-  `EagerContext` with `CpuBackend` for immediate computation and
-  scalar-loss reverse-mode via `backward()`
-- **Lazy traced execution** — `TracedTensor` with graph optimization and
-  transform-oriented automatic differentiation (`grad`, `vjp`, `jvp`, HVP)
-- **Einsum** — with automatic contraction-tree planning
-- **Linear algebra** — SVD, QR, Cholesky, eigh, LU, solve
+It supports:
 
-CPU execution is fully supported; GPU support is planned.
+- eager CPU tensor operations with `Tensor`, `TypedTensor`, and `CpuBackend`,
+- eager scalar-loss reverse-mode AD with `EagerTensor`,
+- lazy traced execution with `TracedTensor` and `Engine`,
+- transform AD with `grad`, `vjp`, `jvp`, and HVP composition,
+- einsum and linear algebra,
+- experimental CUDA execution for selected operations.
 
-## PyTorch, JAX, and tenferro
-
-| Topic | PyTorch | JAX | tenferro |
-|---|---|---|---|
-| Eager tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec(shape, data)` |
-| Traced tensor | — | staged via `jit` | `TracedTensor::from_vec(shape, data)` |
-| Execution | Eager by default | Eager; `jit` stages when asked | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `.eval()`) |
-| Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
-| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
-| Einsum | `torch.einsum(...)` | `jnp.einsum(...)` | `einsum(...)` / `eager_einsum(...)` |
-| Device | Device on tensors | `jax.device_put(...)` | Backend owned by `Engine` or `CpuBackend` |
-
-## Navigate
+## Start Here
 
 - [Getting Started](getting-started/index.md)
-- [Guides](guides/tensor-operations.md)
-- [API](api/index.md)
-- [Internals](internals/index.md)
+- [Choosing an API](guides/choosing-an-api.md)
+- [Devices and GPU](guides/devices-and-gpu.md)
+- [API Reference](api/index.md)
+
+## First CPU Example
+
+<!-- snippet-source: tenferro/examples/cpu_quickstart.rs -->
+```rust
+use tenferro::{CpuBackend, Tensor};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut backend = CpuBackend::new();
+
+    let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    let b = Tensor::from_vec(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
+
+    let c = a.matmul(&b, &mut backend)?;
+
+    assert_eq!(c.shape(), &[2, 2]);
+    assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+
+    Ok(())
+}
+```
+<!-- end-snippet-source -->
+
+## Mental Model
+
+| Workflow | Use |
+| --- | --- |
+| Direct CPU computation | `Tensor` or `TypedTensor` with `CpuBackend` |
+| Scalar-loss eager AD | `EagerTensor` with `EagerContext` |
+| Transform AD and graph optimization | `TracedTensor` with `Engine` |
+| CUDA execution | `tenferro::cuda::CudaBackend` with the `cuda` feature and explicit upload/download |
