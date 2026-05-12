@@ -24,4 +24,5 @@ a lazy expression graph that an `Engine<B>` can evaluate and reuse.
 CUDA support is provided by the feature-gated CubeCL backend for concrete,
 eager, and traced workflows. GPU tensors use explicit upload/download at
 backend boundaries; tenferro does not silently fall back to CPU when a GPU
-operation or dtype is unavailable.
+operation or dtype is unavailable. See [Devices and GPU](devices-and-gpu.md)
+for the current CUDA operation and dtype matrix.

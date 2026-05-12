@@ -11,8 +11,11 @@ CUDA GPU support is implemented through the feature-gated CubeCL backend across
 the concrete tensor, eager, and traced execution surfaces. Coverage includes
 allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
 kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
-Performance optimization and exhaustive dtype/op parity are still active work,
-and HIP/ROCm is still a feature stub rather than a supported execution path.
+Performance optimization is still active work. The remaining unsupported CUDA
+cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
+`dynamic_update_slice`, `I64` numeric/linalg gaps, and selected complex
+analytic or ordering operations. HIP/ROCm is still a feature stub rather than
+a supported execution path.
 
 See also:
 
@@ -209,19 +212,21 @@ CUDA library calls:
 | Category | Current status |
 | --- | --- |
 | Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge |
-| Elementwise | broad real coverage; selected complex ops; unsupported complex analytic ops return `BackendFailure` |
-| Reductions | sum/prod for real and complex; min/max for real |
-| Structural | transpose, reshape, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks |
-| Indexing | gather/scatter/slice/pad/reverse paths through CubeCL kernels where dtype support exists |
-| Contraction | cuTENSOR/cuBLAS-backed paths for supported real dtypes |
-| Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, and triangular solve where supported |
+| Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `C32`/`C64` add/mul/div/neg/conj |
+| Reductions | sum/prod for all tensor dtypes; min/max for `F32`/`F64` |
+| Structural | transpose, reshape, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks for all tensor dtypes |
+| Indexing | slice/pad/concatenate/reverse for all tensor dtypes; gather/scatter/dynamic_slice for floating and complex data with numeric index tensors |
+| Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
+| Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
+
+The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
+the current CUDA operation and dtype matrix. Keep that matrix synchronized with
+the `CubeclBackend` `TensorBackend` implementation when adding or removing CUDA
+dispatch arms.
 
 General eigendecomposition (`eig`, LAPACK `dgeev` style) is not provided by
 cuSOLVER. The CUDA backend returns `BackendFailure`; users must explicitly
 download to CPU and call the CPU backend.
-
-Complex CubeCL support is intentionally not expanded in this batch because the
-required CubeCL support is being handled upstream.
 
 ## Unsupported And Deferred Work
 
@@ -230,8 +235,10 @@ The following are intentionally outside the current batch:
 - GPU benchmark work,
 - HIP/ROCm implementation,
 - replacing the CubeCL fork,
-- remaining complex kernel expansion before upstream CubeCL support lands,
-- closing remaining CPU/GPU op and dtype parity gaps,
+- selected complex analytic kernels and ordering operations,
+- CUDA implementations for `full_piv_lu`, `full_piv_lu_solve`, and
+  `dynamic_update_slice`,
+- `I64` numeric/linalg CUDA kernels beyond structural and reduction paths,
 - changing the public placement contract.
 
 ## Tests
