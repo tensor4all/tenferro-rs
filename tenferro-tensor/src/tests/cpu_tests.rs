@@ -186,28 +186,87 @@ fn matrix_f64_from_tensor(t: &Tensor, rows: usize, cols: usize) -> Vec<f64> {
     out
 }
 
-#[test]
-fn row_major_inputs_preserve_logical_elementwise_semantics() {
-    let lhs = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = Tensor::from_vec_row_major(vec![2, 3], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0]);
+fn assert_same_f64_tensor(name: &str, actual: &Tensor, expected: &Tensor) {
+    assert_eq!(actual.shape(), expected.shape(), "{name}: shape mismatch");
+    let actual = actual.to_col_major().unwrap();
+    let expected = expected.to_col_major().unwrap();
+    assert_eq!(
+        actual.as_slice::<f64>().unwrap().len(),
+        expected.as_slice::<f64>().unwrap().len(),
+        "{name}: element count mismatch"
+    );
+    for (index, (&actual, &expected)) in actual
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .zip(expected.as_slice::<f64>().unwrap())
+        .enumerate()
+    {
+        assert_f64_close_tol(actual, expected, 1.0e-10);
+        let _ = index;
+    }
+}
 
-    let out = add(&lhs, &rhs).unwrap();
+fn assert_row_major_unary_matches_col_major(
+    name: &str,
+    input: &Tensor,
+    op: impl Fn(&Tensor) -> crate::Result<Tensor>,
+) {
+    let expected = op(input).unwrap();
+    let row_input = input.to_row_major().unwrap();
+    let actual = op(&row_input).unwrap();
 
-    assert_eq!(out.shape(), &[2, 3]);
-    assert_f64_close(get_f64(&out, &[0, 2]), 33.0);
-    assert_f64_close(get_f64(&out, &[1, 0]), 44.0);
+    assert_same_f64_tensor(name, &actual, &expected);
+}
+
+fn assert_row_major_binary_matches_col_major(
+    name: &str,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    op: impl Fn(&Tensor, &Tensor) -> crate::Result<Tensor>,
+) {
+    let expected = op(lhs, rhs).unwrap();
+    let row_lhs = lhs.to_row_major().unwrap();
+    let row_rhs = rhs.to_row_major().unwrap();
+    let actual = op(&row_lhs, &row_rhs).unwrap();
+
+    assert_same_f64_tensor(name, &actual, &expected);
 }
 
 #[test]
-fn row_major_inputs_preserve_logical_dot_general_semantics() {
-    let mut backend = CpuBackend::with_threads(1);
-    let lhs = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = Tensor::from_vec_row_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
+fn row_major_computation_matches_col_major_for_elementwise_and_structural_ops() {
+    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let other = Tensor::from_vec(vec![2, 3], vec![10.0_f64, 40.0, 20.0, 50.0, 30.0, 60.0]);
 
-    let out = backend
-        .dot_general(
-            &lhs,
-            &rhs,
+    assert_row_major_binary_matches_col_major("add", &input, &other, add);
+    assert_row_major_binary_matches_col_major("mul", &input, &other, mul);
+    assert_row_major_unary_matches_col_major("neg", &input, neg);
+    assert_row_major_unary_matches_col_major("transpose", &input, |x| transpose(x, &[1, 0]));
+    assert_row_major_unary_matches_col_major("reduce_sum", &input, |x| reduce_sum(x, &[1]));
+    assert_row_major_unary_matches_col_major("broadcast_in_dim", &input, |x| {
+        broadcast_in_dim(x, &[2, 3, 2], &[0, 1])
+    });
+    assert_row_major_unary_matches_col_major("slice", &input, |x| {
+        crate::cpu::indexing::try_slice(
+            x,
+            &SliceConfig {
+                starts: vec![0, 1],
+                limits: vec![2, 3],
+                strides: vec![1, 1],
+            },
+        )
+    });
+}
+
+#[test]
+fn row_major_computation_matches_col_major_for_gemm_indexing_and_linalg_ops() {
+    let lhs = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let rhs = Tensor::from_vec(vec![3, 2], vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0]);
+    assert_row_major_binary_matches_col_major("dot_general", &lhs, &rhs, |a, b| {
+        let mut backend = CpuBackend::with_threads(1);
+        backend.dot_general(
+            a,
+            b,
             &DotGeneralConfig {
                 lhs_contracting_dims: vec![1],
                 rhs_contracting_dims: vec![0],
@@ -215,33 +274,13 @@ fn row_major_inputs_preserve_logical_dot_general_semantics() {
                 rhs_batch_dims: vec![],
             },
         )
-        .unwrap();
+    });
 
-    assert_eq!(out.shape(), &[2, 2]);
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[58.0, 139.0, 64.0, 154.0]);
-}
-
-#[test]
-fn row_major_input_preserves_logical_broadcast_semantics() {
-    let input = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-
-    let out = broadcast_in_dim(&input, &[2, 3, 2], &[0, 1]).unwrap();
-    let row_major = out.to_row_major().unwrap();
-
-    assert_eq!(out.shape(), &[2, 3, 2]);
-    assert_eq!(
-        row_major.as_slice::<f64>().unwrap(),
-        &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 6.0]
-    );
-}
-
-#[test]
-fn row_major_index_tensor_preserves_logical_gather_indices() {
     let operand = Tensor::from_vec(
         vec![3, 3],
         vec![1.0_f64, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0],
     );
-    let start_indices = Tensor::from_vec_row_major(vec![2, 2], vec![0_i64, 2, 1, 0]);
+    let start_indices = Tensor::from_vec(vec![2, 2], vec![0_i64, 1, 2, 0]);
     let config = GatherConfig {
         offset_dims: vec![],
         collapsed_slice_dims: vec![0, 1],
@@ -249,24 +288,16 @@ fn row_major_index_tensor_preserves_logical_gather_indices() {
         index_vector_dim: 1,
         slice_sizes: vec![1, 1],
     };
+    assert_row_major_binary_matches_col_major("gather", &operand, &start_indices, |x, indices| {
+        gather(x, indices, &config)
+    });
 
-    let out = gather(&operand, &start_indices, &config).unwrap();
-
-    assert_eq!(out.shape(), &[2]);
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
-}
-
-#[test]
-fn row_major_linalg_input_preserves_logical_solve_semantics() {
-    let mut backend = CpuBackend::with_threads(1);
-    let a = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
     let b = Tensor::from_vec(vec![2], vec![5.0_f64, 11.0]);
-
-    let out = backend.solve(&a, &b).unwrap();
-
-    assert_eq!(out.shape(), &[2]);
-    assert_f64_close_tol(get_f64(&out, &[0]), 1.0, 1.0e-10);
-    assert_f64_close_tol(get_f64(&out, &[1]), 2.0, 1.0e-10);
+    assert_row_major_binary_matches_col_major("solve", &a, &b, |a, b| {
+        let mut backend = CpuBackend::with_threads(1);
+        backend.solve(a, b)
+    });
 }
 
 fn batch_vector_f64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec<f64> {
