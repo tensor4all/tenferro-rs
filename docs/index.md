@@ -6,12 +6,12 @@ backend control.
 
 It supports:
 
-- eager CPU tensor operations with `Tensor`, `TypedTensor`, and `CpuBackend`,
+- eager tensor operations with `Tensor`, `TypedTensor`, and a backend,
 - eager scalar-loss reverse-mode AD with `EagerTensor`,
 - lazy traced execution with `TracedTensor` and `Engine`,
 - transform AD with `grad`, `vjp`, `jvp`, and HVP composition,
 - einsum and linear algebra,
-- experimental CUDA execution for selected operations.
+- CUDA execution through the feature-gated CubeCL backend.
 
 ## Start Here
 

@@ -6,13 +6,13 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 | Concept | PyTorch | JAX | tenferro |
 |---|---|---|---|
-| Eager tensor | `numpy.ndarray` | — | `Tensor` + `CpuBackend` |
+| Eager tensor | `numpy.ndarray` | — | `Tensor` + a backend |
 | Tensor handle | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `.eval(&mut engine)` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `.eval()`) |
 | Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
-| Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives inside `Engine` |
+| Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerContext`, or `Engine` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro::einsum::einsum` |
 
@@ -59,9 +59,9 @@ between devices implicitly. Upload CPU tensors with
 `tenferro::cuda::upload_tensor` before CUDA backend operations, and download
 with `tenferro::cuda::download_tensor` before inspecting values on the host.
 
-CUDA support is partial and experimental, and currently targets NVIDIA CUDA.
-See [Devices and GPU](../guides/devices-and-gpu.md) for the current coverage
-and setup commands.
+CUDA support targets NVIDIA CUDA through the CubeCL backend. See
+[Devices and GPU](../guides/devices-and-gpu.md) for the current coverage and
+setup commands.
 
 ### Lazy evaluation
 

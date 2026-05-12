@@ -46,8 +46,8 @@ CUDA support is enabled with the `cuda` feature alias:
 tenferro = { path = "/path/to/tenferro-rs/tenferro", features = ["cuda"] }
 ```
 
-CUDA support is partial and experimental. It currently targets NVIDIA CUDA.
-See [Devices and GPU](devices-and-gpu.md) for the transfer model and current
+CUDA support targets NVIDIA CUDA through the CubeCL backend. See
+[Devices and GPU](devices-and-gpu.md) for the transfer model and current
 coverage.
 
 Common CUDA runtime environment variables:

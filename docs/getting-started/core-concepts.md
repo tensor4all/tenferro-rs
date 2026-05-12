@@ -14,9 +14,9 @@ tenferro provides four tensor types for different use cases:
 Choose the simplest layer that meets your needs:
 
 - **Compile-time dtype safety** -> `TypedTensor<T>` + a backend such as `CpuBackend`
-- **No AD needed** -> `Tensor` + `CpuBackend`
-- **PyTorch-style scalar-loss backward** -> `EagerTensor` + `EagerContext`
-- **Transform AD or graph reuse** -> `TracedTensor` + `Engine`
+- **No AD needed** -> `Tensor` + a backend
+- **PyTorch-style scalar-loss backward** -> `EagerTensor<B>` + `EagerContext<B>`
+- **Transform AD or graph reuse** -> `TracedTensor` + `Engine<B>`
 
 ## TypedTensor<T>: statically typed storage
 
@@ -99,9 +99,9 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 
 | Library | Mental model | tenferro equivalent |
 |---|---|---|
-| NumPy | Eager, no AD | `Tensor` + `CpuBackend` |
-| PyTorch (eager) | Eager with autograd | `EagerTensor` + `EagerContext` |
-| JAX (`jit`) | Staged/lazy computation | `TracedTensor` + `Engine` |
+| NumPy | Eager, no AD | `Tensor` + a backend |
+| PyTorch (eager) | Eager with autograd | `EagerTensor<B>` + `EagerContext<B>` |
+| JAX (`jit`) | Staged/lazy computation | `TracedTensor` + `Engine<B>` |
 
 ## Minimal examples
 

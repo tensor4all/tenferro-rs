@@ -252,7 +252,7 @@ depending on the dispatch category.
 that encapsulates standard tensor kernel dispatch. `TensorExec` is the
 session-scoped companion trait used for batches of backend ops inside one
 execution context. `CpuBackend` lives in tenferro-tensor and implements
-`TensorBackend`; the CubeCL GPU backend is partial and feature-gated.
+`TensorBackend`; the CubeCL GPU backend is feature-gated.
 
 Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contract.md).
 

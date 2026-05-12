@@ -21,11 +21,12 @@ The workspace contains active implementations alongside evolving APIs. Implement
 
 ### GPU Status
 
-GPU support is still partial and experimental. CUDA-only allocation,
-CPU<->GPU transfer, and limited cuTENSOR-backed primitive execution now exist,
-but broader GPU coverage is incomplete and HIP remains stubbed. Outside
-explicit GPU implementation tasks, do not assume a GPU path works just because
-the symbol is present.
+CUDA GPU support is implemented through the feature-gated CubeCL backend across
+the concrete tensor, eager, and traced execution surfaces. Performance
+optimization and exhaustive dtype/op parity are still active work, and
+HIP/ROCm remains stubbed. Outside explicit GPU implementation tasks, check the
+current CUDA/CubeCL backend and tests before assuming a specific
+op/dtype/backend combination is supported.
 
 ### Documentation Requirements
 

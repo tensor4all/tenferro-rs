@@ -4,8 +4,8 @@ General-purpose dense tensor computation in Rust, inspired by PyTorch and JAX.
 
 tenferro's complete default path is CPU: eager tensor operations with
 scalar-loss reverse-mode autodiff, lazy traced execution, einsum, linear
-algebra, and transform AD (VJP/JVP/HVP). The experimental CUDA backend supports
-a partial subset of tensor operations with explicit CPU/GPU transfers.
+algebra, and transform AD (VJP/JVP/HVP). CUDA execution is available through
+the feature-gated CubeCL backend with explicit CPU/GPU transfers.
 
 AD shape and dtype metadata is owned by the live eager/traced tensor handles
 that need it. The backing lookup table is process-global, but entries are

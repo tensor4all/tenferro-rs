@@ -1,8 +1,8 @@
 # Getting Started
 
 tenferro supports direct CPU tensor computation, eager scalar-loss AD, traced
-execution, transform AD, einsum, linear algebra, and experimental CUDA
-execution for selected operations.
+execution, transform AD, einsum, linear algebra, and CUDA execution through the
+feature-gated CubeCL backend.
 
 ## Installation
 
