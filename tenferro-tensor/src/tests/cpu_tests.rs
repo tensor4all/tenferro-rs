@@ -186,6 +186,53 @@ fn matrix_f64_from_tensor(t: &Tensor, rows: usize, cols: usize) -> Vec<f64> {
     out
 }
 
+#[test]
+fn row_major_inputs_preserve_logical_elementwise_semantics() {
+    let lhs = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+    let rhs = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
+    );
+
+    let out = add(&lhs, &rhs).unwrap();
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_f64_close(get_f64(&out, &[0, 2]), 33.0);
+    assert_f64_close(get_f64(&out, &[1, 0]), 44.0);
+}
+
+#[test]
+fn row_major_inputs_preserve_logical_dot_general_semantics() {
+    let mut backend = CpuBackend::with_threads(1);
+    let lhs = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+    let rhs = Tensor::from_vec_row_major(
+        vec![3, 2],
+        vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0],
+    );
+
+    let out = backend
+        .dot_general(
+            &lhs,
+            &rhs,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[58.0, 139.0, 64.0, 154.0]);
+}
+
 fn batch_vector_f64_from_tensor(t: &Tensor, len: usize, batch_idx: usize) -> Vec<f64> {
     let mut out = vec![0.0; len];
     for i in 0..len {

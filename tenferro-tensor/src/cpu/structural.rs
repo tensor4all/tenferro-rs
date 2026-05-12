@@ -65,7 +65,7 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
 fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, T, Identity>> {
     match &tensor.buffer {
         crate::Buffer::Host(data) => {
-            let strides = crate::col_major_strides(&tensor.shape);
+            let strides = crate::contiguous_strides(&tensor.shape, tensor.order);
             StridedView::new(data, &tensor.shape, &strides, 0)
                 .map_err(|err| backend_failure("structural", err))
         }

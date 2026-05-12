@@ -84,6 +84,33 @@ fn tensor_owned_export_is_zero_copy_only_for_matching_order() {
 }
 
 #[test]
+fn row_major_typed_tensor_uses_logical_indices() {
+    let tensor = TypedTensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+
+    assert_eq!(*tensor.get(&[0, 2]), 3.0);
+    assert_eq!(*tensor.get(&[1, 0]), 4.0);
+}
+
+#[test]
+fn row_major_to_col_major_reorders_owned_buffer() {
+    let tensor = Tensor::from_vec_row_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+
+    let converted = tensor.to_col_major().unwrap();
+
+    assert_eq!(converted.order(), MemoryOrder::ColMajor);
+    assert_eq!(
+        converted.as_slice::<f64>().unwrap(),
+        &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+    );
+}
+
+#[test]
 fn typed_tensor_panics_cover_length_and_indexing_errors() {
     let mismatched = catch_unwind(|| TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0]));
     assert!(mismatched.is_err());
