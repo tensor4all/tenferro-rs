@@ -44,3 +44,10 @@ cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 tenferro-cubecl = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "element_access"
+harness = false
