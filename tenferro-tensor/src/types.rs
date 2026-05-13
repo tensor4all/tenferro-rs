@@ -3,6 +3,8 @@ use num_traits::{One, Zero};
 
 use crate::{DotGeneralConfig, TensorBackend};
 
+mod accessors;
+
 /// Memory location for tensor storage.
 ///
 /// # Examples
@@ -239,6 +241,20 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Try to borrow the host data from a [`Tensor`].
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
 
+    /// Try to mutably borrow the host data from a [`Tensor`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorScalar};
+    ///
+    /// let mut tensor = Tensor::from_vec(vec![1], vec![2.0_f64]);
+    /// <f64 as TensorScalar>::try_as_slice_mut(&mut tensor).unwrap()[0] = 3.0;
+    ///
+    /// assert_eq!(tensor.as_slice::<f64>().unwrap(), &[3.0]);
+    /// ```
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]>;
+
     /// Try to extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
     ///
     /// Returns `None` if the tensor dtype does not match `Self`.
@@ -284,6 +300,13 @@ impl TensorScalar for f64 {
         }
     }
 
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::F64(t) => Some(t.host_data_mut()),
+            _ => None,
+        }
+    }
+
     fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
         match tensor {
             Tensor::F64(inner) => Some(inner),
@@ -306,6 +329,13 @@ impl TensorScalar for f32 {
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::F32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::F32(t) => Some(t.host_data_mut()),
             _ => None,
         }
     }
@@ -336,6 +366,13 @@ impl TensorScalar for i64 {
         }
     }
 
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::I64(t) => Some(t.host_data_mut()),
+            _ => None,
+        }
+    }
+
     fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
         match tensor {
             Tensor::I64(inner) => Some(inner),
@@ -362,6 +399,13 @@ impl TensorScalar for Complex64 {
         }
     }
 
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::C64(t) => Some(t.host_data_mut()),
+            _ => None,
+        }
+    }
+
     fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
         match tensor {
             Tensor::C64(inner) => Some(inner),
@@ -384,6 +428,13 @@ impl TensorScalar for Complex32 {
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::C32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::C32(t) => Some(t.host_data_mut()),
             _ => None,
         }
     }
@@ -570,28 +621,46 @@ pub fn contiguous_strides(shape: &[usize], order: MemoryOrder) -> Vec<isize> {
 
 fn linear_offset_for_order(shape: &[usize], indices: &[usize], order: MemoryOrder) -> usize {
     assert_eq!(indices.len(), shape.len());
-    let strides = contiguous_strides(shape, order);
-    let mut offset = 0usize;
-    for (axis, (&idx, &extent)) in indices.iter().zip(shape).enumerate() {
-        assert!(idx < extent, "index out of bounds");
-        offset += idx * strides[axis] as usize;
+    match order {
+        MemoryOrder::ColMajor => {
+            let mut offset = 0usize;
+            let mut stride = 1usize;
+            for (&idx, &extent) in indices.iter().zip(shape) {
+                assert!(idx < extent, "index out of bounds");
+                offset += idx * stride;
+                stride *= extent;
+            }
+            offset
+        }
+        MemoryOrder::RowMajor => {
+            let mut offset = 0usize;
+            let mut stride = 1usize;
+            for (&idx, &extent) in indices.iter().zip(shape).rev() {
+                assert!(idx < extent, "index out of bounds");
+                offset += idx * stride;
+                stride *= extent;
+            }
+            offset
+        }
     }
-    offset
 }
 
 fn flat_to_multi_for_order(flat: usize, shape: &[usize], order: MemoryOrder, out: &mut [usize]) {
     assert_eq!(shape.len(), out.len());
-    if shape.is_empty() {
-        return;
-    }
-    let strides = contiguous_strides(shape, order);
     let mut remaining = flat;
-    let mut axes: Vec<usize> = (0..shape.len()).collect();
-    axes.sort_by_key(|&axis| std::cmp::Reverse(strides[axis]));
-    for axis in axes {
-        let stride = strides[axis] as usize;
-        out[axis] = remaining / stride;
-        remaining %= stride;
+    match order {
+        MemoryOrder::ColMajor => {
+            for (&extent, slot) in shape.iter().zip(out.iter_mut()) {
+                *slot = remaining % extent;
+                remaining /= extent;
+            }
+        }
+        MemoryOrder::RowMajor => {
+            for (&extent, slot) in shape.iter().zip(out.iter_mut()).rev() {
+                *slot = remaining % extent;
+                remaining /= extent;
+            }
+        }
     }
 }
 
@@ -972,7 +1041,7 @@ impl<T: Clone> TypedTensor<T> {
         }
     }
 
-    /// Compute the linear column-major offset for an index.
+    /// Compute the linear physical-buffer offset for a logical index.
     ///
     /// # Examples
     ///
