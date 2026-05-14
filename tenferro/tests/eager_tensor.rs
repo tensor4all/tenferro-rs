@@ -140,6 +140,45 @@ fn eager_gather_keeps_indices_integer_for_complex_operand() {
 }
 
 #[test]
+fn eager_index_select_keeps_indices_integer_for_complex_operand() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(3.0, 0.5),
+            ],
+        ),
+        test_ctx(),
+    );
+
+    let y = x.index_select(-1, &[2, 0]).unwrap();
+
+    assert_eq!(y.data().shape(), &[2]);
+    assert_eq!(
+        c64_data(y.data()),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
+fn eager_stack_trailing_axis_and_index_select_primal() {
+    let x0 = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let x1 = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), test_ctx());
+
+    let stacked = EagerTensor::stack(&[&x0, &x1], -1).unwrap();
+    let selected = stacked.index_select(-1, &[1, 0, 1]).unwrap();
+
+    assert_eq!(selected.data().shape(), &[2, 3]);
+    assert_close_slice(
+        f64_data(selected.data()),
+        &[3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
+        TOL,
+    );
+}
+
+#[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());

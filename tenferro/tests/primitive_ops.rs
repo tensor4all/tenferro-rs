@@ -190,6 +190,60 @@ fn test_reshape() {
 }
 
 #[test]
+fn traced_index_select_keeps_indices_integer_for_complex_operand() {
+    use num_complex::Complex64;
+
+    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+        vec![3],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.5),
+        ],
+    ));
+    let mut y = x.index_select(-1, &[2, 0]).unwrap();
+    let mut engine = Engine::new(CpuBackend::new());
+    let out = y.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
+fn traced_stack_trailing_axis_and_index_select_feed_batched_dot_general() {
+    let a0 =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let a1 =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
+    let b0 = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![2.0, 3.0]));
+    let b1 = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![4.0, 5.0]));
+
+    let a = TracedTensor::stack(&[&a0, &a1], -1).unwrap();
+    let b = TracedTensor::stack(&[&b0, &b1], -1)
+        .unwrap()
+        .index_select(-1, &[1, 0])
+        .unwrap();
+    let mut c = a.dot_general(
+        &b,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![2],
+            rhs_batch_dims: vec![2],
+        },
+    );
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let out = c.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2, 1, 2]);
+    assert_eq!(get_f64_data(out), &[19.0, 28.0, 31.0, 36.0]);
+}
+
+#[test]
 fn test_eval_all() {
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
