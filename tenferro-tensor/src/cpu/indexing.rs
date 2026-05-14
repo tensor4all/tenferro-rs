@@ -2,6 +2,8 @@ use std::ops::Add;
 
 use num_traits::Zero;
 
+use super::indexing_alloc::pooled_uninit_tensor;
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use crate::types::{flat_to_multi, Tensor, TypedTensor};
 
@@ -59,12 +61,22 @@ pub fn gather(
     start_indices: &Tensor,
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
+    let mut buffers = BufferPool::new();
+    gather_with_pool(&mut buffers, operand, start_indices, config)
+}
+
+pub(crate) fn gather_with_pool(
+    buffers: &mut BufferPool,
+    operand: &Tensor,
+    start_indices: &Tensor,
+    config: &GatherConfig,
+) -> crate::Result<Tensor> {
     let start_indices = try_index_tensor(start_indices)?;
     match operand {
-        Tensor::F32(t) => typed_gather(t, &start_indices, config).map(Tensor::F32),
-        Tensor::F64(t) => typed_gather(t, &start_indices, config).map(Tensor::F64),
-        Tensor::C32(t) => typed_gather(t, &start_indices, config).map(Tensor::C32),
-        Tensor::C64(t) => typed_gather(t, &start_indices, config).map(Tensor::C64),
+        Tensor::F32(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::F32),
+        Tensor::F64(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::F64),
+        Tensor::C32(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::C32),
+        Tensor::C64(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::C64),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "gather",
             message: "I64 data tensors are not supported by this operation".into(),
@@ -202,6 +214,15 @@ pub fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
 }
 
 pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
+    let mut buffers = BufferPool::new();
+    try_concatenate_with_pool(&mut buffers, inputs, axis)
+}
+
+pub(crate) fn try_concatenate_with_pool(
+    buffers: &mut BufferPool,
+    inputs: &[&Tensor],
+    axis: usize,
+) -> crate::Result<Tensor> {
     let first = inputs
         .first()
         .copied()
@@ -211,19 +232,19 @@ pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>
         })?;
     match first {
         Tensor::F32(t) => Ok(Tensor::F32(typed_concatenate_from_dyn_inputs(
-            t, inputs, axis,
+            buffers, t, inputs, axis,
         )?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_concatenate_from_dyn_inputs(
-            t, inputs, axis,
+            buffers, t, inputs, axis,
         )?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_concatenate_from_dyn_inputs(
-            t, inputs, axis,
+            buffers, t, inputs, axis,
         )?)),
         Tensor::C32(t) => Ok(Tensor::C32(typed_concatenate_from_dyn_inputs(
-            t, inputs, axis,
+            buffers, t, inputs, axis,
         )?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_concatenate_from_dyn_inputs(
-            t, inputs, axis,
+            buffers, t, inputs, axis,
         )?)),
     }
 }
@@ -324,17 +345,18 @@ fn typed_slice<T: Copy + Clone>(
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
+    buffers: &mut BufferPool,
     _first: &TypedTensor<T>,
     inputs: &[&Tensor],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone,
+    T: Copy + Clone + PoolScalar,
     Tensor: TensorAsTyped<T>,
 {
     let first_dtype = inputs[0].dtype();
     let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
-    typed_concatenate(&typed_inputs, axis)
+    typed_concatenate(buffers, &typed_inputs, axis)
 }
 
 fn collect_typed_inputs<'a, T>(
@@ -356,7 +378,8 @@ where
         .collect()
 }
 
-fn typed_concatenate<T: Copy + Clone>(
+fn typed_concatenate<T: Copy + Clone + PoolScalar>(
+    buffers: &mut BufferPool,
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
@@ -403,7 +426,7 @@ fn typed_concatenate<T: Copy + Clone>(
         .collect();
 
     let out_len: usize = out_shape.iter().product();
-    let mut out_data = Vec::with_capacity(out_len);
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
@@ -425,10 +448,10 @@ fn typed_concatenate<T: Copy + Clone>(
 
         in_idx.copy_from_slice(&out_idx);
         in_idx[axis] -= axis_base;
-        out_data.push(*inputs[input_pos].get(&in_idx));
+        *out.get_mut(&out_idx) = *inputs[input_pos].get(&in_idx);
     }
 
-    Ok(TypedTensor::from_vec(out_shape, out_data))
+    Ok(out)
 }
 
 fn typed_reverse<T: Copy + Clone>(
@@ -667,7 +690,8 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
         .collect()
 }
 
-fn typed_gather<T: Copy + Clone + Zero>(
+fn typed_gather<T: Copy + Clone + Zero + PoolScalar>(
+    buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
     config: &GatherConfig,
@@ -803,7 +827,7 @@ fn typed_gather<T: Copy + Clone + Zero>(
         let _ = component;
     }
 
-    let mut out = typed_tensor_uninit(out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
     let mut out_idx = vec![0usize; out_rank];
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut operand_idx = vec![0usize; rank];

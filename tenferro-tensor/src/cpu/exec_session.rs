@@ -210,14 +210,21 @@ impl TensorExec for CpuExecSession<'_> {
     }
 
     // Indexing
-    delegate!(gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) => indexing::gather(operand, start_indices, config));
+    fn gather(
+        &mut self,
+        operand: &Tensor,
+        start_indices: &Tensor,
+        config: &GatherConfig,
+    ) -> crate::Result<Tensor> {
+        indexing::gather_with_pool(self.buffers, operand, start_indices, config)
+    }
     delegate!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter(operand, indices, updates, config));
     delegate!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice(input, config));
     delegate!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice(input, starts, slice_sizes));
     delegate!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice(operand, update, starts));
     delegate!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad(input, config));
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        indexing::try_concatenate(inputs, axis)
+        indexing::try_concatenate_with_pool(self.buffers, inputs, axis)
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         indexing::reverse(input, axes)

@@ -907,6 +907,33 @@ fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
 }
 
 #[test]
+fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
+    let mut backend = CpuBackend::new();
+    let reusable = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
+    backend.reclaim_buffer(reusable);
+
+    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let out = input.index_select(-1, &[2, 0, 1], &mut backend).unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
+}
+
+#[test]
+fn tensor_stack_reuses_reclaimed_cpu_buffer() {
+    let mut backend = CpuBackend::new();
+    let reusable = Tensor::from_vec(vec![2, 2], vec![0.0_f64; 4]);
+    let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
+    backend.reclaim_buffer(reusable);
+
+    let x0 = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x1 = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let out = Tensor::stack(&[&x0, &x1], -1, &mut backend).unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
+}
+
+#[test]
 fn test_reverse_axis_out_of_bounds_returns_error() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
     let mut backend = CpuBackend::new();

@@ -388,7 +388,9 @@ impl TensorBackend for CpuBackend {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.install(|| indexing::gather(operand, start_indices, config))
+        self.install_with_pool(|buffers| {
+            indexing::gather_with_pool(buffers, operand, start_indices, config)
+        })
     }
 
     fn scatter(
@@ -428,7 +430,7 @@ impl TensorBackend for CpuBackend {
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.install(|| indexing::try_concatenate(inputs, axis))
+        self.install_with_pool(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
