@@ -159,8 +159,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 unreachable!("NaryEinsum is handled before opening an exec session")
             }
             StdTensorOp::Gather(config) => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.gather(&a, &b, config)?]
+                vec![exec.gather(inputs[0], inputs[1], config)?]
             }
             StdTensorOp::GatherDynamicSliceSizes {
                 offset_dims,
@@ -177,22 +176,18 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                     index_vector_dim: *index_vector_dim,
                     slice_sizes,
                 };
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.gather(&a, &b, &config)?]
+                vec![exec.gather(inputs[0], inputs[1], &config)?]
             }
             StdTensorOp::Scatter(config) => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
-                vec![exec.scatter(&a, &b, &c, config)?]
+                let (operand, updates) = promote_binary(exec, inputs[0], inputs[2], op)?;
+                vec![exec.scatter(&operand, inputs[1], &updates, config)?]
             }
             StdTensorOp::DynamicSlice { slice_sizes } => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.dynamic_slice(&a, &b, slice_sizes)?]
+                vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
             }
             StdTensorOp::DynamicUpdateSlice => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
-                vec![exec.dynamic_update_slice(&a, &b, &c)?]
+                let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
+                vec![exec.dynamic_update_slice(&operand, &update, inputs[2])?]
             }
             StdTensorOp::Cholesky { .. } => vec![exec.cholesky(inputs[0])?],
             StdTensorOp::TriangularSolve {

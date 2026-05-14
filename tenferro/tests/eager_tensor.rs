@@ -104,6 +104,42 @@ fn row_major_eager_input_uses_logical_shape_and_values() {
 }
 
 #[test]
+fn eager_gather_keeps_indices_integer_for_complex_operand() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(3.0, 0.5),
+            ],
+        ),
+        test_ctx(),
+    );
+    let indices =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![2_i64, 0]), test_ctx());
+
+    let y = x
+        .gather(
+            &indices,
+            GatherConfig {
+                offset_dims: vec![],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(y.data().shape(), &[2]);
+    assert_eq!(
+        c64_data(y.data()),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());
