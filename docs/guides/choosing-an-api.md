@@ -21,6 +21,10 @@ explicitly uploaded CUDA-resident data. `EagerTensor<B>` keeps PyTorch-style
 gradient state for immediate workflows on a backend `B`. `TracedTensor` builds
 a lazy expression graph that an `Engine<B>` can evaluate and reuse.
 
+Across concrete, eager, and traced workflows, use `stack(..., -1)` to create a
+trailing batch axis and `index_select(-1, positions)` to align entries along
+that axis.
+
 CUDA support is provided by the feature-gated CubeCL backend for concrete,
 eager, and traced workflows. GPU tensors use explicit upload/download at
 backend boundaries; tenferro does not silently fall back to CPU when a GPU

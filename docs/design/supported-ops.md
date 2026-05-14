@@ -31,6 +31,8 @@ implementation-facing page also names the CubeCL layer that backs it.
 - Reductions: sum, product, max, min.
 - Contraction: `dot_general`.
 - Indexing: gather, scatter, slice, dynamic slice, pad, concatenate, reverse.
+- Shape packing helpers: `Tensor::stack` and `Tensor::index_select` compose
+  reshape/concatenate/gather for host-known positions.
 - Linalg: Cholesky, triangular solve, LU, full-pivot LU, full-pivot LU solve,
   SVD, QR, symmetric/Hermitian eigendecomposition, and general eigendecomposition
   where the backend supports it.
@@ -128,6 +130,9 @@ Implemented public surfaces include:
 - Public AD transforms such as VJP/JVP/HVP over supported traced dense numeric
   paths.
 - Compiled execution through `ExecProgram` / `eval_exec_ir`.
+- Shape packing on concrete, eager, and traced tensors: use `stack(..., -1)`
+  to create a trailing batch axis and `index_select(-1, positions)` to align
+  entries along that axis.
 
 The facade can evaluate through `CpuBackend` or the CUDA backend when the
 program uses operations supported by that backend and tensors are placed
