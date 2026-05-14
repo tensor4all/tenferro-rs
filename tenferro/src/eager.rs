@@ -7,7 +7,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 use tidu::{
     topo_sort_grad_dag, try_backward_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
     LinearFragment,
@@ -759,13 +759,14 @@ pub(crate) fn exec_single_output<B: TensorBackend>(
     Ok(outputs.remove(0))
 }
 
-pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {
-    let neg = input
-        .neg(backend)
-        .unwrap_or_else(|err| panic!("zero_like neg failed: {}", err));
-    input
-        .add(&neg, backend)
-        .unwrap_or_else(|err| panic!("zero_like add failed: {}", err))
+pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut B) -> Tensor {
+    match input {
+        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape.clone())),
+    }
 }
 
 pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Tensor {

@@ -179,6 +179,27 @@ fn eager_stack_trailing_axis_and_index_select_primal() {
 }
 
 #[test]
+fn eager_index_select_repeated_positions_accumulates_grad() {
+    let ctx = test_ctx();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        ctx.clone(),
+    );
+    let weights =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]), ctx);
+
+    let selected = x.index_select(0, &[1, 1, 2]).unwrap();
+    let loss = (&selected * &weights).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_close_slice(
+        f64_data(x.grad().unwrap().as_ref()),
+        &[0.0, 30.0, 30.0],
+        TOL,
+    );
+}
+
+#[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());
