@@ -4,6 +4,7 @@ use num_traits::{One, Zero};
 use crate::{DotGeneralConfig, TensorBackend};
 
 mod accessors;
+mod shape_packing;
 
 /// Memory location for tensor storage.
 ///
