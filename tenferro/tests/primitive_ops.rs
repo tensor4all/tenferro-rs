@@ -1,6 +1,7 @@
 use tenferro::engine::Engine;
 use tenferro::pow;
 use tenferro::traced::{eval_all, TracedTensor};
+use tenferro::DType;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
@@ -187,6 +188,133 @@ fn test_reshape() {
     let mut engine = Engine::new(CpuBackend::new());
     let result = tb.eval(&mut engine).unwrap();
     assert_eq!(get_f64_data(result), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+}
+
+#[test]
+fn traced_index_select_keeps_indices_integer_for_complex_operand() {
+    use num_complex::Complex64;
+
+    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+        vec![3],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.5),
+        ],
+    ));
+    let mut y = x.index_select(-1, &[2, 0]).unwrap();
+    let mut engine = Engine::new(CpuBackend::new());
+    let out = y.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
+fn traced_stack_trailing_axis_and_index_select_feed_batched_dot_general() {
+    let a0 =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let a1 =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]));
+    let b0 = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![2.0, 3.0]));
+    let b1 = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![4.0, 5.0]));
+
+    let a = TracedTensor::stack(&[&a0, &a1], -1).unwrap();
+    let b = TracedTensor::stack(&[&b0, &b1], -1)
+        .unwrap()
+        .index_select(-1, &[1, 0])
+        .unwrap();
+    let mut c = a.dot_general(
+        &b,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![2],
+            rhs_batch_dims: vec![2],
+        },
+    );
+
+    let mut engine = Engine::new(CpuBackend::new());
+    let out = c.eval(&mut engine).unwrap();
+
+    assert_eq!(out.shape(), &[2, 1, 2]);
+    assert_eq!(get_f64_data(out), &[19.0, 28.0, 31.0, 36.0]);
+}
+
+#[test]
+fn traced_index_select_rejects_invalid_axis_position_and_symbolic_shape() {
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 2.0]));
+
+    let axis_err = x.index_select(1, &[0]).err().unwrap().to_string();
+    assert!(axis_err.contains("index_select"), "got: {axis_err}");
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let position_err = x.index_select(0, &[2]).err().unwrap().to_string();
+    assert!(
+        position_err.contains("position 2 out of bounds"),
+        "got: {position_err}"
+    );
+
+    let symbolic = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let shape_err = symbolic.index_select(0, &[0]).err().unwrap().to_string();
+    assert!(
+        shape_err.contains("concrete shape hint"),
+        "got: {shape_err}"
+    );
+}
+
+#[test]
+fn traced_stack_rejects_empty_mismatched_invalid_axis_and_symbolic_shapes() {
+    let empty: [&TracedTensor; 0] = [];
+    let empty_err = TracedTensor::stack(&empty, 0).err().unwrap().to_string();
+    assert!(empty_err.contains("stack requires at least one input"));
+
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 2.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![3.0, 4.0, 5.0]));
+    let shape_err = TracedTensor::stack(&[&a, &b], -1)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(shape_err.contains("shape mismatch"), "got: {shape_err}");
+
+    let axis_err = TracedTensor::stack(&[&a], 2).err().unwrap().to_string();
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let symbolic_first = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let first_shape_err = TracedTensor::stack(&[&symbolic_first], -1)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        first_shape_err.contains("concrete shape hints"),
+        "got: {first_shape_err}"
+    );
+
+    let symbolic_second = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let second_shape_err = TracedTensor::stack(&[&a, &symbolic_second], -1)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        second_shape_err.contains("concrete shape hints"),
+        "got: {second_shape_err}"
+    );
+}
+
+#[test]
+fn traced_stack_positive_axis_promotes_mixed_input_dtypes() {
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![2], vec![1.0_f32, 2.0]));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, 4.0]));
+
+    let mut out = TracedTensor::stack(&[&a, &b], 0).unwrap();
+    let mut engine = Engine::new(CpuBackend::new());
+    let result = out.eval(&mut engine).unwrap();
+
+    assert_eq!(result.shape(), &[2, 2]);
+    assert_eq!(get_f64_data(result), &[1.0, 3.0, 2.0, 4.0]);
 }
 
 #[test]

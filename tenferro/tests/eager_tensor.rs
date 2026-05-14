@@ -104,6 +104,141 @@ fn row_major_eager_input_uses_logical_shape_and_values() {
 }
 
 #[test]
+fn eager_gather_keeps_indices_integer_for_complex_operand() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(3.0, 0.5),
+            ],
+        ),
+        test_ctx(),
+    );
+    let indices =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![2_i64, 0]), test_ctx());
+
+    let y = x
+        .gather(
+            &indices,
+            GatherConfig {
+                offset_dims: vec![],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1],
+            },
+        )
+        .unwrap();
+
+    assert_eq!(y.data().shape(), &[2]);
+    assert_eq!(
+        c64_data(y.data()),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
+fn eager_index_select_keeps_indices_integer_for_complex_operand() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(3.0, 0.5),
+            ],
+        ),
+        test_ctx(),
+    );
+
+    let y = x.index_select(-1, &[2, 0]).unwrap();
+
+    assert_eq!(y.data().shape(), &[2]);
+    assert_eq!(
+        c64_data(y.data()),
+        &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
+    );
+}
+
+#[test]
+fn eager_stack_trailing_axis_and_index_select_primal() {
+    let x0 = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let x1 = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), test_ctx());
+
+    let stacked = EagerTensor::stack(&[&x0, &x1], -1).unwrap();
+    let selected = stacked.index_select(-1, &[1, 0, 1]).unwrap();
+
+    assert_eq!(selected.data().shape(), &[2, 3]);
+    assert_close_slice(
+        f64_data(selected.data()),
+        &[3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
+        TOL,
+    );
+}
+
+#[test]
+fn eager_index_select_rejects_invalid_axis_and_position() {
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+
+    let axis_err = x.index_select(1, &[0]).err().unwrap().to_string();
+    assert!(axis_err.contains("index_select"), "got: {axis_err}");
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let position_err = x.index_select(0, &[2]).err().unwrap().to_string();
+    assert!(position_err.contains("index_select"), "got: {position_err}");
+    assert!(
+        position_err.contains("position 2 out of bounds"),
+        "got: {position_err}"
+    );
+}
+
+#[test]
+fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
+    let empty: [&EagerTensor<CpuBackend>; 0] = [];
+    let empty_err = EagerTensor::stack(&empty, 0).err().unwrap().to_string();
+    assert!(empty_err.contains("stack requires at least one input"));
+
+    let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![3.0_f64, 4.0, 5.0]),
+        test_ctx(),
+    );
+    let shape_err = EagerTensor::stack(&[&a, &b], -1).err().unwrap().to_string();
+    assert!(shape_err.contains("shape mismatch"), "got: {shape_err}");
+
+    let axis_err = EagerTensor::stack(&[&a], 2).err().unwrap().to_string();
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let c = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), test_ctx());
+    let out = EagerTensor::stack(&[&a, &c], 0).unwrap();
+    assert_eq!(out.data().shape(), &[2, 2]);
+    assert_close_slice(f64_data(out.data()), &[1.0, 3.0, 2.0, 4.0], TOL);
+}
+
+#[test]
+fn eager_index_select_repeated_positions_accumulates_grad() {
+    let ctx = test_ctx();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        ctx.clone(),
+    );
+    let weights =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]), ctx);
+
+    let selected = x.index_select(0, &[1, 1, 2]).unwrap();
+    let loss = (&selected * &weights).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_close_slice(
+        f64_data(x.grad().unwrap().as_ref()),
+        &[0.0, 30.0, 30.0],
+        TOL,
+    );
+}
+
+#[test]
 fn eager_x_squared_gradient_matches_finite_difference() {
     let x_data = vec![1.0, 2.0, 3.0];
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], x_data.clone()), test_ctx());

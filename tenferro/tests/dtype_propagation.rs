@@ -1,7 +1,7 @@
 use tenferro::shape_infer::infer_output_dtype;
 use tenferro::{eig, Tensor, TracedTensor, TypedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, ScatterConfig};
 
 #[test]
 fn test_add_preserves_f32() {
@@ -90,6 +90,48 @@ fn test_dot_general_preserves_lhs_dtype() {
     };
     assert_eq!(
         infer_output_dtype(&op, &[DType::F32, DType::F32]),
+        DType::F32
+    );
+}
+
+#[test]
+fn test_indexing_dtype_inference_ignores_index_operands() {
+    let gather = StdTensorOp::Gather(GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    });
+    assert_eq!(
+        infer_output_dtype(&gather, &[DType::C64, DType::I64]),
+        DType::C64
+    );
+
+    let dynamic_slice = StdTensorOp::DynamicSlice {
+        slice_sizes: vec![1],
+    };
+    assert_eq!(
+        infer_output_dtype(&dynamic_slice, &[DType::F32, DType::I64]),
+        DType::F32
+    );
+
+    let scatter = StdTensorOp::Scatter(ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    });
+    assert_eq!(
+        infer_output_dtype(&scatter, &[DType::F32, DType::I64, DType::F32]),
+        DType::F32
+    );
+
+    assert_eq!(
+        infer_output_dtype(
+            &StdTensorOp::DynamicUpdateSlice,
+            &[DType::F32, DType::F32, DType::I64],
+        ),
         DType::F32
     );
 }

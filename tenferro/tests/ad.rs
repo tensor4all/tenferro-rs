@@ -3167,6 +3167,33 @@ fn grad_gather_reduce_sum_accumulates_indices_correctly() {
     assert_close_slice(get_f64_data(&grad), &[1.0, 0.0, 3.0, 0.0, 1.0]);
 }
 
+#[test]
+fn grad_traced_index_select_repeated_positions_accumulates() {
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
+    let weights =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![10.0, 20.0, 30.0]));
+
+    let selected = x.index_select(0, &[1, 1, 2]).unwrap();
+    let loss = (&selected * &weights).reduce_sum(&[0]);
+    let grad = eval_tensor(loss.grad(&x).unwrap());
+
+    assert_eq!(grad.shape(), &[3]);
+    assert_close_slice(get_f64_data(&grad), &[0.0, 30.0, 30.0]);
+}
+
+#[test]
+fn jvp_traced_index_select_gathers_tangent() {
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+    let tangent =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.5, 1.5, 2.5, 3.5]));
+
+    let y = x.index_select(0, &[3, 1, 3]).unwrap();
+    let tangent_y = eval_tensor(y.jvp(&x, &tangent));
+
+    assert_eq!(tangent_y.shape(), &[3]);
+    assert_close_slice(get_f64_data(&tangent_y), &[3.5, 1.5, 3.5]);
+}
+
 /// Build `y = ReduceSum(Scatter(operand, indices, updates, config))`,
 /// where the Scatter output has the same shape as `operand`.
 fn build_scatter_reduce_sum_fragment(

@@ -848,6 +848,92 @@ fn test_reverse_accepts_i64_data_tensor() {
 }
 
 #[test]
+fn tensor_index_select_trailing_axis_returns_expected_values() {
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let out = input.index_select(-1, &[2, 0, 2], &mut backend).unwrap();
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_f64_close(get_f64(&out, &[0, 0]), 5.0);
+    assert_f64_close(get_f64(&out, &[1, 0]), 6.0);
+    assert_f64_close(get_f64(&out, &[0, 1]), 1.0);
+    assert_f64_close(get_f64(&out, &[1, 1]), 2.0);
+    assert_f64_close(get_f64(&out, &[0, 2]), 5.0);
+    assert_f64_close(get_f64(&out, &[1, 2]), 6.0);
+}
+
+#[test]
+fn tensor_index_select_rejects_invalid_axis_and_position() {
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+
+    let axis_err = input.index_select(-2, &[0], &mut backend).unwrap_err();
+    assert!(axis_err.to_string().contains("index_select"));
+    assert!(axis_err.to_string().contains("axis"));
+
+    let position_err = input.index_select(0, &[3], &mut backend).unwrap_err();
+    assert!(position_err.to_string().contains("index_select"));
+    assert!(position_err.to_string().contains("position"));
+}
+
+#[test]
+fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
+    let mut backend = CpuBackend::new();
+
+    let a = Tensor::from_vec(vec![], vec![1.0_f64]);
+    let b = Tensor::from_vec(vec![], vec![2.0_f64]);
+    let scalars = Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
+    assert_eq!(scalars.shape(), &[2]);
+    assert_eq!(scalars.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let v0 = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let v1 = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let vectors = Tensor::stack(&[&v0, &v1], -1, &mut backend).unwrap();
+    assert_eq!(vectors.shape(), &[2, 2]);
+    assert_f64_close(get_f64(&vectors, &[0, 0]), 1.0);
+    assert_f64_close(get_f64(&vectors, &[1, 0]), 2.0);
+    assert_f64_close(get_f64(&vectors, &[0, 1]), 3.0);
+    assert_f64_close(get_f64(&vectors, &[1, 1]), 4.0);
+
+    let m0 = Tensor::from_vec(vec![2, 1], vec![1.0_f64, 2.0]);
+    let m1 = Tensor::from_vec(vec![2, 1], vec![3.0_f64, 4.0]);
+    let matrices = Tensor::stack(&[&m0, &m1], -1, &mut backend).unwrap();
+    assert_eq!(matrices.shape(), &[2, 1, 2]);
+    assert_f64_close(get_f64(&matrices, &[0, 0, 0]), 1.0);
+    assert_f64_close(get_f64(&matrices, &[1, 0, 0]), 2.0);
+    assert_f64_close(get_f64(&matrices, &[0, 0, 1]), 3.0);
+    assert_f64_close(get_f64(&matrices, &[1, 0, 1]), 4.0);
+}
+
+#[test]
+fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
+    let mut backend = CpuBackend::new();
+    let reusable = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
+    backend.reclaim_buffer(reusable);
+
+    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let out = input.index_select(-1, &[2, 0, 1], &mut backend).unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
+}
+
+#[test]
+fn tensor_stack_reuses_reclaimed_cpu_buffer() {
+    let mut backend = CpuBackend::new();
+    let reusable = Tensor::from_vec(vec![2, 2], vec![0.0_f64; 4]);
+    let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
+    backend.reclaim_buffer(reusable);
+
+    let x0 = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x1 = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let out = Tensor::stack(&[&x0, &x1], -1, &mut backend).unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
+}
+
+#[test]
 fn test_reverse_axis_out_of_bounds_returns_error() {
     let input = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
     let mut backend = CpuBackend::new();

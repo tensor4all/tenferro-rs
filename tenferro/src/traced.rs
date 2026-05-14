@@ -2095,6 +2095,28 @@ pub(crate) fn apply_binary(
         rhs.clone()
     };
 
+    apply_binary_with_output_dtype(op, &lhs, &rhs, out_rank, out_shape_hint, out_dtype)
+}
+
+pub(crate) fn apply_binary_preserve_input_dtypes(
+    op: StdTensorOp,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    out_dtype: DType,
+) -> TracedTensor {
+    apply_binary_with_output_dtype(op, lhs, rhs, out_rank, out_shape_hint, out_dtype)
+}
+
+fn apply_binary_with_output_dtype(
+    op: StdTensorOp,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    out_dtype: DType,
+) -> TracedTensor {
     let lhs_ref = ValRef::External(lhs.fragment.vals()[lhs.val].key.clone());
     let rhs_ref = ValRef::External(rhs.fragment.vals()[rhs.val].key.clone());
 

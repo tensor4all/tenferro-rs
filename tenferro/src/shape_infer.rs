@@ -116,8 +116,6 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::NaryEinsum { .. }
         | StdTensorOp::TriangularSolve { .. }
         | StdTensorOp::FullPivLuSolve { .. }
-        | StdTensorOp::DynamicSlice { .. }
-        | StdTensorOp::DynamicUpdateSlice
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::PadToMatch { .. }
         | StdTensorOp::DynamicTruncate { .. }
@@ -125,10 +123,8 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         StdTensorOp::Div | StdTensorOp::Pow => {
             promote_dtype_div_like(input_dtypes[0], input_dtypes[1])
         }
-        StdTensorOp::Scatter(_) => promote_dtype(
-            promote_dtype(input_dtypes[0], input_dtypes[1]),
-            input_dtypes[2],
-        ),
+        StdTensorOp::Scatter(_) => promote_dtype(input_dtypes[0], input_dtypes[2]),
+        StdTensorOp::DynamicUpdateSlice => promote_dtype(input_dtypes[0], input_dtypes[1]),
         // Unary / structural — output dtype equals input dtype.
         StdTensorOp::Neg
         | StdTensorOp::Conj
@@ -156,6 +152,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Triu { .. }
         | StdTensorOp::Gather(_)
         | StdTensorOp::GatherDynamicSliceSizes { .. }
+        | StdTensorOp::DynamicSlice { .. }
         | StdTensorOp::Slice(_)
         | StdTensorOp::Pad(_)
         | StdTensorOp::Reverse { .. }

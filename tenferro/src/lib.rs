@@ -36,6 +36,7 @@ mod metadata;
 mod scalar_semantics;
 pub mod segment;
 pub mod shape_infer;
+mod shape_packing;
 pub mod sym_dim;
 pub mod traced;
 
