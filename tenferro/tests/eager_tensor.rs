@@ -179,6 +179,45 @@ fn eager_stack_trailing_axis_and_index_select_primal() {
 }
 
 #[test]
+fn eager_index_select_rejects_invalid_axis_and_position() {
+    let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+
+    let axis_err = x.index_select(1, &[0]).err().unwrap().to_string();
+    assert!(axis_err.contains("index_select"), "got: {axis_err}");
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let position_err = x.index_select(0, &[2]).err().unwrap().to_string();
+    assert!(position_err.contains("index_select"), "got: {position_err}");
+    assert!(
+        position_err.contains("position 2 out of bounds"),
+        "got: {position_err}"
+    );
+}
+
+#[test]
+fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
+    let empty: [&EagerTensor<CpuBackend>; 0] = [];
+    let empty_err = EagerTensor::stack(&empty, 0).err().unwrap().to_string();
+    assert!(empty_err.contains("stack requires at least one input"));
+
+    let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![3.0_f64, 4.0, 5.0]),
+        test_ctx(),
+    );
+    let shape_err = EagerTensor::stack(&[&a, &b], -1).err().unwrap().to_string();
+    assert!(shape_err.contains("shape mismatch"), "got: {shape_err}");
+
+    let axis_err = EagerTensor::stack(&[&a], 2).err().unwrap().to_string();
+    assert!(axis_err.contains("axis"), "got: {axis_err}");
+
+    let c = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), test_ctx());
+    let out = EagerTensor::stack(&[&a, &c], 0).unwrap();
+    assert_eq!(out.data().shape(), &[2, 2]);
+    assert_close_slice(f64_data(out.data()), &[1.0, 3.0, 2.0, 4.0], TOL);
+}
+
+#[test]
 fn eager_index_select_repeated_positions_accumulates_grad() {
     let ctx = test_ctx();
     let x = EagerTensor::requires_grad_in(
