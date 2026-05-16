@@ -44,6 +44,11 @@ where
         _marker: PhantomData,
     };
     unsafe {
+        // SAFETY: `ClassifiedFusion` proves all inputs share one dense output
+        // shape, and `typed_tensor_array_arg` validates every raw array length
+        // against its tensor shape. The generated kernel reads `out.len()`,
+        // launches over `classified.n_elements`, and guards the body with
+        // `ABSOLUTE_POS < out.len()`.
         launcher.launch_unchecked(
             cube_count_for_len(classified.n_elements),
             kernel,

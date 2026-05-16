@@ -135,6 +135,49 @@ fn full_piv_lu_solve_returns_expected_solution() {
 }
 
 #[test]
+fn solve_alias_and_right_solve_cover_success_and_validation_errors() {
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
+        test_ctx(),
+    );
+    let b =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]), test_ctx());
+    let x = a.solve(&b).unwrap();
+    assert_eq!(x.data().shape(), &[2, 1]);
+    assert_eq!(f64_data(x.data()), &[2.0, 2.0]);
+
+    let rhs =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![1, 2], vec![4.0_f64, 8.0]), test_ctx());
+    let right = a.right_solve(&rhs).unwrap();
+    assert_eq!(right.data().shape(), &[1, 2]);
+    assert_eq!(f64_data(right.data()), &[2.0, 2.0]);
+
+    let vector =
+        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let lhs_rank_err = match vector.right_solve(&rhs) {
+        Ok(_) => panic!("expected lhs rank mismatch"),
+        Err(err) => err,
+    };
+    assert!(lhs_rank_err.to_string().contains("rank mismatch"));
+
+    let rhs_rank_err = match a.right_solve(&vector) {
+        Ok(_) => panic!("expected rhs rank mismatch"),
+        Err(err) => err,
+    };
+    assert!(rhs_rank_err.to_string().contains("rank mismatch"));
+
+    let bad_rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![1, 3], vec![1.0_f64, 2.0, 3.0]),
+        test_ctx(),
+    );
+    let shape_err = match a.right_solve(&bad_rhs) {
+        Ok(_) => panic!("expected shape mismatch"),
+        Err(err) => err,
+    };
+    assert!(shape_err.to_string().contains("shape mismatch"));
+}
+
+#[test]
 fn eigh_returns_expected_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),

@@ -115,6 +115,102 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
 }
 
 impl<B: TensorBackend> EagerTensor<B> {
+    /// Select entries from one axis using host-known indices.
+    ///
+    /// The index list is primal metadata: gradients flow to `self`, including
+    /// accumulation for repeated indices, but not to the selected positions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
+    ///     ctx,
+    /// );
+    /// let y = x.take_axis(0, &[2, 0]).unwrap();
+    ///
+    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// ```
+    pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
+        let axis = isize::try_from(axis).map_err(|_| {
+            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+                op: "take_axis",
+                message: format!("axis {axis} cannot be represented as isize"),
+            })
+        })?;
+        self.index_select(axis, indices)
+    }
+
+    /// Select matrix rows using host-known row indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     ctx,
+    /// );
+    /// let y = x.take_rows(&[1]).unwrap();
+    ///
+    /// assert_eq!(y.data().shape(), &[1, 2]);
+    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// ```
+    pub fn take_rows(&self, rows: &[usize]) -> Result<Self> {
+        self.take_axis(0, rows)
+    }
+
+    /// Select matrix columns using host-known column indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     ctx,
+    /// );
+    /// let y = x.take_cols(&[1]).unwrap();
+    ///
+    /// assert_eq!(y.data().shape(), &[2, 1]);
+    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    /// ```
+    pub fn take_cols(&self, cols: &[usize]) -> Result<Self> {
+        self.take_axis(1, cols)
+    }
+
+    /// Select a matrix block using host-known row and column indices.
+    ///
+    /// This is a convenience wrapper over row selection followed by column
+    /// selection. The row and column lists, plus the approximation rank implied
+    /// by their lengths, are fixed primal metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     ctx,
+    /// );
+    /// let y = x.take_block(&[1], &[0]).unwrap();
+    ///
+    /// assert_eq!(y.data().shape(), &[1, 1]);
+    /// assert_eq!(y.data().as_slice::<f64>().unwrap(), &[2.0]);
+    /// ```
+    pub fn take_block(&self, rows: &[usize], cols: &[usize]) -> Result<Self> {
+        self.take_rows(rows)?.take_cols(cols)
+    }
+
     /// Select entries from one axis using host-known positions.
     ///
     /// # Examples

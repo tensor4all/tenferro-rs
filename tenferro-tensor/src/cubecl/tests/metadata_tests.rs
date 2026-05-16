@@ -1,6 +1,8 @@
 use cubecl::stream_id::StreamId;
 
-use crate::cubecl::dispatch::{cubecl_shape_and_strides, typed_tensor_binding};
+use crate::cubecl::dispatch::{
+    cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
+};
 use crate::{Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, TypedTensor};
 
 #[test]
@@ -17,6 +19,25 @@ fn typed_tensor_binding_rejects_shape_buffer_len_mismatch() {
     let tensor = cubecl_tensor_with_len(vec![2, 3], 5);
 
     let err = typed_tensor_binding(&tensor, "metadata_test").unwrap_err();
+
+    match err {
+        crate::Error::BackendFailure { op, message } => {
+            assert_eq!(op, "metadata_test");
+            assert!(message.contains("expected shape product 6"));
+            assert!(message.contains("actual CubeclBuffer::len 5"));
+        }
+        other => panic!("expected BackendFailure, got {other:?}"),
+    }
+}
+
+#[test]
+fn typed_tensor_array_arg_rejects_shape_buffer_len_mismatch() {
+    let tensor = cubecl_tensor_with_len(vec![2, 3], 5);
+
+    let err = match typed_tensor_array_arg(&tensor, "metadata_test") {
+        Ok(_) => panic!("expected typed_tensor_array_arg to reject buffer length mismatch"),
+        Err(err) => err,
+    };
 
     match err {
         crate::Error::BackendFailure { op, message } => {

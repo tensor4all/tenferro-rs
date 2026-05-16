@@ -78,7 +78,9 @@ use std::cell::OnceCell;
 
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
-use cubecl::prelude::{Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat};
+use cubecl::prelude::{
+    ArrayArg, Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat,
+};
 use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
@@ -103,8 +105,8 @@ use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
     launch_binary_tensor, launch_nullary_into, launch_ternary, launch_unary, launch_unary_tensor,
-    launch_unary_tensor_into, ternary_dtype_mismatch, typed_from_cubecl, typed_tensor_array_arg_as,
-    typed_tensor_binding,
+    launch_unary_tensor_into, ternary_dtype_mismatch, typed_tensor_array_arg,
+    typed_tensor_array_arg_as, typed_tensor_binding,
 };
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -375,132 +377,124 @@ impl CubeclBackend {
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f32, Complex32>(
-            input,
-            std::mem::size_of::<f32>(),
-            |client, out_h, inp_h, n| {
-                let count = cubecl::prelude::CubeCount::new_single();
-                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
-                unsafe {
-                    structural::convert_f32_to_c32_raw::launch_unchecked::<CudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
-                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
-                    );
-                }
-            },
-        )
+        self.convert_float_to_complex_raw::<f32, Complex32, f32>(input, |client, out, input, n| {
+            unsafe {
+                // SAFETY: `convert_float_to_complex_raw` validated that
+                // `input` has `n` elements and `out` has `2 * n` scalar
+                // components. The kernel launches exactly `n` logical input
+                // positions and guards with `ABSOLUTE_POS < input.len()`.
+                structural::convert_f32_to_c32_raw::launch_unchecked::<CudaRuntime>(
+                    client,
+                    cube_count_for_len(n),
+                    cube_dim_1d(),
+                    out,
+                    input,
+                );
+            }
+        })
     }
 
     fn convert_f32_to_c64(
         &self,
         input: &TypedTensor<f32>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f32, Complex64>(
-            input,
-            std::mem::size_of::<f64>(),
-            |client, out_h, inp_h, n| {
-                let count = cubecl::prelude::CubeCount::new_single();
-                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
-                unsafe {
-                    structural::convert_f32_to_c64_raw::launch_unchecked::<CudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
-                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
-                    );
-                }
-            },
-        )
+        self.convert_float_to_complex_raw::<f32, Complex64, f64>(input, |client, out, input, n| {
+            unsafe {
+                // SAFETY: `convert_float_to_complex_raw` validated that
+                // `input` has `n` elements and `out` has `2 * n` scalar
+                // components. The kernel launches exactly `n` logical input
+                // positions and guards with `ABSOLUTE_POS < input.len()`.
+                structural::convert_f32_to_c64_raw::launch_unchecked::<CudaRuntime>(
+                    client,
+                    cube_count_for_len(n),
+                    cube_dim_1d(),
+                    out,
+                    input,
+                );
+            }
+        })
     }
 
     fn convert_f64_to_c32(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex32>> {
-        self.convert_float_to_complex_raw::<f64, Complex32>(
-            input,
-            std::mem::size_of::<f32>(),
-            |client, out_h, inp_h, n| {
-                let count = cubecl::prelude::CubeCount::new_single();
-                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
-                unsafe {
-                    structural::convert_f64_to_c32_raw::launch_unchecked::<CudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
-                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
-                    );
-                }
-            },
-        )
+        self.convert_float_to_complex_raw::<f64, Complex32, f32>(input, |client, out, input, n| {
+            unsafe {
+                // SAFETY: `convert_float_to_complex_raw` validated that
+                // `input` has `n` elements and `out` has `2 * n` scalar
+                // components. The kernel launches exactly `n` logical input
+                // positions and guards with `ABSOLUTE_POS < input.len()`.
+                structural::convert_f64_to_c32_raw::launch_unchecked::<CudaRuntime>(
+                    client,
+                    cube_count_for_len(n),
+                    cube_dim_1d(),
+                    out,
+                    input,
+                );
+            }
+        })
     }
 
     fn convert_f64_to_c64(
         &self,
         input: &TypedTensor<f64>,
     ) -> crate::Result<TypedTensor<Complex64>> {
-        self.convert_float_to_complex_raw::<f64, Complex64>(
-            input,
-            std::mem::size_of::<f64>(),
-            |client, out_h, inp_h, n| {
-                let count = cubecl::prelude::CubeCount::new_single();
-                let dim = cubecl::prelude::CubeDim::new_1d(n as u32);
-                unsafe {
-                    structural::convert_f64_to_c64_raw::launch_unchecked::<CudaRuntime>(
-                        client,
-                        count,
-                        dim,
-                        cubecl::prelude::ArrayArg::from_raw_parts(out_h, n * 2),
-                        cubecl::prelude::ArrayArg::from_raw_parts(inp_h, n),
-                    );
-                }
-            },
-        )
+        self.convert_float_to_complex_raw::<f64, Complex64, f64>(input, |client, out, input, n| {
+            unsafe {
+                // SAFETY: `convert_float_to_complex_raw` validated that
+                // `input` has `n` elements and `out` has `2 * n` scalar
+                // components. The kernel launches exactly `n` logical input
+                // positions and guards with `ABSOLUTE_POS < input.len()`.
+                structural::convert_f64_to_c64_raw::launch_unchecked::<CudaRuntime>(
+                    client,
+                    cube_count_for_len(n),
+                    cube_dim_1d(),
+                    out,
+                    input,
+                );
+            }
+        })
     }
 
     /// Generic float-to-complex conversion via raw interleaved kernel.
     ///
     /// The kernel writes `(re, 0, re, 0, ...)` into a raw float buffer that
-    /// is then reinterpreted as complex. `out_float_size` is the byte size of
-    /// each real output component.
-    fn convert_float_to_complex_raw<InFloat, OutComplex>(
+    /// is then reinterpreted as complex.
+    fn convert_float_to_complex_raw<InFloat, OutComplex, OutFloat>(
         &self,
         input: &TypedTensor<InFloat>,
-        out_float_size: usize,
         launch: impl FnOnce(
             &cubecl::client::ComputeClient<CudaRuntime>,
-            cubecl::server::Handle,
-            cubecl::server::Handle,
+            ArrayArg<CudaRuntime>,
+            ArrayArg<CudaRuntime>,
             usize,
         ),
     ) -> crate::Result<TypedTensor<OutComplex>>
     where
         InFloat: CubeElement + Clone,
-        OutComplex: Clone,
+        OutComplex: CubeElement + Clone,
+        OutFloat: CubeElement + Clone,
     {
-        let n = input.shape.iter().product::<usize>();
-        let client = self.rt.client();
-        let input_handle = match &input.buffer {
-            crate::Buffer::Cubecl(buf) => buf.handle.clone(),
-            _ => {
-                return Err(crate::Error::BackendFailure {
-                    op: "convert",
-                    message: "expected cubecl buffer".into(),
-                })
-            }
-        };
-        let out_handle = client.empty(n * 2 * out_float_size);
-        launch(client, out_handle.clone(), input_handle, n);
-        Ok(typed_from_cubecl(
-            input.shape.clone(),
-            crate::CubeclBuffer::new(out_handle, n),
-            self.rt.device_ordinal(),
-        ))
+        let n = input.n_elements();
+        let output = alloc_output::<OutComplex>(self.runtime(), &input.shape);
+        if n == 0 {
+            return Ok(output);
+        }
+        let output_part_len = n
+            .checked_mul(2)
+            .ok_or_else(|| crate::Error::BackendFailure {
+                op: "convert",
+                message: "complex output part length overflow".into(),
+            })?;
+        let output_parts =
+            typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, output_part_len, "convert")?;
+        let input_arg = typed_tensor_array_arg(input, "convert")?;
+        // SAFETY: The checked raw-array helpers prove that `input_arg` covers
+        // exactly the dense input shape and `output_parts` covers the complete
+        // real/imaginary scalar representation of the output allocation.
+        launch(self.runtime().client(), output_parts, input_arg, n);
+        Ok(output)
     }
 
     fn convert_c32_to_f32(
@@ -1202,6 +1196,11 @@ impl CubeclBackend {
         let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
         let updates_arg = typed_tensor_binding(updates, "scatter")?;
         unsafe {
+            // SAFETY: `scatter_launch_meta` validates the scatter/update
+            // shapes and dimension-number mappings. `typed_tensor_binding`
+            // validates every logical tensor buffer length. The launch domain
+            // is `scatter_update_len(meta)`, and the kernel maps each launched
+            // update through the validated metadata before indexing.
             indexing::scatter_float_kernel::launch_unchecked::<T, I, CudaRuntime>(
                 client,
                 cube_count_for_len(update_len),
@@ -1295,6 +1294,13 @@ impl CubeclBackend {
         let scatter_arg = typed_tensor_binding(scatter_indices, "scatter")?;
         let updates_arg = typed_tensor_binding(updates, "scatter")?;
         unsafe {
+            // SAFETY: `scatter_launch_meta` validates the scatter/update
+            // shapes and dimension-number mappings. `typed_tensor_binding`
+            // validates logical tensor buffers, while `typed_tensor_array_arg_as`
+            // proves complex real/imaginary part arrays stay within their
+            // backing allocations. The launch domain is
+            // `scatter_update_len(meta)` and the kernel indexes via the
+            // validated metadata.
             indexing::scatter_complex_kernel::launch_unchecked::<T, F, I, CudaRuntime>(
                 client,
                 cube_count_for_len(update_len),
@@ -1322,140 +1328,116 @@ impl CubeclBackend {
 impl TensorBackend for CubeclBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("add", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "add",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::add_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("add", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "add",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::add_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
-                dispatch::ensure_same_shape("add", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "add",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::add_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C32)
-            }
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
-                dispatch::ensure_same_shape("add", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "add",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::add_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "add",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::add_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "add",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::add_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "add",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::add_complex::launch_unchecked::<Complex32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C32),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "add",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::add_complex::launch_unchecked::<Complex64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C64),
             _ => Err(dtype_mismatch("add", lhs, rhs)),
         }
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("mul", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "mul",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::mul_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("mul", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "mul",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::mul_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
-                dispatch::ensure_same_shape("mul", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "mul",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::mul_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C32)
-            }
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
-                dispatch::ensure_same_shape("mul", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "mul",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::mul_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "mul",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::mul_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "mul",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::mul_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "mul",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::mul_complex::launch_unchecked::<Complex32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C32),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "mul",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::mul_complex::launch_unchecked::<Complex64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C64),
             _ => Err(dtype_mismatch("mul", lhs, rhs)),
         }
     }
@@ -1554,70 +1536,58 @@ impl TensorBackend for CubeclBackend {
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("div", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "div",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("div", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "div",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
-                dispatch::ensure_same_shape("div", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "div",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C32)
-            }
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
-                dispatch::ensure_same_shape("div", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "div",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::div_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::C64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "div",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "div",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "div",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C32),
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "div",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::div_complex::launch_unchecked::<Complex64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::C64),
             _ => Err(dtype_mismatch("div", lhs, rhs)),
         }
     }
@@ -1690,38 +1660,32 @@ impl TensorBackend for CubeclBackend {
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("maximum", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "maximum",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::maximum_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("maximum", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "maximum",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::maximum_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "maximum",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::maximum_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "maximum",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::maximum_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
                     op: "maximum",
@@ -1734,38 +1698,32 @@ impl TensorBackend for CubeclBackend {
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("minimum", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "minimum",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::minimum_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("minimum", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "minimum",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::minimum_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "minimum",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::minimum_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "minimum",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::minimum_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
                     op: "minimum",
@@ -1778,50 +1736,44 @@ impl TensorBackend for CubeclBackend {
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("compare", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "compare",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::compare_float::launch_unchecked::<f32, CudaRuntime>(
-                            client,
-                            count,
-                            dim,
-                            out,
-                            lhs_arg,
-                            rhs_arg,
-                            dispatch::compare_mode(dir),
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("compare", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "compare",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::compare_float::launch_unchecked::<f64, CudaRuntime>(
-                            client,
-                            count,
-                            dim,
-                            out,
-                            lhs_arg,
-                            rhs_arg,
-                            dispatch::compare_mode(dir),
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "compare",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_float::launch_unchecked::<f32, CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "compare",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::compare_float::launch_unchecked::<f64, CudaRuntime>(
+                        client,
+                        count,
+                        dim,
+                        out,
+                        lhs_arg,
+                        rhs_arg,
+                        dispatch::compare_mode(dir),
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
                     op: "compare",
@@ -1839,42 +1791,34 @@ impl TensorBackend for CubeclBackend {
         on_false: &Tensor,
     ) -> crate::Result<Tensor> {
         match (pred, on_true, on_false) {
-            (Tensor::F32(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => {
-                dispatch::ensure_same_shape("select", &pred.shape, &on_true.shape)?;
-                dispatch::ensure_same_shape("select", &pred.shape, &on_false.shape)?;
-                launch_ternary(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    &pred.shape,
-                    "select",
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(pred), Tensor::F64(on_true), Tensor::F64(on_false)) => {
-                dispatch::ensure_same_shape("select", &pred.shape, &on_true.shape)?;
-                dispatch::ensure_same_shape("select", &pred.shape, &on_false.shape)?;
-                launch_ternary(
-                    self.runtime(),
-                    pred,
-                    on_true,
-                    on_false,
-                    &pred.shape,
-                    "select",
-                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                        elementwise::select_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, pred_arg, true_arg, false_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => launch_ternary(
+                self.runtime(),
+                pred,
+                on_true,
+                on_false,
+                &pred.shape,
+                "select",
+                |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                    elementwise::select_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, pred_arg, true_arg, false_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(pred), Tensor::F64(on_true), Tensor::F64(on_false)) => launch_ternary(
+                self.runtime(),
+                pred,
+                on_true,
+                on_false,
+                &pred.shape,
+                "select",
+                |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                    elementwise::select_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, pred_arg, true_arg, false_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
             | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
@@ -1888,42 +1832,34 @@ impl TensorBackend for CubeclBackend {
 
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
         match (input, lower, upper) {
-            (Tensor::F32(input), Tensor::F32(lower), Tensor::F32(upper)) => {
-                dispatch::ensure_same_shape("clamp", &input.shape, &lower.shape)?;
-                dispatch::ensure_same_shape("clamp", &input.shape, &upper.shape)?;
-                launch_ternary(
-                    self.runtime(),
-                    input,
-                    lower,
-                    upper,
-                    &input.shape,
-                    "clamp",
-                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                        elementwise::clamp_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, input_arg, lower_arg, upper_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(input), Tensor::F64(lower), Tensor::F64(upper)) => {
-                dispatch::ensure_same_shape("clamp", &input.shape, &lower.shape)?;
-                dispatch::ensure_same_shape("clamp", &input.shape, &upper.shape)?;
-                launch_ternary(
-                    self.runtime(),
-                    input,
-                    lower,
-                    upper,
-                    &input.shape,
-                    "clamp",
-                    |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
-                        elementwise::clamp_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, input_arg, lower_arg, upper_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(input), Tensor::F32(lower), Tensor::F32(upper)) => launch_ternary(
+                self.runtime(),
+                input,
+                lower,
+                upper,
+                &input.shape,
+                "clamp",
+                |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
+                    elementwise::clamp_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, input_arg, lower_arg, upper_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(input), Tensor::F64(lower), Tensor::F64(upper)) => launch_ternary(
+                self.runtime(),
+                input,
+                lower,
+                upper,
+                &input.shape,
+                "clamp",
+                |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
+                    elementwise::clamp_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, input_arg, lower_arg, upper_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
             | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
@@ -2168,38 +2104,32 @@ impl TensorBackend for CubeclBackend {
 
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
-                dispatch::ensure_same_shape("pow", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "pow",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::pow_float::launch_unchecked::<f32, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F32)
-            }
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
-                dispatch::ensure_same_shape("pow", &lhs.shape, &rhs.shape)?;
-                launch_binary(
-                    self.runtime(),
-                    lhs,
-                    rhs,
-                    &lhs.shape,
-                    "pow",
-                    |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                        elementwise::pow_float::launch_unchecked::<f64, CudaRuntime>(
-                            client, count, dim, out, lhs_arg, rhs_arg,
-                        );
-                    },
-                )
-                .map(Tensor::F64)
-            }
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "pow",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::pow_float::launch_unchecked::<f32, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F32),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+                self.runtime(),
+                lhs,
+                rhs,
+                &lhs.shape,
+                "pow",
+                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                    elementwise::pow_float::launch_unchecked::<f64, CudaRuntime>(
+                        client, count, dim, out, lhs_arg, rhs_arg,
+                    );
+                },
+            )
+            .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
                     op: "pow",

@@ -123,6 +123,11 @@ pub fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_sum_float::launch_unchecked::<F, R>(
             client,
             cube_count,
@@ -164,6 +169,11 @@ pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_sum_int::launch_unchecked::<I, R>(
             client,
             cube_count,
@@ -206,6 +216,11 @@ pub fn launch_sum_complex<R: Runtime, C: Complex + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_sum_complex::launch_unchecked::<C, R>(
             client,
             cube_count,
@@ -247,6 +262,11 @@ pub fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_prod_float::launch_unchecked::<F, R>(
             client,
             cube_count,
@@ -288,6 +308,11 @@ pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_prod_int::launch_unchecked::<I, R>(
             client,
             cube_count,
@@ -330,6 +355,11 @@ pub fn launch_prod_complex<R: Runtime, C: Complex + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_prod_complex::launch_unchecked::<C, R>(
             client,
             cube_count,
@@ -371,6 +401,11 @@ pub fn launch_max_float<R: Runtime, F: Float + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_max_float::launch_unchecked::<F, R>(
             client,
             cube_count,
@@ -412,6 +447,11 @@ pub fn launch_min_float<R: Runtime, F: Float + CubeElement>(
         launch_with_unit_settings(client, problem, strategy);
 
     unsafe {
+        // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
+        // and keepdims output shapes are compatible and the reduce axis is
+        // non-empty. `launch_with_unit_settings` derives the launched output
+        // domain from that validated problem; the reduction kernel uses
+        // `output_len == problem.reduce_count` to guard output indexing.
         kernels::reduce_min_float::launch_unchecked::<F, R>(
             client,
             cube_count,

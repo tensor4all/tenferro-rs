@@ -17,6 +17,7 @@ It supports:
 
 - [Getting Started](getting-started/index.md)
 - [Choosing an API](guides/choosing-an-api.md)
+- [Custom Tensor Operations](guides/custom-operations.md)
 - [Devices and GPU](guides/devices-and-gpu.md)
 - [API Reference](api/index.md)
 

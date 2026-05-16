@@ -147,6 +147,76 @@ impl<B: TensorBackend> EagerTensor<B> {
         self.binary_op(b, StdTensorOp::FullPivLuSolve { transpose_a: false })
     }
 
+    /// Solve `A x = rhs` using complete-pivoting LU factorization.
+    ///
+    /// This is a shorter alias for [`Self::full_piv_lu_solve`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]), ctx.clone());
+    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]), ctx);
+    /// let x = a.solve(&b).unwrap();
+    ///
+    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[2.0, 2.0]);
+    /// ```
+    pub fn solve(&self, rhs: &Self) -> Result<Self> {
+        self.full_piv_lu_solve(rhs)
+    }
+
+    /// Solve `x A = rhs`, returning `rhs * A^{-1}` without forming an inverse.
+    ///
+    /// This uses the identity `rhs * A^{-1} = (A^T \ rhs^T)^T`, so AD flows
+    /// through the existing linear solve rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]), ctx.clone());
+    /// let rhs = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1, 2], vec![4.0_f64, 8.0]), ctx);
+    /// let x = a.right_solve(&rhs).unwrap();
+    ///
+    /// assert_eq!(x.data().shape(), &[1, 2]);
+    /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[2.0, 2.0]);
+    /// ```
+    pub fn right_solve(&self, rhs: &Self) -> Result<Self> {
+        let lhs_shape = self.data().shape();
+        let rhs_shape = rhs.data().shape();
+        if lhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::RankMismatch {
+                op: "right_solve",
+                expected: 2,
+                actual: lhs_shape.len(),
+            }
+            .into());
+        }
+        if rhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::RankMismatch {
+                op: "right_solve",
+                expected: 2,
+                actual: rhs_shape.len(),
+            }
+            .into());
+        }
+        if lhs_shape[1] != rhs_shape[1] {
+            return Err(tenferro_tensor::Error::ShapeMismatch {
+                op: "right_solve",
+                lhs: lhs_shape.to_vec(),
+                rhs: rhs_shape.to_vec(),
+            }
+            .into());
+        }
+        let a_t = self.transpose(&[1, 0])?;
+        let rhs_t = rhs.transpose(&[1, 0])?;
+        a_t.full_piv_lu_solve(&rhs_t)?.transpose(&[1, 0])
+    }
+
     /// Cholesky factorization: `A = L L^T` for real inputs.
     ///
     /// # Examples

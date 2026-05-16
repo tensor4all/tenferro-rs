@@ -36,6 +36,8 @@ website:
           - guides/tensor-operations.md
           - guides/einsum.md
           - guides/linear-algebra.md
+          - guides/custom-operations.md
+          - guides/tenferro-fft.md
           - guides/autodiff.md
           - guides/devices-and-gpu.md
           - guides/memory-order.md

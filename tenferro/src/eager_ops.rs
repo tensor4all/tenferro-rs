@@ -125,6 +125,69 @@ impl<B: TensorBackend> EagerTensor<B> {
         self.binary_op(other, StdTensorOp::DotGeneral { config })
     }
 
+    /// Matrix multiplication for rank-2 tensors.
+    ///
+    /// This is a convenience wrapper over [`Self::dot_general`] that
+    /// contracts the left matrix's column axis with the right matrix's row
+    /// axis.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+    ///
+    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let a = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     ctx.clone(),
+    /// );
+    /// let b = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec(vec![2, 1], vec![5.0_f64, 6.0]),
+    ///     ctx,
+    /// );
+    /// let c = a.matmul(&b).unwrap();
+    ///
+    /// assert_eq!(c.data().shape(), &[2, 1]);
+    /// assert_eq!(c.data().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
+    /// ```
+    pub fn matmul(&self, other: &Self) -> Result<Self> {
+        let lhs_shape = self.data().shape();
+        let rhs_shape = other.data().shape();
+        if lhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::RankMismatch {
+                op: "matmul",
+                expected: 2,
+                actual: lhs_shape.len(),
+            }
+            .into());
+        }
+        if rhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::RankMismatch {
+                op: "matmul",
+                expected: 2,
+                actual: rhs_shape.len(),
+            }
+            .into());
+        }
+        if lhs_shape[1] != rhs_shape[0] {
+            return Err(tenferro_tensor::Error::ShapeMismatch {
+                op: "matmul",
+                lhs: lhs_shape.to_vec(),
+                rhs: rhs_shape.to_vec(),
+            }
+            .into());
+        }
+        self.dot_general(
+            other,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+    }
+
     /// Permute tensor axes.
     ///
     /// # Examples

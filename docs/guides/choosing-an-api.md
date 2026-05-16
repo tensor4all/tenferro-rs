@@ -8,6 +8,7 @@ Use the simplest tensor layer that matches the workflow.
 | Compile-time scalar type while still owning dense data | `TypedTensor<T>` |
 | PyTorch-style scalar-loss `backward()` | `EagerTensor<B>` + `EagerContext<B>` |
 | `grad`, `vjp`, `jvp`, HVP, graph optimization | `TracedTensor` + `Engine<B>` |
+| Tensor operation not built into tenferro | an extension crate; see [Custom Tensor Operations](custom-operations.md) |
 
 ## Rule of Thumb
 
@@ -30,3 +31,8 @@ eager, and traced workflows. GPU tensors use explicit upload/download at
 backend boundaries; tenferro does not silently fall back to CPU when a GPU
 operation or dtype is unavailable. See [Devices and GPU](devices-and-gpu.md)
 for the current CUDA operation and dtype matrix.
+
+When a project needs a tensor operation outside the built-in surface, prefer a
+focused extension crate over adding application-specific APIs to tenferro
+itself. The [tenferro-fft](tenferro-fft.md) package shows this pattern for
+Fourier transforms.
