@@ -26,8 +26,7 @@ macro_rules! delegate {
 macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            let input = input.to_col_major()?;
-            match &input {
+            match input {
                 Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::F32),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::F64),
                 Tensor::C32(t) => linalg::$name(self.ctx, self.buffers, t).map(Tensor::C32),
@@ -43,8 +42,7 @@ macro_rules! linalg_single {
 macro_rules! linalg_single {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            let input = input.to_col_major()?;
-            match &input {
+            match input {
                 Tensor::F32(t) => linalg::$name(self.buffers, t).map(Tensor::F32),
                 Tensor::F64(t) => linalg::$name(self.buffers, t).map(Tensor::F64),
                 Tensor::C32(t) => linalg::$name(self.buffers, t).map(Tensor::C32),
@@ -60,8 +58,7 @@ macro_rules! linalg_single {
 macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-            let input = input.to_col_major()?;
-            match &input {
+            match input {
                 Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
@@ -81,8 +78,7 @@ macro_rules! linalg_multi {
 macro_rules! linalg_multi_result {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-            let input = input.to_col_major()?;
-            match &input {
+            match input {
                 Tensor::F32(t) => linalg::$name(self.ctx, self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.ctx, self.buffers, t)
@@ -102,8 +98,7 @@ macro_rules! linalg_multi_result {
 macro_rules! linalg_multi {
     ($name:ident) => {
         fn $name(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-            let input = input.to_col_major()?;
-            match &input {
+            match input {
                 Tensor::F32(t) => linalg::$name(self.buffers, t)
                     .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
                 Tensor::F64(t) => linalg::$name(self.buffers, t)
@@ -251,14 +246,13 @@ impl TensorExec for CpuExecSession<'_> {
         ) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
-        let input = input.to_col_major()?;
         #[cfg(feature = "cpu-faer")]
         {
-            linalg::eig(self.ctx, self.buffers, &input)
+            linalg::eig(self.ctx, self.buffers, input)
         }
         #[cfg(feature = "cpu-blas")]
         {
-            linalg::eig(self.buffers, &input)
+            linalg::eig(self.buffers, input)
         }
     }
 
@@ -271,9 +265,7 @@ impl TensorExec for CpuExecSession<'_> {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> crate::Result<Tensor> {
-        let a = a.to_col_major()?;
-        let b = b.to_col_major()?;
-        match (&a, &b) {
+        match (a, b) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
                 self.ctx,
@@ -386,9 +378,7 @@ impl TensorExec for CpuExecSession<'_> {
         b: &Tensor,
         transpose_a: bool,
     ) -> crate::Result<Tensor> {
-        let a = a.to_col_major()?;
-        let b = b.to_col_major()?;
-        match (&a, &b) {
+        match (a, b) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F32(a), Tensor::F32(b)) => {
                 linalg::full_piv_lu_solve(self.ctx, self.buffers, a, b, transpose_a)

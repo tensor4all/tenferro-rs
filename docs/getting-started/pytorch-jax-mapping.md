@@ -49,8 +49,8 @@ let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0
 
 then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 
-Use `Tensor::from_vec_row_major` when the flat input data is already in
-PyTorch, NumPy, or JAX row-major order.
+Convert flat input data first when it is already in PyTorch, NumPy, or JAX
+row-major order, then construct the tensor with `Tensor::from_vec`.
 
 ### Explicit CUDA transfer
 

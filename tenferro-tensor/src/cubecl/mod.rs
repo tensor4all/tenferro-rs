@@ -2301,31 +2301,26 @@ impl TensorBackend for CubeclBackend {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
-                order: t.order,
             })),
             Tensor::F64(t) => Ok(Tensor::F64(TypedTensor {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
-                order: t.order,
             })),
             Tensor::I64(t) => Ok(Tensor::I64(TypedTensor {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
-                order: t.order,
             })),
             Tensor::C32(t) => Ok(Tensor::C32(TypedTensor {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
-                order: t.order,
             })),
             Tensor::C64(t) => Ok(Tensor::C64(TypedTensor {
                 buffer: t.buffer.clone(),
                 shape: shape.to_vec(),
                 placement: t.placement.clone(),
-                order: t.order,
             })),
         }
     }

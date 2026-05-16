@@ -1,7 +1,5 @@
 //! Host-to-device and device-to-host transfers via CubeCL-managed allocations.
 
-use std::borrow::Cow;
-
 use cubecl::client::ComputeClient;
 use cubecl::prelude::CubeElement;
 use cubecl_cuda::CudaRuntime;
@@ -9,7 +7,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::cubecl::runtime::CubeclRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, MemoryOrder, Placement, Tensor, TypedTensor,
+    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, Tensor, TypedTensor,
 };
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
@@ -85,32 +83,8 @@ fn upload_typed<T: CubeElement + Clone>(
     device_ordinal: usize,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    let upload_source = canonical_host_tensor_for_upload(typed)?;
-    let host_data = match &upload_source.buffer {
+    let host_data = match &typed.buffer {
         Buffer::Host(data) => data,
-        Buffer::Backend(_) | Buffer::Cubecl(_) => unreachable!("canonical upload source is host"),
-    };
-
-    let handle = client.create_from_slice(T::as_bytes(host_data));
-    Ok(TypedTensor {
-        buffer: Buffer::Cubecl(CubeclBuffer::new(handle, host_data.len())),
-        shape: upload_source.shape.clone(),
-        placement: Placement {
-            memory_kind: MemoryKind::Device,
-            resident_device: Some(ComputeDevice {
-                kind: "cuda".into(),
-                ordinal: device_ordinal,
-            }),
-        },
-        order: MemoryOrder::ColMajor,
-    })
-}
-
-pub(crate) fn canonical_host_tensor_for_upload<T: Clone>(
-    typed: &TypedTensor<T>,
-) -> crate::Result<Cow<'_, TypedTensor<T>>> {
-    match &typed.buffer {
-        Buffer::Host(_) => {}
         Buffer::Backend(_) => {
             return Err(crate::Error::BackendFailure {
                 op: "upload",
@@ -124,11 +98,19 @@ pub(crate) fn canonical_host_tensor_for_upload<T: Clone>(
             });
         }
     };
-    if typed.order == MemoryOrder::ColMajor {
-        Ok(Cow::Borrowed(typed))
-    } else {
-        typed.to_col_major().map(Cow::Owned)
-    }
+
+    let handle = client.create_from_slice(T::as_bytes(host_data));
+    Ok(TypedTensor {
+        buffer: Buffer::Cubecl(CubeclBuffer::new(handle, host_data.len())),
+        shape: typed.shape.clone(),
+        placement: Placement {
+            memory_kind: MemoryKind::Device,
+            resident_device: Some(ComputeDevice {
+                kind: "cuda".into(),
+                ordinal: device_ordinal,
+            }),
+        },
+    })
 }
 
 fn download_typed<T: CubeElement + Clone>(

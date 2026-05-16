@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
-use strided_kernel::{copy_into, map_into, Identity, StridedView};
+use strided_kernel::{col_major_strides, copy_into, map_into, Identity, StridedView};
 
 use crate::{
     types::{flat_to_multi, Tensor, TypedTensor},
@@ -65,7 +65,7 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
 fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, T, Identity>> {
     match &tensor.buffer {
         crate::Buffer::Host(data) => {
-            let strides = crate::contiguous_strides(&tensor.shape, tensor.order);
+            let strides = col_major_strides(&tensor.shape);
             StridedView::new(data, &tensor.shape, &strides, 0)
                 .map_err(|err| backend_failure("structural", err))
         }
@@ -231,7 +231,6 @@ pub fn typed_reshape<T: Clone>(
         buffer: tensor.buffer.clone(),
         shape: shape.to_vec(),
         placement: tensor.placement.clone(),
-        order: tensor.order,
     })
 }
 
@@ -244,7 +243,7 @@ pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
     let mut seen = vec![false; shape.len()];
     let mut base_dims = vec![1usize; shape.len()];
     let mut base_strides = vec![0isize; shape.len()];
-    let source_strides = crate::contiguous_strides(&tensor.shape, tensor.order);
+    let source_strides = col_major_strides(&tensor.shape);
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
         if seen[dst_axis] {

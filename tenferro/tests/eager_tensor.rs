@@ -91,16 +91,15 @@ fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
 }
 
 #[test]
-fn row_major_eager_input_uses_logical_shape_and_values() {
+fn matrix_eager_input_uses_column_major_values() {
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]),
         test_ctx(),
     );
     let y = &x + &x;
-    let row_major = y.data().to_row_major().expect("row-major conversion");
 
     assert_eq!(y.data().shape(), &[2, 3]);
-    assert_eq!(f64_data(&row_major), &[2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
+    assert_eq!(f64_data(y.data()), &[2.0, 8.0, 4.0, 10.0, 6.0, 12.0]);
 }
 
 #[test]

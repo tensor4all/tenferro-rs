@@ -1,51 +1,73 @@
 # Memory Order
 
-tenferro stores dense tensors in column-major order by default. In a 2D tensor,
-the leftmost dimension varies fastest in memory.
+tenferro dense tensors use column-major flat buffers. The leftmost dimension
+varies fastest in memory.
 
 ```rust
-use tenferro::{MemoryOrder, Tensor};
+use tenferro::Tensor;
 
-let col = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-assert_eq!(col.order(), MemoryOrder::ColMajor);
+let tensor = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+assert_eq!(tensor.shape(), &[2, 3]);
+assert_eq!(
+    tensor.as_slice::<f64>().unwrap(),
+    &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+);
 ```
 
-For PyTorch, NumPy, and JAX-style row-major flat data, import with
-`Tensor::from_vec_row_major`:
+The logical matrix is:
+
+```text
+[[1, 2, 3],
+ [4, 5, 6]]
+```
+
+## Importing Row-Major Data
+
+PyTorch, NumPy, and JAX examples often show row-major flat buffers. Convert
+those buffers to column-major before constructing a tenferro tensor.
 
 ```rust
-use tenferro::{MemoryOrder, Tensor};
+use tenferro::Tensor;
 
-let row = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-assert_eq!(row.order(), MemoryOrder::RowMajor);
+fn row_major_to_column_major<T: Copy>(shape: &[usize], data: &[T]) -> Vec<T> {
+    assert_eq!(shape.len(), 2);
+    let rows = shape[0];
+    let cols = shape[1];
+    assert_eq!(data.len(), rows * cols);
 
-let col = row.to_col_major().unwrap();
-assert_eq!(col.order(), MemoryOrder::ColMajor);
-assert_eq!(col.as_slice::<f64>().unwrap(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let mut out = Vec::with_capacity(data.len());
+    for col in 0..cols {
+        for row in 0..rows {
+            out.push(data[row * cols + col]);
+        }
+    }
+    out
+}
+
+let shape = vec![2, 3];
+let row_major = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+let column_major = row_major_to_column_major(&shape, &row_major);
+let tensor = Tensor::from_vec(shape, column_major);
+
+assert_eq!(
+    tensor.as_slice::<f64>().unwrap(),
+    &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+);
 ```
-
-Use `to_col_major()` or `to_row_major()` when you need a specific owned memory
-order. These methods preserve the logical tensor values and reorder the owned
-buffer when needed.
 
 ## Owned Export
 
-Owned export is zero-copy only when the tensor already has the requested
-memory order:
+Owned export returns the column-major host buffer:
 
 ```rust
-use tenferro::{MemoryOrder, Tensor};
+use tenferro::Tensor;
 
-let row = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-let (shape, data) = row.try_into_vec_row_major::<f64>().unwrap();
+let tensor = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+let (shape, data) = tensor.try_into_vec::<f64>().unwrap();
+
 assert_eq!(shape, vec![2, 2]);
-assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
-
-let col = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-let (_shape, data) = col.try_into_vec_with_order::<f64>(MemoryOrder::ColMajor).unwrap();
 assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);
 ```
 
-If the order does not match, convert first with `to_col_major()` or
-`to_row_major()`, then export with `try_into_vec_col_major()`,
-`try_into_vec_row_major()`, or `try_into_vec_with_order::<T>(...)`.
+Convert the exported buffer in your application if a consumer expects
+row-major data.

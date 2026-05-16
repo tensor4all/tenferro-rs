@@ -1,6 +1,6 @@
 //! Ported v1 einsum tests adapted for the v2 traced pipeline.
 //!
-//! Data is stored in **column-major** order. A helper `row_to_col_major` is
+//! Data is stored in **column-major** order. A helper `row_major_to_column_major` is
 //! available for converting row-major test data when needed.
 
 use num_complex::Complex64;
@@ -36,7 +36,7 @@ fn get_v2(t: &Tensor, idx: &[usize]) -> f64 {
 
 /// Convert row-major data to column-major for a given shape.
 #[allow(dead_code)]
-fn row_to_col_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
+fn row_major_to_column_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
     let n: usize = shape.iter().product();
     let mut col_data = vec![0.0; n];
     let rank = shape.len();

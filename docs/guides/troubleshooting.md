@@ -58,8 +58,9 @@ supported scalar type.
 ## Column-Major and Row-Major Confusion
 
 `Tensor::from_vec` reads flat data as column-major. When porting PyTorch,
-NumPy, or JAX examples that use row-major flat data, use
-`Tensor::from_vec_row_major` or convert with `to_row_major()` before exporting.
+NumPy, or JAX examples that use row-major flat data, convert the data to
+column-major before construction. If another library expects row-major output,
+convert the exported `try_into_vec::<T>()` buffer at that boundary.
 See [Memory Order](memory-order.md).
 
 ## CPU Backend Feature Conflicts

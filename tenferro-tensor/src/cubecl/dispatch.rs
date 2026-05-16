@@ -5,7 +5,7 @@ use cubecl_cuda::CudaRuntime;
 use crate::config::CompareDir;
 use crate::cubecl::CubeclRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, MemoryOrder, Placement, Tensor, TypedTensor,
+    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, Tensor, TypedTensor,
 };
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -78,12 +78,6 @@ pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
             ),
         });
     }
-    if tensor.order != MemoryOrder::ColMajor {
-        return Err(crate::Error::BackendFailure {
-            op,
-            message: "expected column-major GPU tensor; row-major host tensors must be canonicalized during upload".into(),
-        });
-    }
     let (shape, strides) = cubecl_shape_and_strides(&tensor.shape);
 
     // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
@@ -147,7 +141,6 @@ pub(crate) fn typed_from_cubecl<T>(
                 ordinal: device_ordinal,
             }),
         },
-        order: crate::MemoryOrder::ColMajor,
     }
 }
 
