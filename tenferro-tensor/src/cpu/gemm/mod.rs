@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::DotGeneralConfig;
 use crate::cpu::structural::typed_transpose;
-use crate::types::{col_major_strides, contiguous_strides, Buffer, TypedTensor};
+use crate::types::{col_major_strides, Buffer, TypedTensor};
 use crate::Error;
 
 #[cfg(feature = "cpu-blas")]
@@ -261,12 +261,8 @@ fn analyse_gemm<T>(
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&lhs.shape, lhs.order)
-        .into_iter()
-        .collect();
-    let rhs_strides: SmallVec<[isize; 8]> = contiguous_strides(&rhs.shape, rhs.order)
-        .into_iter()
-        .collect();
+    let lhs_strides: SmallVec<[isize; 8]> = col_major_strides(&lhs.shape).into_iter().collect();
+    let rhs_strides: SmallVec<[isize; 8]> = col_major_strides(&rhs.shape).into_iter().collect();
 
     let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims
@@ -416,7 +412,6 @@ where
             buffer: Buffer::Host(vec![T::zero(); out_n]),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
-            order: crate::MemoryOrder::ColMajor,
         });
     }
 
@@ -466,7 +461,6 @@ where
         buffer: Buffer::Host(out_data),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
-        order: crate::MemoryOrder::ColMajor,
     })
 }
 
@@ -527,7 +521,6 @@ where
             buffer: Buffer::Host(vec![T::zero(); out_n]),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
-            order: crate::MemoryOrder::ColMajor,
         }));
     }
 
@@ -602,7 +595,6 @@ where
         buffer: Buffer::Host(out),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
-        order: crate::MemoryOrder::ColMajor,
     }))
 }
 

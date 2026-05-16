@@ -523,15 +523,11 @@ fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
 
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     match tensor {
-        Tensor::I64(t) => {
-            let t = t.to_col_major()?;
-            Ok(IndexTensor {
-                shape: t.shape.clone(),
-                values: t.host_data().to_vec(),
-            })
-        }
+        Tensor::I64(t) => Ok(IndexTensor {
+            shape: t.shape.clone(),
+            values: t.host_data().to_vec(),
+        }),
         Tensor::F32(t) => {
-            let t = t.to_col_major()?;
             let values: crate::Result<Vec<i64>> = t
                 .host_data()
                 .iter()
@@ -543,7 +539,6 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
             })
         }
         Tensor::F64(t) => {
-            let t = t.to_col_major()?;
             let values: crate::Result<Vec<i64>> = t
                 .host_data()
                 .iter()

@@ -130,7 +130,7 @@ pub fn tensor_data_as_col_major(td: &TensorData) -> Result<Vec<f64>, String> {
         ));
     }
     match td.order.as_str() {
-        "row_major" => Ok(row_to_col_major_blocks(&td.data, &td.shape, 1)),
+        "row_major" => Ok(row_major_to_column_major_blocks(&td.data, &td.shape, 1)),
         "col_major" => Ok(td.data.clone()),
         other => Err(format!("unsupported tensor storage order {other}")),
     }
@@ -150,7 +150,7 @@ pub fn complex_tensor_data_as_col_major(td: &TensorData) -> Result<Vec<Complex64
     }
 
     let flat = match td.order.as_str() {
-        "row_major" => row_to_col_major_blocks(&td.data, &td.shape, 2),
+        "row_major" => row_major_to_column_major_blocks(&td.data, &td.shape, 2),
         "col_major" => td.data.clone(),
         other => return Err(format!("unsupported tensor storage order {other}")),
     };
@@ -162,11 +162,11 @@ pub fn complex_tensor_data_as_col_major(td: &TensorData) -> Result<Vec<Complex64
     Ok(out)
 }
 
-pub fn row_to_col_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
-    row_to_col_major_blocks(data, shape, 1)
+pub fn row_major_to_column_major(data: &[f64], shape: &[usize]) -> Vec<f64> {
+    row_major_to_column_major_blocks(data, shape, 1)
 }
 
-pub fn row_to_col_major_blocks(data: &[f64], shape: &[usize], block: usize) -> Vec<f64> {
+pub fn row_major_to_column_major_blocks(data: &[f64], shape: &[usize], block: usize) -> Vec<f64> {
     let total: usize = shape.iter().product();
     if total == 0 {
         return Vec::new();

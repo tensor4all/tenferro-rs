@@ -5,7 +5,7 @@ use cubecl_cuda::CudaRuntime;
 use crate::config::CompareDir;
 use crate::cubecl::CubeclRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, MemoryOrder, Placement, Tensor, TypedTensor,
+    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, Tensor, TypedTensor,
 };
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -53,22 +53,22 @@ pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usiz
     (shape.to_vec(), strides)
 }
 
-pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T>,
-    op: &'static str,
-) -> crate::Result<TensorBinding<CudaRuntime>> {
-    let buffer = cubecl_buffer(tensor, op)?;
-    let expected_len = tensor
-        .shape
+fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usize> {
+    shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .ok_or_else(|| crate::Error::BackendFailure {
             op,
-            message: format!(
-                "shape product overflow for CubeCL tensor shape {:?}",
-                tensor.shape
-            ),
-        })?;
+            message: format!("shape product overflow for CubeCL tensor shape {shape:?}"),
+        })
+}
+
+fn validate_cubecl_buffer_len<T>(
+    tensor: &TypedTensor<T>,
+    buffer: &CubeclBuffer<T>,
+    op: &'static str,
+) -> crate::Result<()> {
+    let expected_len = checked_shape_product(op, &tensor.shape)?;
     if expected_len != buffer.len {
         return Err(crate::Error::BackendFailure {
             op,
@@ -78,12 +78,45 @@ pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
             ),
         });
     }
-    if tensor.order != MemoryOrder::ColMajor {
-        return Err(crate::Error::BackendFailure {
-            op,
-            message: "expected column-major GPU tensor; row-major host tensors must be canonicalized during upload".into(),
-        });
-    }
+    Ok(())
+}
+
+fn validate_raw_unary_shapes<TIn>(
+    input: &TypedTensor<TIn>,
+    out_shape: &[usize],
+    op: &'static str,
+) -> crate::Result<()> {
+    ensure_same_shape(op, &input.shape, out_shape)
+}
+
+fn validate_raw_binary_shapes<TLhs, TRhs>(
+    lhs: &TypedTensor<TLhs>,
+    rhs: &TypedTensor<TRhs>,
+    out_shape: &[usize],
+    op: &'static str,
+) -> crate::Result<()> {
+    ensure_same_shape(op, &lhs.shape, out_shape)?;
+    ensure_same_shape(op, &rhs.shape, out_shape)
+}
+
+fn validate_raw_ternary_shapes<TA, TB, TC>(
+    a: &TypedTensor<TA>,
+    b: &TypedTensor<TB>,
+    c: &TypedTensor<TC>,
+    out_shape: &[usize],
+    op: &'static str,
+) -> crate::Result<()> {
+    ensure_same_shape(op, &a.shape, out_shape)?;
+    ensure_same_shape(op, &b.shape, out_shape)?;
+    ensure_same_shape(op, &c.shape, out_shape)
+}
+
+pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
+    tensor: &TypedTensor<T>,
+    op: &'static str,
+) -> crate::Result<TensorBinding<CudaRuntime>> {
+    let buffer = cubecl_buffer(tensor, op)?;
+    validate_cubecl_buffer_len(tensor, buffer, op)?;
     let (shape, strides) = cubecl_shape_and_strides(&tensor.shape);
 
     // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
@@ -147,7 +180,6 @@ pub(crate) fn typed_from_cubecl<T>(
                 ordinal: device_ordinal,
             }),
         },
-        order: crate::MemoryOrder::ColMajor,
     }
 }
 
@@ -169,7 +201,12 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
-    // SAFETY: `CubeclBuffer::len` tracks the allocation length in elements.
+    validate_cubecl_buffer_len(tensor, buffer, op)?;
+
+    // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
+    // `validate_cubecl_buffer_len` proves `buffer.len` equals the dense shape
+    // product, so raw linear kernels that index `0..out.len()` cannot observe
+    // an array longer than the logical tensor allocation.
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
 }
 
@@ -183,6 +220,7 @@ where
     U: CubeElement + Clone,
 {
     let buffer = cubecl_buffer(tensor, op)?;
+    validate_cubecl_buffer_len(tensor, buffer, op)?;
     let requested_bytes =
         len.checked_mul(core::mem::size_of::<U>())
             .ok_or_else(|| crate::Error::BackendFailure {
@@ -208,9 +246,12 @@ where
         });
     }
 
-    // SAFETY: The checked byte-size invariant proves the requested view stays
-    // within the same CubeCL allocation. Kernels using this helper are
-    // responsible for using a representation-compatible scalar view.
+    // SAFETY: `validate_cubecl_buffer_len` first proves the typed tensor shape
+    // matches the backing allocation. The checked byte-size invariant then
+    // proves the requested representation view stays within the same
+    // allocation. Kernels using this helper are responsible for using a
+    // representation-compatible scalar view, for example complex values as
+    // their real and imaginary scalar parts.
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), len) })
 }
 
@@ -231,6 +272,7 @@ where
     TIn: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
+    validate_raw_unary_shapes(input, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
     if len == 0 {
@@ -239,6 +281,12 @@ where
     let client = rt.client();
     let output_arg = typed_tensor_array_arg(&output, op)?;
     let input_arg = typed_tensor_array_arg(input, op)?;
+    // SAFETY: This helper is the host-side unchecked launch boundary for raw
+    // shape-preserving unary kernels. The shape validation above proves input
+    // and output have the same dense element count; `typed_tensor_array_arg`
+    // proves each raw array length matches its tensor shape. The launch domain
+    // covers `len == output.n_elements()`, and these kernels guard writes with
+    // `ABSOLUTE_POS < out.len()`.
     launch(
         client,
         cube_count_for_len(len),
@@ -274,6 +322,11 @@ where
     let client = rt.client();
     let output_arg = typed_tensor_binding(&output, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
+    // SAFETY: Logical tensor kernels use `TensorBinding`, whose construction
+    // validates shape product against the CubeCL allocation length. The caller
+    // supplies output shape and launch metadata already validated for the
+    // specific structural/indexing operation, and the kernels guard their
+    // launched index domain before mapping logical indices.
     launch(
         client,
         cube_count_for_len(len),
@@ -299,6 +352,9 @@ where
         return Ok(());
     }
     let output_arg = typed_tensor_array_arg(output, op)?;
+    // SAFETY: Nullary raw kernels write only to the validated output array.
+    // The caller-supplied `count`/`dim` must describe the initialized domain,
+    // and kernels using this path guard with `ABSOLUTE_POS < out.len()`.
     launch(rt.client(), count, dim, output_arg);
     Ok(())
 }
@@ -327,6 +383,10 @@ where
     }
     let output_arg = typed_tensor_binding(output, op)?;
     let input_arg = typed_tensor_binding(input, op)?;
+    // SAFETY: `TensorBinding` construction validates shape and backing buffer
+    // length for both tensors. The caller supplies a launch domain derived
+    // from validated operation metadata, and the target kernel guards the
+    // output or update domain before logical tensor indexing.
     launch(rt.client(), count, dim, output_arg, input_arg);
     Ok(())
 }
@@ -351,6 +411,7 @@ where
     TRhs: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
+    validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
     if len == 0 {
@@ -360,6 +421,12 @@ where
     let output_arg = typed_tensor_array_arg(&output, op)?;
     let lhs_arg = typed_tensor_array_arg(lhs, op)?;
     let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    // SAFETY: This helper is the host-side unchecked launch boundary for raw
+    // shape-preserving binary kernels. The shared shape validation above
+    // proves all arrays have the same dense element count; the raw array
+    // helpers prove every CubeCL buffer length matches its tensor shape. The
+    // launch covers `len == output.n_elements()`, and elementwise kernels guard
+    // with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
         cube_count_for_len(len),
@@ -400,6 +467,11 @@ where
     let output_arg = typed_tensor_binding(&output, op)?;
     let lhs_arg = typed_tensor_binding(lhs, op)?;
     let rhs_arg = typed_tensor_binding(rhs, op)?;
+    // SAFETY: Logical tensor kernels receive only `TensorBinding` arguments,
+    // each validated against its backing buffer length. Shape/config
+    // compatibility is checked by the operation-specific metadata builder
+    // before this launch helper is called, and the kernel guards its launched
+    // index domain.
     launch(
         client,
         cube_count_for_len(len),
@@ -434,6 +506,7 @@ where
     TC: CubeElement + Clone,
     TOut: CubeElement + Clone,
 {
+    validate_raw_ternary_shapes(a, b, c, out_shape, op)?;
     let output = alloc_output::<TOut>(rt, out_shape);
     let len = output.n_elements();
     if len == 0 {
@@ -444,6 +517,11 @@ where
     let a_arg = typed_tensor_array_arg(a, op)?;
     let b_arg = typed_tensor_array_arg(b, op)?;
     let c_arg = typed_tensor_array_arg(c, op)?;
+    // SAFETY: This helper is the host-side unchecked launch boundary for raw
+    // shape-preserving ternary kernels. The shared shape validation above
+    // proves all inputs and output have the same dense element count; raw array
+    // construction validates each backing buffer length. Kernels launched by
+    // this helper guard with `ABSOLUTE_POS < out.len()`.
     launch(
         client,
         cube_count_for_len(len),

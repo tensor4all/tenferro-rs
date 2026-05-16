@@ -1,39 +1,19 @@
-use super::{linear_offset_for_order, MemoryOrder, Tensor, TensorScalar, TypedTensor};
+use super::{linear_offset, Tensor, TensorScalar, TypedTensor};
 
-fn try_linear_offset_for_order(
-    shape: &[usize],
-    indices: &[usize],
-    order: MemoryOrder,
-) -> Option<usize> {
+fn try_linear_offset(shape: &[usize], indices: &[usize]) -> Option<usize> {
     if indices.len() != shape.len() {
         return None;
     }
-    match order {
-        MemoryOrder::ColMajor => {
-            let mut offset = 0usize;
-            let mut stride = 1usize;
-            for (&idx, &extent) in indices.iter().zip(shape) {
-                if idx >= extent {
-                    return None;
-                }
-                offset += idx * stride;
-                stride *= extent;
-            }
-            Some(offset)
+    let mut offset = 0usize;
+    let mut stride = 1usize;
+    for (&idx, &extent) in indices.iter().zip(shape) {
+        if idx >= extent {
+            return None;
         }
-        MemoryOrder::RowMajor => {
-            let mut offset = 0usize;
-            let mut stride = 1usize;
-            for (&idx, &extent) in indices.iter().zip(shape).rev() {
-                if idx >= extent {
-                    return None;
-                }
-                offset += idx * stride;
-                stride *= extent;
-            }
-            Some(offset)
-        }
+        offset += idx * stride;
+        stride *= extent;
     }
+    Some(offset)
 }
 
 fn debug_assert_index_in_bounds(shape: &[usize], indices: &[usize]) {
@@ -43,85 +23,45 @@ fn debug_assert_index_in_bounds(shape: &[usize], indices: &[usize]) {
     }
 }
 
-fn linear_offset_unchecked_for_order(
-    shape: &[usize],
-    indices: &[usize],
-    order: MemoryOrder,
-) -> usize {
+fn linear_offset_unchecked(shape: &[usize], indices: &[usize]) -> usize {
     debug_assert_index_in_bounds(shape, indices);
-    match order {
-        MemoryOrder::ColMajor => {
-            let mut offset = 0usize;
-            let mut stride = 1usize;
-            for (&idx, &extent) in indices.iter().zip(shape) {
-                offset += idx * stride;
-                stride *= extent;
-            }
-            offset
-        }
-        MemoryOrder::RowMajor => {
-            let mut offset = 0usize;
-            let mut stride = 1usize;
-            for (&idx, &extent) in indices.iter().zip(shape).rev() {
-                offset += idx * stride;
-                stride *= extent;
-            }
-            offset
-        }
+    let mut offset = 0usize;
+    let mut stride = 1usize;
+    for (&idx, &extent) in indices.iter().zip(shape) {
+        offset += idx * stride;
+        stride *= extent;
     }
+    offset
 }
 
-fn linear_offset2_for_order(shape: &[usize], i: usize, j: usize, order: MemoryOrder) -> usize {
+fn linear_offset2(shape: &[usize], i: usize, j: usize) -> usize {
     assert_eq!(shape.len(), 2);
     assert!(i < shape[0], "index out of bounds");
     assert!(j < shape[1], "index out of bounds");
-    linear_offset2_unchecked_for_order(shape, i, j, order)
+    linear_offset2_unchecked(shape, i, j)
 }
 
-fn linear_offset2_unchecked_for_order(
-    shape: &[usize],
-    i: usize,
-    j: usize,
-    order: MemoryOrder,
-) -> usize {
+fn linear_offset2_unchecked(shape: &[usize], i: usize, j: usize) -> usize {
     debug_assert_eq!(shape.len(), 2);
     debug_assert!(i < shape[0], "index out of bounds");
     debug_assert!(j < shape[1], "index out of bounds");
-    match order {
-        MemoryOrder::ColMajor => i + shape[0] * j,
-        MemoryOrder::RowMajor => j + shape[1] * i,
-    }
+    i + shape[0] * j
 }
 
-fn linear_offset3_for_order(
-    shape: &[usize],
-    i: usize,
-    j: usize,
-    k: usize,
-    order: MemoryOrder,
-) -> usize {
+fn linear_offset3(shape: &[usize], i: usize, j: usize, k: usize) -> usize {
     assert_eq!(shape.len(), 3);
     assert!(i < shape[0], "index out of bounds");
     assert!(j < shape[1], "index out of bounds");
     assert!(k < shape[2], "index out of bounds");
-    linear_offset3_unchecked_for_order(shape, i, j, k, order)
+    linear_offset3_unchecked(shape, i, j, k)
 }
 
-fn linear_offset3_unchecked_for_order(
-    shape: &[usize],
-    i: usize,
-    j: usize,
-    k: usize,
-    order: MemoryOrder,
-) -> usize {
+fn linear_offset3_unchecked(shape: &[usize], i: usize, j: usize, k: usize) -> usize {
     debug_assert_eq!(shape.len(), 3);
     debug_assert!(i < shape[0], "index out of bounds");
     debug_assert!(j < shape[1], "index out of bounds");
     debug_assert!(k < shape[2], "index out of bounds");
-    match order {
-        MemoryOrder::ColMajor => i + shape[0] * (j + shape[1] * k),
-        MemoryOrder::RowMajor => k + shape[2] * (j + shape[1] * i),
-    }
+    i + shape[0] * (j + shape[1] * k)
 }
 
 impl<T: Clone> TypedTensor<T> {
@@ -134,18 +74,14 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.as_physical_slice(), &[1.0, 2.0]);
     /// ```
     pub fn as_physical_slice(&self) -> &[T] {
         self.host_data()
     }
 
-    /// Iterate over the contiguous host buffer in physical memory order.
-    ///
-    /// For column-major tensors this visits the leftmost logical dimension
-    /// fastest. For row-major tensors it visits the rightmost logical
-    /// dimension fastest.
+    /// Iterate over the contiguous column-major host buffer.
     ///
     /// # Examples
     ///
@@ -175,12 +111,7 @@ impl<T: Clone> TypedTensor<T> {
         self.host_data_mut()
     }
 
-    /// Mutably iterate over the contiguous host buffer in physical memory
-    /// order.
-    ///
-    /// For column-major tensors this visits the leftmost logical dimension
-    /// fastest. For row-major tensors it visits the rightmost logical
-    /// dimension fastest.
+    /// Mutably iterate over the contiguous column-major host buffer.
     ///
     /// # Examples
     ///
@@ -204,11 +135,11 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
-        linear_offset2_for_order(&self.shape, i, j, self.order)
+        linear_offset2(&self.shape, i, j)
     }
 
     /// Compute the linear physical-buffer offset for a rank-3 logical index.
@@ -218,11 +149,11 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]);
+    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3, 2], vec![0.0; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
-        linear_offset3_for_order(&self.shape, i, j, k, self.order)
+        linear_offset3(&self.shape, i, j, k)
     }
 
     /// Try to borrow a single element by multi-index.
@@ -239,7 +170,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.try_get(&[2]), None);
     /// ```
     pub fn try_get(&self, indices: &[usize]) -> Option<&T> {
-        let off = try_linear_offset_for_order(&self.shape, indices, self.order)?;
+        let off = try_linear_offset(&self.shape, indices)?;
         self.host_data().get(off)
     }
 
@@ -250,7 +181,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.get2(1, 0), &2.0);
     /// ```
     pub fn get2(&self, i: usize, j: usize) -> &T {
@@ -265,7 +196,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1, 1, 2], vec![3.0, 4.0]);
+    /// let t = TypedTensor::<f64>::from_vec(vec![1, 1, 2], vec![3.0, 4.0]);
     /// assert_eq!(t.get3(0, 0, 1), &4.0);
     /// ```
     pub fn get3(&self, i: usize, j: usize, k: usize) -> &T {
@@ -292,7 +223,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(unsafe { *t.get_unchecked(&[1]) }, 2.0);
     /// ```
     pub unsafe fn get_unchecked(&self, indices: &[usize]) -> &T {
-        let off = linear_offset_unchecked_for_order(&self.shape, indices, self.order);
+        let off = linear_offset_unchecked(&self.shape, indices);
         unsafe { self.host_data().get_unchecked(off) }
     }
 
@@ -310,7 +241,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.as_slice(), &[2.0]);
     /// ```
     pub fn try_get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
-        let off = try_linear_offset_for_order(&self.shape, indices, self.order)?;
+        let off = try_linear_offset(&self.shape, indices)?;
         self.host_data_mut().get_mut(off)
     }
 
@@ -321,7 +252,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// *t.get_mut2(1, 0) = 5.0;
     /// assert_eq!(t.as_slice(), &[1.0, 5.0, 3.0, 4.0]);
     /// ```
@@ -337,7 +268,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1, 1, 2], vec![3.0, 4.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec(vec![1, 1, 2], vec![3.0, 4.0]);
     /// *t.get_mut3(0, 0, 1) = 5.0;
     /// assert_eq!(t.as_slice(), &[3.0, 5.0]);
     /// ```
@@ -368,7 +299,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.as_slice(), &[2.0]);
     /// ```
     pub unsafe fn get_unchecked_mut(&mut self, indices: &[usize]) -> &mut T {
-        let off = linear_offset_unchecked_for_order(&self.shape, indices, self.order);
+        let off = linear_offset_unchecked(&self.shape, indices);
         unsafe { self.host_data_mut().get_unchecked_mut(off) }
     }
 }
@@ -381,11 +312,11 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_row_major(vec![2, 3], vec![0.0_f64; 6]);
-    /// assert_eq!(t.linear_offset(&[1, 0]), 3);
+    /// let t = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    /// assert_eq!(t.linear_offset(&[1, 2]), 5);
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> usize {
-        linear_offset_for_order(self.shape(), indices, self.order())
+        linear_offset(self.shape(), indices)
     }
 
     /// Compute the linear physical-buffer offset for a rank-2 logical index.
@@ -395,11 +326,11 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_row_major(vec![2, 3], vec![0.0_f64; 6]);
-    /// assert_eq!(t.linear_offset2(1, 0), 3);
+    /// let t = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
-        linear_offset2_for_order(self.shape(), i, j, self.order())
+        linear_offset2(self.shape(), i, j)
     }
 
     /// Compute the linear physical-buffer offset for a rank-3 logical index.
@@ -409,11 +340,11 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]);
+    /// let t = Tensor::from_vec(vec![2, 3, 2], vec![0.0_f64; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
-        linear_offset3_for_order(self.shape(), i, j, k, self.order())
+        linear_offset3(self.shape(), i, j, k)
     }
 
     /// Try to borrow the host data as a typed physical-memory-order slice.
@@ -465,7 +396,7 @@ impl Tensor {
     /// assert_eq!(t.try_get::<f32>(&[1]), None);
     /// ```
     pub fn try_get<T: TensorScalar>(&self, indices: &[usize]) -> Option<&T> {
-        let off = try_linear_offset_for_order(self.shape(), indices, self.order())?;
+        let off = try_linear_offset(self.shape(), indices)?;
         self.as_slice::<T>()?.get(off)
     }
 
@@ -484,7 +415,7 @@ impl Tensor {
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
     pub fn try_get_mut<T: TensorScalar>(&mut self, indices: &[usize]) -> Option<&mut T> {
-        let off = try_linear_offset_for_order(self.shape(), indices, self.order())?;
+        let off = try_linear_offset(self.shape(), indices)?;
         self.as_slice_mut::<T>()?.get_mut(off)
     }
 
@@ -508,7 +439,7 @@ impl Tensor {
     /// assert_eq!(unsafe { *t.get_unchecked::<f64>(&[1]).unwrap() }, 2.0);
     /// ```
     pub unsafe fn get_unchecked<T: TensorScalar>(&self, indices: &[usize]) -> Option<&T> {
-        let off = linear_offset_unchecked_for_order(self.shape(), indices, self.order());
+        let off = linear_offset_unchecked(self.shape(), indices);
         let data = self.as_slice::<T>()?;
         Some(unsafe { data.get_unchecked(off) })
     }
@@ -539,7 +470,7 @@ impl Tensor {
         &mut self,
         indices: &[usize],
     ) -> Option<&mut T> {
-        let off = linear_offset_unchecked_for_order(self.shape(), indices, self.order());
+        let off = linear_offset_unchecked(self.shape(), indices);
         let data = self.as_slice_mut::<T>()?;
         Some(unsafe { data.get_unchecked_mut(off) })
     }

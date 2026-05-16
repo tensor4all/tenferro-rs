@@ -27,11 +27,9 @@ not:
 ```
 
 If you are porting examples from PyTorch or JAX, check the flat-data order first.
-Use `Tensor::from_vec_row_major` for row-major flat data, and use
-`to_col_major()` or `to_row_major()` when you need an owned tensor in a
-specific memory order. Owned export through `try_into_vec_col_major()`,
-`try_into_vec_row_major()`, or `try_into_vec_with_order::<T>(...)` is zero-copy
-only when the tensor already has the requested order.
+Convert row-major flat data to column-major before calling `Tensor::from_vec`,
+or write literals directly in column-major order. Owned export through
+`try_into_vec::<T>()` returns the column-major host buffer.
 
 ## Control CPU thread count
 
