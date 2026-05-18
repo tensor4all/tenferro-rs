@@ -6,7 +6,7 @@ use lru::LruCache;
 
 use super::exec::ExecProgram;
 use tenferro_einsum::ContractionTree;
-use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
+use tenferro_tensor::{buffer_pool::BufferPoolStats, cpu::CpuBackend, TensorBackend};
 
 /// Key used for the N-ary einsum cache: `(subscripts, shapes)`.
 pub(crate) type EinsumCacheKey = (String, Vec<Vec<usize>>);
@@ -236,5 +236,40 @@ impl Engine<CpuBackend> {
     /// ```
     pub fn buffer_pool_len(&self) -> usize {
         self.backend.buffer_pool_len()
+    }
+
+    /// Snapshot reusable typed host buffers currently retained by the CPU backend.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// let stats = engine.buffer_pool_stats();
+    /// assert_eq!(stats.buffers, 0);
+    /// assert_eq!(stats.capacity_bytes, 0);
+    /// ```
+    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.backend.buffer_pool_stats()
+    }
+
+    /// Reset all reusable typed host buffers retained by the CPU backend.
+    ///
+    /// This clears tenferro's explicit buffer pool. The process allocator may
+    /// still keep released pages mapped, so operating-system RSS is not a
+    /// precise measure of whether the pool is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// engine.reset_buffer_pool();
+    /// assert_eq!(engine.buffer_pool_len(), 0);
+    /// ```
+    pub fn reset_buffer_pool(&mut self) {
+        self.backend.reset_buffer_pool();
     }
 }

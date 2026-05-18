@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::backend::{TensorBackend, TensorExec};
-use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -142,6 +142,41 @@ impl CpuBackend {
     /// ```
     pub fn buffer_pool_len(&self) -> usize {
         self.buffers.len()
+    }
+
+    /// Snapshot reusable typed host buffers currently retained by this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// let stats = backend.buffer_pool_stats();
+    /// assert_eq!(stats.buffers, 0);
+    /// assert_eq!(stats.capacity_bytes, 0);
+    /// ```
+    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.buffers.stats()
+    }
+
+    /// Reset reusable typed host buffers currently retained by this backend.
+    ///
+    /// This releases pool-owned vectors to the process allocator. Operating
+    /// system RSS may not fall immediately because allocators can retain freed
+    /// pages for future allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.reset_buffer_pool();
+    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// ```
+    pub fn reset_buffer_pool(&mut self) {
+        self.buffers.clear();
     }
 
     /// Run a closure inside this backend's shared rayon thread pool.

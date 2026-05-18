@@ -13,8 +13,37 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::env;
+use std::mem::size_of;
 
 use num_complex::{Complex32, Complex64};
+
+/// Environment variable overriding the CPU buffer-pool retention cap in bytes.
+///
+/// The value is parsed as an unsigned integer. Invalid values fall back to
+/// [`DEFAULT_MAX_RETAINED_CAPACITY_BYTES`].
+pub const BUFFER_POOL_MAX_RETAINED_BYTES_ENV: &str = "TENFERRO_BUFFER_POOL_MAX_RETAINED_BYTES";
+
+/// Default retained CPU buffer capacity per backend.
+///
+/// The cap keeps long-running workloads from accumulating obsolete buffer
+/// sizes as tensor shapes grow while still preserving reuse for hot working
+/// sets.
+pub const DEFAULT_MAX_RETAINED_CAPACITY_BYTES: usize = 100 * 1024 * 1024;
+
+/// Snapshot of typed host buffers retained by a [`BufferPool`].
+///
+/// `buffers` counts retained `Vec` allocations, while `capacity_bytes` counts
+/// their total element capacity in bytes. Allocators may keep freed memory in
+/// process-local arenas after a pool is cleared, so this reports memory that is
+/// still live in the pool rather than operating-system RSS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BufferPoolStats {
+    /// Number of retained vector allocations.
+    pub buffers: usize,
+    /// Total retained vector capacity in bytes.
+    pub capacity_bytes: usize,
+}
 
 /// Typed buffer pool keyed by element capacity and separated by scalar type.
 ///
@@ -38,6 +67,8 @@ pub struct BufferPool {
     i64_pool: BTreeMap<usize, Vec<Vec<i64>>>,
     c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
     c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
+    retained_capacity_bytes: usize,
+    max_retained_capacity_bytes: usize,
 }
 
 /// Scalar types supported by [`BufferPool`].
@@ -117,6 +148,38 @@ fn take_best_fit<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>, len: usize) -> Opti
     buf
 }
 
+fn pool_len<T>(pool: &BTreeMap<usize, Vec<Vec<T>>>) -> usize {
+    pool.values().map(Vec::len).sum()
+}
+
+fn evict_one_from_pool<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>) -> Option<usize> {
+    let key = *pool.keys().next()?;
+    let vecs = pool.get_mut(&key)?;
+    let _ = vecs.pop()?;
+    if vecs.is_empty() {
+        pool.remove(&key);
+    }
+    Some(key.saturating_mul(size_of::<T>()))
+}
+
+#[derive(Clone, Copy)]
+enum TypedPoolKind {
+    F64,
+    F32,
+    I64,
+    C64,
+    C32,
+}
+
+fn smallest_pool_candidate<T>(
+    pool: &BTreeMap<usize, Vec<Vec<T>>>,
+    kind: TypedPoolKind,
+) -> Option<(usize, TypedPoolKind)> {
+    pool.keys()
+        .next()
+        .map(|&capacity| (capacity.saturating_mul(size_of::<T>()), kind))
+}
+
 macro_rules! impl_pool_scalar {
     ($ty:ty, $field:ident) => {
         impl PoolScalar for $ty {
@@ -124,6 +187,9 @@ macro_rules! impl_pool_scalar {
             unsafe fn pool_acquire(pool: &mut BufferPool, len: usize) -> Vec<Self> {
                 match take_best_fit(&mut pool.$field, len) {
                     Some(mut buf) => {
+                        pool.retained_capacity_bytes = pool
+                            .retained_capacity_bytes
+                            .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
                         // SAFETY: caller upholds that elements will be written
                         // before any read. len <= capacity by construction.
                         unsafe { buf.set_len(len) };
@@ -142,7 +208,11 @@ macro_rules! impl_pool_scalar {
             fn pool_release(pool: &mut BufferPool, buf: Vec<Self>) {
                 let cap = buf.capacity();
                 if cap > 0 {
+                    pool.retained_capacity_bytes = pool
+                        .retained_capacity_bytes
+                        .saturating_add(cap.saturating_mul(size_of::<Self>()));
                     pool.$field.entry(cap).or_default().push(buf);
+                    pool.enforce_retention_limit();
                 }
             }
         }
@@ -167,13 +237,63 @@ impl BufferPool {
     /// assert!(pool.is_empty());
     /// ```
     pub fn new() -> Self {
+        Self::with_max_retained_capacity_bytes(default_max_retained_capacity_bytes())
+    }
+
+    /// Create an empty typed buffer pool with a specific retention cap.
+    ///
+    /// A cap of zero disables retention. Use [`BufferPool::unbounded`] only for
+    /// diagnostics or workloads that are externally memory-limited.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::BufferPool;
+    ///
+    /// let pool = BufferPool::with_max_retained_capacity_bytes(1024);
+    /// assert_eq!(pool.max_retained_capacity_bytes(), 1024);
+    /// ```
+    pub fn with_max_retained_capacity_bytes(max_retained_capacity_bytes: usize) -> Self {
         Self {
             f64_pool: BTreeMap::new(),
             f32_pool: BTreeMap::new(),
             i64_pool: BTreeMap::new(),
             c64_pool: BTreeMap::new(),
             c32_pool: BTreeMap::new(),
+            retained_capacity_bytes: 0,
+            max_retained_capacity_bytes,
         }
+    }
+
+    /// Create an empty typed buffer pool without a retention cap.
+    ///
+    /// This preserves the historical behavior and is mainly useful for
+    /// diagnostics or controlled benchmarks.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::BufferPool;
+    ///
+    /// let pool = BufferPool::unbounded();
+    /// assert_eq!(pool.max_retained_capacity_bytes(), usize::MAX);
+    /// ```
+    pub fn unbounded() -> Self {
+        Self::with_max_retained_capacity_bytes(usize::MAX)
+    }
+
+    /// Maximum retained typed host-buffer capacity in bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::BufferPool;
+    ///
+    /// let pool = BufferPool::with_max_retained_capacity_bytes(4096);
+    /// assert_eq!(pool.max_retained_capacity_bytes(), 4096);
+    /// ```
+    pub fn max_retained_capacity_bytes(&self) -> usize {
+        self.max_retained_capacity_bytes
     }
 
     /// Number of retained buffers across all typed pools.
@@ -188,11 +308,50 @@ impl BufferPool {
     /// assert_eq!(pool.len(), 1);
     /// ```
     pub fn len(&self) -> usize {
-        self.f64_pool.values().map(Vec::len).sum::<usize>()
-            + self.f32_pool.values().map(Vec::len).sum::<usize>()
-            + self.i64_pool.values().map(Vec::len).sum::<usize>()
-            + self.c64_pool.values().map(Vec::len).sum::<usize>()
-            + self.c32_pool.values().map(Vec::len).sum::<usize>()
+        self.stats().buffers
+    }
+
+    /// Total retained typed host-buffer capacity in bytes.
+    ///
+    /// This counts capacity that is still live in the pool. The operating
+    /// system RSS may remain high after clearing the pool because the process
+    /// allocator can keep freed pages for future allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::new();
+    /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(2));
+    /// assert_eq!(pool.retained_capacity_bytes(), 16);
+    /// ```
+    pub fn retained_capacity_bytes(&self) -> usize {
+        self.stats().capacity_bytes
+    }
+
+    /// Snapshot retained-buffer count and capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::new();
+    /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
+    /// let stats = pool.stats();
+    /// assert_eq!(stats.buffers, 1);
+    /// assert_eq!(stats.capacity_bytes, 16);
+    /// ```
+    pub fn stats(&self) -> BufferPoolStats {
+        BufferPoolStats {
+            buffers: pool_len(&self.f64_pool)
+                + pool_len(&self.f32_pool)
+                + pool_len(&self.i64_pool)
+                + pool_len(&self.c64_pool)
+                + pool_len(&self.c32_pool),
+            capacity_bytes: self.retained_capacity_bytes,
+        }
     }
 
     /// Acquire a typed vector with length 0 and at least `cap` capacity.
@@ -240,6 +399,70 @@ impl BufferPool {
             && self.c64_pool.is_empty()
             && self.c32_pool.is_empty()
     }
+
+    /// Drop all retained buffers from the pool.
+    ///
+    /// This releases the vectors owned by the pool. The process allocator may
+    /// still keep freed pages mapped for reuse, so operating-system RSS is not
+    /// guaranteed to fall immediately.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::new();
+    /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
+    /// pool.clear();
+    /// assert!(pool.is_empty());
+    /// ```
+    pub fn clear(&mut self) {
+        self.f64_pool.clear();
+        self.f32_pool.clear();
+        self.i64_pool.clear();
+        self.c64_pool.clear();
+        self.c32_pool.clear();
+        self.retained_capacity_bytes = 0;
+    }
+
+    fn enforce_retention_limit(&mut self) {
+        while self.retained_capacity_bytes > self.max_retained_capacity_bytes {
+            let Some(evicted_bytes) = self.evict_smallest_retained_buffer() else {
+                self.retained_capacity_bytes = 0;
+                return;
+            };
+            self.retained_capacity_bytes =
+                self.retained_capacity_bytes.saturating_sub(evicted_bytes);
+        }
+    }
+
+    fn evict_smallest_retained_buffer(&mut self) -> Option<usize> {
+        let candidates = [
+            smallest_pool_candidate(&self.f64_pool, TypedPoolKind::F64),
+            smallest_pool_candidate(&self.f32_pool, TypedPoolKind::F32),
+            smallest_pool_candidate(&self.i64_pool, TypedPoolKind::I64),
+            smallest_pool_candidate(&self.c64_pool, TypedPoolKind::C64),
+            smallest_pool_candidate(&self.c32_pool, TypedPoolKind::C32),
+        ];
+        let (_, kind) = candidates
+            .into_iter()
+            .flatten()
+            .min_by_key(|(bytes, _)| *bytes)?;
+        match kind {
+            TypedPoolKind::F64 => evict_one_from_pool(&mut self.f64_pool),
+            TypedPoolKind::F32 => evict_one_from_pool(&mut self.f32_pool),
+            TypedPoolKind::I64 => evict_one_from_pool(&mut self.i64_pool),
+            TypedPoolKind::C64 => evict_one_from_pool(&mut self.c64_pool),
+            TypedPoolKind::C32 => evict_one_from_pool(&mut self.c32_pool),
+        }
+    }
+}
+
+fn default_max_retained_capacity_bytes() -> usize {
+    env::var(BUFFER_POOL_MAX_RETAINED_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_MAX_RETAINED_CAPACITY_BYTES)
 }
 
 impl Default for BufferPool {
@@ -250,6 +473,8 @@ impl Default for BufferPool {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+
     use super::{BufferPool, PoolScalar};
 
     #[test]
@@ -324,5 +549,71 @@ mod tests {
         assert_eq!(reused.len(), 0);
         assert_eq!(reused.capacity(), cap);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn acquire_updates_retained_capacity_stats() {
+        let mut pool = BufferPool::new();
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
+        assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
+
+        let _reused = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
+
+        assert_eq!(pool.retained_capacity_bytes(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn stats_counts_typed_capacity_bytes() {
+        let mut pool = BufferPool::new();
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(3));
+        <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(5));
+        <num_complex::Complex64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(7));
+
+        let stats = pool.stats();
+        assert_eq!(stats.buffers, 3);
+        assert_eq!(
+            stats.capacity_bytes,
+            3 * size_of::<f64>() + 5 * size_of::<f32>() + 7 * size_of::<num_complex::Complex64>()
+        );
+        assert_eq!(pool.retained_capacity_bytes(), stats.capacity_bytes);
+    }
+
+    #[test]
+    fn clear_drops_retained_buffers() {
+        let mut pool = BufferPool::new();
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(11));
+        <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(13));
+
+        assert!(!pool.is_empty());
+        assert!(pool.retained_capacity_bytes() > 0);
+
+        pool.clear();
+
+        assert!(pool.is_empty());
+        assert_eq!(pool.stats(), Default::default());
+    }
+
+    #[test]
+    fn retention_limit_evicts_smallest_obsolete_buffers() {
+        let mut pool = BufferPool::with_max_retained_capacity_bytes(200);
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(10));
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(20));
+
+        assert_eq!(pool.stats().buffers, 1);
+        assert_eq!(pool.retained_capacity_bytes(), 20 * size_of::<f64>());
+
+        let reused = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 10) };
+        assert_eq!(reused.capacity(), 20);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn zero_retention_limit_drops_released_buffers() {
+        let mut pool = BufferPool::with_max_retained_capacity_bytes(0);
+        <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(10));
+
+        assert!(pool.is_empty());
+        assert_eq!(pool.retained_capacity_bytes(), 0);
     }
 }
