@@ -21,11 +21,12 @@ use super::engine::Engine;
 use super::error::{Error, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
+use crate::exec::ExecProgram;
 use crate::metadata::{
     concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new,
     metadata_scopes_with_scope, push_metadata_scope, register_scoped_fragment_metadata,
-    register_scoped_value_metadata, registered_meta, symbolic_input_meta, tensor_meta_from_tensor,
-    MetadataScope,
+    register_scoped_metadata_batch, register_scoped_value_metadata, registered_meta,
+    symbolic_input_meta, tensor_meta, tensor_meta_from_tensor, MetadataScope,
 };
 use crate::scalar_semantics::round_real_to_i64;
 
@@ -62,6 +63,13 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
+}
+
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct CompiledTracedTensor {
+    pub program: ExecProgram,
+    pub inputs: Vec<Tensor>,
 }
 
 /// Compute a broadcast output shape following NumPy rules.
@@ -515,6 +523,191 @@ impl TracedTensor {
 
     pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
         self.eval_with_inputs(engine, &[])
+    }
+
+    #[doc(hidden)]
+    pub fn compile_with_inputs(
+        &self,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<CompiledTracedTensor> {
+        let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
+        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
+            if placeholder.data.is_some() {
+                return Err(Error::UnexpectedBinding {
+                    binding_index: index,
+                });
+            }
+            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
+                binding_index: index,
+            })?;
+
+            if placeholder.dtype != tensor.dtype() {
+                return Err(Error::PlaceholderDtypeMismatch {
+                    expected: placeholder.dtype,
+                    actual: tensor.dtype(),
+                });
+            }
+
+            match try_concrete_shape(placeholder) {
+                Some(expected_shape) => {
+                    if expected_shape.as_slice() != tensor.shape() {
+                        return Err(Error::PlaceholderShapeMismatch {
+                            expected: expected_shape,
+                            actual: tensor.shape().to_vec(),
+                        });
+                    }
+                }
+                None => {
+                    if placeholder.rank != tensor.shape().len() {
+                        return Err(Error::PlaceholderRankMismatch {
+                            expected: placeholder.rank,
+                            actual: tensor.shape().len(),
+                        });
+                    }
+                }
+            }
+
+            if binding_map.insert(key.clone(), *tensor).is_some() {
+                return Err(Error::DuplicateBinding {
+                    input_key: format!("{:?}", key),
+                });
+            }
+        }
+
+        let output_key = self.fragment.vals()[self.val].key.clone();
+        let view = resolve(self.resolve_roots());
+        let graph = materialize_merge(&view, &[output_key]);
+        let compiled = compile(&graph);
+
+        let mut input_tensors = Vec::with_capacity(graph.inputs.len());
+        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
+        for key in &graph.inputs {
+            match key {
+                GlobalValKey::Input(k) => {
+                    if let Some(tensor) = self.inputs_map.get(k) {
+                        input_tensors.push(tensor.as_ref().clone());
+                        input_dtypes.push(tensor.dtype());
+                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
+                    } else if let Some(bound) = binding_map.get(k) {
+                        input_tensors.push((*bound).clone());
+                        input_dtypes.push(bound.dtype());
+                        input_shapes.push(DimExpr::from_concrete(bound.shape()));
+                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
+                        input_dtypes.push(zero.dtype());
+                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
+                        input_tensors.push(zero);
+                    } else {
+                        return Err(Error::UnboundPlaceholder {
+                            input_key: format!("{:?}", k),
+                        });
+                    }
+                }
+                _ => {
+                    return Err(Error::Internal(
+                        "expected Input key in graph inputs".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
+        Ok(CompiledTracedTensor {
+            program,
+            inputs: input_tensors,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn compile_with_input_specs(
+        &self,
+        bindings: &[(&TracedTensor, DType, &[usize])],
+    ) -> Result<ExecProgram> {
+        let mut binding_map: HashMap<TensorInputKey, (DType, &[usize])> = HashMap::new();
+        for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
+            if placeholder.data.is_some() {
+                return Err(Error::UnexpectedBinding {
+                    binding_index: index,
+                });
+            }
+            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
+                binding_index: index,
+            })?;
+
+            if placeholder.dtype != *dtype {
+                return Err(Error::PlaceholderDtypeMismatch {
+                    expected: placeholder.dtype,
+                    actual: *dtype,
+                });
+            }
+
+            match try_concrete_shape(placeholder) {
+                Some(expected_shape) => {
+                    if expected_shape.as_slice() != *shape {
+                        return Err(Error::PlaceholderShapeMismatch {
+                            expected: expected_shape,
+                            actual: (*shape).to_vec(),
+                        });
+                    }
+                }
+                None => {
+                    if placeholder.rank != shape.len() {
+                        return Err(Error::PlaceholderRankMismatch {
+                            expected: placeholder.rank,
+                            actual: shape.len(),
+                        });
+                    }
+                }
+            }
+
+            if binding_map.insert(key.clone(), (*dtype, *shape)).is_some() {
+                return Err(Error::DuplicateBinding {
+                    input_key: format!("{:?}", key),
+                });
+            }
+        }
+
+        let output_key = self.fragment.vals()[self.val].key.clone();
+        let view = resolve(self.resolve_roots());
+        let graph = materialize_merge(&view, &[output_key]);
+        let compiled = compile(&graph);
+
+        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
+        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
+        for key in &graph.inputs {
+            match key {
+                GlobalValKey::Input(k) => {
+                    if let Some(tensor) = self.inputs_map.get(k) {
+                        input_dtypes.push(tensor.dtype());
+                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
+                    } else if let Some((dtype, shape)) = binding_map.get(k) {
+                        input_dtypes.push(*dtype);
+                        input_shapes.push(DimExpr::from_concrete(*shape));
+                    } else if !matches!(k, TensorInputKey::User { .. }) {
+                        let root = tangent_primal_root(k);
+                        if let Some((dtype, shape)) = binding_map.get(root) {
+                            input_dtypes.push(*dtype);
+                            input_shapes.push(DimExpr::from_concrete(*shape));
+                        } else {
+                            return Err(Error::UnboundPlaceholder {
+                                input_key: format!("{:?}", k),
+                            });
+                        }
+                    } else {
+                        return Err(Error::UnboundPlaceholder {
+                            input_key: format!("{:?}", k),
+                        });
+                    }
+                }
+                _ => {
+                    return Err(Error::Internal(
+                        "expected Input key in graph inputs".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(compile_std_to_exec(&compiled, &input_dtypes, &input_shapes))
     }
 
     /// Evaluate this traced tensor, binding external tensors to any
@@ -1955,7 +2148,8 @@ pub(crate) fn apply_unary_with_dtype(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope =
+        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
     TracedTensor {
         id: next_traced_id(),
@@ -2005,7 +2199,12 @@ pub(crate) fn apply_unary_with_shape_refs(
     let outputs = builder.add_op(op, op_inputs, OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope = register_single_output_metadata(
+        fragment.as_ref(),
+        outputs[0],
+        input.dtype,
+        &out_shape_hint,
+    );
 
     let mut merged = (*input.inputs_map).clone();
     for t in shape_refs {
@@ -2057,7 +2256,8 @@ pub(crate) fn apply_nullary(
     let outputs = builder.add_op(op, vec![], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope =
+        register_single_output_metadata(fragment.as_ref(), outputs[0], dtype, &shape_hint);
 
     TracedTensor {
         id: next_traced_id(),
@@ -2126,7 +2326,8 @@ fn apply_binary_with_output_dtype(
     let outputs = builder.add_op(op, vec![lhs_ref, rhs_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
+    let metadata_scope =
+        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
 
     let mut merged = (*lhs.inputs_map).clone();
     merged.extend(rhs.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -2168,15 +2369,22 @@ pub(crate) fn apply_multi_output(
     let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
-    let metadata_scope = Arc::new(register_scoped_fragment_metadata(
-        fragment.as_ref(),
-        std::iter::empty(),
-    ));
     assert_eq!(
         outputs.len(),
         output_shapes.len(),
         "apply_multi_output: output count must match output_shapes"
     );
+    let metadata_scope = Arc::new(register_scoped_metadata_batch(
+        outputs
+            .iter()
+            .zip(output_shapes.iter())
+            .map(|(&val, shape)| {
+                (
+                    fragment.vals()[val].key.clone(),
+                    tensor_meta(input.dtype, shape.clone()),
+                )
+            }),
+    ));
 
     outputs
         .iter()
@@ -2198,6 +2406,22 @@ pub(crate) fn apply_multi_output(
             ),
         })
         .collect()
+}
+
+fn register_single_output_metadata(
+    fragment: &Fragment<StdTensorOp>,
+    output: LocalValId,
+    dtype: DType,
+    shape_hint: &Option<Vec<SymDim>>,
+) -> MetadataScope {
+    if let Some(shape) = shape_hint {
+        register_scoped_value_metadata(
+            fragment.vals()[output].key.clone(),
+            tensor_meta(dtype, shape.clone()),
+        )
+    } else {
+        register_scoped_fragment_metadata(fragment, std::iter::empty())
+    }
 }
 
 impl TracedTensor {

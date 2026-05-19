@@ -1,4 +1,5 @@
-use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-6;
 const FD_H: f64 = 1.0e-6;

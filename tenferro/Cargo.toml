@@ -54,5 +54,18 @@ thiserror.workspace = true
 lru = { workspace = true }
 
 [dev-dependencies]
+criterion.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "mps_inner_product"
+harness = false
+
+[[bench]]
+name = "mps_inner_product_compile"
+harness = false
+
+[[bench]]
+name = "mps_inner_product_eager"
+harness = false

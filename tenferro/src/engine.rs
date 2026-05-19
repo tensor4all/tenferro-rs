@@ -5,14 +5,23 @@ use std::sync::Arc;
 use lru::LruCache;
 
 use super::exec::ExecProgram;
-use tenferro_einsum::ContractionTree;
-use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
+use tenferro_einsum::{ContractionTree, Subscripts};
+use tenferro_tensor::{buffer_pool::BufferPoolStats, cpu::CpuBackend, Tensor, TensorBackend};
 
-/// Key used for the N-ary einsum cache: `(subscripts, shapes)`.
-pub(crate) type EinsumCacheKey = (String, Vec<Vec<usize>>);
+/// Parsed einsum notation retained separately from shape-specific plans.
+pub(crate) struct ParsedEinsum {
+    pub(crate) notation: Arc<str>,
+    pub(crate) subscripts: Subscripts,
+}
+
+/// Key used for the N-ary einsum cache: `(interned_subscripts, shapes)`.
+pub(crate) type EinsumCacheKey = (Arc<str>, Vec<Vec<usize>>);
 
 /// LRU cache of optimized contraction trees keyed by einsum subscripts + input shapes.
 pub(crate) type NaryEinsumCache = LruCache<EinsumCacheKey, Arc<ContractionTree>>;
+
+/// LRU cache of parsed einsum subscripts keyed only by notation.
+pub(crate) type EinsumParseCache = LruCache<String, Arc<ParsedEinsum>>;
 
 /// Default capacity for `Engine::einsum_cache`.
 ///
@@ -65,8 +74,11 @@ fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
 /// ```
 pub struct Engine<B: TensorBackend> {
     pub(crate) backend: B,
+    pub(crate) backend_cache: B::RuntimeCache,
     pub(crate) compile_cache: HashMap<CacheKey, ExecProgram>,
     pub(crate) einsum_cache: NaryEinsumCache,
+    pub(crate) einsum_parse_cache: EinsumParseCache,
+    pub(crate) slot_workspace: Vec<Option<Tensor>>,
 }
 
 impl<B: TensorBackend> Engine<B> {
@@ -83,11 +95,17 @@ impl<B: TensorBackend> Engine<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
+            backend_cache: B::RuntimeCache::default(),
             compile_cache: HashMap::new(),
             einsum_cache: LruCache::new(
                 NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
                     .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
             ),
+            einsum_parse_cache: LruCache::new(
+                NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
+                    .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
+            ),
+            slot_workspace: Vec::new(),
         }
     }
 
@@ -135,8 +153,11 @@ impl<B: TensorBackend> Engine<B> {
     pub fn with_einsum_cache_capacity(backend: B, capacity: NonZeroUsize) -> Self {
         Self {
             backend,
+            backend_cache: B::RuntimeCache::default(),
             compile_cache: HashMap::new(),
             einsum_cache: LruCache::new(capacity),
+            einsum_parse_cache: LruCache::new(capacity),
+            slot_workspace: Vec::new(),
         }
     }
 
@@ -169,6 +190,7 @@ impl<B: TensorBackend> Engine<B> {
     /// ```
     pub fn set_einsum_cache_capacity(&mut self, capacity: NonZeroUsize) {
         self.einsum_cache.resize(capacity);
+        self.einsum_parse_cache.resize(capacity);
     }
 
     /// Returns `true` if the einsum cache contains a tree for `key`.
@@ -185,7 +207,8 @@ impl<B: TensorBackend> Engine<B> {
     /// assert!(!engine.einsum_cache_contains(&key));
     /// ```
     pub fn einsum_cache_contains(&self, key: &(String, Vec<Vec<usize>>)) -> bool {
-        self.einsum_cache.contains(key)
+        let key = (Arc::<str>::from(key.0.as_str()), key.1.clone());
+        self.einsum_cache.contains(&key)
     }
 
     /// Look up a cached ExecProgram, or cache and return the given one.
@@ -212,14 +235,29 @@ impl<B: TensorBackend> Engine<B> {
     pub fn eval_exec_ir(
         &mut self,
         program: &ExecProgram,
-        inputs: Vec<tenferro_tensor::Tensor>,
-    ) -> crate::error::Result<Vec<tenferro_tensor::Tensor>> {
-        crate::segment::eval_exec_segmented_with_cache(
+        inputs: Vec<Tensor>,
+    ) -> crate::error::Result<Vec<Tensor>> {
+        crate::segment::eval_exec_segmented_with_cache_and_workspace(
             &mut self.backend,
             program,
             inputs,
             &mut self.einsum_cache,
+            &mut self.slot_workspace,
+            &mut self.backend_cache,
         )
+    }
+
+    /// Evaluate an `ExecProgram` without consuming the caller's input tensors.
+    ///
+    /// This keeps the public ownership choice explicit. Today this clones the
+    /// inputs before entering the owned execution path, so it preserves caller
+    /// tensors but still pays host clone cost for host-backed inputs.
+    pub fn eval_exec_ir_non_consuming(
+        &mut self,
+        program: &ExecProgram,
+        inputs: &[Tensor],
+    ) -> crate::error::Result<Vec<Tensor>> {
+        self.eval_exec_ir(program, inputs.to_vec())
     }
 }
 
@@ -236,5 +274,40 @@ impl Engine<CpuBackend> {
     /// ```
     pub fn buffer_pool_len(&self) -> usize {
         self.backend.buffer_pool_len()
+    }
+
+    /// Snapshot reusable typed host buffers currently retained by the CPU backend.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let engine = Engine::new(CpuBackend::new());
+    /// let stats = engine.buffer_pool_stats();
+    /// assert_eq!(stats.buffers, 0);
+    /// assert_eq!(stats.capacity_bytes, 0);
+    /// ```
+    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.backend.buffer_pool_stats()
+    }
+
+    /// Reset all reusable typed host buffers retained by the CPU backend.
+    ///
+    /// This clears tenferro's explicit buffer pool. The process allocator may
+    /// still keep released pages mapped, so operating-system RSS is not a
+    /// precise measure of whether the pool is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{CpuBackend, Engine};
+    ///
+    /// let mut engine = Engine::new(CpuBackend::new());
+    /// engine.reset_buffer_pool();
+    /// assert_eq!(engine.buffer_pool_len(), 0);
+    /// ```
+    pub fn reset_buffer_pool(&mut self) {
+        self.backend.reset_buffer_pool();
     }
 }

@@ -43,6 +43,42 @@ pub(crate) trait BlasGemm: Sized {
         c_rs: isize,
         c_cs: isize,
     ) -> crate::Result<()>;
+
+    #[allow(clippy::too_many_arguments)]
+    /// Run GEMM against raw strided matrix pointers with optional input conjugation.
+    ///
+    /// Returns `Ok(false)` when the requested conjugation cannot be represented
+    /// by the selected BLAS transpose flags without materializing an input.
+    ///
+    /// # Safety
+    ///
+    /// The safety contract is the same as [`BlasGemm::strided_gemm`].
+    unsafe fn strided_gemm_with_conj(
+        alpha: Self,
+        a_ptr: *const Self,
+        m: usize,
+        k: usize,
+        a_rs: isize,
+        a_cs: isize,
+        conj_a: bool,
+        b_ptr: *const Self,
+        n: usize,
+        b_rs: isize,
+        b_cs: isize,
+        conj_b: bool,
+        beta: Self,
+        c_ptr: *mut Self,
+        c_rs: isize,
+        c_cs: isize,
+    ) -> crate::Result<bool> {
+        let _ = (conj_a, conj_b);
+        unsafe {
+            Self::strided_gemm(
+                alpha, a_ptr, m, k, a_rs, a_cs, b_ptr, n, b_rs, b_cs, beta, c_ptr, c_rs, c_cs,
+            )?;
+        }
+        Ok(true)
+    }
 }
 
 fn dim_to_i32(name: &'static str, value: usize) -> crate::Result<i32> {
@@ -146,6 +182,19 @@ fn infer_c_layout(m: usize, c_rs: isize, c_cs: isize) -> crate::Result<i32> {
         });
     }
     Ok(ldc)
+}
+
+fn apply_conj_transpose(trans: CBLAS_TRANSPOSE, conj: bool) -> Option<CBLAS_TRANSPOSE> {
+    if !conj {
+        return Some(trans);
+    }
+
+    match trans {
+        CBLAS_TRANSPOSE::CblasTrans | CBLAS_TRANSPOSE::CblasConjTrans => {
+            Some(CBLAS_TRANSPOSE::CblasConjTrans)
+        }
+        CBLAS_TRANSPOSE::CblasNoTrans => None,
+    }
 }
 
 macro_rules! impl_real_blas_gemm {
@@ -323,6 +372,63 @@ macro_rules! impl_complex_blas_gemm {
                     ldc,
                 );
                 Ok(())
+            }
+
+            unsafe fn strided_gemm_with_conj(
+                alpha: Self,
+                a_ptr: *const Self,
+                m: usize,
+                k: usize,
+                a_rs: isize,
+                a_cs: isize,
+                conj_a: bool,
+                b_ptr: *const Self,
+                n: usize,
+                b_rs: isize,
+                b_cs: isize,
+                conj_b: bool,
+                beta: Self,
+                c_ptr: *mut Self,
+                c_rs: isize,
+                c_cs: isize,
+            ) -> crate::Result<bool> {
+                let m_i32 = dim_to_i32("m", m)?;
+                let n_i32 = dim_to_i32("n", n)?;
+                let k_i32 = dim_to_i32("k", k)?;
+                let (trans_a, lda) = infer_a_layout(m, k, a_rs, a_cs)?;
+                let (trans_b, ldb) = infer_b_layout(k, n, b_rs, b_cs)?;
+                let Some(trans_a) = apply_conj_transpose(trans_a, conj_a) else {
+                    return Ok(false);
+                };
+                let Some(trans_b) = apply_conj_transpose(trans_b, conj_b) else {
+                    return Ok(false);
+                };
+                let ldc = infer_c_layout(m, c_rs, c_cs)?;
+                let alpha_ri = [alpha.re, alpha.im];
+                let beta_ri = [beta.re, beta.im];
+
+                // SAFETY: `strided_gemm_with_conj`'s caller guarantees the
+                // raw pointers are valid for the strided matrix regions.
+                // Layout inference checked the unit-stride axis and BLAS
+                // leading dims; `apply_conj_transpose` only accepts
+                // conjugation representable as CblasConjTrans.
+                $gemm(
+                    CBLAS_LAYOUT::CblasColMajor,
+                    trans_a,
+                    trans_b,
+                    m_i32,
+                    n_i32,
+                    k_i32,
+                    alpha_ri.as_ptr() as *const _,
+                    a_ptr as *const _,
+                    lda,
+                    b_ptr as *const _,
+                    ldb,
+                    beta_ri.as_ptr() as *const _,
+                    c_ptr as *mut _,
+                    ldc,
+                );
+                Ok(true)
             }
         }
     };

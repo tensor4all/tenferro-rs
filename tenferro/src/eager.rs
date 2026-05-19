@@ -344,6 +344,10 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
     }
 
+    pub(crate) fn new_untracked_result(ctx: Arc<EagerContext<B>>, tensor: Tensor) -> Self {
+        Self::new_result(ctx, eager_val_key(), tensor, false, None, Vec::new())
+    }
+
     /// Detach this tensor from the reverse graph.
     ///
     /// The returned tensor keeps the concrete value but no longer contributes

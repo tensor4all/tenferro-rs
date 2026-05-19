@@ -1,7 +1,7 @@
 use computegraph::compile::{CompiledProgram, Instruction};
 use tenferro::compiler::{
-    compile_std_to_exec, dot_decomposer, dot_dimension_sorter, eliminate_dead_code,
-    transpose_folding,
+    compile_std_to_exec, conj_sinking, dot_conj_folding, dot_decomposer, dot_dimension_sorter,
+    eliminate_dead_code, transpose_folding,
 };
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_ops::dim_expr::DimExpr;
@@ -43,6 +43,27 @@ fn make_exec_instr(
         dtype: DType::F64,
         output_shapes: vec![Vec::new(); output_slots.len()],
         output_extents: vec![Vec::new(); output_slots.len()],
+        last_use: Vec::new(),
+    }
+}
+
+fn make_exec_instr_with_meta(
+    op: ExecOp,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    dtype: DType,
+    output_shapes: Vec<Vec<DimExpr>>,
+) -> ExecInstruction {
+    ExecInstruction {
+        op,
+        input_slots,
+        output_slots,
+        dtype,
+        output_extents: output_shapes
+            .iter()
+            .map(|shape| exact_extents(shape))
+            .collect(),
+        output_shapes,
         last_use: Vec::new(),
     }
 }
@@ -228,6 +249,231 @@ fn test_transpose_folding_fixed_point() {
 }
 
 #[test]
+fn test_conj_sinking_pushes_through_transpose() {
+    let transpose = make_exec_instr_with_meta(
+        ExecOp::Transpose { perm: vec![1, 0] },
+        vec![0],
+        vec![1],
+        DType::C64,
+        vec![dim_shape(&[3, 2])],
+    );
+    let conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![1],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[3, 2])],
+    );
+    let mut program = make_exec_program(vec![transpose, conj], vec![0], vec![2], 3);
+
+    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2, 3])]);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(program.instructions[0].op, ExecOp::Conj));
+    assert_eq!(program.instructions[0].input_slots, vec![0]);
+    match &program.instructions[1].op {
+        ExecOp::Transpose { perm } => {
+            assert_eq!(perm, &vec![1, 0]);
+            assert_eq!(
+                program.instructions[1].input_slots,
+                program.instructions[0].output_slots
+            );
+            assert_eq!(program.instructions[1].output_slots, vec![2]);
+        }
+        other => panic!("expected Transpose after sinking, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_conj_sinking_cancels_double_conj() {
+    let conj_a = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![0],
+        vec![1],
+        DType::C64,
+        vec![dim_shape(&[2])],
+    );
+    let conj_b = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![1],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[2])],
+    );
+    let mut program = make_exec_program(vec![conj_a, conj_b], vec![0], vec![2], 3);
+
+    conj_sinking(&mut program, &[DType::C64], &[dim_shape(&[2])]);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.output_slots, vec![0]);
+    assert!(program.instructions.is_empty());
+}
+
+#[test]
+fn test_conj_sinking_does_not_push_convert_onto_i64() {
+    let convert_i64_to_f64 = make_exec_instr_with_meta(
+        ExecOp::Convert { to: DType::F64 },
+        vec![0],
+        vec![1],
+        DType::F64,
+        vec![dim_shape(&[2])],
+    );
+    let conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![1],
+        vec![2],
+        DType::F64,
+        vec![dim_shape(&[2])],
+    );
+    let mut program = make_exec_program(vec![convert_i64_to_f64, conj], vec![0], vec![2], 3);
+
+    conj_sinking(&mut program, &[DType::I64], &[dim_shape(&[2])]);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(
+        program.instructions[0].op,
+        ExecOp::Convert { to: DType::F64 }
+    ));
+    assert!(matches!(program.instructions[1].op, ExecOp::Conj));
+    assert_eq!(program.instructions[1].input_slots, vec![1]);
+}
+
+#[test]
+fn test_conj_sinking_does_not_push_convert_to_i64() {
+    let convert_f64_to_i64 = make_exec_instr_with_meta(
+        ExecOp::Convert { to: DType::I64 },
+        vec![0],
+        vec![1],
+        DType::I64,
+        vec![dim_shape(&[2])],
+    );
+    let conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![1],
+        vec![2],
+        DType::I64,
+        vec![dim_shape(&[2])],
+    );
+    let mut program = make_exec_program(vec![convert_f64_to_i64, conj], vec![0], vec![2], 3);
+
+    conj_sinking(&mut program, &[DType::F64], &[dim_shape(&[2])]);
+
+    assert_eq!(program.instructions.len(), 2);
+    assert!(matches!(
+        program.instructions[0].op,
+        ExecOp::Convert { to: DType::I64 }
+    ));
+    assert!(matches!(program.instructions[1].op, ExecOp::Conj));
+    assert_eq!(program.instructions[1].input_slots, vec![1]);
+}
+
+#[test]
+fn test_conj_sinking_preserves_transpose_folding_path_to_dot_conj() {
+    let transpose = make_exec_instr_with_meta(
+        ExecOp::Transpose { perm: vec![1, 0] },
+        vec![0],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[3, 2])],
+    );
+    let conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![2],
+        vec![3],
+        DType::C64,
+        vec![dim_shape(&[3, 2])],
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr_with_meta(
+        ExecOp::DotGeneral(config),
+        vec![3, 1],
+        vec![4],
+        DType::C64,
+        vec![dim_shape(&[2, 4])],
+    );
+    let mut program = make_exec_program(vec![transpose, conj, dot], vec![0, 1], vec![4], 5);
+
+    conj_sinking(
+        &mut program,
+        &[DType::C64, DType::C64],
+        &[dim_shape(&[2, 3]), dim_shape(&[3, 4])],
+    );
+    transpose_folding(&mut program);
+    dot_conj_folding(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
+    let dot = &program.instructions[0];
+    assert_eq!(dot.input_slots, vec![0, 1]);
+    match &dot.op {
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => {
+            assert_eq!(config.lhs_contracting_dims, vec![1]);
+            assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert!(*lhs_conj);
+            assert!(!*rhs_conj);
+        }
+        other => panic!("expected DotGeneralWithConj, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_dot_conj_folding_absorbs_both_operands() {
+    let lhs_conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![0],
+        vec![2],
+        DType::C64,
+        vec![dim_shape(&[2, 3])],
+    );
+    let rhs_conj = make_exec_instr_with_meta(
+        ExecOp::Conj,
+        vec![1],
+        vec![3],
+        DType::C64,
+        vec![dim_shape(&[3, 4])],
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_exec_instr_with_meta(
+        ExecOp::DotGeneral(config),
+        vec![2, 3],
+        vec![4],
+        DType::C64,
+        vec![dim_shape(&[2, 4])],
+    );
+    let mut program = make_exec_program(vec![lhs_conj, rhs_conj, dot], vec![0, 1], vec![4], 5);
+
+    dot_conj_folding(&mut program);
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
+    assert_eq!(program.instructions[0].input_slots, vec![0, 1]);
+    match &program.instructions[0].op {
+        ExecOp::DotGeneralWithConj {
+            lhs_conj, rhs_conj, ..
+        } => {
+            assert!(*lhs_conj);
+            assert!(*rhs_conj);
+        }
+        other => panic!("expected DotGeneralWithConj, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_full_pipeline_matmul() {
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
@@ -298,10 +544,9 @@ fn test_full_pipeline_transpose_matmul() {
         &[dim_shape(&[3, 2]), dim_shape(&[3, 4])],
     );
 
-    // `transpose_folding` absorbs the Transpose into DotGeneral dim-numbers,
-    // but `dot_decomposer` then canonicalizes the resulting non-canonical
-    // DotGeneral, re-emitting a Transpose. The final DotGeneral must be
-    // canonical: LHS rank 2 with one free dim -> contracting = [1].
+    // `transpose_folding` absorbs the Transpose into DotGeneral dim-numbers.
+    // The compiled pipeline leaves the non-canonical DotGeneral for the backend
+    // strided GEMM path instead of materializing a canonical layout.
     let dot_instr = exec
         .instructions
         .iter()
@@ -309,7 +554,7 @@ fn test_full_pipeline_transpose_matmul() {
         .expect("expected DotGeneral after direct lowering");
     match &dot_instr.op {
         ExecOp::DotGeneral(config) => {
-            assert_eq!(config.lhs_contracting_dims, vec![1]);
+            assert_eq!(config.lhs_contracting_dims, vec![0]);
             assert_eq!(config.rhs_contracting_dims, vec![0]);
             assert!(config.lhs_batch_dims.is_empty());
             assert!(config.rhs_batch_dims.is_empty());
@@ -317,29 +562,71 @@ fn test_full_pipeline_transpose_matmul() {
         _ => panic!("expected DotGeneral"),
     }
 
-    // The canonical DotGeneral's LHS must come from a Transpose on input 0,
-    // and the dead fold-then-decompose Transpose must have been eliminated.
-    let lhs_slot = dot_instr.input_slots[0];
-    let lhs_producer = exec
-        .instructions
-        .iter()
-        .find(|i| i.output_slots.contains(&lhs_slot))
-        .expect("LHS slot must have a producer");
-    match &lhs_producer.op {
-        ExecOp::Transpose { perm } => {
-            assert_eq!(perm, &vec![1, 0]);
-            assert_eq!(lhs_producer.input_slots, vec![0]);
-        }
-        other => panic!("expected Transpose producing LHS, got {other:?}"),
-    }
+    assert_eq!(dot_instr.input_slots[0], 0);
     assert_eq!(dot_instr.input_slots[1], 1);
     let transpose_count = exec
         .instructions
         .iter()
         .filter(|i| matches!(i.op, ExecOp::Transpose { .. }))
         .count();
-    assert_eq!(transpose_count, 1, "dead-code elimination failed");
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 3])]);
+    assert_eq!(transpose_count, 0, "dead-code elimination failed");
+    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+}
+
+#[test]
+fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
+    let conj = make_std_instr(StdTensorOp::Conj, vec![1], vec![2]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let dot = make_std_instr(StdTensorOp::DotGeneral { config }, vec![0, 2], vec![3]);
+    let program = CompiledProgram {
+        instructions: vec![conj, dot],
+        input_slots: vec![0, 1],
+        output_slots: vec![3],
+        n_slots: 4,
+    };
+
+    let exec = compile_std_to_exec(
+        &program,
+        &[DType::C64, DType::C64],
+        &[dim_shape(&[2, 3]), dim_shape(&[3, 4, 5])],
+    );
+
+    assert!(
+        exec.instructions
+            .iter()
+            .all(|instr| !matches!(instr.op, ExecOp::Conj)),
+        "Conj should be folded into the decomposed DotGeneral"
+    );
+    let dot_instr = exec
+        .instructions
+        .iter()
+        .find(|instr| matches!(instr.op, ExecOp::DotGeneralWithConj { .. }))
+        .expect("expected DotGeneralWithConj after decomposing conj input");
+    match &dot_instr.op {
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => {
+            assert_eq!(config.lhs_contracting_dims, vec![1]);
+            assert_eq!(config.rhs_contracting_dims, vec![0]);
+            assert!(!*lhs_conj);
+            assert!(*rhs_conj);
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        exec.instructions
+            .last()
+            .expect("compiled program should have an output instruction")
+            .output_shapes,
+        vec![dim_shape(&[2, 4, 5])]
+    );
 }
 
 // ----------------------------------------------------------------------------

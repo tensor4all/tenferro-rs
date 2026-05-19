@@ -133,6 +133,60 @@ pub trait TensorExec {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor>;
 
+    #[doc(hidden)]
+    fn dot_general_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        self.dot_general(lhs, rhs, config)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        if !lhs_conj && !rhs_conj {
+            return self.dot_general(lhs, rhs, config);
+        }
+
+        let lhs_tmp;
+        let lhs_ref = if lhs_conj {
+            lhs_tmp = self.conj(lhs)?;
+            &lhs_tmp
+        } else {
+            lhs
+        };
+        let rhs_tmp;
+        let rhs_ref = if rhs_conj {
+            rhs_tmp = self.conj(rhs)?;
+            &rhs_tmp
+        } else {
+            rhs
+        };
+        self.dot_general(lhs_ref, rhs_ref, config)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_with_conj_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
     fn gather(
         &mut self,
         operand: &Tensor,
@@ -249,6 +303,13 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
         reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> crate::Result<Tensor>;
+        dot_general_with_conj(
+            lhs: &Tensor,
+            rhs: &Tensor,
+            config: &DotGeneralConfig,
+            lhs_conj: bool,
+            rhs_conj: bool
+        ) -> crate::Result<Tensor>;
         gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
         scatter(
             operand: &Tensor,
@@ -318,6 +379,9 @@ pub fn default_exec_session<B: TensorBackend + ?Sized, R: Send>(
 /// let mut backend = CpuBackend::new();
 /// ```
 pub trait TensorBackend {
+    #[doc(hidden)]
+    type RuntimeCache: Default;
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -382,6 +446,62 @@ pub trait TensorBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn dot_general_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        self.dot_general(lhs, rhs, config)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        if !lhs_conj && !rhs_conj {
+            return self.dot_general(lhs, rhs, config);
+        }
+
+        let lhs_tmp;
+        let lhs_ref = if lhs_conj {
+            lhs_tmp = self.conj(lhs)?;
+            &lhs_tmp
+        } else {
+            lhs
+        };
+        let rhs_tmp;
+        let rhs_ref = if rhs_conj {
+            rhs_tmp = self.conj(rhs)?;
+            &rhs_tmp
+        } else {
+            rhs
+        };
+        self.dot_general(lhs_ref, rhs_ref, config)
+    }
+
+    #[doc(hidden)]
+    fn dot_general_with_conj_cached(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        _cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
+    }
 
     fn gather(
         &mut self,
@@ -452,6 +572,20 @@ pub trait TensorBackend {
     /// ```
     fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
         default_exec_session(self, f)
+    }
+
+    /// Execute a batch of operations with an externally owned runtime cache.
+    ///
+    /// The default implementation ignores the cache. Backends can override
+    /// this to use Engine-owned prepared plans or analysis caches while keeping
+    /// cache lifetime and clearing under the caller's control.
+    #[doc(hidden)]
+    fn with_exec_session_cached<R: Send>(
+        &mut self,
+        _cache: &mut Self::RuntimeCache,
+        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+    ) -> R {
+        self.with_exec_session(f)
     }
 
     /// Materialize a backend tensor into host memory.

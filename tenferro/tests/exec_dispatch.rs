@@ -112,6 +112,8 @@ impl FakeTensorBackend {
 }
 
 impl TensorBackend for FakeTensorBackend {
+    type RuntimeCache = ();
+
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("add", 1.0)
     }

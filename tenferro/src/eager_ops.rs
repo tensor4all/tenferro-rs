@@ -8,7 +8,7 @@ use tenferro_tensor::{
 };
 
 use crate::eager::{exec_single_output, record_eager_outputs, EagerTensor};
-use crate::eager_exec::exec_op_on_tensors;
+use crate::eager_exec::{exec_dot_general_with_conj_on_tensors, exec_op_on_tensors};
 use crate::error::{Error, Result};
 use crate::metadata::push_metadata_scope;
 
@@ -123,6 +123,57 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Result<Self> {
         self.binary_op(other, StdTensorOp::DotGeneral { config })
+    }
+
+    /// Execute a dot-general contraction, optionally conjugating either operand.
+    ///
+    /// Untracked tensors route the conjugation flags directly to the backend so
+    /// the conjugated operand does not need to be materialized. Tracked tensors
+    /// fall back to explicit `Conj` plus `DotGeneral` so reverse-mode AD keeps
+    /// the same graph semantics as the standard eager ops.
+    pub fn dot_general_with_conj(
+        &self,
+        other: &Self,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> Result<Self> {
+        if !self.same_context(other) {
+            return Err(Error::ContextMismatch {
+                lhs: self.ctx_id(),
+                rhs: other.ctx_id(),
+            });
+        }
+
+        if !self.requires_grad && !other.requires_grad {
+            let ctx = Arc::clone(&self.ctx);
+            let output = {
+                let mut backend = ctx.backend.lock().unwrap();
+                exec_dot_general_with_conj_on_tensors(
+                    self.data.as_ref(),
+                    other.data.as_ref(),
+                    config,
+                    lhs_conj,
+                    rhs_conj,
+                    &mut *backend,
+                )?
+            };
+            return Ok(Self::new_untracked_result(ctx, output));
+        }
+
+        match (lhs_conj, rhs_conj) {
+            (false, false) => self.dot_general(other, config.clone()),
+            (true, false) => self.conj()?.dot_general(other, config.clone()),
+            (false, true) => {
+                let rhs = other.conj()?;
+                self.dot_general(&rhs, config.clone())
+            }
+            (true, true) => {
+                let lhs = self.conj()?;
+                let rhs = other.conj()?;
+                lhs.dot_general(&rhs, config.clone())
+            }
+        }
     }
 
     /// Matrix multiplication for rank-2 tensors.
@@ -604,6 +655,13 @@ impl<B: TensorBackend> EagerTensor<B> {
             )));
         }
 
+        if !self.requires_grad {
+            return Ok(outputs
+                .into_iter()
+                .map(|output| Self::new_untracked_result(Arc::clone(&self.ctx), output))
+                .collect());
+        }
+
         let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
         let recorded = record_eager_outputs(&op, &outputs, &[self]);
         if recorded.traces.len() != outputs.len() {
@@ -658,7 +716,12 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
 
         let inputs: Vec<&Tensor> = tensors.iter().map(|tensor| tensor.data.as_ref()).collect();
-        let output = Arc::new(exec_single_output(&op, &inputs, &ctx)?);
+        let output = exec_single_output(&op, &inputs, &ctx)?;
+        if !tensors.iter().any(|tensor| tensor.requires_grad) {
+            return Ok(Self::new_untracked_result(ctx, output));
+        }
+
+        let output = Arc::new(output);
         let outputs = vec![Arc::clone(&output)];
         let mut recorded = record_eager_outputs(&op, &outputs, tensors);
         let trace = recorded.traces.pop().ok_or_else(|| {

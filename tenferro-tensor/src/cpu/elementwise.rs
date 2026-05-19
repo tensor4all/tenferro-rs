@@ -5,13 +5,14 @@ use num_traits::{One, Zero};
 use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
 
 use crate::{
+    buffer_pool::{BufferPool, PoolScalar},
     config::CompareDir,
     types::{ConjElem, Tensor, TypedTensor},
 };
 
-use super::{tensor_from_array, typed_array_uninit, typed_view};
+use super::{tensor_from_array, typed_array_uninit_from_pool, typed_view};
 
-macro_rules! dispatch_ternary_result {
+macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
         match ($a, $b, $c) {
             (Tensor::F32($x), Tensor::F32($y), Tensor::F32($z)) => Ok(Tensor::F32($body?)),
@@ -160,28 +161,41 @@ fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
     }
 }
 
+fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+    let mut buffers = BufferPool::new();
+    f(&mut buffers)
+}
+
 pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| add_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn add_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_add(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_add(a, b)?)),
-        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C32(typed_add(&scalar, b)?))
+            Ok(Tensor::C32(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C32(typed_add(a, &scalar)?))
+            Ok(Tensor::C32(typed_add_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C64(typed_add(&scalar, b)?))
+            Ok(Tensor::C64(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C64(typed_add(a, &scalar)?))
+            Ok(Tensor::C64(typed_add_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
             op: "add",
@@ -192,27 +206,35 @@ pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
 }
 
 pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| mul_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn mul_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_mul(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_mul(a, b)?)),
-        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C32(typed_mul(&scalar, b)?))
+            Ok(Tensor::C32(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C32(typed_mul(a, &scalar)?))
+            Ok(Tensor::C32(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C64(typed_mul(&scalar, b)?))
+            Ok(Tensor::C64(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C64(typed_mul(a, &scalar)?))
+            Ok(Tensor::C64(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
             op: "mul",
@@ -223,26 +245,34 @@ pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
 }
 
 pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| div_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn div_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_div(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_div_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div_with_pool(buffers, a, b)?)),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C32(typed_div(&scalar, b)?))
+            Ok(Tensor::C32(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C32(typed_div(a, &scalar)?))
+            Ok(Tensor::C32(typed_div_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
             let scalar = complex_scalar_tensor(a.host_data()[0]);
-            Ok(Tensor::C64(typed_div(&scalar, b)?))
+            Ok(Tensor::C64(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
             let scalar = complex_scalar_tensor(b.host_data()[0]);
-            Ok(Tensor::C64(typed_div(a, &scalar)?))
+            Ok(Tensor::C64(typed_div_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
             op: "div",
@@ -253,63 +283,95 @@ pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
 }
 
 pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| neg_with_pool(buffers, input))
+}
+
+pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_neg(t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_neg(t)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "neg",
             message: "unsupported dtype I64".into(),
         }),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_neg(t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_neg(t)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_neg_with_pool(buffers, t)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_neg_with_pool(buffers, t)?)),
     }
 }
 
 pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| conj_with_pool(buffers, input))
+}
+
+pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_conj(t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_conj(t)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "conj",
             message: "unsupported dtype I64".into(),
         }),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_conj(t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_conj(t)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_conj_with_pool(buffers, t)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_conj_with_pool(buffers, t)?)),
     }
 }
 
 pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| abs_with_pool(buffers, input))
+}
+
+pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_abs(t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_abs(t)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "abs",
             message: "unsupported dtype I64".into(),
         }),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_abs(t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_abs(t)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_abs_with_pool(buffers, t)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_abs_with_pool(buffers, t)?)),
     }
 }
 
 pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| sign_with_pool(buffers, input))
+}
+
+pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_sign(t)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_sign(t)?)),
+        Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
+        Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "sign",
             message: "unsupported dtype I64".into(),
         }),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_sign(t)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_sign(t)?)),
+        Tensor::C32(t) => Ok(Tensor::C32(typed_sign_with_pool(buffers, t)?)),
+        Tensor::C64(t) => Ok(Tensor::C64(typed_sign_with_pool(buffers, t)?)),
     }
 }
 
 pub fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| maximum_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn maximum_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_maximum(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_maximum(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_maximum(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_maximum(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => {
+            Ok(Tensor::F32(typed_maximum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::F64(a), Tensor::F64(b)) => {
+            Ok(Tensor::F64(typed_maximum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::C32(a), Tensor::C32(b)) => {
+            Ok(Tensor::C32(typed_maximum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::C64(a), Tensor::C64(b)) => {
+            Ok(Tensor::C64(typed_maximum_with_pool(buffers, a, b)?))
+        }
         _ => Err(crate::Error::DTypeMismatch {
             op: "maximum",
             lhs: lhs.dtype(),
@@ -319,11 +381,27 @@ pub fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
 }
 
 pub fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| minimum_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn minimum_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_minimum(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_minimum(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_minimum(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_minimum(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => {
+            Ok(Tensor::F32(typed_minimum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::F64(a), Tensor::F64(b)) => {
+            Ok(Tensor::F64(typed_minimum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::C32(a), Tensor::C32(b)) => {
+            Ok(Tensor::C32(typed_minimum_with_pool(buffers, a, b)?))
+        }
+        (Tensor::C64(a), Tensor::C64(b)) => {
+            Ok(Tensor::C64(typed_minimum_with_pool(buffers, a, b)?))
+        }
         _ => Err(crate::Error::DTypeMismatch {
             op: "minimum",
             lhs: lhs.dtype(),
@@ -333,11 +411,28 @@ pub fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
 }
 
 pub fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| compare_with_pool(buffers, lhs, rhs, dir))
+}
+
+pub(crate) fn compare_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    dir: &CompareDir,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_compare(a, b, dir)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_compare(a, b, dir)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_compare(a, b, dir)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_compare(a, b, dir)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => {
+            Ok(Tensor::F32(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::F64(a), Tensor::F64(b)) => {
+            Ok(Tensor::F64(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::C32(a), Tensor::C32(b)) => {
+            Ok(Tensor::C32(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::C64(a), Tensor::C64(b)) => {
+            Ok(Tensor::C64(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
         _ => Err(crate::Error::DTypeMismatch {
             op: "compare",
             lhs: lhs.dtype(),
@@ -347,24 +442,53 @@ pub fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Te
 }
 
 pub fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
-    dispatch_ternary_result!("select", pred, on_true, on_false, |p, t, f| typed_select(
-        p, t, f
-    ))
+    with_local_pool(|buffers| select_with_pool(buffers, pred, on_true, on_false))
+}
+
+pub(crate) fn select_with_pool(
+    buffers: &mut BufferPool,
+    pred: &Tensor,
+    on_true: &Tensor,
+    on_false: &Tensor,
+) -> crate::Result<Tensor> {
+    dispatch_ternary_result_with_pool!("select", pred, on_true, on_false, |p, t, f| {
+        typed_select_with_pool(buffers, p, t, f)
+    })
 }
 
 pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-    dispatch_ternary_result!("clamp", input, lower, upper, |x, lo, hi| typed_clamp(
-        x, lo, hi
-    ))
+    with_local_pool(|buffers| clamp_with_pool(buffers, input, lower, upper))
+}
+
+pub(crate) fn clamp_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    lower: &Tensor,
+    upper: &Tensor,
+) -> crate::Result<Tensor> {
+    dispatch_ternary_result_with_pool!("clamp", input, lower, upper, |x, lo, hi| {
+        typed_clamp_with_pool(buffers, x, lo, hi)
+    })
 }
 
 pub fn typed_add<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Add<Output = T>,
+    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
+{
+    with_local_pool(|buffers| typed_add_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn typed_add_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
     if lhs.shape == rhs.shape {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view(lhs),
@@ -379,7 +503,7 @@ where
     } else if lhs.shape.is_empty() {
         let scalar = lhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar + x).map_err(|err| {
             crate::Error::BackendFailure {
                 op: "add",
@@ -390,7 +514,7 @@ where
     } else if rhs.shape.is_empty() {
         let scalar = rhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x + scalar).map_err(|err| {
             crate::Error::BackendFailure {
                 op: "add",
@@ -409,11 +533,22 @@ where
 
 pub fn typed_mul<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Mul<Output = T>,
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar,
+{
+    with_local_pool(|buffers| typed_mul_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn typed_mul_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar,
 {
     if lhs.shape == rhs.shape {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view(lhs),
@@ -425,14 +560,14 @@ where
     } else if lhs.shape.is_empty() {
         let scalar = lhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar * x)
             .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
         let scalar = rhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x * scalar)
             .map_err(|err| backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
@@ -447,11 +582,22 @@ where
 
 pub fn typed_div<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Div<Output = T>,
+    T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
+{
+    with_local_pool(|buffers| typed_div_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn typed_div_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
 {
     if lhs.shape == rhs.shape {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view(lhs),
@@ -463,14 +609,14 @@ where
     } else if lhs.shape.is_empty() {
         let scalar = lhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar / x)
             .map_err(|err| backend_failure("div", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
         let scalar = rhs.host_data()[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         map_into(&mut out.view_mut(), &typed_view(lhs), |x| x / scalar)
             .map_err(|err| backend_failure("div", err))?;
         Ok(tensor_from_array(out))
@@ -485,10 +631,20 @@ where
 
 pub fn typed_neg<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Neg<Output = T>,
+    T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
+{
+    with_local_pool(|buffers| typed_neg_with_pool(buffers, input))
+}
+
+pub(crate) fn typed_neg_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| -x)
         .map_err(|err| backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
@@ -496,43 +652,87 @@ where
 
 pub fn typed_conj<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + ConjElem,
+    T: Copy + Clone + Zero + ConjElem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_conj_with_pool(buffers, input))
+}
+
+pub(crate) fn typed_conj_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + ConjElem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.conj_elem())
         .map_err(|err| backend_failure("conj", err))?;
     Ok(tensor_from_array(out))
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_abs<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_abs_with_pool(buffers, input))
+}
+
+pub(crate) fn typed_abs_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.abs_elem())
         .map_err(|err| backend_failure("abs", err))?;
     Ok(tensor_from_array(out))
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_sign<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_sign_with_pool(buffers, input))
+}
+
+pub(crate) fn typed_sign_with_pool<T>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     map_into(&mut out.view_mut(), &typed_view(input), |x| x.sign_elem())
         .map_err(|err| backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_maximum<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_maximum_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn typed_maximum_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar,
 {
     if lhs.shape != rhs.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -542,7 +742,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -553,12 +753,24 @@ where
     Ok(tensor_from_array(out))
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_minimum<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_minimum_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn typed_minimum_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar,
 {
     if lhs.shape != rhs.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -568,7 +780,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -579,13 +791,26 @@ where
     Ok(tensor_from_array(out))
 }
 
+#[allow(dead_code)]
 pub(crate) fn typed_compare<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     dir: &CompareDir,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
+{
+    with_local_pool(|buffers| typed_compare_with_pool(buffers, lhs, rhs, dir))
+}
+
+pub(crate) fn typed_compare_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    dir: &CompareDir,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Tier2Elem + PoolScalar,
 {
     if lhs.shape != rhs.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -595,7 +820,7 @@ where
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),
@@ -606,13 +831,14 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_select<T>(
+pub(crate) fn typed_select_with_pool<T>(
+    buffers: &mut BufferPool,
     pred: &TypedTensor<T>,
     on_true: &TypedTensor<T>,
     on_false: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
 {
     if pred.shape != on_true.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -629,7 +855,7 @@ where
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&pred.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &pred.shape) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view(pred),
@@ -641,13 +867,14 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_clamp<T>(
+pub(crate) fn typed_clamp_with_pool<T>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     lower: &TypedTensor<T>,
     upper: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem,
+    T: Tier2Elem + PoolScalar,
 {
     if input.shape != lower.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -664,7 +891,7 @@ where
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit(&input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view(input),

@@ -132,3 +132,91 @@ fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
         .expect("rank-only placeholder accepts arbitrary shape of that rank");
     assert_eq!(out.shape(), &[7]);
 }
+
+#[test]
+fn compile_with_inputs_validates_and_collects_bound_tensors() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = &x + &x;
+    let bound = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+
+    let compiled = y
+        .compile_with_inputs(&[(&x, &bound)])
+        .expect("symbolic placeholder binding should compile");
+    assert_eq!(compiled.inputs.len(), 1);
+    assert_eq!(compiled.inputs[0].shape(), &[2]);
+    assert!(!compiled.program.instructions.is_empty());
+
+    let err = y.compile_with_inputs(&[]).unwrap_err();
+    assert!(matches!(err, Error::UnboundPlaceholder { .. }));
+
+    let err = y
+        .compile_with_inputs(&[(&x, &bound), (&x, &bound)])
+        .unwrap_err();
+    assert!(matches!(err, Error::DuplicateBinding { .. }));
+
+    let concrete = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let err = concrete
+        .compile_with_inputs(&[(&concrete, &bound)])
+        .unwrap_err();
+    assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
+}
+
+#[test]
+fn compile_with_input_specs_validates_specs_without_tensor_values() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = &x + &x;
+    let shape = [2usize];
+
+    let program = y
+        .compile_with_input_specs(&[(&x, DType::F64, shape.as_slice())])
+        .expect("symbolic placeholder spec should compile");
+    assert!(!program.instructions.is_empty());
+
+    let err = y
+        .compile_with_input_specs(&[(&x, DType::F32, shape.as_slice())])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::PlaceholderDtypeMismatch {
+            expected: DType::F64,
+            actual: DType::F32
+        }
+    ));
+
+    let wrong_rank = [2usize, 1usize];
+    let err = y
+        .compile_with_input_specs(&[(&x, DType::F64, wrong_rank.as_slice())])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::PlaceholderRankMismatch {
+            expected: 1,
+            actual: 2
+        }
+    ));
+
+    let concrete = TracedTensor::input_concrete_shape(DType::F64, &[2]);
+    let concrete_y = concrete.clone();
+    let wrong_shape = [3usize];
+    let err = concrete_y
+        .compile_with_input_specs(&[(&concrete, DType::F64, wrong_shape.as_slice())])
+        .unwrap_err();
+    assert!(matches!(err, Error::PlaceholderShapeMismatch { .. }));
+
+    let data_leaf = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let err = data_leaf
+        .compile_with_input_specs(&[(&data_leaf, DType::F64, shape.as_slice())])
+        .unwrap_err();
+    assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
+
+    let err = y
+        .compile_with_input_specs(&[
+            (&x, DType::F64, shape.as_slice()),
+            (&x, DType::F64, shape.as_slice()),
+        ])
+        .unwrap_err();
+    assert!(matches!(err, Error::DuplicateBinding { .. }));
+
+    let err = y.compile_with_input_specs(&[]).unwrap_err();
+    assert!(matches!(err, Error::UnboundPlaceholder { .. }));
+}

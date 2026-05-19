@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::backend::{TensorBackend, TensorExec};
-use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -144,6 +144,41 @@ impl CpuBackend {
         self.buffers.len()
     }
 
+    /// Snapshot reusable typed host buffers currently retained by this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// let stats = backend.buffer_pool_stats();
+    /// assert_eq!(stats.buffers, 0);
+    /// assert_eq!(stats.capacity_bytes, 0);
+    /// ```
+    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.buffers.stats()
+    }
+
+    /// Reset reusable typed host buffers currently retained by this backend.
+    ///
+    /// This releases pool-owned vectors to the process allocator. Operating
+    /// system RSS may not fall immediately because allocators can retain freed
+    /// pages for future allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.reset_buffer_pool();
+    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// ```
+    pub fn reset_buffer_pool(&mut self) {
+        self.buffers.clear();
+    }
+
     /// Run a closure inside this backend's shared rayon thread pool.
     ///
     /// # Examples
@@ -174,47 +209,66 @@ impl CpuBackend {
         self.buffers = buffers;
         result
     }
+
+    fn install_with_pool_and_gemm_cache<R>(
+        &mut self,
+        gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
+        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
+    ) -> R
+    where
+        R: Send,
+    {
+        let mut buffers = std::mem::take(&mut self.buffers);
+        let (result, buffers) = self.ctx.install(|| {
+            let result = op(&mut buffers, gemm_analysis_cache);
+            (result, buffers)
+        });
+        self.buffers = buffers;
+        result
+    }
 }
 
 impl TensorBackend for CpuBackend {
+    type RuntimeCache = gemm::GemmAnalysisCache;
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::add(lhs, rhs))
+        self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::mul(lhs, rhs))
+        self.install_with_pool(|buffers| elementwise::mul_with_pool(buffers, lhs, rhs))
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::neg(input))
+        self.install_with_pool(|buffers| elementwise::neg_with_pool(buffers, input))
     }
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::conj(input))
+        self.install_with_pool(|buffers| elementwise::conj_with_pool(buffers, input))
     }
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::div(lhs, rhs))
+        self.install_with_pool(|buffers| elementwise::div_with_pool(buffers, lhs, rhs))
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::abs(input))
+        self.install_with_pool(|buffers| elementwise::abs_with_pool(buffers, input))
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::sign(input))
+        self.install_with_pool(|buffers| elementwise::sign_with_pool(buffers, input))
     }
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::maximum(lhs, rhs))
+        self.install_with_pool(|buffers| elementwise::maximum_with_pool(buffers, lhs, rhs))
     }
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::minimum(lhs, rhs))
+        self.install_with_pool(|buffers| elementwise::minimum_with_pool(buffers, lhs, rhs))
     }
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-        self.install(|| elementwise::compare(lhs, rhs, dir))
+        self.install_with_pool(|buffers| elementwise::compare_with_pool(buffers, lhs, rhs, dir))
     }
 
     fn select(
@@ -223,55 +277,57 @@ impl TensorBackend for CpuBackend {
         on_true: &Tensor,
         on_false: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.install(|| elementwise::select(pred, on_true, on_false))
+        self.install_with_pool(|buffers| {
+            elementwise::select_with_pool(buffers, pred, on_true, on_false)
+        })
     }
 
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| elementwise::clamp(input, lower, upper))
+        self.install_with_pool(|buffers| elementwise::clamp_with_pool(buffers, input, lower, upper))
     }
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::exp(input))
+        self.install_with_pool(|buffers| analytic::exp_with_pool(buffers, input))
     }
 
     fn log(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::log(input))
+        self.install_with_pool(|buffers| analytic::log_with_pool(buffers, input))
     }
 
     fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::sin(input))
+        self.install_with_pool(|buffers| analytic::sin_with_pool(buffers, input))
     }
 
     fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::cos(input))
+        self.install_with_pool(|buffers| analytic::cos_with_pool(buffers, input))
     }
 
     fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::tanh(input))
+        self.install_with_pool(|buffers| analytic::tanh_with_pool(buffers, input))
     }
 
     fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::sqrt(input))
+        self.install_with_pool(|buffers| analytic::sqrt_with_pool(buffers, input))
     }
 
     fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::rsqrt(input))
+        self.install_with_pool(|buffers| analytic::rsqrt_with_pool(buffers, input))
     }
 
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::pow(lhs, rhs))
+        self.install_with_pool(|buffers| analytic::pow_with_pool(buffers, lhs, rhs))
     }
 
     fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::expm1(input))
+        self.install_with_pool(|buffers| analytic::expm1_with_pool(buffers, input))
     }
 
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install(|| analytic::log1p(input))
+        self.install_with_pool(|buffers| analytic::log1p_with_pool(buffers, input))
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| structural::transpose(input, perm))
+        self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
@@ -284,11 +340,13 @@ impl TensorBackend for CpuBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        self.install(|| structural::broadcast_in_dim(input, shape, dims))
+        self.install_with_pool(|buffers| {
+            structural::broadcast_in_dim_with_pool(buffers, input, shape, dims)
+        })
     }
 
     fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        self.install(|| structural::convert(input, to))
+        self.install_with_pool(|buffers| structural::convert_with_pool(buffers, input, to))
     }
 
     fn extract_diagonal(
@@ -297,7 +355,9 @@ impl TensorBackend for CpuBackend {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        self.install(|| structural::extract_diagonal(input, axis_a, axis_b))
+        self.install_with_pool(|buffers| {
+            structural::extract_diagonal_with_pool(buffers, input, axis_a, axis_b)
+        })
     }
 
     fn embed_diagonal(
@@ -306,15 +366,17 @@ impl TensorBackend for CpuBackend {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        self.install(|| structural::embed_diagonal(input, axis_a, axis_b))
+        self.install_with_pool(|buffers| {
+            structural::embed_diagonal_with_pool(buffers, input, axis_a, axis_b)
+        })
     }
 
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.install(|| structural::tril(input, k))
+        self.install_with_pool(|buffers| structural::tril_with_pool(buffers, input, k))
     }
 
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.install(|| structural::triu(input, k))
+        self.install_with_pool(|buffers| structural::triu_with_pool(buffers, input, k))
     }
 
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -339,41 +401,162 @@ impl TensorBackend for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        self.dot_general_cached(&mut cache, Some(0), lhs, rhs, config)
+    }
+
+    fn dot_general_cached(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
         #[cfg(feature = "cpu-faer")]
         let ctx = Arc::clone(&self.ctx);
-        self.install_with_pool(|buffers| match (lhs, rhs) {
+        self.install_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
             #[cfg(feature = "cpu-faer")]
             (Tensor::F32(a), Tensor::F32(b)) => {
-                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::F32)
+                gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
+                    .map(Tensor::F32)
             }
             #[cfg(feature = "cpu-faer")]
             (Tensor::F64(a), Tensor::F64(b)) => {
-                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::F64)
+                gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
+                    .map(Tensor::F64)
             }
             #[cfg(feature = "cpu-faer")]
             (Tensor::C32(a), Tensor::C32(b)) => {
-                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::C32)
+                gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
+                    .map(Tensor::C32)
             }
             #[cfg(feature = "cpu-faer")]
             (Tensor::C64(a), Tensor::C64(b)) => {
-                gemm::dot_general(buffers, ctx.as_ref(), a, b, config).map(Tensor::C64)
+                gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
+                    .map(Tensor::C64)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::F32(a), Tensor::F32(b)) => {
-                gemm::dot_general(buffers, a, b, config).map(Tensor::F32)
+                gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config).map(Tensor::F32)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::F64(a), Tensor::F64(b)) => {
-                gemm::dot_general(buffers, a, b, config).map(Tensor::F64)
+                gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config).map(Tensor::F64)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::C32(a), Tensor::C32(b)) => {
-                gemm::dot_general(buffers, a, b, config).map(Tensor::C32)
+                gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config).map(Tensor::C32)
             }
             #[cfg(feature = "cpu-blas")]
             (Tensor::C64(a), Tensor::C64(b)) => {
-                gemm::dot_general(buffers, a, b, config).map(Tensor::C64)
+                gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config).map(Tensor::C64)
             }
+            _ => Err(crate::Error::DTypeMismatch {
+                op: "dot_general",
+                lhs: lhs.dtype(),
+                rhs: rhs.dtype(),
+            }),
+        })
+    }
+
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        self.dot_general_with_conj_cached(&mut cache, Some(0), lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
+    fn dot_general_with_conj_cached(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        #[cfg(feature = "cpu-faer")]
+        let ctx = Arc::clone(&self.ctx);
+        self.install_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
+                buffers,
+                cache,
+                cache_slot,
+                ctx.as_ref(),
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
+                buffers,
+                cache,
+                cache_slot,
+                ctx.as_ref(),
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F64),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
+                buffers,
+                cache,
+                cache_slot,
+                ctx.as_ref(),
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C32),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
+                buffers,
+                cache,
+                cache_slot,
+                ctx.as_ref(),
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C64),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
+                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
+                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+            )
+            .map(Tensor::F64),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
+                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+            )
+            .map(Tensor::C32),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
+                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+            )
+            .map(Tensor::C64),
             _ => Err(crate::Error::DTypeMismatch {
                 op: "dot_general",
                 lhs: lhs.dtype(),
@@ -400,11 +583,13 @@ impl TensorBackend for CpuBackend {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.install(|| indexing::scatter(operand, scatter_indices, updates, config))
+        self.install_with_pool(|buffers| {
+            indexing::scatter_with_pool(buffers, operand, scatter_indices, updates, config)
+        })
     }
 
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-        self.install(|| indexing::try_slice(input, config))
+        self.install_with_pool(|buffers| indexing::try_slice_with_pool(buffers, input, config))
     }
 
     fn dynamic_slice(
@@ -413,7 +598,9 @@ impl TensorBackend for CpuBackend {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.install(|| indexing::dynamic_slice(input, starts, slice_sizes))
+        self.install_with_pool(|buffers| {
+            indexing::dynamic_slice_with_pool(buffers, input, starts, slice_sizes)
+        })
     }
 
     fn dynamic_update_slice(
@@ -422,11 +609,13 @@ impl TensorBackend for CpuBackend {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.install(|| indexing::dynamic_update_slice(operand, update, starts))
+        self.install_with_pool(|buffers| {
+            indexing::dynamic_update_slice_with_pool(buffers, operand, update, starts)
+        })
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-        self.install(|| indexing::try_pad(input, config))
+        self.install_with_pool(|buffers| indexing::try_pad_with_pool(buffers, input, config))
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
@@ -434,7 +623,7 @@ impl TensorBackend for CpuBackend {
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| indexing::reverse(input, axes))
+        self.install_with_pool(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
 
     fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -873,14 +1062,25 @@ impl TensorBackend for CpuBackend {
     }
 
     fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        self.with_exec_session_cached(&mut cache, f)
+    }
+
+    fn with_exec_session_cached<R: Send>(
+        &mut self,
+        cache: &mut Self::RuntimeCache,
+        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+    ) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
         let ctx = Arc::clone(&self.ctx);
-        let result = ctx.install(|| {
+        let (result, buffers) = ctx.install(|| {
             let mut session = CpuExecSession {
                 ctx: ctx.as_ref(),
                 buffers: &mut buffers,
+                gemm_analysis_cache: cache,
             };
-            f(&mut session)
+            let result = f(&mut session);
+            (result, buffers)
         });
         self.buffers = buffers;
         result

@@ -39,6 +39,31 @@
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
 
+## Complexity Budget
+
+- Do not introduce accidental `O(n^2)` behavior in graph construction,
+  metadata propagation, key hashing/equality, compilation, or execution
+  scheduling. If a quadratic algorithm is intentional, document why the input
+  size is bounded or why the tradeoff is acceptable.
+- Avoid repeatedly cloning, hashing, formatting, or scanning whole graph
+  histories, metadata scope lists, tensor input maps, or structural keys inside
+  per-node/per-op loops. Prefer stable IDs, interning, cached fingerprints with
+  exact equality checks, or persistent/shared data structures.
+- When optimizing compiler or graph-build overhead, measure scaling across
+  increasing graph sizes, not only one fixed benchmark case.
+
+## Cache Ownership
+
+- Long-lived runtime/compiler caches must be owned by `Engine` or another
+  explicit top-level runtime object, not hidden in thread-local/global state or
+  buried in backend internals.
+- Every cache must have a bounded default, a user-facing way to configure that
+  bound, and a user-facing way to clear it.
+- Backend resource pools such as buffer pools may live on the backend, but they
+  still need explicit limit/clear controls and documentation.
+- Do not add a new cache without documenting its owner, lifetime, default
+  capacity, memory behavior, and clear/configuration path.
+
 ## CPU Threading Contract
 
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.

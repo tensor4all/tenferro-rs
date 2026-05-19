@@ -16,10 +16,12 @@ einsum helpers, and public multi-output linalg helpers.
 - `Engine`
 - `EagerTensor`
 - `EagerContext`
-- `einsum::einsum` and `einsum::einsum_with`
-- `eager_einsum::eager_einsum` and `eager_einsum::eager_einsum_ad`
-- free linalg helpers such as `svd`, `qr`, `eigh`, `solve`, `cholesky`, and
-  `triangular_solve`
+- `traced_tensor::einsum` and `traced_tensor::einsum_with`
+- `eager_tensor::einsum`
+- `tensor::einsum` and `tensor::einsum_owned`
+- `typed_tensor::einsum`
+- traced linalg helpers under `traced_tensor`, such as `svd`, `qr`, `eigh`,
+  `solve`, `cholesky`, and `triangular_solve`
 - `EagerTensor::backward`, `EagerTensor::clear_grad`, `EagerContext::clear_grads`
 - `TracedTensor::grad`, `TracedTensor::jvp`, `TracedTensor::vjp`
 - re-exported dense runtime types from `tenferro-tensor`:
@@ -40,7 +42,8 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 ## Traced Example
 
 ```rust
-use tenferro::{einsum::einsum, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))

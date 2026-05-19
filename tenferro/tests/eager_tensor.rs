@@ -20,6 +20,16 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     }
 }
 
+fn assert_close_c64_slice(actual: &[Complex64], expected: &[Complex64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (actual - expected).norm() <= tol,
+            "index {index}: expected {expected}, got {actual}"
+        );
+    }
+}
+
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
 }
@@ -100,6 +110,63 @@ fn matrix_eager_input_uses_column_major_values() {
 
     assert_eq!(y.data().shape(), &[2, 3]);
     assert_eq!(f64_data(y.data()), &[2.0, 8.0, 4.0, 10.0, 6.0, 12.0]);
+}
+
+#[test]
+fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
+    let ctx = test_ctx();
+    let plain = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]),
+        ctx.clone(),
+    );
+    let scale = &plain + &plain;
+    assert!(!scale.tracks_grad());
+
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
+    let loss = (&x * &scale).reduce_sum(&[0]).unwrap();
+    let _ = loss.backward().unwrap();
+
+    assert_close_slice(f64_data(x.grad().unwrap().as_ref()), &[2.0, 4.0, 6.0], TOL);
+    x.clear_grad();
+}
+
+#[test]
+fn eager_dot_general_with_conj_uses_untracked_fast_path() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![2, 2],
+            vec![
+                Complex64::new(1.0, 0.5),
+                Complex64::new(2.0, -0.25),
+                Complex64::new(-1.0, 0.75),
+                Complex64::new(0.5, 1.5),
+            ],
+        ),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec(
+            vec![2, 2],
+            vec![
+                Complex64::new(0.25, -1.0),
+                Complex64::new(3.0, 0.5),
+                Complex64::new(-2.0, 0.25),
+                Complex64::new(1.5, -0.75),
+            ],
+        ),
+        ctx,
+    );
+    let config = matmul_config();
+
+    let fused = lhs
+        .dot_general_with_conj(&rhs, &config, true, false)
+        .unwrap();
+    let explicit = lhs.conj().unwrap().dot_general(&rhs, config).unwrap();
+
+    assert!(!fused.tracks_grad());
+    assert_eq!(fused.data().shape(), explicit.data().shape());
+    assert_close_c64_slice(c64_data(fused.data()), c64_data(explicit.data()), TOL);
 }
 
 #[test]

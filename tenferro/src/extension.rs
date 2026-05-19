@@ -241,6 +241,13 @@ pub fn apply_eager<B: TensorBackend>(
         )));
     }
 
+    if !inputs.iter().any(|input| input.requires_grad) {
+        return Ok(outputs
+            .into_iter()
+            .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
+            .collect());
+    }
+
     let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
     let recorded = record_eager_outputs(&op, &outputs, inputs);
     if recorded.traces.len() != outputs.len() {

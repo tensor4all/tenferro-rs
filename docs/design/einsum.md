@@ -1,11 +1,13 @@
 # Einsum Design
 
-tenferro has two current einsum surfaces:
+tenferro has three current facade einsum surfaces:
 
-- `tenferro::einsum::{einsum, einsum_with}` builds lazy traced graphs over
+- `tenferro::traced_tensor::{einsum, einsum_with}` builds lazy traced graphs over
   `TracedTensor`.
-- `tenferro_einsum::{eager_einsum, eager_einsum_owned}` executes immediately
-  over concrete `Tensor` values and is used by runtime N-ary execution.
+- `tenferro::eager_tensor::einsum` executes immediately over `EagerTensor`
+  values and records AD metadata when inputs require gradients.
+- `tenferro::tensor::{einsum, einsum_owned}` executes immediately over concrete
+  `Tensor` values and is used by runtime N-ary execution.
 
 The implementation is split between:
 
@@ -28,7 +30,8 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 The facade crate exposes lazy traced einsum:
 
 ```rust,ignore
-use tenferro::{einsum::einsum, CpuBackend, Engine, TracedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::{CpuBackend, Engine, TracedTensor};
 
 let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -50,23 +53,23 @@ let result = c.eval(&mut engine)?;
 
 `EinsumOptimize::default()` is time-optimized automatic planning.
 
-## Concrete Eager API
+## Concrete Tensor API
 
-`tenferro-einsum` owns immediate execution over `Tensor` values:
+`tenferro::tensor` exposes immediate execution over `Tensor` values:
 
 ```rust
-use tenferro_einsum::eager_einsum;
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend};
+use tenferro::tensor::einsum;
+use tenferro::{CpuBackend, Tensor, TensorBackend};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let c = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
+let c = einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
-`eager_einsum_owned` consumes inputs and lets the backend reclaim eligible
+`einsum_owned` consumes inputs and lets the backend reclaim eligible
 buffers after their last use. Downstream runtime code should use these N-ary
 entrypoints rather than depending on binary lowering internals.
 

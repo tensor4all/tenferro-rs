@@ -19,11 +19,12 @@ macro_rules! panic_backend_methods {
 }
 
 impl TensorBackend for WrongDTypeBackend {
+    type RuntimeCache = ();
+
     panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         neg(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        conj(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         abs(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sign(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -85,6 +86,10 @@ impl TensorBackend for WrongDTypeBackend {
             vec![1.0, 2.0, 3.0, 4.0],
         )))
     }
+
+    fn conj(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        CpuBackend::new().conj(input)
+    }
 }
 
 #[test]
@@ -128,4 +133,40 @@ fn typed_einsum_reports_dtype_mismatch_from_backend_result() {
             rhs: DType::F32,
         }
     ));
+}
+
+#[test]
+fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
+    let lhs = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![1.0]));
+    let rhs = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![3.0]));
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let mut backend = WrongDTypeBackend;
+    let mut cache = ();
+
+    let direct =
+        TensorBackend::dot_general_cached(&mut backend, &mut cache, Some(7), &lhs, &rhs, &config)
+            .unwrap();
+    assert_eq!(direct.shape(), &[2, 2]);
+
+    let folded =
+        TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true)
+            .unwrap();
+    assert_eq!(folded.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+
+    let value = TensorBackend::with_exec_session_cached(&mut backend, &mut cache, |exec| {
+        let cached = exec
+            .dot_general_cached(Some(3), &lhs, &rhs, &config)
+            .unwrap();
+        let folded = exec
+            .dot_general_with_conj_cached(Some(5), &lhs, &rhs, &config, false, false)
+            .unwrap();
+        cached.shape().len() + folded.shape().len()
+    });
+    assert_eq!(value, 4);
 }

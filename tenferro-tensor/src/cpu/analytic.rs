@@ -2,7 +2,8 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use strided_kernel::{map_into, zip_map2_into};
 
-use super::{tensor_from_array, typed_array_uninit, typed_view};
+use super::{tensor_from_array, typed_array_uninit_from_pool, typed_view};
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::types::{Tensor, TypedTensor};
 
 trait UnaryAnalyticElem: Copy + Clone + One + Zero {
@@ -129,26 +130,41 @@ fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
     }
 }
 
+fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+    let mut buffers = BufferPool::new();
+    f(&mut buffers)
+}
+
 macro_rules! define_unary_analytic_op {
-    ($dispatch_fn:ident, $typed_fn:ident, $elem_fn:ident) => {
+    ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $typed_fn:ident, $typed_with_pool_fn:ident, $elem_fn:ident) => {
         pub fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
+            with_local_pool(|buffers| $dispatch_with_pool_fn(buffers, input))
+        }
+
+        pub(crate) fn $dispatch_with_pool_fn(
+            buffers: &mut BufferPool,
+            input: &Tensor,
+        ) -> crate::Result<Tensor> {
             match input {
-                Tensor::F32(t) => Ok(Tensor::F32($typed_fn(t)?)),
-                Tensor::F64(t) => Ok(Tensor::F64($typed_fn(t)?)),
+                Tensor::F32(t) => Ok(Tensor::F32($typed_with_pool_fn(buffers, t)?)),
+                Tensor::F64(t) => Ok(Tensor::F64($typed_with_pool_fn(buffers, t)?)),
                 Tensor::I64(_) => Err(crate::Error::BackendFailure {
                     op: stringify!($dispatch_fn),
                     message: "unsupported dtype I64".into(),
                 }),
-                Tensor::C32(t) => Ok(Tensor::C32($typed_fn(t)?)),
-                Tensor::C64(t) => Ok(Tensor::C64($typed_fn(t)?)),
+                Tensor::C32(t) => Ok(Tensor::C32($typed_with_pool_fn(buffers, t)?)),
+                Tensor::C64(t) => Ok(Tensor::C64($typed_with_pool_fn(buffers, t)?)),
             }
         }
 
-        fn $typed_fn<T>(input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
+        fn $typed_with_pool_fn<T>(
+            buffers: &mut BufferPool,
+            input: &TypedTensor<T>,
+        ) -> crate::Result<TypedTensor<T>>
         where
-            T: UnaryAnalyticElem,
+            T: UnaryAnalyticElem + PoolScalar,
         {
-            let mut out = unsafe { typed_array_uninit(&input.shape) };
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
             map_into(&mut out.view_mut(), &typed_view(input), |x| x.$elem_fn())
                 .map_err(|err| backend_failure(stringify!($typed_fn), err))?;
             Ok(tensor_from_array(out))
@@ -156,22 +172,60 @@ macro_rules! define_unary_analytic_op {
     };
 }
 
-define_unary_analytic_op!(exp, typed_exp, exp_elem);
-define_unary_analytic_op!(log, typed_log, log_elem);
-define_unary_analytic_op!(sin, typed_sin, sin_elem);
-define_unary_analytic_op!(cos, typed_cos, cos_elem);
-define_unary_analytic_op!(tanh, typed_tanh, tanh_elem);
-define_unary_analytic_op!(sqrt, typed_sqrt, sqrt_elem);
-define_unary_analytic_op!(rsqrt, typed_rsqrt, rsqrt_elem);
-define_unary_analytic_op!(expm1, typed_expm1, expm1_elem);
-define_unary_analytic_op!(log1p, typed_log1p, log1p_elem);
+define_unary_analytic_op!(exp, exp_with_pool, typed_exp, typed_exp_with_pool, exp_elem);
+define_unary_analytic_op!(log, log_with_pool, typed_log, typed_log_with_pool, log_elem);
+define_unary_analytic_op!(sin, sin_with_pool, typed_sin, typed_sin_with_pool, sin_elem);
+define_unary_analytic_op!(cos, cos_with_pool, typed_cos, typed_cos_with_pool, cos_elem);
+define_unary_analytic_op!(
+    tanh,
+    tanh_with_pool,
+    typed_tanh,
+    typed_tanh_with_pool,
+    tanh_elem
+);
+define_unary_analytic_op!(
+    sqrt,
+    sqrt_with_pool,
+    typed_sqrt,
+    typed_sqrt_with_pool,
+    sqrt_elem
+);
+define_unary_analytic_op!(
+    rsqrt,
+    rsqrt_with_pool,
+    typed_rsqrt,
+    typed_rsqrt_with_pool,
+    rsqrt_elem
+);
+define_unary_analytic_op!(
+    expm1,
+    expm1_with_pool,
+    typed_expm1,
+    typed_expm1_with_pool,
+    expm1_elem
+);
+define_unary_analytic_op!(
+    log1p,
+    log1p_with_pool,
+    typed_log1p,
+    typed_log1p_with_pool,
+    log1p_elem
+);
 
 pub fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| pow_with_pool(buffers, lhs, rhs))
+}
+
+pub(crate) fn pow_with_pool(
+    buffers: &mut BufferPool,
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> crate::Result<Tensor> {
     match (lhs, rhs) {
-        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_pow(a, b)?)),
-        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_pow(a, b)?)),
-        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow(a, b)?)),
-        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow(a, b)?)),
+        (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_pow_with_pool(buffers, a, b)?)),
+        (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_pow_with_pool(buffers, a, b)?)),
+        (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow_with_pool(buffers, a, b)?)),
+        (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow_with_pool(buffers, a, b)?)),
         _ => Err(crate::Error::DTypeMismatch {
             op: "pow",
             lhs: lhs.dtype(),
@@ -180,9 +234,13 @@ pub fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     }
 }
 
-fn typed_pow<T>(lhs: &TypedTensor<T>, rhs: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
+fn typed_pow_with_pool<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+) -> crate::Result<TypedTensor<T>>
 where
-    T: PowElem,
+    T: PowElem + PoolScalar,
 {
     if lhs.shape != rhs.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -191,7 +249,7 @@ where
             rhs: rhs.shape.clone(),
         });
     }
-    let mut out = unsafe { typed_array_uninit(&lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view(lhs),

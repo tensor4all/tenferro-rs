@@ -56,13 +56,38 @@ impl TensorAsTyped<num_complex::Complex<f64>> for Tensor {
     }
 }
 
+fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+    let mut buffers = BufferPool::new();
+    f(&mut buffers)
+}
+
+fn pooled_zeroed_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> TypedTensor<T>
+where
+    T: Clone + Zero + PoolScalar,
+{
+    let mut out = pooled_uninit_tensor(buffers, shape);
+    out.host_data_mut().fill(T::zero());
+    out
+}
+
+fn clone_host_tensor_from_pool<T>(
+    buffers: &mut BufferPool,
+    tensor: &TypedTensor<T>,
+) -> TypedTensor<T>
+where
+    T: Copy + Clone + PoolScalar,
+{
+    let mut out = pooled_uninit_tensor(buffers, tensor.shape.clone());
+    out.host_data_mut().copy_from_slice(tensor.host_data());
+    out
+}
+
 pub fn gather(
     operand: &Tensor,
     start_indices: &Tensor,
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
-    let mut buffers = BufferPool::new();
-    gather_with_pool(&mut buffers, operand, start_indices, config)
+    with_local_pool(|buffers| gather_with_pool(buffers, operand, start_indices, config))
 }
 
 pub(crate) fn gather_with_pool(
@@ -90,19 +115,29 @@ pub fn scatter(
     updates: &Tensor,
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| scatter_with_pool(buffers, operand, scatter_indices, updates, config))
+}
+
+pub(crate) fn scatter_with_pool(
+    buffers: &mut BufferPool,
+    operand: &Tensor,
+    scatter_indices: &Tensor,
+    updates: &Tensor,
+    config: &ScatterConfig,
+) -> crate::Result<Tensor> {
     let scatter_indices = try_index_tensor(scatter_indices)?;
     match (operand, updates) {
         (Tensor::F32(op), Tensor::F32(upd)) => {
-            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::F32)
+            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::F32)
         }
         (Tensor::F64(op), Tensor::F64(upd)) => {
-            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::F64)
+            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::F64)
         }
         (Tensor::C32(op), Tensor::C32(upd)) => {
-            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::C32)
+            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::C32)
         }
         (Tensor::C64(op), Tensor::C64(upd)) => {
-            typed_scatter(op, &scatter_indices, upd, config).map(Tensor::C64)
+            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::C64)
         }
         (Tensor::I64(_), Tensor::I64(_)) => Err(crate::Error::BackendFailure {
             op: "scatter",
@@ -121,12 +156,20 @@ pub fn slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
 }
 
 pub fn try_slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| try_slice_with_pool(buffers, input, config))
+}
+
+pub(crate) fn try_slice_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    config: &SliceConfig,
+) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_slice(tensor, config)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_slice(tensor, config)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_slice(tensor, config)?)),
-        Tensor::C32(tensor) => Ok(Tensor::C32(typed_slice(tensor, config)?)),
-        Tensor::C64(tensor) => Ok(Tensor::C64(typed_slice(tensor, config)?)),
+        Tensor::F32(tensor) => Ok(Tensor::F32(typed_slice(buffers, tensor, config)?)),
+        Tensor::F64(tensor) => Ok(Tensor::F64(typed_slice(buffers, tensor, config)?)),
+        Tensor::I64(tensor) => Ok(Tensor::I64(typed_slice(buffers, tensor, config)?)),
+        Tensor::C32(tensor) => Ok(Tensor::C32(typed_slice(buffers, tensor, config)?)),
+        Tensor::C64(tensor) => Ok(Tensor::C64(typed_slice(buffers, tensor, config)?)),
     }
 }
 
@@ -135,12 +178,21 @@ pub fn dynamic_slice(
     starts: &Tensor,
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| dynamic_slice_with_pool(buffers, input, starts, slice_sizes))
+}
+
+pub(crate) fn dynamic_slice_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    starts: &Tensor,
+    slice_sizes: &[usize],
+) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
     match input {
-        Tensor::F32(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::F32),
-        Tensor::F64(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::F64),
-        Tensor::C32(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::C32),
-        Tensor::C64(t) => typed_dynamic_slice(t, &starts, slice_sizes).map(Tensor::C64),
+        Tensor::F32(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::F32),
+        Tensor::F64(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::F64),
+        Tensor::C32(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::C32),
+        Tensor::C64(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::C64),
         Tensor::I64(_) => Err(crate::Error::BackendFailure {
             op: "dynamic_slice",
             message: "I64 data tensors are not supported by this operation".into(),
@@ -170,22 +222,31 @@ pub fn dynamic_update_slice(
     update: &Tensor,
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| dynamic_update_slice_with_pool(buffers, operand, update, starts))
+}
+
+pub(crate) fn dynamic_update_slice_with_pool(
+    buffers: &mut BufferPool,
+    operand: &Tensor,
+    update: &Tensor,
+    starts: &Tensor,
+) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
     match (operand, update) {
         (Tensor::F32(op), Tensor::F32(upd)) => {
-            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::F32)
+            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::F32)
         }
         (Tensor::F64(op), Tensor::F64(upd)) => {
-            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::F64)
+            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::F64)
         }
         (Tensor::I64(op), Tensor::I64(upd)) => {
-            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::I64)
+            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::I64)
         }
         (Tensor::C32(op), Tensor::C32(upd)) => {
-            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::C32)
+            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::C32)
         }
         (Tensor::C64(op), Tensor::C64(upd)) => {
-            typed_dynamic_update_slice(op, upd, &starts).map(Tensor::C64)
+            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::C64)
         }
         _ => Err(crate::Error::DTypeMismatch {
             op: "dynamic_update_slice",
@@ -200,12 +261,20 @@ pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
 }
 
 pub fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| try_pad_with_pool(buffers, input, config))
+}
+
+pub(crate) fn try_pad_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    config: &PadConfig,
+) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_pad(tensor, config)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_pad(tensor, config)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_pad(tensor, config)?)),
-        Tensor::C32(tensor) => Ok(Tensor::C32(typed_pad(tensor, config)?)),
-        Tensor::C64(tensor) => Ok(Tensor::C64(typed_pad(tensor, config)?)),
+        Tensor::F32(tensor) => Ok(Tensor::F32(typed_pad(buffers, tensor, config)?)),
+        Tensor::F64(tensor) => Ok(Tensor::F64(typed_pad(buffers, tensor, config)?)),
+        Tensor::I64(tensor) => Ok(Tensor::I64(typed_pad(buffers, tensor, config)?)),
+        Tensor::C32(tensor) => Ok(Tensor::C32(typed_pad(buffers, tensor, config)?)),
+        Tensor::C64(tensor) => Ok(Tensor::C64(typed_pad(buffers, tensor, config)?)),
     }
 }
 
@@ -214,8 +283,7 @@ pub fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
 }
 
 pub fn try_concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-    let mut buffers = BufferPool::new();
-    try_concatenate_with_pool(&mut buffers, inputs, axis)
+    with_local_pool(|buffers| try_concatenate_with_pool(buffers, inputs, axis))
 }
 
 pub(crate) fn try_concatenate_with_pool(
@@ -250,26 +318,25 @@ pub(crate) fn try_concatenate_with_pool(
 }
 
 pub fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+    with_local_pool(|buffers| reverse_with_pool(buffers, input, axes))
+}
+
+pub(crate) fn reverse_with_pool(
+    buffers: &mut BufferPool,
+    input: &Tensor,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
     match input {
-        Tensor::F32(t) => typed_reverse(t, axes).map(Tensor::F32),
-        Tensor::F64(t) => typed_reverse(t, axes).map(Tensor::F64),
-        Tensor::I64(t) => typed_reverse(t, axes).map(Tensor::I64),
-        Tensor::C32(t) => typed_reverse(t, axes).map(Tensor::C32),
-        Tensor::C64(t) => typed_reverse(t, axes).map(Tensor::C64),
+        Tensor::F32(t) => typed_reverse(buffers, t, axes).map(Tensor::F32),
+        Tensor::F64(t) => typed_reverse(buffers, t, axes).map(Tensor::F64),
+        Tensor::I64(t) => typed_reverse(buffers, t, axes).map(Tensor::I64),
+        Tensor::C32(t) => typed_reverse(buffers, t, axes).map(Tensor::C32),
+        Tensor::C64(t) => typed_reverse(buffers, t, axes).map(Tensor::C64),
     }
 }
 
-#[allow(clippy::uninit_vec)]
-fn typed_tensor_uninit<T: Clone>(shape: Vec<usize>) -> TypedTensor<T> {
-    let n: usize = shape.iter().product();
-    let mut data = Vec::with_capacity(n);
-    // SAFETY: callers only use this helper for outputs that are fully written
-    // before any read.
-    unsafe { data.set_len(n) };
-    TypedTensor::from_vec(shape, data)
-}
-
-fn typed_slice<T: Copy + Clone>(
+fn typed_slice<T: Copy + Clone + PoolScalar>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
@@ -328,20 +395,19 @@ fn typed_slice<T: Copy + Clone>(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
-    let out_len: usize = out_shape.iter().product();
-    let mut out_data = Vec::with_capacity(out_len);
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    for flat in 0..out_len {
+    for flat in 0..out.n_elements() {
         flat_to_multi(flat, &out_shape, &mut out_idx);
         for axis in 0..rank {
             in_idx[axis] = config.starts[axis] + out_idx[axis] * config.strides[axis];
         }
-        out_data.push(*input.get(&in_idx));
+        *out.get_mut(&out_idx) = *input.get(&in_idx);
     }
 
-    Ok(TypedTensor::from_vec(out_shape, out_data))
+    Ok(out)
 }
 
 fn typed_concatenate_from_dyn_inputs<T>(
@@ -454,7 +520,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     Ok(out)
 }
 
-fn typed_reverse<T: Copy + Clone>(
+fn typed_reverse<T: Copy + Clone + PoolScalar>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -471,12 +538,11 @@ fn typed_reverse<T: Copy + Clone>(
         reverse_axis[axis] = true;
     }
 
-    let out_len = input.n_elements();
-    let mut out_data = Vec::with_capacity(out_len);
+    let mut out = pooled_uninit_tensor(buffers, input.shape.clone());
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
-    for flat in 0..out_len {
+    for flat in 0..out.n_elements() {
         flat_to_multi(flat, &input.shape, &mut out_idx);
         for axis in 0..rank {
             in_idx[axis] = if reverse_axis[axis] {
@@ -485,10 +551,10 @@ fn typed_reverse<T: Copy + Clone>(
                 out_idx[axis]
             };
         }
-        out_data.push(*input.get(&in_idx));
+        *out.get_mut(&out_idx) = *input.get(&in_idx);
     }
 
-    Ok(TypedTensor::from_vec(input.shape.clone(), out_data))
+    Ok(out)
 }
 
 struct IndexTensor {
@@ -870,13 +936,14 @@ fn typed_gather<T: Copy + Clone + Zero + PoolScalar>(
 }
 
 fn typed_scatter<T>(
+    buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     scatter_indices: &IndexTensor,
     updates: &TypedTensor<T>,
     config: &ScatterConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Zero + Add<Output = T>,
+    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
     let op_rank = operand.shape.len();
     for &dim in &config.inserted_window_dims {
@@ -1033,7 +1100,7 @@ where
     let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?.max(1);
     let window_elems =
         checked_product("scatter", "window update shape", &window_shape_updates)?.max(1);
-    let mut out = operand.clone();
+    let mut out = clone_host_tensor_from_pool(buffers, operand);
 
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut window_idx = vec![0usize; window_shape_updates.len()];
@@ -1107,7 +1174,8 @@ where
     Ok(out)
 }
 
-fn typed_dynamic_slice<T: Copy + Clone + Zero>(
+fn typed_dynamic_slice<T: Copy + Clone + Zero + PoolScalar>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
     slice_sizes: &[usize],
@@ -1147,7 +1215,7 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
     }
 
     let out_shape = slice_sizes.to_vec();
-    let mut out = typed_tensor_uninit(out_shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, out_shape.clone());
     let mut out_idx = vec![0usize; out_shape.len()];
     let mut input_idx = vec![0usize; out_shape.len()];
 
@@ -1162,7 +1230,8 @@ fn typed_dynamic_slice<T: Copy + Clone + Zero>(
     Ok(out)
 }
 
-fn typed_dynamic_update_slice<T: Copy + Clone>(
+fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
+    buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     update: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1201,7 +1270,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone>(
         )?;
     }
 
-    let mut out = operand.clone();
+    let mut out = clone_host_tensor_from_pool(buffers, operand);
     let mut update_idx = vec![0usize; update.shape.len()];
     let mut operand_idx = vec![0usize; operand.shape.len()];
 
@@ -1216,7 +1285,8 @@ fn typed_dynamic_update_slice<T: Copy + Clone>(
     Ok(out)
 }
 
-fn typed_pad<T: Copy + Clone + Zero>(
+fn typed_pad<T: Copy + Clone + Zero + PoolScalar>(
+    buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     config: &PadConfig,
 ) -> crate::Result<TypedTensor<T>> {
@@ -1265,7 +1335,7 @@ fn typed_pad<T: Copy + Clone + Zero>(
         );
     }
 
-    let mut out = TypedTensor::zeros(out_shape.clone());
+    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone());
     let mut input_idx = vec![0usize; input.shape.len()];
     let mut out_idx = vec![0usize; input.shape.len()];
 

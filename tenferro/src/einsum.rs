@@ -7,7 +7,7 @@
 //! # Quick start
 //!
 //! ```ignore
-//! use tenferro::einsum::einsum;
+//! use tenferro::traced_tensor::einsum;
 //! use tenferro::engine::Engine;
 //! use tenferro::traced::TracedTensor;
 //!
@@ -32,13 +32,11 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::TensorBackend;
 
 use super::checkpoint::CheckpointNode;
-use super::engine::Engine;
+use super::engine::{Engine, ParsedEinsum};
 use super::error::{Error, Result};
-use super::metadata::{
-    metadata_scopes_with_new, push_metadata_scope, register_scoped_fragment_metadata,
-};
+use super::metadata::{metadata_scopes_with_new, register_scoped_fragment_metadata};
 use super::sym_dim::SymDim;
-use super::traced::{concrete_shape, next_traced_id, try_concrete_shape, TracedTensor};
+use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 
 /// Controls how the contraction path is determined for N-ary einsum.
 ///
@@ -52,7 +50,7 @@ use super::traced::{concrete_shape, next_traced_id, try_concrete_shape, TracedTe
 /// ```ignore
 /// use omeco::ScoreFunction;
 /// use tenferro_einsum::ContractionOptimizerOptions;
-/// use tenferro::einsum::{einsum_with, EinsumOptimize};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
 ///
 /// // Default: FLOPS-first (minimize computation time)
 /// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
@@ -193,7 +191,7 @@ impl Default for EinsumOptimize {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::einsum::einsum;
+/// use tenferro::traced_tensor::einsum;
 /// use tenferro::engine::Engine;
 /// use tenferro::traced::TracedTensor;
 ///
@@ -230,7 +228,7 @@ pub fn einsum<B: TensorBackend>(
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro::einsum::{einsum_with, EinsumOptimize};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
 /// use tenferro::engine::Engine;
 /// use tenferro::traced::TracedTensor;
 ///
@@ -254,8 +252,8 @@ pub fn einsum_with<B: TensorBackend>(
         ));
     }
 
-    let subs =
-        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
+    let parsed = cached_subscripts(engine, subscripts)?;
+    let subs = &parsed.subscripts;
     if subs.inputs.len() != inputs.len() {
         return Err(Error::ContractionError(format!(
             "einsum subscripts expect {} inputs, got {}",
@@ -263,11 +261,12 @@ pub fn einsum_with<B: TensorBackend>(
             inputs.len()
         )));
     }
-    if inputs
-        .iter()
-        .any(|tensor| try_concrete_shape(tensor).is_none())
-    {
-        return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
+    if inputs.iter().any(|tensor| !has_concrete_shape(tensor)) {
+        return Ok(build_symbolic_nary_einsum(
+            inputs,
+            parsed.notation.as_ref(),
+            subs,
+        ));
     }
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| concrete_shape(t)).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
@@ -275,7 +274,7 @@ pub fn einsum_with<B: TensorBackend>(
     match optimize {
         // Reuse TreeSA results for repeated calls with the same equation and input shapes.
         EinsumOptimize::Auto(opts) => {
-            let cache_key = (subscripts.to_string(), shapes.clone());
+            let cache_key = (Arc::clone(&parsed.notation), shapes.clone());
             let tree = if let Some(cached) = engine.einsum_cache.get(&cache_key) {
                 cached.clone()
             } else {
@@ -294,6 +293,32 @@ pub fn einsum_with<B: TensorBackend>(
             build_traced_from_tree(inputs, &subs, &tree, &shapes)
         }
     }
+}
+
+fn has_concrete_shape(tensor: &TracedTensor) -> bool {
+    tensor
+        .sym_shape()
+        .is_some_and(|shape| shape.iter().all(|dim| dim.constant_value().is_some()))
+}
+
+fn cached_subscripts<B: TensorBackend>(
+    engine: &mut Engine<B>,
+    subscripts: &str,
+) -> Result<Arc<ParsedEinsum>> {
+    if let Some(cached) = engine.einsum_parse_cache.get(subscripts) {
+        return Ok(Arc::clone(cached));
+    }
+
+    let parsed =
+        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
+    let cached = Arc::new(ParsedEinsum {
+        notation: Arc::<str>::from(subscripts),
+        subscripts: parsed,
+    });
+    engine
+        .einsum_parse_cache
+        .put(subscripts.to_owned(), Arc::clone(&cached));
+    Ok(cached)
 }
 
 fn build_symbolic_nary_einsum(
@@ -330,12 +355,10 @@ fn build_symbolic_nary_einsum(
     builder.set_outputs(outputs.clone());
     let fragment = Arc::new(builder.build());
     let metadata_scope = register_scoped_fragment_metadata(fragment.as_ref(), std::iter::empty());
-    let mut metadata_scopes = metadata_scopes_with_new(metadata_scope, []);
-    for input in inputs {
-        for scope in &input.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
-    }
+    let metadata_scopes = metadata_scopes_with_new(
+        metadata_scope,
+        inputs.iter().map(|input| input.metadata_scopes.as_slice()),
+    );
 
     TracedTensor {
         id: next_traced_id(),
@@ -494,14 +517,14 @@ fn build_traced_from_tree(
 
             let mut merged = HashMap::new();
             let mut extra_roots = Vec::new();
-            let mut metadata_scopes = metadata_scopes_with_new(metadata_scope, []);
             for input in inputs {
                 merged.extend(input.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
                 extra_roots.extend(input.extra_roots.iter().cloned());
-                for scope in &input.metadata_scopes {
-                    push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-                }
             }
+            let metadata_scopes = metadata_scopes_with_new(
+                metadata_scope,
+                inputs.iter().map(|input| input.metadata_scopes.as_slice()),
+            );
 
             let merged_chain = inputs.iter().fold(None, |acc, input| {
                 CheckpointNode::merge_chains(acc, input.checkpoint_chain.clone())

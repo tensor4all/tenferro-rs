@@ -3,7 +3,11 @@ use smallvec::SmallVec;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::DotGeneralConfig;
-use crate::cpu::structural::typed_transpose;
+#[cfg(feature = "cpu-blas")]
+use crate::cpu::elementwise::typed_conj_with_pool;
+use crate::cpu::structural::typed_transpose_with_pool;
+#[cfg(feature = "cpu-blas")]
+use crate::types::ConjElem;
 use crate::types::{col_major_strides, Buffer, TypedTensor};
 use crate::Error;
 
@@ -17,6 +21,7 @@ use blas_gemm::BlasGemm;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
 
+#[derive(Clone)]
 struct GemmDims {
     m: usize,
     n: usize,
@@ -32,6 +37,106 @@ struct GemmDims {
     c_cs: isize,
     c_bs: isize,
     out_shape: SmallVec<[usize; 8]>,
+}
+
+#[derive(Clone)]
+struct GemmAnalysisPlan {
+    lhs_shape: Vec<usize>,
+    rhs_shape: Vec<usize>,
+    config: DotGeneralConfig,
+    dims: Option<GemmDims>,
+}
+
+const GEMM_ANALYSIS_CACHE_MAX: usize = 1024;
+
+#[derive(Default)]
+struct GemmAnalysisCacheSlot {
+    direct: Option<GemmAnalysisPlan>,
+    canonical: Option<GemmAnalysisPlan>,
+}
+
+#[derive(Clone, Copy)]
+enum GemmAnalysisCacheKind {
+    Direct,
+    Canonical,
+}
+
+impl GemmAnalysisPlan {
+    fn matches<T>(
+        &self,
+        lhs: &TypedTensor<T>,
+        rhs: &TypedTensor<T>,
+        config: &DotGeneralConfig,
+    ) -> bool {
+        self.lhs_shape.as_slice() == lhs.shape.as_slice()
+            && self.rhs_shape.as_slice() == rhs.shape.as_slice()
+            && self.config == *config
+    }
+}
+
+impl GemmAnalysisCacheSlot {
+    fn get(&self, kind: GemmAnalysisCacheKind) -> Option<&GemmAnalysisPlan> {
+        match kind {
+            GemmAnalysisCacheKind::Direct => self.direct.as_ref(),
+            GemmAnalysisCacheKind::Canonical => self.canonical.as_ref(),
+        }
+    }
+
+    fn set(&mut self, kind: GemmAnalysisCacheKind, plan: GemmAnalysisPlan) {
+        match kind {
+            GemmAnalysisCacheKind::Direct => self.direct = Some(plan),
+            GemmAnalysisCacheKind::Canonical => self.canonical = Some(plan),
+        }
+    }
+}
+
+#[derive(Default)]
+#[doc(hidden)]
+pub struct GemmAnalysisCache {
+    slots: Vec<GemmAnalysisCacheSlot>,
+}
+
+impl GemmAnalysisCache {
+    fn cached_dims<T>(
+        &self,
+        slot: usize,
+        kind: GemmAnalysisCacheKind,
+        lhs: &TypedTensor<T>,
+        rhs: &TypedTensor<T>,
+        config: &DotGeneralConfig,
+    ) -> Option<Option<GemmDims>> {
+        self.slots
+            .get(slot)
+            .and_then(|entry| entry.get(kind))
+            .filter(|plan| plan.matches(lhs, rhs, config))
+            .map(|plan| plan.dims.clone())
+    }
+
+    fn store(
+        &mut self,
+        slot: usize,
+        kind: GemmAnalysisCacheKind,
+        lhs_shape: Vec<usize>,
+        rhs_shape: Vec<usize>,
+        config: DotGeneralConfig,
+        dims: Option<GemmDims>,
+    ) {
+        if slot >= GEMM_ANALYSIS_CACHE_MAX {
+            return;
+        }
+        if self.slots.len() <= slot {
+            self.slots.resize_with(slot + 1, Default::default);
+        }
+        self.slots[slot].set(
+            kind,
+            GemmAnalysisPlan {
+                lhs_shape,
+                rhs_shape,
+                config,
+                dims,
+            },
+        );
+    }
 }
 
 fn validate_axis_list(
@@ -359,9 +464,41 @@ fn analyse_gemm<T>(
     })
 }
 
+fn analyse_gemm_cached<T>(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    cache_kind: GemmAnalysisCacheKind,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<GemmDims>> {
+    let cache_slot = cache_slot.filter(|&slot| slot < GEMM_ANALYSIS_CACHE_MAX);
+    if let Some(slot) = cache_slot {
+        if let Some(cached) = cache.cached_dims(slot, cache_kind, lhs, rhs, config) {
+            return Ok(cached);
+        }
+    }
+
+    validate_dot_general(lhs, rhs, config)?;
+    let dims = analyse_gemm(lhs, rhs, config);
+    if let Some(slot) = cache_slot {
+        cache.store(
+            slot,
+            cache_kind,
+            lhs.shape.clone(),
+            rhs.shape.clone(),
+            config.clone(),
+            dims.clone(),
+        );
+    }
+    Ok(dims)
+}
+
 #[cfg(feature = "cpu-faer")]
+#[allow(dead_code)]
 pub(crate) fn dot_general<T>(
     buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
     ctx: &crate::cpu::CpuContext,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -370,8 +507,74 @@ pub(crate) fn dot_general<T>(
 where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
-    validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_faer_gemm(buffers, ctx, lhs, rhs, config) {
+    dot_general_cached(buffers, cache, None, ctx, lhs, rhs, config)
+}
+
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn dot_general_cached<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    ctx: &crate::cpu::CpuContext,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+{
+    dot_general_with_conj_cached(
+        buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
+    )
+}
+
+#[cfg(feature = "cpu-faer")]
+#[allow(dead_code)]
+pub(crate) fn dot_general_with_conj<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    ctx: &crate::cpu::CpuContext,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+{
+    dot_general_with_conj_cached(
+        buffers, cache, None, ctx, lhs, rhs, config, lhs_conj, rhs_conj,
+    )
+}
+
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn dot_general_with_conj_cached<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    ctx: &crate::cpu::CpuContext,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+{
+    if let Some(result) = typed_faer_gemm(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        ctx,
+        lhs,
+        rhs,
+        config,
+        lhs_conj,
+        rhs_conj,
+    )? {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -379,51 +582,74 @@ where
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, lhs, &lhs_perm)?)
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
         std::borrow::Cow::Borrowed(rhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, rhs, &rhs_perm)?)
     };
-    typed_faer_gemm(buffers, ctx, &lhs_canon, &rhs_canon, &new_config).ok_or_else(|| {
-        Error::BackendFailure {
-            op: "dot_general",
-            message: "CPU GEMM requires host-backed canonical inputs".into(),
-        }
+    typed_faer_gemm(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Canonical,
+        ctx,
+        &lhs_canon,
+        &rhs_canon,
+        &new_config,
+        lhs_conj,
+        rhs_conj,
+    )?
+    .ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "CPU GEMM requires host-backed canonical inputs".into(),
     })
 }
 
 #[cfg(feature = "cpu-faer")]
 fn typed_faer_gemm<T>(
     buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    cache_kind: GemmAnalysisCacheKind,
     ctx: &crate::cpu::CpuContext,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
-) -> Option<TypedTensor<T>>
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<Option<TypedTensor<T>>>
 where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
-    let dims = analyse_gemm(lhs, rhs, config)?;
-    let out_n = checked_product(&dims.out_shape)?;
+    let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
+        return Ok(None);
+    };
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "output element count overflow".into(),
+    })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
-        return Some(TypedTensor {
-            buffer: Buffer::Host(vec![T::zero(); out_n]),
+        // SAFETY: the buffer is fully initialized immediately by fill.
+        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
+        data.fill(T::zero());
+        return Ok(Some(TypedTensor {
+            buffer: Buffer::Host(data),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
-        });
+        }));
     }
 
     let a_data = match &lhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
-        Buffer::Backend(_) => return None,
+        Buffer::Backend(_) => return Ok(None),
         #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let b_data = match &rhs.buffer {
         Buffer::Host(v) => v.as_ptr(),
-        Buffer::Backend(_) => return None,
+        Buffer::Backend(_) => return Ok(None),
         #[cfg(feature = "cubecl")]
         Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
@@ -433,40 +659,76 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)?;
-        let c_off = checked_batch_offset(batch, dims.c_bs)?;
+        let a_off =
+            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "lhs batch offset overflow".into(),
+            })?;
+        let b_off =
+            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "rhs batch offset overflow".into(),
+            })?;
+        let c_off =
+            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "output batch offset overflow".into(),
+            })?;
         unsafe {
-            T::strided_gemm(
-                ctx,
-                T::one(),
-                a_data.offset(a_off),
-                dims.m,
-                dims.k,
-                dims.a_rs,
-                dims.a_cs,
-                b_data.offset(b_off),
-                dims.n,
-                dims.b_rs,
-                dims.b_cs,
-                T::zero(),
-                c_ptr.offset(c_off),
-                dims.c_rs,
-                dims.c_cs,
-            );
+            if lhs_conj || rhs_conj {
+                T::strided_gemm_with_conj(
+                    ctx,
+                    T::one(),
+                    a_data.offset(a_off),
+                    dims.m,
+                    dims.k,
+                    dims.a_rs,
+                    dims.a_cs,
+                    lhs_conj,
+                    b_data.offset(b_off),
+                    dims.n,
+                    dims.b_rs,
+                    dims.b_cs,
+                    rhs_conj,
+                    T::zero(),
+                    c_ptr.offset(c_off),
+                    dims.c_rs,
+                    dims.c_cs,
+                );
+            } else {
+                T::strided_gemm(
+                    ctx,
+                    T::one(),
+                    a_data.offset(a_off),
+                    dims.m,
+                    dims.k,
+                    dims.a_rs,
+                    dims.a_cs,
+                    b_data.offset(b_off),
+                    dims.n,
+                    dims.b_rs,
+                    dims.b_cs,
+                    T::zero(),
+                    c_ptr.offset(c_off),
+                    dims.c_rs,
+                    dims.c_cs,
+                );
+            }
         }
     }
 
-    Some(TypedTensor {
+    Ok(Some(TypedTensor {
         buffer: Buffer::Host(out_data),
         shape: dims.out_shape.into_vec(),
         placement: lhs.placement.clone(),
-    })
+    }))
 }
 
 #[cfg(feature = "cpu-blas")]
+#[allow(dead_code)]
 pub(crate) fn dot_general<T>(
     buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -474,8 +736,30 @@ pub(crate) fn dot_general<T>(
 where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
-    validate_dot_general(lhs, rhs, config)?;
-    if let Some(result) = typed_blas_gemm(buffers, lhs, rhs, config)? {
+    dot_general_cached(buffers, cache, None, lhs, rhs, config)
+}
+
+#[cfg(feature = "cpu-blas")]
+pub(crate) fn dot_general_cached<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+{
+    if let Some(result) = typed_blas_gemm(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        config,
+    )? {
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
@@ -483,32 +767,135 @@ where
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(lhs, &lhs_perm)?)
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, lhs, &lhs_perm)?)
     };
     let rhs_canon = if is_identity_perm(&rhs_perm) {
         std::borrow::Cow::Borrowed(rhs)
     } else {
-        std::borrow::Cow::Owned(typed_transpose(rhs, &rhs_perm)?)
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, rhs, &rhs_perm)?)
     };
-    typed_blas_gemm(buffers, &lhs_canon, &rhs_canon, &new_config)?.ok_or_else(|| {
-        Error::BackendFailure {
-            op: "dot_general",
-            message: "CPU GEMM requires host-backed canonical inputs".into(),
-        }
+    typed_blas_gemm(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Canonical,
+        &lhs_canon,
+        &rhs_canon,
+        &new_config,
+    )?
+    .ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "CPU GEMM requires host-backed canonical inputs".into(),
     })
 }
 
 #[cfg(feature = "cpu-blas")]
-fn typed_blas_gemm<T>(
+#[allow(dead_code)]
+pub(crate) fn dot_general_with_conj<T>(
     buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+{
+    dot_general_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
+}
+
+#[cfg(feature = "cpu-blas")]
+pub(crate) fn dot_general_with_conj_cached<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+{
+    if !lhs_conj && !rhs_conj {
+        return dot_general_cached(buffers, cache, cache_slot, lhs, rhs, config);
+    }
+
+    if let Some(result) = typed_blas_gemm_with_conj(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        config,
+        lhs_conj,
+        rhs_conj,
+    )? {
+        return Ok(result);
+    }
+    let (lhs_perm, rhs_perm, new_config) =
+        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+    let lhs_canon = if is_identity_perm(&lhs_perm) {
+        std::borrow::Cow::Borrowed(lhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, lhs, &lhs_perm)?)
+    };
+    let rhs_canon = if is_identity_perm(&rhs_perm) {
+        std::borrow::Cow::Borrowed(rhs)
+    } else {
+        std::borrow::Cow::Owned(typed_transpose_with_pool(buffers, rhs, &rhs_perm)?)
+    };
+    if let Some(result) = typed_blas_gemm_with_conj(
+        buffers,
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Canonical,
+        &lhs_canon,
+        &rhs_canon,
+        &new_config,
+        lhs_conj,
+        rhs_conj,
+    )? {
+        return Ok(result);
+    }
+
+    let lhs_tmp;
+    let lhs_ref = if lhs_conj {
+        lhs_tmp = typed_conj_with_pool(buffers, lhs)?;
+        &lhs_tmp
+    } else {
+        lhs
+    };
+    let rhs_tmp;
+    let rhs_ref = if rhs_conj {
+        rhs_tmp = typed_conj_with_pool(buffers, rhs)?;
+        &rhs_tmp
+    } else {
+        rhs
+    };
+    dot_general_cached(buffers, cache, cache_slot, lhs_ref, rhs_ref, config)
+}
+
+#[cfg(feature = "cpu-blas")]
+fn typed_blas_gemm_with_conj<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    cache_kind: GemmAnalysisCacheKind,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
 ) -> crate::Result<Option<TypedTensor<T>>>
 where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
-    let dims = match analyse_gemm(lhs, rhs, config) {
+    let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
         Some(dims) => dims,
         None => return Ok(None),
     };
@@ -517,8 +904,123 @@ where
         message: "output element count overflow".into(),
     })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        // SAFETY: the buffer is fully initialized immediately by fill.
+        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
+        data.fill(T::zero());
         return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(vec![T::zero(); out_n]),
+            buffer: Buffer::Host(data),
+            shape: dims.out_shape.into_vec(),
+            placement: lhs.placement.clone(),
+        }));
+    }
+
+    let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
+    let a_cs = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
+    let b_rs = normalize_singleton_stride(dims.b_rs, dims.k, dims.n);
+    let b_cs = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
+    let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
+    let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
+
+    let a_ok = a_rs == 1 || a_cs == 1;
+    let b_ok = b_rs == 1 || b_cs == 1;
+    let c_ok = c_rs == 1;
+    if !a_ok || !b_ok || !c_ok {
+        return Ok(None);
+    }
+
+    let a_data = match &lhs.buffer {
+        Buffer::Host(v) => v.as_ptr(),
+        Buffer::Backend(_) => return Ok(None),
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
+    };
+    let b_data = match &rhs.buffer {
+        Buffer::Host(v) => v.as_ptr(),
+        Buffer::Backend(_) => return Ok(None),
+        #[cfg(feature = "cubecl")]
+        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
+    };
+
+    // SAFETY: each batch GEMM writes its full output block with beta = 0 when
+    // the BLAS layout can represent the requested conjugation.
+    let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
+    let c_ptr = out.as_mut_ptr();
+
+    for batch in 0..dims.batch_total {
+        let a_off =
+            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "lhs batch offset overflow".into(),
+            })?;
+        let b_off =
+            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "rhs batch offset overflow".into(),
+            })?;
+        let c_off =
+            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
+                op: "dot_general",
+                message: "output batch offset overflow".into(),
+            })?;
+        let executed = unsafe {
+            T::strided_gemm_with_conj(
+                T::one(),
+                a_data.offset(a_off),
+                dims.m,
+                dims.k,
+                a_rs,
+                a_cs,
+                lhs_conj,
+                b_data.offset(b_off),
+                dims.n,
+                b_rs,
+                b_cs,
+                rhs_conj,
+                T::zero(),
+                c_ptr.offset(c_off),
+                c_rs,
+                c_cs,
+            )?
+        };
+        if !executed {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(TypedTensor {
+        buffer: Buffer::Host(out),
+        shape: dims.out_shape.into_vec(),
+        placement: lhs.placement.clone(),
+    }))
+}
+
+#[cfg(feature = "cpu-blas")]
+fn typed_blas_gemm<T>(
+    buffers: &mut BufferPool,
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    cache_kind: GemmAnalysisCacheKind,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+{
+    let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
+        Some(dims) => dims,
+        None => return Ok(None),
+    };
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
+        op: "dot_general",
+        message: "output element count overflow".into(),
+    })?;
+    if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
+        // SAFETY: the buffer is fully initialized immediately by fill.
+        let mut data = unsafe { T::pool_acquire(buffers, out_n) };
+        data.fill(T::zero());
+        return Ok(Some(TypedTensor {
+            buffer: Buffer::Host(data),
             shape: dims.out_shape.into_vec(),
             placement: lhs.placement.clone(),
         }));

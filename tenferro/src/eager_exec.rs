@@ -2,7 +2,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::validate::validate_nonsingular_u;
-use tenferro_tensor::{DType, PadConfig, SliceConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{
+    DType, DotGeneralConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
+};
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
@@ -11,13 +13,12 @@ use crate::shape_infer::promote_dtype_for_binary_op;
 /// If the two tensors have different dtypes, insert Convert ops so they
 /// both match the promoted result dtype. Returns the (possibly converted)
 /// tensors.
-fn promote_binary(
-    exec: &mut dyn tenferro_tensor::TensorExec,
+fn promote_binary_to_dtype(
+    exec: &mut dyn TensorExec,
     a: &Tensor,
     b: &Tensor,
-    op: &StdTensorOp,
+    promoted: DType,
 ) -> Result<(Tensor, Tensor)> {
-    let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
     let a = if a.dtype() != promoted {
         exec.convert(a, promoted).map_err(Error::from)?
     } else {
@@ -29,6 +30,32 @@ fn promote_binary(
         b.clone()
     };
     Ok((a, b))
+}
+
+fn promote_binary(
+    exec: &mut dyn TensorExec,
+    a: &Tensor,
+    b: &Tensor,
+    op: &StdTensorOp,
+) -> Result<(Tensor, Tensor)> {
+    let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
+    promote_binary_to_dtype(exec, a, b, promoted)
+}
+
+pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+    backend: &mut B,
+) -> Result<Tensor> {
+    let promoted = crate::shape_infer::promote_dtype(lhs.dtype(), rhs.dtype());
+    backend.with_exec_session(|exec| {
+        let (lhs, rhs) = promote_binary_to_dtype(exec, lhs, rhs, promoted)?;
+        exec.dot_general_with_conj(&lhs, &rhs, config, lhs_conj, rhs_conj)
+            .map_err(Error::from)
+    })
 }
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.

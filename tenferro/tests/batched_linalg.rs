@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
-use tenferro::{cholesky, qr, solve, svd, triangular_solve};
+use tenferro::traced_tensor::{cholesky, qr, solve, svd, triangular_solve};
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 
 const TOL: f64 = 1.0e-9;

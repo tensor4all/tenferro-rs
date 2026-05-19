@@ -2,9 +2,9 @@
 //!
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
-use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
+use tenferro::traced_tensor::einsum;
 use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

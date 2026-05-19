@@ -20,13 +20,14 @@ pub use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConf
 mod checkpoint;
 pub mod compiler;
 mod eager;
-pub mod eager_einsum;
+mod eager_einsum;
 mod eager_emitter;
 pub mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub(crate) mod eager_ops_linalg;
-pub mod einsum;
+pub mod eager_tensor;
+mod einsum;
 pub mod engine;
 pub mod error;
 pub mod exec;
@@ -38,16 +39,14 @@ pub mod segment;
 pub mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
+pub mod tensor;
 pub mod traced;
+pub mod traced_tensor;
+pub mod typed_tensor;
 
 pub use eager::{EagerContext, EagerTensor};
 pub use engine::Engine;
 pub use error::ContextId;
-pub use linalg_api::{
-    cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu,
-    full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,
-    triangular_solve,
-};
 pub use sym_dim::SymDim;
 pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{DType, Tensor, TensorBackend, TensorScalar, TypedTensor};
@@ -62,34 +61,4 @@ pub mod cuda {
     pub use tenferro_tensor::cubecl::{
         download_tensor, gpu_available, upload_tensor, CubeclBackend as CudaBackend,
     };
-}
-
-/// Matrix multiplication helper for rank-2 traced tensors.
-///
-/// This contracts the last dimension of `a` with the first dimension of `b`.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// let c = tenferro::matmul(&a, &b);
-/// ```
-pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: vec![a.rank - 1],
-        rhs_contracting_dims: vec![0],
-        lhs_batch_dims: vec![],
-        rhs_batch_dims: vec![],
-    };
-    a.dot_general(b, config)
-}
-
-/// Elementwise power helper with NumPy-style broadcasting.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// let y = tenferro::pow(&base, &exp);
-/// ```
-pub fn pow(base: &TracedTensor, exp: &TracedTensor) -> TracedTensor {
-    base.pow(exp)
 }

@@ -1,6 +1,6 @@
 use tenferro::engine::Engine;
-use tenferro::pow;
 use tenferro::traced::{eval_all, TracedTensor};
+use tenferro::traced_tensor::pow;
 use tenferro::DType;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};

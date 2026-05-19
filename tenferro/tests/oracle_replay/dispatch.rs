@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use tenferro::{
+use tenferro::traced_tensor::{
     cholesky, det, eig, eigh, eigvals, eigvalsh, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet,
     solve, svd, triangular_solve, TracedTensor,
 };
