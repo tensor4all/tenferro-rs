@@ -122,7 +122,7 @@ assert_eq!(col_sum.shape(), &[3]);
 ## Einsum
 
 ```rust
-use tenferro::eager_einsum::eager_einsum;
+use tenferro::tensor::einsum;
 use tenferro::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
@@ -134,7 +134,7 @@ let b = Tensor::from_vec(vec![3, 4], vec![
     7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
 ]);
 
-let c = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
+let c = einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 assert_eq!(c.shape(), &[2, 4]);
 ```
 

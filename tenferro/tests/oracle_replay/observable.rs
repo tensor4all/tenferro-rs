@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
+use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, TracedTensor};
 
 use crate::dispatch::NamedTensor;

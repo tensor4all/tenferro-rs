@@ -1326,6 +1326,8 @@ impl CubeclBackend {
 }
 
 impl TensorBackend for CubeclBackend {
+    type RuntimeCache = ();
+
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(

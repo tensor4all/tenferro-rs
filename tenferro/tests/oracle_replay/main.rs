@@ -246,7 +246,7 @@ fn oracle_replay_norm_case_048() {
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
         TypedTensor::from_vec(vec![], vec![1.0]),
     ));
-    let manual_output = tenferro::norm(
+    let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),
         Some(f64::NEG_INFINITY),
         Some(&[0, 1]),
@@ -370,7 +370,7 @@ fn oracle_manual_norm_case_048() {
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
         TypedTensor::from_vec(vec![], vec![1.0]),
     ));
-    let manual_output = tenferro::norm(
+    let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),
         Some(f64::NEG_INFINITY),
         Some(&[0, 1]),

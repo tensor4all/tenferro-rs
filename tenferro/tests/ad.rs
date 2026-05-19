@@ -10,10 +10,11 @@ use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
-use tenferro::einsum::einsum;
 use tenferro::exec::eval_exec_ir;
 use tenferro::shape_infer::{infer_output_dtype, infer_output_extents};
-use tenferro::{matmul, Engine, TracedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::traced_tensor::matmul;
+use tenferro::{Engine, TracedTensor};
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
@@ -1929,7 +1930,9 @@ fn grad_real_sum_of_eigvals_matches_trace_gradient() {
         vec![1.0, 0.0, 0.0, 0.2, 2.0, 0.0, -0.1, 0.3, 4.0],
     ));
 
-    let mut loss = tenferro::eigvals(&a).convert(DType::F64).reduce_sum(&[0]);
+    let mut loss = tenferro::traced_tensor::eigvals(&a)
+        .convert(DType::F64)
+        .reduce_sum(&[0]);
     let mut grad = loss.grad(&a).unwrap();
 
     let mut engine = Engine::new(CpuBackend::new());

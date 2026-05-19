@@ -1,6 +1,6 @@
 use computegraph::fragment::Fragment;
 use computegraph::types::{GlobalValKey, ValRef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tenferro_ops::ad::context::{
@@ -78,8 +78,9 @@ pub(crate) fn metadata_scopes_with_scope<'a>(
     inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
 ) -> Vec<Arc<MetadataScope>> {
     let mut scopes = Vec::new();
-    push_metadata_scope(&mut scopes, scope);
-    extend_metadata_scopes(&mut scopes, inherited);
+    let mut seen = HashSet::new();
+    push_metadata_scope_seen(&mut scopes, &mut seen, scope);
+    extend_metadata_scopes(&mut scopes, &mut seen, inherited);
     scopes
 }
 
@@ -89,13 +90,24 @@ pub(crate) fn push_metadata_scope(scopes: &mut Vec<Arc<MetadataScope>>, scope: A
     }
 }
 
+fn push_metadata_scope_seen(
+    scopes: &mut Vec<Arc<MetadataScope>>,
+    seen: &mut HashSet<*const MetadataScope>,
+    scope: Arc<MetadataScope>,
+) {
+    if seen.insert(Arc::as_ptr(&scope)) {
+        scopes.push(scope);
+    }
+}
+
 fn extend_metadata_scopes<'a>(
     scopes: &mut Vec<Arc<MetadataScope>>,
+    seen: &mut HashSet<*const MetadataScope>,
     inherited: impl IntoIterator<Item = &'a [Arc<MetadataScope>]>,
 ) {
     for source in inherited {
         for scope in source {
-            push_metadata_scope(scopes, Arc::clone(scope));
+            push_metadata_scope_seen(scopes, seen, Arc::clone(scope));
         }
     }
 }

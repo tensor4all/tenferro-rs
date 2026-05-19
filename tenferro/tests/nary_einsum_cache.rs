@@ -2,7 +2,7 @@
 
 use std::num::NonZeroUsize;
 
-use tenferro::einsum::einsum;
+use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, Engine, TracedTensor};
 
 fn run_matmul(engine: &mut Engine<CpuBackend>, rows: usize, cols: usize, mid: usize) {

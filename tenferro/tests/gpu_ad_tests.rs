@@ -1,7 +1,8 @@
 #![cfg(feature = "cubecl")]
 
-use tenferro::einsum::einsum;
-use tenferro::{svd, CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::traced_tensor::svd;
+use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::Buffer;
 

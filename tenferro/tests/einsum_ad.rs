@@ -1,7 +1,7 @@
 use num_complex::Complex64;
-use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
+use tenferro::traced_tensor::einsum;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TypedTensor};
 

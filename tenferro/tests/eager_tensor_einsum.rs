@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tenferro::eager_einsum::eager_einsum_ad;
+use tenferro::eager_tensor::einsum;
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -12,7 +12,7 @@ fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
 }
 
 #[test]
-fn eager_einsum_ad_matmul_primal_matches_expected_values() {
+fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
@@ -23,14 +23,14 @@ fn eager_einsum_ad_matmul_primal_matches_expected_values() {
         ctx.clone(),
     );
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(c.data().shape(), &[2, 2]);
     assert_eq!(f64_data(c.data()), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]
-fn eager_einsum_ad_backward_populates_input_grads() {
+fn eager_tensor_einsum_backward_populates_input_grads() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
@@ -41,7 +41,7 @@ fn eager_einsum_ad_backward_populates_input_grads() {
         ctx.clone(),
     );
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -55,7 +55,7 @@ fn eager_einsum_ad_backward_populates_input_grads() {
 }
 
 #[test]
-fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
+fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
@@ -66,7 +66,7 @@ fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
         ctx.clone(),
     );
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -78,7 +78,7 @@ fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -92,7 +92,7 @@ fn eager_einsum_ad_repeated_backward_accumulates_across_calls() {
 }
 
 #[test]
-fn eager_einsum_ad_context_clear_grads_resets_all_live_leaves() {
+fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let ctx = EagerContext::with_backend(CpuBackend::new());
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
@@ -103,7 +103,7 @@ fn eager_einsum_ad_context_clear_grads_resets_all_live_leaves() {
         ctx.clone(),
     );
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 
@@ -112,7 +112,7 @@ fn eager_einsum_ad_context_clear_grads_resets_all_live_leaves() {
     assert!(a.grad().is_none());
     assert!(b.grad().is_none());
 
-    let c = eager_einsum_ad(&[&a, &b], "ij,jk->ik").unwrap();
+    let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = c.reduce_sum(&[0, 1]).unwrap();
     let _ = loss.backward().unwrap();
 

@@ -42,6 +42,11 @@ pub enum ExecOp {
         bytes: Vec<u8>,
     },
     DotGeneral(DotGeneralConfig),
+    DotGeneralWithConj {
+        config: DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    },
     NaryEinsum {
         subscripts: String,
     },
@@ -191,17 +196,21 @@ pub(crate) fn get<'a, T>(
         .ok_or(TensorError::MissingValue { slot }.into())
 }
 
-pub(crate) fn initialize_slots(program: &ExecProgram, inputs: Vec<Tensor>) -> Vec<Option<Tensor>> {
-    let mut slots: Vec<Option<Tensor>> = vec![None; program.n_slots];
+pub(crate) fn initialize_slots_in(
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    slots: &mut Vec<Option<Tensor>>,
+) {
+    slots.clear();
+    slots.resize_with(program.n_slots, || None);
     for (i, tensor) in inputs.into_iter().enumerate() {
         slots[program.input_slots[i]] = Some(tensor);
     }
-    slots
 }
 
-pub(crate) fn collect_outputs(
+pub(crate) fn collect_outputs_from(
     program: &ExecProgram,
-    mut slots: Vec<Option<Tensor>>,
+    slots: &mut [Option<Tensor>],
 ) -> Result<Vec<Tensor>> {
     program
         .output_slots
@@ -229,6 +238,7 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
     matches!(
         &inst.op,
         ExecOp::DotGeneral(_)
+            | ExecOp::DotGeneralWithConj { .. }
             | ExecOp::NaryEinsum { .. }
             | ExecOp::Cholesky
             | ExecOp::Svd
@@ -240,6 +250,23 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
             | ExecOp::Eig
             | ExecOp::TriangularSolve { .. }
             | ExecOp::Extension(_)
+    )
+}
+
+pub(crate) fn is_exec_session_ffi_instruction(inst: &ExecInstruction) -> bool {
+    matches!(
+        &inst.op,
+        ExecOp::DotGeneral(_)
+            | ExecOp::DotGeneralWithConj { .. }
+            | ExecOp::Cholesky
+            | ExecOp::Svd
+            | ExecOp::Qr
+            | ExecOp::Lu
+            | ExecOp::FullPivLu
+            | ExecOp::FullPivLuSolve { .. }
+            | ExecOp::Eigh
+            | ExecOp::Eig
+            | ExecOp::TriangularSolve { .. }
     )
 }
 
@@ -312,22 +339,77 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend>(
     inputs: Vec<Tensor>,
     cache: &mut NaryEinsumCache,
 ) -> Result<Vec<Tensor>> {
-    let mut slots = initialize_slots(program, inputs);
+    let mut slots = Vec::new();
+    eval_exec_ir_unsegmented_with_cache_and_workspace(backend, program, inputs, cache, &mut slots)
+}
 
-    for inst in &program.instructions {
-        if is_host_instruction(inst) {
-            execute_host_instruction(backend, &mut slots, inst)?;
-        } else if is_ffi_instruction(inst) {
-            execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Unsegmented, cache)?;
-        } else {
-            let result =
-                backend.with_exec_session(|exec| execute_backend_op(exec, &slots, inst))?;
-            slots[inst.output_slots[0]] = Some(result);
+pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    cache: &mut NaryEinsumCache,
+    slots: &mut Vec<Option<Tensor>>,
+) -> Result<Vec<Tensor>> {
+    let result = (|| {
+        initialize_slots_in(program, inputs, slots);
+
+        for inst in &program.instructions {
+            if is_host_instruction(inst) {
+                execute_host_instruction(backend, slots, inst)?;
+            } else if is_ffi_instruction(inst) {
+                execute_ffi_instruction(backend, slots, inst, DispatchMode::Unsegmented, cache)?;
+            } else {
+                let result =
+                    backend.with_exec_session(|exec| execute_backend_op(exec, slots, inst))?;
+                slots[inst.output_slots[0]] = Some(result);
+            }
+            reclaim_last_use_inputs_backend(slots, inst, backend);
         }
-        reclaim_last_use_inputs_backend(&mut slots, inst, backend);
-    }
 
-    collect_outputs(program, slots)
+        collect_outputs_from(program, slots)
+    })();
+    slots.clear();
+    result
+}
+
+pub(crate) fn can_run_in_single_exec_session(program: &ExecProgram) -> bool {
+    program.instructions.iter().all(|inst| {
+        !is_host_instruction(inst)
+            && (!is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
+    })
+}
+
+pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    slots: &mut Vec<Option<Tensor>>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<Tensor>> {
+    let result = (|| {
+        initialize_slots_in(program, inputs, slots);
+
+        backend.with_exec_session_cached(backend_cache, |exec| -> Result<()> {
+            for (inst_idx, inst) in program.instructions.iter().enumerate() {
+                if is_host_instruction(inst) {
+                    return Err(Error::Internal(
+                        "host instruction reached single-session executor".into(),
+                    ));
+                } else if is_ffi_instruction(inst) {
+                    execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                } else {
+                    let result = execute_backend_op(exec, slots, inst)?;
+                    slots[inst.output_slots[0]] = Some(result);
+                }
+                reclaim_last_use_inputs_exec(slots, inst, exec);
+            }
+            Ok(())
+        })?;
+
+        collect_outputs_from(program, slots)
+    })();
+    slots.clear();
+    result
 }
 
 pub(crate) fn execute_backend_op(
@@ -572,6 +654,20 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
             )?;
             slots[inst.output_slots[0]] = Some(result);
         }
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => {
+            let result = backend.dot_general_with_conj(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+                *lhs_conj,
+                *rhs_conj,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
         ExecOp::NaryEinsum { subscripts } => {
             let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
             let result = execute_nary_einsum(backend, &inputs, subscripts, mode, cache)?;
@@ -633,6 +729,140 @@ pub(crate) fn execute_ffi_instruction<B: TensorBackend>(
         other => {
             return Err(Error::Internal(format!(
                 "non-ffi op reached ffi executor: {other:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend>(
+    backend: &mut B,
+    backend_cache: &mut B::RuntimeCache,
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    mode: DispatchMode,
+    cache: &mut NaryEinsumCache,
+    cache_slot: Option<usize>,
+) -> Result<()> {
+    match &inst.op {
+        ExecOp::DotGeneral(config) => {
+            let result = backend.dot_general_cached(
+                backend_cache,
+                cache_slot,
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+            Ok(())
+        }
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => {
+            let result = backend.dot_general_with_conj_cached(
+                backend_cache,
+                cache_slot,
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+                *lhs_conj,
+                *rhs_conj,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+            Ok(())
+        }
+        _ => execute_ffi_instruction(backend, slots, inst, mode, cache),
+    }
+}
+
+pub(crate) fn execute_ffi_instruction_exec(
+    exec: &mut dyn TensorExec,
+    slots: &mut [Option<Tensor>],
+    inst: &ExecInstruction,
+    cache_slot: Option<usize>,
+) -> Result<()> {
+    match &inst.op {
+        ExecOp::DotGeneral(config) => {
+            let result = exec.dot_general_cached(
+                cache_slot,
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => {
+            let result = exec.dot_general_with_conj_cached(
+                cache_slot,
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                config,
+                *lhs_conj,
+                *rhs_conj,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Cholesky => {
+            let result = exec.cholesky(get(slots, &inst.input_slots, 0)?)?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Svd => {
+            let results = exec.svd(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "svd")?;
+        }
+        ExecOp::Qr => {
+            let results = exec.qr(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "qr")?;
+        }
+        ExecOp::Lu => {
+            let results = exec.lu(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "lu")?;
+        }
+        ExecOp::FullPivLu => {
+            let results = exec.full_piv_lu(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "full_piv_lu")?;
+        }
+        ExecOp::FullPivLuSolve { transpose_a } => {
+            let result = exec.full_piv_lu_solve(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                *transpose_a,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        ExecOp::Eigh => {
+            let results = exec.eigh(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "eigh")?;
+        }
+        ExecOp::Eig => {
+            let results = exec.eig(get(slots, &inst.input_slots, 0)?)?;
+            assign_multi_output(slots, inst, results, "eig")?;
+        }
+        ExecOp::TriangularSolve {
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        } => {
+            let result = exec.triangular_solve(
+                get(slots, &inst.input_slots, 0)?,
+                get(slots, &inst.input_slots, 1)?,
+                *left_side,
+                *lower,
+                *transpose_a,
+                *unit_diagonal,
+            )?;
+            slots[inst.output_slots[0]] = Some(result);
+        }
+        other => {
+            return Err(Error::Internal(format!(
+                "unsupported single-session FFI op: {other:?}"
             )))
         }
     }
@@ -735,7 +965,7 @@ fn execute_nary_einsum<B: TensorBackend>(
         .map(|tensor| tensor.shape().to_vec())
         .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-    let cache_key = (subscripts.to_string(), shapes.clone());
+    let cache_key = (Arc::<str>::from(subscripts), shapes.clone());
     let tree_arc = if let Some(cached) = cache.get(&cache_key) {
         cached.clone()
     } else {

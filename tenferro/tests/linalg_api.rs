@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tenferro::engine::Engine;
 use tenferro::traced::{eval_all, TracedTensor};
-use tenferro::{
+use tenferro::traced_tensor::{
     cholesky, det, eig, eigh, full_piv_lu, full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol,
     qr, slogdet, solve, svd, triangular_solve,
 };
@@ -26,7 +26,7 @@ fn get_c64_data(t: &Tensor) -> &[Complex64] {
 }
 
 #[test]
-fn svd_free_function_returns_three_outputs() {
+fn svd_traced_tensor_returns_three_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
     let (mut u, mut s, mut vt) = svd(&a);
@@ -43,7 +43,7 @@ fn svd_free_function_returns_three_outputs() {
 }
 
 #[test]
-fn qr_free_function_returns_q_and_r() {
+fn qr_traced_tensor_returns_q_and_r() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
     let (mut q, mut r) = qr(&a);
@@ -57,7 +57,7 @@ fn qr_free_function_returns_q_and_r() {
 }
 
 #[test]
-fn eigh_free_function_returns_values_and_vectors() {
+fn eigh_traced_tensor_returns_values_and_vectors() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
     let (mut values, mut vectors) = eigh(&a);
@@ -73,7 +73,7 @@ fn eigh_free_function_returns_values_and_vectors() {
 }
 
 #[test]
-fn linalg_single_output_free_functions_eval() {
+fn linalg_single_output_traced_tensor_functions_eval() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
@@ -91,7 +91,7 @@ fn linalg_single_output_free_functions_eval() {
 }
 
 #[test]
-fn lu_free_function_returns_four_outputs() {
+fn lu_traced_tensor_returns_four_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
     let (mut p, mut l, mut u, mut parity) = lu(&a);
@@ -106,7 +106,7 @@ fn lu_free_function_returns_four_outputs() {
 }
 
 #[test]
-fn full_piv_lu_free_function_returns_five_outputs() {
+fn full_piv_lu_traced_tensor_returns_five_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
     let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
@@ -125,7 +125,7 @@ fn full_piv_lu_free_function_returns_five_outputs() {
 }
 
 #[test]
-fn full_piv_lu_solve_free_function_eval() {
+fn full_piv_lu_solve_traced_tensor_eval() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]));
@@ -139,7 +139,7 @@ fn full_piv_lu_solve_free_function_eval() {
 }
 
 #[test]
-fn eig_free_function_returns_complex_outputs() {
+fn eig_traced_tensor_returns_complex_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
     let (mut values, mut vectors) = eig(&a);

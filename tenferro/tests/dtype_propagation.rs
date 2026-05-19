@@ -1,5 +1,6 @@
 use tenferro::shape_infer::infer_output_dtype;
-use tenferro::{eig, Tensor, TracedTensor, TypedTensor};
+use tenferro::traced_tensor::eig;
+use tenferro::{Tensor, TracedTensor, TypedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, ScatterConfig};
 

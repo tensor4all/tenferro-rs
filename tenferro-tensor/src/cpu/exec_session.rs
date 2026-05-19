@@ -12,12 +12,22 @@ pub(crate) struct CpuExecSession<'a> {
     #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
     pub(crate) ctx: &'a CpuContext,
     pub(crate) buffers: &'a mut BufferPool,
+    pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
 }
 
 /// Simple delegation: no dtype dispatch, no install.
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> { $body }
+    };
+}
+
+/// Delegation for operations whose outputs can be allocated from the session pool.
+macro_rules! delegate_with_pool {
+    ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
+        fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
+            $callee(self.buffers, $($arg),*)
+        }
     };
 }
 
@@ -115,40 +125,40 @@ macro_rules! linalg_multi {
 
 impl TensorExec for CpuExecSession<'_> {
     // Elementwise — direct delegation, no install
-    delegate!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add(lhs, rhs));
-    delegate!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul(lhs, rhs));
-    delegate!(neg(input: &Tensor) => elementwise::neg(input));
-    delegate!(conj(input: &Tensor) => elementwise::conj(input));
-    delegate!(div(lhs: &Tensor, rhs: &Tensor) => elementwise::div(lhs, rhs));
-    delegate!(abs(input: &Tensor) => elementwise::abs(input));
-    delegate!(sign(input: &Tensor) => elementwise::sign(input));
-    delegate!(maximum(lhs: &Tensor, rhs: &Tensor) => elementwise::maximum(lhs, rhs));
-    delegate!(minimum(lhs: &Tensor, rhs: &Tensor) => elementwise::minimum(lhs, rhs));
-    delegate!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => elementwise::compare(lhs, rhs, dir));
-    delegate!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => elementwise::select(pred, on_true, on_false));
-    delegate!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => elementwise::clamp(input, lower, upper));
+    delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
+    delegate_with_pool!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
+    delegate_with_pool!(neg(input: &Tensor) => elementwise::neg_with_pool);
+    delegate_with_pool!(conj(input: &Tensor) => elementwise::conj_with_pool);
+    delegate_with_pool!(div(lhs: &Tensor, rhs: &Tensor) => elementwise::div_with_pool);
+    delegate_with_pool!(abs(input: &Tensor) => elementwise::abs_with_pool);
+    delegate_with_pool!(sign(input: &Tensor) => elementwise::sign_with_pool);
+    delegate_with_pool!(maximum(lhs: &Tensor, rhs: &Tensor) => elementwise::maximum_with_pool);
+    delegate_with_pool!(minimum(lhs: &Tensor, rhs: &Tensor) => elementwise::minimum_with_pool);
+    delegate_with_pool!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => elementwise::compare_with_pool);
+    delegate_with_pool!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => elementwise::select_with_pool);
+    delegate_with_pool!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => elementwise::clamp_with_pool);
 
     // Analytic
-    delegate!(exp(input: &Tensor) => analytic::exp(input));
-    delegate!(log(input: &Tensor) => analytic::log(input));
-    delegate!(sin(input: &Tensor) => analytic::sin(input));
-    delegate!(cos(input: &Tensor) => analytic::cos(input));
-    delegate!(tanh(input: &Tensor) => analytic::tanh(input));
-    delegate!(sqrt(input: &Tensor) => analytic::sqrt(input));
-    delegate!(rsqrt(input: &Tensor) => analytic::rsqrt(input));
-    delegate!(pow(lhs: &Tensor, rhs: &Tensor) => analytic::pow(lhs, rhs));
-    delegate!(expm1(input: &Tensor) => analytic::expm1(input));
-    delegate!(log1p(input: &Tensor) => analytic::log1p(input));
+    delegate_with_pool!(exp(input: &Tensor) => analytic::exp_with_pool);
+    delegate_with_pool!(log(input: &Tensor) => analytic::log_with_pool);
+    delegate_with_pool!(sin(input: &Tensor) => analytic::sin_with_pool);
+    delegate_with_pool!(cos(input: &Tensor) => analytic::cos_with_pool);
+    delegate_with_pool!(tanh(input: &Tensor) => analytic::tanh_with_pool);
+    delegate_with_pool!(sqrt(input: &Tensor) => analytic::sqrt_with_pool);
+    delegate_with_pool!(rsqrt(input: &Tensor) => analytic::rsqrt_with_pool);
+    delegate_with_pool!(pow(lhs: &Tensor, rhs: &Tensor) => analytic::pow_with_pool);
+    delegate_with_pool!(expm1(input: &Tensor) => analytic::expm1_with_pool);
+    delegate_with_pool!(log1p(input: &Tensor) => analytic::log1p_with_pool);
 
     // Structural
-    delegate!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose(input, perm));
+    delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
-    delegate!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim(input, shape, dims));
-    delegate!(convert(input: &Tensor, to: crate::DType) => structural::convert(input, to));
-    delegate!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal(input, axis_a, axis_b));
-    delegate!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal(input, axis_a, axis_b));
-    delegate!(tril(input: &Tensor, k: i64) => structural::tril(input, k));
-    delegate!(triu(input: &Tensor, k: i64) => structural::triu(input, k));
+    delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
+    delegate_with_pool!(convert(input: &Tensor, to: crate::DType) => structural::convert_with_pool);
+    delegate_with_pool!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal_with_pool);
+    delegate_with_pool!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal_with_pool);
+    delegate_with_pool!(tril(input: &Tensor, k: i64) => structural::tril_with_pool);
+    delegate_with_pool!(triu(input: &Tensor, k: i64) => structural::triu_with_pool);
 
     // Reduction
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
@@ -163,39 +173,230 @@ impl TensorExec for CpuExecSession<'_> {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        self.dot_general_cached(None, lhs, rhs, config)
+    }
+
+    fn dot_general_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
         match (lhs, rhs) {
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                gemm::dot_general(self.buffers, self.ctx, a, b, config).map(Tensor::F32)
-            }
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::F32),
             #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                gemm::dot_general(self.buffers, self.ctx, a, b, config).map(Tensor::F64)
-            }
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                gemm::dot_general(self.buffers, self.ctx, a, b, config).map(Tensor::C32)
-            }
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::C32),
             #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                gemm::dot_general(self.buffers, self.ctx, a, b, config).map(Tensor::C64)
-            }
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::C64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                gemm::dot_general(self.buffers, a, b, config).map(Tensor::F32)
-            }
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::F32),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                gemm::dot_general(self.buffers, a, b, config).map(Tensor::F64)
-            }
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::F64),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                gemm::dot_general(self.buffers, a, b, config).map(Tensor::C32)
-            }
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::C32),
             #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                gemm::dot_general(self.buffers, a, b, config).map(Tensor::C64)
-            }
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+            )
+            .map(Tensor::C64),
+            _ => Err(crate::Error::DTypeMismatch {
+                op: "dot_general",
+                lhs: lhs.dtype(),
+                rhs: rhs.dtype(),
+            }),
+        }
+    }
+
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_with_conj_cached(None, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
+    fn dot_general_with_conj_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        match (lhs, rhs) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F64),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C32),
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                self.ctx,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C64),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F32),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::F64),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C32),
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
+                self.buffers,
+                self.gemm_analysis_cache,
+                cache_slot,
+                a,
+                b,
+                config,
+                lhs_conj,
+                rhs_conj,
+            )
+            .map(Tensor::C64),
             _ => Err(crate::Error::DTypeMismatch {
                 op: "dot_general",
                 lhs: lhs.dtype(),
@@ -213,16 +414,16 @@ impl TensorExec for CpuExecSession<'_> {
     ) -> crate::Result<Tensor> {
         indexing::gather_with_pool(self.buffers, operand, start_indices, config)
     }
-    delegate!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter(operand, indices, updates, config));
-    delegate!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice(input, config));
-    delegate!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice(input, starts, slice_sizes));
-    delegate!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice(operand, update, starts));
-    delegate!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad(input, config));
+    delegate_with_pool!(scatter(operand: &Tensor, indices: &Tensor, updates: &Tensor, config: &ScatterConfig) => indexing::scatter_with_pool);
+    delegate_with_pool!(slice(input: &Tensor, config: &SliceConfig) => indexing::try_slice_with_pool);
+    delegate_with_pool!(dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) => indexing::dynamic_slice_with_pool);
+    delegate_with_pool!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice_with_pool);
+    delegate_with_pool!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad_with_pool);
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
         indexing::try_concatenate_with_pool(self.buffers, inputs, axis)
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        indexing::reverse(input, axes)
+        indexing::reverse_with_pool(self.buffers, input, axes)
     }
 
     // Linalg — macro-generated dtype dispatch

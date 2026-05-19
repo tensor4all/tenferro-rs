@@ -3,10 +3,11 @@
 //! Primary approach: Forward-over-Reverse (FoR) = jvp(grad(f), x, v),
 //! matching JAX's standard HVP pattern.
 
-use tenferro::einsum::einsum;
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
-use tenferro::{qr, svd, CpuBackend, Tensor, TypedTensor};
+use tenferro::traced_tensor::einsum;
+use tenferro::traced_tensor::{qr, svd};
+use tenferro::{CpuBackend, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 const FD_H: f64 = 1e-5;

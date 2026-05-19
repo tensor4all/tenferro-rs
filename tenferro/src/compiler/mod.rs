@@ -49,22 +49,20 @@ pub fn compile_std_to_exec(
                     })
                 })
                 .collect();
-            let input_shapes_owned: Vec<Vec<DimExpr>> = instr
+            let input_shapes_refs: Vec<&[DimExpr]> = instr
                 .inputs
                 .iter()
                 .map(|&slot| {
-                    slot_shapes[slot].clone().unwrap_or_else(|| {
+                    slot_shapes[slot].as_deref().unwrap_or_else(|| {
                         panic!("compile_std_to_exec: missing shape for slot {slot}")
                     })
                 })
                 .collect();
-            let input_shapes_refs: Vec<&[DimExpr]> =
-                input_shapes_owned.iter().map(Vec::as_slice).collect();
-            let input_extents_owned: Vec<Vec<ShapeExtent<DimExpr>>> = instr
+            let input_extents_refs: Vec<&[ShapeExtent<DimExpr>]> = instr
                 .inputs
                 .iter()
                 .map(|&slot| {
-                    slot_extents[slot].clone().unwrap_or_else(|| {
+                    slot_extents[slot].as_deref().unwrap_or_else(|| {
                         panic!("compile_std_to_exec: missing extents for slot {slot}")
                     })
                 })
@@ -124,7 +122,7 @@ pub fn compile_std_to_exec(
                     instr.outputs.len()
                 );
                 let resolved_extents =
-                    resolve_output_extents(extents, &input_shapes_owned, &input_extents_owned);
+                    resolve_output_extents(extents, &input_shapes_refs, &input_extents_refs);
                 (dtype, shapes, resolved_extents)
             };
 
@@ -157,9 +155,10 @@ pub fn compile_std_to_exec(
         output_slots: prog.output_slots.clone(),
         n_slots: prog.n_slots,
     };
+    conj_sinking(&mut program, input_dtypes, input_shapes);
     dot_dimension_sorter(&mut program);
     transpose_folding(&mut program);
-    dot_decomposer(&mut program, input_shapes);
+    dot_conj_folding(&mut program);
     eliminate_dead_code(&mut program);
     populate_last_use(&mut program);
     program
@@ -178,8 +177,8 @@ fn exact_extents_from_shapes(shapes: &[Vec<DimExpr>]) -> Vec<Vec<ShapeExtent<Dim
 
 fn resolve_output_extents(
     extents: Vec<Vec<ShapeExtent<DimExpr>>>,
-    input_shapes: &[Vec<DimExpr>],
-    input_extents: &[Vec<ShapeExtent<DimExpr>>],
+    input_shapes: &[&[DimExpr]],
+    input_extents: &[&[ShapeExtent<DimExpr>]],
 ) -> Vec<Vec<ShapeExtent<DimExpr>>> {
     extents
         .into_iter()
@@ -194,8 +193,8 @@ fn resolve_output_extents(
 
 fn resolve_extent(
     extent: ShapeExtent<DimExpr>,
-    input_shapes: &[Vec<DimExpr>],
-    input_extents: &[Vec<ShapeExtent<DimExpr>>],
+    input_shapes: &[&[DimExpr]],
+    input_extents: &[&[ShapeExtent<DimExpr>]],
 ) -> ShapeExtent<DimExpr> {
     match extent {
         ShapeExtent::Exact(dim) => match dim_expr_extent_kind(&dim, input_extents) {
@@ -215,7 +214,7 @@ fn resolve_extent(
     }
 }
 
-fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[Vec<DimExpr>]) -> DimExpr {
+fn resolve_dim_expr(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> DimExpr {
     match expr {
         DimExpr::Const(value) => DimExpr::Const(*value),
         DimExpr::InputDim { input_idx, axis } => input_shapes
@@ -264,7 +263,7 @@ enum ExtentKind {
     Unknown,
 }
 
-fn dim_expr_extent_kind(expr: &DimExpr, input_extents: &[Vec<ShapeExtent<DimExpr>>]) -> ExtentKind {
+fn dim_expr_extent_kind(expr: &DimExpr, input_extents: &[&[ShapeExtent<DimExpr>]]) -> ExtentKind {
     match expr {
         DimExpr::Const(_) => ExtentKind::Exact,
         DimExpr::InputDim { input_idx, axis } => input_extents
@@ -420,42 +419,284 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
     }
 }
 
-pub(crate) fn populate_last_use(program: &mut ExecProgram) {
-    let all_input_slots: Vec<Vec<usize>> = program
-        .instructions
-        .iter()
-        .map(|instr| instr.input_slots.clone())
-        .collect();
-    for (idx, instr) in program.instructions.iter_mut().enumerate() {
-        instr.last_use = compute_last_use(
-            &instr.input_slots,
-            idx,
-            &all_input_slots,
-            &program.output_slots,
-        );
+#[derive(Clone)]
+struct SlotMeta {
+    dtype: DType,
+    shape: Vec<DimExpr>,
+    extents: Vec<ShapeExtent<DimExpr>>,
+}
+
+#[derive(Clone)]
+struct ProducerInfo {
+    op: ExecOp,
+    input_slots: Vec<usize>,
+    dtype: DType,
+}
+
+type ProducerMap = Vec<Option<ProducerInfo>>;
+
+// ============================================================================
+// Pass 0: ConjSinking
+// ============================================================================
+//
+// Move `Conj` through shape-preserving standard ops so layout passes can still
+// see through Transpose/Reshape and `dot_conj_folding` can finally fold input
+// conjugation into the GEMM backend call.
+
+/// Sink `Conj` through commuting standard ops.
+///
+/// `input_dtypes` and `input_shapes` are the program-input metadata matching
+/// `program.input_slots`. They are required because `ExecProgram` stores
+/// metadata on instruction outputs, but not on program inputs.
+pub fn conj_sinking(
+    program: &mut ExecProgram,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+) {
+    assert_eq!(
+        program.input_slots.len(),
+        input_dtypes.len(),
+        "conj_sinking: input dtype count must match input slot count"
+    );
+    assert_eq!(
+        program.input_slots.len(),
+        input_shapes.len(),
+        "conj_sinking: input shape count must match input slot count"
+    );
+
+    loop {
+        if !conj_sinking_one_pass(program, input_dtypes, input_shapes) {
+            break;
+        }
     }
 }
 
-fn compute_last_use(
-    input_slots: &[usize],
-    current_idx: usize,
-    all_input_slots: &[Vec<usize>],
-    output_slots: &[usize],
-) -> Vec<bool> {
-    input_slots
-        .iter()
-        .map(|&slot| {
-            if output_slots.contains(&slot) {
-                return false;
-            }
-            for later_inputs in &all_input_slots[current_idx + 1..] {
-                if later_inputs.contains(&slot) {
-                    return false;
+fn conj_sinking_one_pass(
+    program: &mut ExecProgram,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+) -> bool {
+    let mut slot_meta = collect_slot_meta(program, input_dtypes, input_shapes);
+    let mut redirect: Vec<usize> = (0..program.n_slots).collect();
+    let mut producer_by_slot: ProducerMap = vec![None; program.n_slots];
+    let mut conj_cache: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut new_instructions = Vec::with_capacity(program.instructions.len());
+    let mut changed = false;
+
+    let instructions = std::mem::take(&mut program.instructions);
+    for mut instr in instructions {
+        for slot in &mut instr.input_slots {
+            *slot = resolve_slot_redirect(*slot, &redirect);
+        }
+
+        if matches!(instr.op, ExecOp::Conj) && instr.input_slots.len() == 1 {
+            let input_slot = instr.input_slots[0];
+            if let Some(producer) = producer_for_slot(&producer_by_slot, input_slot).cloned() {
+                if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
+                    let replacement = resolve_slot_redirect(producer.input_slots[0], &redirect);
+                    for &slot in &instr.output_slots {
+                        redirect[slot] = replacement;
+                    }
+                    changed = true;
+                    continue;
+                }
+
+                if let Some(commuting_inputs) =
+                    conj_commuting_input_indices(&producer, producer.input_slots.len(), &slot_meta)
+                {
+                    let mut input_slots = producer.input_slots;
+                    for input_idx in commuting_inputs {
+                        let input_slot = input_slots[input_idx];
+                        input_slots[input_idx] = ensure_conj_slot(
+                            input_slot,
+                            &mut slot_meta,
+                            &mut producer_by_slot,
+                            &mut conj_cache,
+                            &mut new_instructions,
+                            &mut program.n_slots,
+                            &mut redirect,
+                        );
+                    }
+                    instr.op = producer.op;
+                    instr.input_slots = input_slots;
+                    changed = true;
                 }
             }
-            true
-        })
-        .collect()
+        }
+
+        record_producer(&mut producer_by_slot, &instr);
+        new_instructions.push(instr);
+    }
+
+    for slot in &mut program.output_slots {
+        *slot = resolve_slot_redirect(*slot, &redirect);
+    }
+    program.instructions = new_instructions;
+    changed
+}
+
+fn collect_slot_meta(
+    program: &ExecProgram,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+) -> Vec<Option<SlotMeta>> {
+    let mut slot_meta = vec![None; program.n_slots];
+    for (index, &slot) in program.input_slots.iter().enumerate() {
+        slot_meta[slot] = Some(SlotMeta {
+            dtype: input_dtypes[index],
+            shape: input_shapes[index].clone(),
+            extents: exact_extents_from_shape(&input_shapes[index]),
+        });
+    }
+    for instr in &program.instructions {
+        for ((&slot, shape), extents) in instr
+            .output_slots
+            .iter()
+            .zip(instr.output_shapes.iter())
+            .zip(instr.output_extents.iter())
+        {
+            slot_meta[slot] = Some(SlotMeta {
+                dtype: instr.dtype,
+                shape: shape.clone(),
+                extents: extents.clone(),
+            });
+        }
+    }
+    slot_meta
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_conj_slot(
+    slot: usize,
+    slot_meta: &mut Vec<Option<SlotMeta>>,
+    producer_by_slot: &mut ProducerMap,
+    conj_cache: &mut std::collections::HashMap<usize, usize>,
+    new_instructions: &mut Vec<ExecInstruction>,
+    n_slots: &mut usize,
+    redirect: &mut Vec<usize>,
+) -> usize {
+    let slot = resolve_slot_redirect(slot, redirect);
+    if let Some(producer) = producer_for_slot(producer_by_slot, slot) {
+        if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
+            return resolve_slot_redirect(producer.input_slots[0], redirect);
+        }
+    }
+    if let Some(&conj_slot) = conj_cache.get(&slot) {
+        return conj_slot;
+    }
+
+    let meta = slot_meta[slot]
+        .clone()
+        .unwrap_or_else(|| panic!("conj_sinking: missing metadata for slot {slot}"));
+    let output_slot = *n_slots;
+    *n_slots += 1;
+    redirect.push(output_slot);
+    slot_meta.push(Some(meta.clone()));
+
+    let instr = ExecInstruction {
+        op: ExecOp::Conj,
+        input_slots: vec![slot],
+        output_slots: vec![output_slot],
+        dtype: meta.dtype,
+        output_shapes: vec![meta.shape],
+        output_extents: vec![meta.extents],
+        last_use: Vec::new(),
+    };
+    record_producer(producer_by_slot, &instr);
+    new_instructions.push(instr);
+    conj_cache.insert(slot, output_slot);
+    output_slot
+}
+
+fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) {
+    let producer = ProducerInfo {
+        op: instr.op.clone(),
+        input_slots: instr.input_slots.clone(),
+        dtype: instr.dtype,
+    };
+    for &slot in &instr.output_slots {
+        if slot >= producer_by_slot.len() {
+            producer_by_slot.resize_with(slot + 1, || None);
+        }
+        producer_by_slot[slot] = Some(producer.clone());
+    }
+}
+
+fn producer_for_slot(producer_by_slot: &ProducerMap, slot: usize) -> Option<&ProducerInfo> {
+    producer_by_slot.get(slot).and_then(Option::as_ref)
+}
+
+fn resolve_slot_redirect(mut slot: usize, redirect: &[usize]) -> usize {
+    while slot < redirect.len() && redirect[slot] != slot {
+        slot = redirect[slot];
+    }
+    slot
+}
+
+fn conj_commuting_input_indices(
+    producer: &ProducerInfo,
+    input_len: usize,
+    slot_meta: &[Option<SlotMeta>],
+) -> Option<Vec<usize>> {
+    match &producer.op {
+        ExecOp::Add | ExecOp::Multiply | ExecOp::Divide | ExecOp::DotGeneral(_) => {
+            Some((0..input_len).collect())
+        }
+        ExecOp::DotGeneralWithConj { .. } => Some((0..input_len).collect()),
+        ExecOp::Convert { .. } => {
+            let input_dtype = producer
+                .input_slots
+                .first()
+                .and_then(|&slot| slot_meta.get(slot))
+                .and_then(Option::as_ref)
+                .map(|meta| meta.dtype)?;
+            (dtype_supports_conj(input_dtype) && dtype_supports_conj(producer.dtype))
+                .then_some(vec![0])
+        }
+        ExecOp::Negate
+        | ExecOp::ReduceSum { .. }
+        | ExecOp::ReduceProd { .. }
+        | ExecOp::Transpose { .. }
+        | ExecOp::Reshape { .. }
+        | ExecOp::BroadcastInDim { .. }
+        | ExecOp::Slice(_)
+        | ExecOp::DynamicSlice { .. }
+        | ExecOp::Pad(_)
+        | ExecOp::Reverse { .. }
+        | ExecOp::ExtractDiag { .. }
+        | ExecOp::EmbedDiag { .. }
+        | ExecOp::Tril { .. }
+        | ExecOp::Triu { .. }
+        | ExecOp::Gather(_) => Some(vec![0]),
+        ExecOp::Concatenate { .. } => Some((0..input_len).collect()),
+        _ => None,
+    }
+}
+
+fn dtype_supports_conj(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
+}
+
+pub(crate) fn populate_last_use(program: &mut ExecProgram) {
+    let mut output_slot = vec![false; program.n_slots];
+    for &slot in &program.output_slots {
+        output_slot[slot] = true;
+    }
+
+    let mut last_user: Vec<Option<usize>> = vec![None; program.n_slots];
+    for (idx, instr) in program.instructions.iter().enumerate() {
+        for &slot in &instr.input_slots {
+            last_user[slot] = Some(idx);
+        }
+    }
+
+    for (idx, instr) in program.instructions.iter_mut().enumerate() {
+        instr.last_use = instr
+            .input_slots
+            .iter()
+            .map(|&slot| !output_slot[slot] && last_user[slot] == Some(idx))
+            .collect();
+    }
 }
 
 // ============================================================================
@@ -468,8 +709,11 @@ fn compute_last_use(
 /// Sort contracting dimensions of all DotGeneral instructions in place.
 pub fn dot_dimension_sorter(program: &mut ExecProgram) {
     for instr in &mut program.instructions {
-        if let ExecOp::DotGeneral(config) = &mut instr.op {
-            sort_contracting_dims(config);
+        match &mut instr.op {
+            ExecOp::DotGeneral(config) | ExecOp::DotGeneralWithConj { config, .. } => {
+                sort_contracting_dims(config);
+            }
+            _ => {}
         }
     }
 }
@@ -526,25 +770,30 @@ fn apply_perm(source: &[usize], perm: &[usize]) -> Vec<usize> {
 /// Fold Transpose instructions into DotGeneral dimension numbers.
 pub fn transpose_folding(program: &mut ExecProgram) {
     loop {
-        let changed = transpose_fold_one_pass(program);
+        let producer_by_slot = producer_indices_by_slot(program);
+        let changed = transpose_fold_one_pass(program, &producer_by_slot);
         if !changed {
             break;
         }
     }
 }
 
-fn transpose_fold_one_pass(program: &mut ExecProgram) -> bool {
+fn transpose_fold_one_pass(program: &mut ExecProgram, producer_by_slot: &[Option<usize>]) -> bool {
     let mut changed = false;
 
     for index in 0..program.instructions.len() {
-        if !matches!(program.instructions[index].op, ExecOp::DotGeneral(_)) {
+        if !matches!(
+            program.instructions[index].op,
+            ExecOp::DotGeneral(_) | ExecOp::DotGeneralWithConj { .. }
+        ) {
             continue;
         }
 
-        if try_fold_operand(program, index, 0) {
+        if try_fold_operand(program, producer_by_slot, index, 0) {
             changed = true;
         }
-        if program.instructions[index].input_slots.len() > 1 && try_fold_operand(program, index, 1)
+        if program.instructions[index].input_slots.len() > 1
+            && try_fold_operand(program, producer_by_slot, index, 1)
         {
             changed = true;
         }
@@ -553,9 +802,14 @@ fn transpose_fold_one_pass(program: &mut ExecProgram) -> bool {
     changed
 }
 
-fn try_fold_operand(program: &mut ExecProgram, dot_idx: usize, operand_idx: usize) -> bool {
+fn try_fold_operand(
+    program: &mut ExecProgram,
+    producer_by_slot: &[Option<usize>],
+    dot_idx: usize,
+    operand_idx: usize,
+) -> bool {
     let input_slot = program.instructions[dot_idx].input_slots[operand_idx];
-    let Some(producer_idx) = find_producer(program, input_slot) else {
+    let Some(producer_idx) = producer_by_slot.get(input_slot).copied().flatten() else {
         return false;
     };
 
@@ -564,8 +818,13 @@ fn try_fold_operand(program: &mut ExecProgram, dot_idx: usize, operand_idx: usiz
         _ => return false,
     };
 
-    let config = match &program.instructions[dot_idx].op {
-        ExecOp::DotGeneral(config) => config.clone(),
+    let (config, existing_conj) = match &program.instructions[dot_idx].op {
+        ExecOp::DotGeneral(config) => (config.clone(), None),
+        ExecOp::DotGeneralWithConj {
+            config,
+            lhs_conj,
+            rhs_conj,
+        } => (config.clone(), Some((*lhs_conj, *rhs_conj))),
         _ => return false,
     };
 
@@ -575,16 +834,29 @@ fn try_fold_operand(program: &mut ExecProgram, dot_idx: usize, operand_idx: usiz
 
     let new_config = fold_transpose_into_dot(&config, operand_idx, &perm);
     let original_input = program.instructions[producer_idx].input_slots[0];
-    program.instructions[dot_idx].op = ExecOp::DotGeneral(new_config);
+    program.instructions[dot_idx].op = match existing_conj {
+        Some((lhs_conj, rhs_conj)) => ExecOp::DotGeneralWithConj {
+            config: new_config,
+            lhs_conj,
+            rhs_conj,
+        },
+        None => ExecOp::DotGeneral(new_config),
+    };
     program.instructions[dot_idx].input_slots[operand_idx] = original_input;
     true
 }
 
-fn find_producer(program: &ExecProgram, slot: usize) -> Option<usize> {
-    program
-        .instructions
-        .iter()
-        .position(|inst| inst.output_slots.contains(&slot))
+fn producer_indices_by_slot(program: &ExecProgram) -> Vec<Option<usize>> {
+    let mut producer_by_slot = vec![None; program.n_slots];
+    for (idx, instr) in program.instructions.iter().enumerate() {
+        for &slot in &instr.output_slots {
+            if slot >= producer_by_slot.len() {
+                producer_by_slot.resize(slot + 1, None);
+            }
+            producer_by_slot[slot] = Some(idx);
+        }
+    }
+    producer_by_slot
 }
 
 fn is_transpose_foldable(config: &DotGeneralConfig, operand_idx: usize, perm: &[usize]) -> bool {
@@ -746,7 +1018,17 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
     let mut n_slots = program.n_slots;
 
     for instr in &program.instructions {
-        if let ExecOp::DotGeneral(config) = &instr.op {
+        let dot_config_and_conj = match &instr.op {
+            ExecOp::DotGeneral(config) => Some((config, false, false)),
+            ExecOp::DotGeneralWithConj {
+                config,
+                lhs_conj,
+                rhs_conj,
+            } => Some((config, *lhs_conj, *rhs_conj)),
+            _ => None,
+        };
+
+        if let Some((config, lhs_conj, rhs_conj)) = dot_config_and_conj {
             if instr.input_slots.len() == 2 && !config.lhs_contracting_dims.is_empty() {
                 let lhs_slot = instr.input_slots[0];
                 let rhs_slot = instr.input_slots[1];
@@ -764,6 +1046,8 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
                         rhs_shape,
                         lhs_extents,
                         rhs_extents,
+                        lhs_conj,
+                        rhs_conj,
                         &mut n_slots,
                         &mut new_instructions,
                     );
@@ -865,6 +1149,8 @@ fn decompose_dot(
     rhs_shape: &[DimExpr],
     lhs_extents: &[ShapeExtent<DimExpr>],
     rhs_extents: &[ShapeExtent<DimExpr>],
+    lhs_conj: bool,
+    rhs_conj: bool,
     n_slots: &mut usize,
     new_instructions: &mut Vec<ExecInstruction>,
 ) {
@@ -1007,7 +1293,15 @@ fn decompose_dot(
     }
 
     new_instructions.push(ExecInstruction {
-        op: ExecOp::DotGeneral(canonical_config),
+        op: if lhs_conj || rhs_conj {
+            ExecOp::DotGeneralWithConj {
+                config: canonical_config,
+                lhs_conj,
+                rhs_conj,
+            }
+        } else {
+            ExecOp::DotGeneral(canonical_config)
+        },
         input_slots: vec![lhs_canon_slot, rhs_canon_slot],
         output_slots: vec![canonical_output_slot],
         dtype: instr.dtype,
@@ -1260,7 +1554,219 @@ fn merge_extent_span(
 }
 
 // ============================================================================
-// Pass 4: DeadCodeElimination
+// Pass 4: DotConjFolding
+// ============================================================================
+//
+// After layout canonicalization, fold `Conj` producers on DotGeneral operands
+// into backend-visible conjugation flags. This also handles layout-only chains
+// such as `Reshape(Transpose(Conj(x)))` by rewiring the layout chain to consume
+// `x` and marking the DotGeneral operand as conjugated.
+
+/// Fold `Conj` inputs into `DotGeneralWithConj`.
+pub fn dot_conj_folding(program: &mut ExecProgram) {
+    let producer_by_slot = producer_index_by_slot(program);
+    let use_counts = slot_use_counts(program);
+    let mut layout_rewrites: Vec<(usize, usize)> = Vec::new();
+    let mut shape_input_rewrites: Vec<(usize, usize)> = Vec::new();
+    let mut dot_updates: Vec<DotConjUpdate> = Vec::new();
+
+    for (dot_idx, instr) in program.instructions.iter().enumerate() {
+        if instr.input_slots.len() < 2 {
+            continue;
+        }
+
+        let (config, mut lhs_conj, mut rhs_conj) = match instr.op.clone() {
+            ExecOp::DotGeneral(config) => (config, false, false),
+            ExecOp::DotGeneralWithConj {
+                config,
+                lhs_conj,
+                rhs_conj,
+            } => (config, lhs_conj, rhs_conj),
+            _ => continue,
+        };
+
+        let mut input_replacements = [None, None];
+        if let Some(fold) = find_dot_operand_conj_fold(
+            program,
+            instr.input_slots[0],
+            &producer_by_slot,
+            &use_counts,
+        ) {
+            lhs_conj = !lhs_conj;
+            input_replacements[0] = fold.dot_input_replacement;
+            if let Some(rewrite) = fold.layout_input_rewrite {
+                layout_rewrites.push(rewrite);
+            }
+            shape_input_rewrites.push(fold.shape_input_rewrite);
+        }
+        if let Some(fold) = find_dot_operand_conj_fold(
+            program,
+            instr.input_slots[1],
+            &producer_by_slot,
+            &use_counts,
+        ) {
+            rhs_conj = !rhs_conj;
+            input_replacements[1] = fold.dot_input_replacement;
+            if let Some(rewrite) = fold.layout_input_rewrite {
+                layout_rewrites.push(rewrite);
+            }
+            shape_input_rewrites.push(fold.shape_input_rewrite);
+        }
+
+        dot_updates.push(DotConjUpdate {
+            dot_idx,
+            config,
+            lhs_conj,
+            rhs_conj,
+            input_replacements,
+        });
+    }
+
+    for (layout_idx, new_input_slot) in layout_rewrites {
+        program.instructions[layout_idx].input_slots[0] = new_input_slot;
+    }
+    for instr in &mut program.instructions {
+        if !matches!(instr.op, ExecOp::Reshape { .. }) || instr.input_slots.len() <= 1 {
+            continue;
+        }
+        for slot in &mut instr.input_slots[1..] {
+            for &(from, to) in &shape_input_rewrites {
+                if *slot == from {
+                    *slot = to;
+                }
+            }
+        }
+    }
+
+    for update in dot_updates {
+        let instr = &mut program.instructions[update.dot_idx];
+        for (operand_idx, replacement) in update.input_replacements.into_iter().enumerate() {
+            if let Some(slot) = replacement {
+                instr.input_slots[operand_idx] = slot;
+            }
+        }
+        instr.op = if update.lhs_conj || update.rhs_conj {
+            ExecOp::DotGeneralWithConj {
+                config: update.config,
+                lhs_conj: update.lhs_conj,
+                rhs_conj: update.rhs_conj,
+            }
+        } else {
+            ExecOp::DotGeneral(update.config)
+        };
+    }
+}
+
+struct DotConjUpdate {
+    dot_idx: usize,
+    config: DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+    input_replacements: [Option<usize>; 2],
+}
+
+struct DotOperandConjFold {
+    dot_input_replacement: Option<usize>,
+    layout_input_rewrite: Option<(usize, usize)>,
+    shape_input_rewrite: (usize, usize),
+}
+
+fn producer_index_by_slot(program: &ExecProgram) -> Vec<Option<usize>> {
+    let mut producer_by_slot = vec![None; program.n_slots];
+    for (idx, instr) in program.instructions.iter().enumerate() {
+        for &slot in &instr.output_slots {
+            if slot >= producer_by_slot.len() {
+                producer_by_slot.resize(slot + 1, None);
+            }
+            producer_by_slot[slot] = Some(idx);
+        }
+    }
+    producer_by_slot
+}
+
+fn slot_use_counts(program: &ExecProgram) -> Vec<usize> {
+    let mut counts = vec![0usize; program.n_slots];
+    for instr in &program.instructions {
+        for &slot in &instr.input_slots {
+            if slot >= counts.len() {
+                counts.resize(slot + 1, 0);
+            }
+            counts[slot] += 1;
+        }
+    }
+    for &slot in &program.output_slots {
+        if slot >= counts.len() {
+            counts.resize(slot + 1, 0);
+        }
+        counts[slot] += 1;
+    }
+    counts
+}
+
+fn find_dot_operand_conj_fold(
+    program: &ExecProgram,
+    mut slot: usize,
+    producer_by_slot: &[Option<usize>],
+    use_counts: &[usize],
+) -> Option<DotOperandConjFold> {
+    let mut layout_chain = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(slot) {
+        let Some(producer_idx) = producer_by_slot.get(slot).copied().flatten() else {
+            return None;
+        };
+        let producer = &program.instructions[producer_idx];
+
+        if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
+            let source_slot = producer.input_slots[0];
+            return Some(if let Some(&layout_idx) = layout_chain.last() {
+                DotOperandConjFold {
+                    dot_input_replacement: None,
+                    layout_input_rewrite: Some((layout_idx, source_slot)),
+                    shape_input_rewrite: (slot, source_slot),
+                }
+            } else {
+                DotOperandConjFold {
+                    dot_input_replacement: Some(source_slot),
+                    layout_input_rewrite: None,
+                    shape_input_rewrite: (slot, source_slot),
+                }
+            });
+        }
+
+        if !is_conj_transparent_layout_op(&producer.op)
+            || producer.input_slots.len() != 1
+            || producer.output_slots.len() != 1
+            || use_counts.get(slot).copied().unwrap_or(0) != 1
+        {
+            return None;
+        }
+        layout_chain.push(producer_idx);
+        slot = producer.input_slots[0];
+    }
+    None
+}
+
+fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
+    matches!(
+        op,
+        ExecOp::Transpose { .. }
+            | ExecOp::Reshape { .. }
+            | ExecOp::BroadcastInDim { .. }
+            | ExecOp::Slice(_)
+            | ExecOp::DynamicSlice { .. }
+            | ExecOp::Pad(_)
+            | ExecOp::Reverse { .. }
+            | ExecOp::ExtractDiag { .. }
+            | ExecOp::EmbedDiag { .. }
+            | ExecOp::Tril { .. }
+            | ExecOp::Triu { .. }
+            | ExecOp::Gather(_)
+    )
+}
+
+// ============================================================================
+// Pass 5: DeadCodeElimination
 // ============================================================================
 //
 // Remove instructions whose outputs are never consumed by a program output
@@ -1271,25 +1777,35 @@ fn merge_extent_span(
 /// Drop instructions with no downstream consumer. Preserves instructions with
 /// observable side effects (`ValidateNonsingular`).
 pub fn eliminate_dead_code(program: &mut ExecProgram) {
-    let mut live_slots: std::collections::HashSet<usize> =
-        program.output_slots.iter().copied().collect();
+    let mut live_slots = vec![false; program.n_slots];
+    for &slot in &program.output_slots {
+        if slot >= live_slots.len() {
+            live_slots.resize(slot + 1, false);
+        }
+        live_slots[slot] = true;
+    }
     let mut keep = vec![false; program.instructions.len()];
     for idx in (0..program.instructions.len()).rev() {
         let instr = &program.instructions[idx];
-        let has_live_output = instr.output_slots.iter().any(|s| live_slots.contains(s));
+        let has_live_output = instr
+            .output_slots
+            .iter()
+            .any(|&slot| live_slots.get(slot).copied().unwrap_or(false));
         let is_side_effecting = matches!(&instr.op, ExecOp::ValidateNonsingular);
         if has_live_output || is_side_effecting {
             keep[idx] = true;
             for &slot in &instr.input_slots {
-                live_slots.insert(slot);
+                if slot >= live_slots.len() {
+                    live_slots.resize(slot + 1, false);
+                }
+                live_slots[slot] = true;
             }
         }
     }
-    let new_instructions: Vec<ExecInstruction> = program
-        .instructions
-        .iter()
+    let instructions = std::mem::take(&mut program.instructions);
+    program.instructions = instructions
+        .into_iter()
         .enumerate()
-        .filter_map(|(i, instr)| keep[i].then(|| instr.clone()))
+        .filter_map(|(i, instr)| keep[i].then_some(instr))
         .collect();
-    program.instructions = new_instructions;
 }

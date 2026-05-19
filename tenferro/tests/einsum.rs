@@ -4,9 +4,9 @@
 //! available for converting row-major test data when needed.
 
 use num_complex::Complex64;
-use tenferro::einsum::{einsum, einsum_with, EinsumOptimize};
 use tenferro::engine::Engine;
 use tenferro::traced::TracedTensor;
+use tenferro::traced_tensor::{einsum, einsum_with, EinsumOptimize};
 use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts};
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TypedTensor};

@@ -4,7 +4,7 @@
 //!
 //! Inspects the resulting fragment's ops directly.
 
-use tenferro::einsum::einsum;
+use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;

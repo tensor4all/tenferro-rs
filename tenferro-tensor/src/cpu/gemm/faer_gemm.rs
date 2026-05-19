@@ -20,13 +20,41 @@ pub(crate) trait FaerGemm: Sized {
         c_ptr: *mut Self,
         c_rs: isize,
         c_cs: isize,
+    ) {
+        unsafe {
+            Self::strided_gemm_with_conj(
+                ctx, alpha, a_ptr, m, k, a_rs, a_cs, false, b_ptr, n, b_rs, b_cs, false, beta,
+                c_ptr, c_rs, c_cs,
+            )
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn strided_gemm_with_conj(
+        ctx: &CpuContext,
+        alpha: Self,
+        a_ptr: *const Self,
+        m: usize,
+        k: usize,
+        a_rs: isize,
+        a_cs: isize,
+        conj_a: bool,
+        b_ptr: *const Self,
+        n: usize,
+        b_rs: isize,
+        b_cs: isize,
+        conj_b: bool,
+        beta: Self,
+        c_ptr: *mut Self,
+        c_rs: isize,
+        c_cs: isize,
     );
 }
 
 macro_rules! impl_faer_gemm {
     ($ty:ty) => {
         impl FaerGemm for $ty {
-            unsafe fn strided_gemm(
+            unsafe fn strided_gemm_with_conj(
                 ctx: &CpuContext,
                 alpha: $ty,
                 a_ptr: *const $ty,
@@ -34,16 +62,18 @@ macro_rules! impl_faer_gemm {
                 k: usize,
                 a_rs: isize,
                 a_cs: isize,
+                conj_a: bool,
                 b_ptr: *const $ty,
                 n: usize,
                 b_rs: isize,
                 b_cs: isize,
+                conj_b: bool,
                 beta: $ty,
                 c_ptr: *mut $ty,
                 c_rs: isize,
                 c_cs: isize,
             ) {
-                use faer::{Accum, MatMut, MatRef};
+                use faer::{Accum, Conj, MatMut, MatRef};
                 let a_rs = super::normalize_singleton_stride(a_rs, m, k);
                 let a_cs = super::normalize_singleton_stride(a_cs, k, m);
                 let b_rs = super::normalize_singleton_stride(b_rs, k, n);
@@ -71,11 +101,15 @@ macro_rules! impl_faer_gemm {
                     Accum::Add
                 };
                 let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
-                faer::linalg::matmul::matmul(
+                let conj_a = if conj_a { Conj::Yes } else { Conj::No };
+                let conj_b = if conj_b { Conj::Yes } else { Conj::No };
+                faer::linalg::matmul::matmul_with_conj(
                     &mut c_mat,
                     accum,
                     &a_mat,
+                    conj_a,
                     &b_mat,
+                    conj_b,
                     alpha,
                     ctx.faer_par(),
                 );

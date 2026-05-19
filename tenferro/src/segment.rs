@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use crate::error::Result;
 use crate::exec::{
-    collect_outputs, execute_backend_op, execute_ffi_instruction, execute_host_instruction,
-    initialize_slots, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
+    can_run_in_single_exec_session, collect_outputs_from,
+    eval_exec_ir_single_session_with_workspace, eval_exec_ir_unsegmented_with_cache_and_workspace,
+    execute_backend_op, execute_ffi_instruction_cached, execute_host_instruction,
+    initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
 use tenferro_tensor::{
@@ -161,60 +163,130 @@ pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
     inputs: Vec<Tensor>,
     cache: &mut crate::engine::NaryEinsumCache,
 ) -> Result<Vec<Tensor>> {
-    let segments = segment_exec_program(program);
-    let mut slots = initialize_slots(program, inputs);
+    let mut slots = Vec::new();
+    let mut backend_cache = B::RuntimeCache::default();
+    eval_exec_segmented_with_cache_and_workspace(
+        backend,
+        program,
+        inputs,
+        cache,
+        &mut slots,
+        &mut backend_cache,
+    )
+}
 
-    for segment in &segments {
-        match segment {
-            Segment::Fused {
-                instructions,
-                input_slots,
-                output_slots,
-                last_use,
-            } => {
-                backend.with_exec_session(|exec| -> Result<()> {
-                    if let Some(plan) =
-                        build_elementwise_fusion_plan(instructions, input_slots, output_slots)
-                    {
-                        let inputs = collect_segment_inputs(&slots, input_slots)?;
-                        if let Some(outputs) = exec.execute_elementwise_fusion(&inputs, &plan)? {
-                            if outputs.len() != output_slots.len() {
-                                return Err(crate::error::Error::Internal(format!(
-                                    "fused elementwise kernel produced {} outputs for {} slots",
-                                    outputs.len(),
-                                    output_slots.len()
-                                )));
-                            }
-                            for (slot, tensor) in
-                                output_slots.iter().copied().zip(outputs.into_iter())
+pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+    cache: &mut crate::engine::NaryEinsumCache,
+    slots: &mut Vec<Option<Tensor>>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<Tensor>> {
+    let has_fused_segment = has_multi_instruction_fused_segment(program);
+    if !has_fused_segment && can_run_in_single_exec_session(program) {
+        return eval_exec_ir_single_session_with_workspace(
+            backend,
+            program,
+            inputs,
+            slots,
+            backend_cache,
+        );
+    }
+
+    if !has_fused_segment {
+        return eval_exec_ir_unsegmented_with_cache_and_workspace(
+            backend, program, inputs, cache, slots,
+        );
+    }
+
+    let result = (|| {
+        initialize_slots_in(program, inputs, slots);
+
+        let segments = segment_exec_program(program);
+        let mut inst_idx = 0usize;
+        for segment in &segments {
+            match segment {
+                Segment::Fused {
+                    instructions,
+                    input_slots,
+                    output_slots,
+                    last_use,
+                } => {
+                    backend.with_exec_session(|exec| -> Result<()> {
+                        if let Some(plan) =
+                            build_elementwise_fusion_plan(instructions, input_slots, output_slots)
+                        {
+                            let inputs = collect_segment_inputs(slots, input_slots)?;
+                            if let Some(outputs) =
+                                exec.execute_elementwise_fusion(&inputs, &plan)?
                             {
-                                slots[slot] = Some(tensor);
+                                if outputs.len() != output_slots.len() {
+                                    return Err(crate::error::Error::Internal(format!(
+                                        "fused elementwise kernel produced {} outputs for {} slots",
+                                        outputs.len(),
+                                        output_slots.len()
+                                    )));
+                                }
+                                for (slot, tensor) in
+                                    output_slots.iter().copied().zip(outputs.into_iter())
+                                {
+                                    slots[slot] = Some(tensor);
+                                }
+                                reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+                                return Ok(());
                             }
-                            reclaim_segment_inputs_exec(&mut slots, input_slots, last_use, exec);
-                            return Ok(());
                         }
-                    }
 
-                    for inst in instructions {
-                        let result = execute_backend_op(exec, &slots, inst)?;
-                        slots[inst.output_slots[0]] = Some(result);
-                        reclaim_last_use_inputs_exec(&mut slots, inst, exec);
-                    }
-                    Ok(())
-                })?;
+                        for inst in instructions {
+                            let result = execute_backend_op(exec, slots, inst)?;
+                            slots[inst.output_slots[0]] = Some(result);
+                            reclaim_last_use_inputs_exec(slots, inst, exec);
+                        }
+                        Ok(())
+                    })?;
+                    inst_idx += instructions.len();
+                }
+                Segment::Ffi(inst) => {
+                    execute_ffi_instruction_cached(
+                        backend,
+                        backend_cache,
+                        slots,
+                        inst,
+                        DispatchMode::Segmented,
+                        cache,
+                        Some(inst_idx),
+                    )?;
+                    reclaim_last_use_inputs_backend(slots, inst, backend);
+                    inst_idx += 1;
+                }
+                Segment::Host(inst) => {
+                    execute_host_instruction(backend, slots, inst)?;
+                    reclaim_last_use_inputs_backend(slots, inst, backend);
+                    inst_idx += 1;
+                }
             }
-            Segment::Ffi(inst) => {
-                execute_ffi_instruction(backend, &mut slots, inst, DispatchMode::Segmented, cache)?;
-                reclaim_last_use_inputs_backend(&mut slots, inst, backend);
-            }
-            Segment::Host(inst) => {
-                execute_host_instruction(backend, &mut slots, inst)?;
-                reclaim_last_use_inputs_backend(&mut slots, inst, backend);
+        }
+
+        collect_outputs_from(program, slots)
+    })();
+    slots.clear();
+    result
+}
+
+fn has_multi_instruction_fused_segment(program: &ExecProgram) -> bool {
+    let mut run_len = 0usize;
+    for inst in &program.instructions {
+        if is_host_instruction(inst) || is_ffi_instruction(inst) {
+            run_len = 0;
+        } else {
+            run_len += 1;
+            if run_len > 1 {
+                return true;
             }
         }
     }
-
-    collect_outputs(program, slots)
+    false
 }
 
 fn flush_fused_segment(
