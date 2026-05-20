@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
-use tenferro::eager_tensor::einsum;
-use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+use tenferro::eager_tensor::{einsum, einsum_subscripts};
+use tenferro::{CpuBackend, EagerContext, EagerTensor, EinsumSubscripts, Tensor};
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
 }
 
 fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
+    unsafe {
+        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
+        std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "1");
+    }
     EagerContext::with_backend(CpuBackend::new())
 }
 
@@ -24,6 +28,25 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     );
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
+
+    assert_eq!(c.data().shape(), &[2, 2]);
+    assert_eq!(f64_data(c.data()), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn eager_tensor_einsum_integer_subscripts_match_string_path() {
+    let ctx = test_ctx();
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+
+    let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
 
     assert_eq!(c.data().shape(), &[2, 2]);
     assert_eq!(f64_data(c.data()), &[22.0, 28.0, 49.0, 64.0]);

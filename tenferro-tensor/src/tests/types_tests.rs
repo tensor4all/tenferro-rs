@@ -4,7 +4,8 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, Tensor, TensorScalar, TypedTensor,
+    MemoryKind, Placement, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
+    TypedTensorView,
 };
 use crate::Error;
 
@@ -258,6 +259,72 @@ fn tensor_shape_and_dtype_cover_all_variants() {
     assert_eq!(c32_tensor.dtype(), DType::C32);
     assert_eq!(c64_tensor.shape(), &[1, 1]);
     assert_eq!(c64_tensor.dtype(), DType::C64);
+}
+
+#[test]
+fn typed_tensor_view_validates_shape_and_exposes_slice() {
+    let shape = [2, 2];
+    let data = [1.0_f64, 2.0, 3.0, 4.0];
+    let view = TypedTensorView::new(&shape, &data).unwrap();
+
+    assert_eq!(view.shape, &[2, 2]);
+    assert_eq!(view.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
+
+    let err = TypedTensorView::new(&shape, &data[..3]).unwrap_err();
+    assert!(matches!(err, Error::InvalidConfig { .. }));
+}
+
+#[test]
+fn tensor_view_covers_dtype_shape_and_materialization() {
+    let f32_data = [1.0_f32, 2.0];
+    let f64_data = [1.0_f64, 2.0];
+    let i64_data = [1_i64, 2];
+    let c32_data = [Complex32::new(1.0, -1.0), Complex32::new(2.0, 0.5)];
+    let c64_data = [Complex64::new(1.0, -1.0), Complex64::new(2.0, 0.5)];
+    let shape = [2usize];
+
+    let views = [
+        TensorView::f32(&shape, &f32_data).unwrap(),
+        TensorView::f64(&shape, &f64_data).unwrap(),
+        TensorView::i64(&shape, &i64_data).unwrap(),
+        TensorView::c32(&shape, &c32_data).unwrap(),
+        TensorView::c64(&shape, &c64_data).unwrap(),
+    ];
+    let dtypes = [DType::F32, DType::F64, DType::I64, DType::C32, DType::C64];
+
+    for (view, dtype) in views.iter().zip(dtypes) {
+        assert_eq!(view.dtype(), dtype);
+        assert_eq!(view.shape(), &[2]);
+        let tensor = view.to_tensor();
+        assert_eq!(tensor.dtype(), dtype);
+        assert_eq!(tensor.shape(), &[2]);
+    }
+}
+
+#[test]
+fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
+    let tensor = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let read_tensor = TensorRead::from_tensor(&tensor);
+
+    assert_eq!(read_tensor.dtype(), DType::F64);
+    assert_eq!(read_tensor.shape(), &[2]);
+    assert!(read_tensor.as_tensor().is_some());
+    assert_eq!(
+        read_tensor.to_tensor().as_slice::<f64>().unwrap(),
+        &[3.0, 4.0]
+    );
+
+    let shape = [2usize];
+    let data = [5.0_f64, 6.0];
+    let read_view = TensorRead::from_view(TensorView::f64(&shape, &data).unwrap());
+
+    assert_eq!(read_view.dtype(), DType::F64);
+    assert_eq!(read_view.shape(), &[2]);
+    assert!(read_view.as_tensor().is_none());
+    assert_eq!(
+        read_view.to_tensor().as_slice::<f64>().unwrap(),
+        &[5.0, 6.0]
+    );
 }
 
 tensor_scalar_roundtrip_test!(
