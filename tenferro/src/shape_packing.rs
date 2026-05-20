@@ -4,7 +4,7 @@ use std::sync::Arc;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{GatherConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
 use crate::eager::EagerTensor;
@@ -114,7 +114,7 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
     Ok(())
 }
 
-impl<B: TensorBackend> EagerTensor<B> {
+impl EagerTensor {
     /// Select entries from one axis using host-known indices.
     ///
     /// The index list is primal metadata: gradients flow to `self`, including
@@ -125,7 +125,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
     ///     ctx,
@@ -151,7 +151,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
@@ -172,7 +172,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
@@ -197,7 +197,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
@@ -218,7 +218,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
     ///     ctx,
@@ -243,7 +243,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![], vec![1.0_f64]), ctx.clone());
     /// let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![], vec![2.0_f64]), ctx);
     /// let out = EagerTensor::stack(&[&a, &b], -1).unwrap();

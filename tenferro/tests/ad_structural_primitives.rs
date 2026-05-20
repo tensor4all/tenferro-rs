@@ -19,8 +19,8 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
-    EagerContext::with_backend(CpuBackend::new())
+fn test_ctx() -> Arc<EagerContext> {
+    EagerContext::with_cpu_backend(CpuBackend::new())
 }
 
 fn finite_diff_unary(f: impl Fn(&[f64]) -> f64, base: &[f64]) -> Vec<f64> {

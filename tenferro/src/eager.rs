@@ -11,12 +11,15 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
+#[cfg(feature = "cubecl")]
+use tenferro_tensor::cubecl::CubeclBackend;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 use tidu::{
     topo_sort_grad_dag, try_backward_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
     LinearFragment,
 };
 
+use crate::eager_backend::EagerBackend;
 use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{ContextId, Error, Result};
@@ -125,38 +128,68 @@ pub(crate) fn print_and_reset_eager_op_profile() {
 /// ```
 /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 ///
-/// let ctx = EagerContext::with_backend(CpuBackend::new());
+/// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
 /// let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![2.0_f64]), ctx);
 /// let z = &x + &y;
 ///
 /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
-pub struct EagerContext<B: TensorBackend> {
-    pub(crate) backend: Mutex<B>,
+pub struct EagerContext {
+    pub(crate) backend: Mutex<EagerBackend>,
     grad_slots: Mutex<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
 }
 
-impl<B: TensorBackend> EagerContext<B> {
-    fn new(backend: B) -> Self {
+impl EagerContext {
+    fn from_backend(backend: EagerBackend) -> Self {
         Self {
             backend: Mutex::new(backend),
             grad_slots: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Create a shared eager execution context for the provided backend.
+    /// Create a shared CPU eager execution context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::EagerContext;
+    ///
+    /// let ctx = EagerContext::new();
+    /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
+    /// ```
+    pub fn new() -> Arc<Self> {
+        Self::with_cpu_backend(CpuBackend::new())
+    }
+
+    /// Create a shared eager execution context from a configured CPU backend.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro::{CpuBackend, EagerContext};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
-    pub fn with_backend(backend: B) -> Arc<Self> {
-        Arc::new(Self::new(backend))
+    pub fn with_cpu_backend(backend: CpuBackend) -> Arc<Self> {
+        Arc::new(Self::from_backend(EagerBackend::cpu(backend)))
+    }
+
+    /// Create a shared eager execution context from a configured CUDA backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::cuda::CudaBackend;
+    /// use tenferro::EagerContext;
+    ///
+    /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerContext> =
+    ///     EagerContext::with_cuda_backend;
+    /// ```
+    #[cfg(feature = "cubecl")]
+    pub fn with_cuda_backend(backend: CubeclBackend) -> Arc<Self> {
+        Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
     }
 
     /// Return an opaque identifier for this context.
@@ -166,8 +199,8 @@ impl<B: TensorBackend> EagerContext<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
-    /// assert_ne!(ctx.id(), EagerContext::with_backend(CpuBackend::new()).id());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+    /// assert_ne!(ctx.id(), EagerContext::with_cpu_backend(CpuBackend::new()).id());
     /// ```
     pub fn id(&self) -> ContextId {
         ContextId::from_ptr(self)
@@ -190,7 +223,7 @@ impl<B: TensorBackend> EagerContext<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx.clone());
     /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
@@ -223,14 +256,14 @@ impl<B: TensorBackend> EagerContext<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let c = ctx.constant_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx);
     /// let z = x.add(&c).unwrap();
     ///
     /// assert_eq!(z.data().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// ```
-    pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor<B> {
+    pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor {
         EagerTensor::new_leaf(Arc::clone(self), tensor, false)
     }
 
@@ -244,7 +277,7 @@ impl<B: TensorBackend> EagerContext<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let p = ctx.variable_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
     /// let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _ = loss.backward().unwrap();
@@ -252,14 +285,14 @@ impl<B: TensorBackend> EagerContext<B> {
     /// let grad = p.grad().unwrap();
     /// assert_eq!(grad.shape(), &[2]);
     /// ```
-    pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor<B> {
+    pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> EagerTensor {
         EagerTensor::new_leaf(Arc::clone(self), tensor, true)
     }
 
     fn store_grads(
         &self,
         cotangents: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
-        backend: &mut B,
+        backend: &mut EagerBackend,
     ) -> Result<()> {
         let mut updates = Vec::new();
         let mut staged = Vec::new();
@@ -309,7 +342,7 @@ impl<B: TensorBackend> EagerContext<B> {
 /// ```
 /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 ///
-/// let ctx = EagerContext::with_backend(CpuBackend::new());
+/// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
 /// let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 /// let _cotangents = loss.backward().unwrap();
@@ -322,41 +355,41 @@ impl<B: TensorBackend> EagerContext<B> {
 /// assert!(x.grad().is_none());
 /// ```
 #[derive(Clone)]
-pub struct EagerTensor<B: TensorBackend = CpuBackend> {
+pub struct EagerTensor {
     pub(crate) data: Arc<Tensor>,
     pub(crate) key: GlobalValKey<StdTensorOp>,
     pub(crate) grad_node: Option<Arc<GradNode<StdTensorOp>>>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
-    pub(crate) ctx: Arc<EagerContext<B>>,
+    pub(crate) ctx: Arc<EagerContext>,
 }
 
-impl<B: TensorBackend> std::ops::Add for &EagerTensor<B> {
-    type Output = EagerTensor<B>;
+impl std::ops::Add for &EagerTensor {
+    type Output = EagerTensor;
 
-    fn add(self, rhs: &EagerTensor<B>) -> Self::Output {
+    fn add(self, rhs: &EagerTensor) -> Self::Output {
         EagerTensor::add(self, rhs).unwrap_or_else(|err| panic!("eager add failed: {}", err))
     }
 }
 
-impl<B: TensorBackend> std::ops::Mul for &EagerTensor<B> {
-    type Output = EagerTensor<B>;
+impl std::ops::Mul for &EagerTensor {
+    type Output = EagerTensor;
 
-    fn mul(self, rhs: &EagerTensor<B>) -> Self::Output {
+    fn mul(self, rhs: &EagerTensor) -> Self::Output {
         EagerTensor::mul(self, rhs).unwrap_or_else(|err| panic!("eager mul failed: {}", err))
     }
 }
 
-impl<B: TensorBackend> std::ops::Neg for &EagerTensor<B> {
-    type Output = EagerTensor<B>;
+impl std::ops::Neg for &EagerTensor {
+    type Output = EagerTensor;
 
     fn neg(self) -> Self::Output {
         EagerTensor::neg(self).unwrap_or_else(|err| panic!("eager neg failed: {}", err))
     }
 }
 
-impl<B: TensorBackend> EagerTensor<B> {
+impl EagerTensor {
     /// Create an untracked eager tensor inside an existing eager context.
     ///
     /// # Examples
@@ -364,12 +397,12 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     ///
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
-    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerContext<B>>) -> Self {
+    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerContext>) -> Self {
         Self::new_leaf(ctx, tensor, false)
     }
 
@@ -380,16 +413,16 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     ///
     /// assert!(x.grad().is_none());
     /// ```
-    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerContext<B>>) -> Self {
+    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerContext>) -> Self {
         Self::new_leaf(ctx, tensor, true)
     }
 
-    pub(crate) fn new_leaf(ctx: Arc<EagerContext<B>>, tensor: Tensor, requires_grad: bool) -> Self {
+    pub(crate) fn new_leaf(ctx: Arc<EagerContext>, tensor: Tensor, requires_grad: bool) -> Self {
         let key = eager_val_key();
         let metadata_scope =
             register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor));
@@ -410,7 +443,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     }
 
     pub(crate) fn new_result(
-        ctx: Arc<EagerContext<B>>,
+        ctx: Arc<EagerContext>,
         key: GlobalValKey<StdTensorOp>,
         tensor: Tensor,
         requires_grad: bool,
@@ -433,7 +466,7 @@ impl<B: TensorBackend> EagerTensor<B> {
         }
     }
 
-    pub(crate) fn new_untracked_result(ctx: Arc<EagerContext<B>>, tensor: Tensor) -> Self {
+    pub(crate) fn new_untracked_result(ctx: Arc<EagerContext>, tensor: Tensor) -> Self {
         Self::new_result(ctx, eager_val_key(), tensor, false, None, Vec::new())
     }
 
@@ -447,7 +480,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     /// let y = x.detach();
     ///
@@ -466,15 +499,15 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx_a = EagerContext::with_backend(CpuBackend::new());
-    /// let ctx_b = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx_a = EagerContext::with_cpu_backend(CpuBackend::new());
+    /// let ctx_b = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx_a);
     /// let d = x.detach_into(&ctx_b);
     ///
     /// assert!(!d.tracks_grad());
     /// assert_eq!(d.ctx_id(), ctx_b.id());
     /// ```
-    pub fn detach_into(&self, ctx: &Arc<EagerContext<B>>) -> Self {
+    pub fn detach_into(&self, ctx: &Arc<EagerContext>) -> Self {
         Self::new_leaf(Arc::clone(ctx), self.data.as_ref().clone(), false)
     }
 
@@ -485,7 +518,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![3.0_f64]), ctx);
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
@@ -503,7 +536,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     /// let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
@@ -526,7 +559,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
     /// let loss = (&x * &y).reduce_sum(&[0]).unwrap();
@@ -551,7 +584,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let plain = EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
     /// let tracked = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
     /// let detached = tracked.detach();
@@ -571,7 +604,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
     ///
     /// assert_eq!(x.ctx_id(), ctx.id());
@@ -587,7 +620,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx.clone());
     /// let y = EagerTensor::from_tensor_in(Tensor::from_vec(vec![1], vec![2.0_f64]), ctx);
     ///
@@ -608,7 +641,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     /// ```
     /// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
     ///
-    /// let ctx = EagerContext::with_backend(CpuBackend::new());
+    /// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx);
     /// let loss = (&x + &x).reduce_sum(&[0]).unwrap();
     /// let _cotangents = loss.backward().unwrap();
@@ -793,7 +826,7 @@ impl tidu::EagerKeySource<StdTensorOp> for EagerTensorKeySource {
     }
 }
 
-pub(crate) fn eager_value<B: TensorBackend>(tensor: &EagerTensor<B>) -> EagerValue<StdTensorOp> {
+pub(crate) fn eager_value(tensor: &EagerTensor) -> EagerValue<StdTensorOp> {
     EagerValue {
         key: tensor.key.clone(),
         node: tensor.grad_node.clone(),
@@ -807,10 +840,10 @@ pub(crate) struct RecordedEagerOutputs {
     pub(crate) metadata_scope: Arc<MetadataScope>,
 }
 
-pub(crate) fn record_eager_outputs<B: TensorBackend>(
+pub(crate) fn record_eager_outputs(
     op: &StdTensorOp,
     outputs: &[Arc<Tensor>],
-    inputs: &[&EagerTensor<B>],
+    inputs: &[&EagerTensor],
 ) -> RecordedEagerOutputs {
     let input_values: Vec<_> = inputs.iter().map(|tensor| eager_value(*tensor)).collect();
     let mut key_source = EagerTensorKeySource;
@@ -835,10 +868,10 @@ pub(crate) fn record_eager_outputs<B: TensorBackend>(
     }
 }
 
-pub(crate) fn exec_single_output<B: TensorBackend>(
+pub(crate) fn exec_single_output(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    ctx: &EagerContext<B>,
+    ctx: &EagerContext,
 ) -> Result<Tensor> {
     let mut backend = profile_eager_op_section("exec_single_output.lock_backend", || {
         ctx.backend.lock().unwrap()

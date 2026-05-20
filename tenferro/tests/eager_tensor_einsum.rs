@@ -7,12 +7,12 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
 }
 
-fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
+fn test_ctx() -> Arc<EagerContext> {
     unsafe {
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "1");
     }
-    EagerContext::with_backend(CpuBackend::new())
+    EagerContext::with_cpu_backend(CpuBackend::new())
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
 
 #[test]
 fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
-    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
