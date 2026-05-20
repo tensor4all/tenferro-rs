@@ -55,3 +55,16 @@ harness = false
 [[bench]]
 name = "dot_general_overhead"
 harness = false
+
+[[bench]]
+name = "pairwise_contraction"
+harness = false
+
+[[bench]]
+name = "cpu_install_overhead"
+harness = false
+
+[[bench]]
+name = "openblas_direct_overhead"
+harness = false
+required-features = ["cpu-blas"]
