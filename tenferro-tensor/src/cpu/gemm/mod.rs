@@ -44,10 +44,18 @@ struct GemmDims {
 
 #[derive(Clone)]
 struct GemmAnalysisPlan {
-    lhs_shape: Vec<usize>,
-    rhs_shape: Vec<usize>,
-    config: DotGeneralConfig,
+    lhs_shape: SmallVec<[usize; 8]>,
+    rhs_shape: SmallVec<[usize; 8]>,
+    config: GemmConfigKey,
     dims: Option<GemmDims>,
+}
+
+#[derive(Clone)]
+struct GemmConfigKey {
+    lhs_contracting_dims: SmallVec<[usize; 4]>,
+    rhs_contracting_dims: SmallVec<[usize; 4]>,
+    lhs_batch_dims: SmallVec<[usize; 4]>,
+    rhs_batch_dims: SmallVec<[usize; 4]>,
 }
 
 const GEMM_ANALYSIS_CACHE_MAX: usize = 1024;
@@ -72,7 +80,25 @@ impl GemmAnalysisPlan {
     {
         self.lhs_shape.as_slice() == lhs.shape()
             && self.rhs_shape.as_slice() == rhs.shape()
-            && self.config == *config
+            && self.config.matches(config)
+    }
+}
+
+impl GemmConfigKey {
+    fn from_config(config: &DotGeneralConfig) -> Self {
+        Self {
+            lhs_contracting_dims: config.lhs_contracting_dims.iter().copied().collect(),
+            rhs_contracting_dims: config.rhs_contracting_dims.iter().copied().collect(),
+            lhs_batch_dims: config.lhs_batch_dims.iter().copied().collect(),
+            rhs_batch_dims: config.rhs_batch_dims.iter().copied().collect(),
+        }
+    }
+
+    fn matches(&self, config: &DotGeneralConfig) -> bool {
+        self.lhs_contracting_dims.as_slice() == config.lhs_contracting_dims.as_slice()
+            && self.rhs_contracting_dims.as_slice() == config.rhs_contracting_dims.as_slice()
+            && self.lhs_batch_dims.as_slice() == config.lhs_batch_dims.as_slice()
+            && self.rhs_batch_dims.as_slice() == config.rhs_batch_dims.as_slice()
     }
 }
 
@@ -162,9 +188,9 @@ impl GemmAnalysisCache {
         &mut self,
         slot: usize,
         kind: GemmAnalysisCacheKind,
-        lhs_shape: Vec<usize>,
-        rhs_shape: Vec<usize>,
-        config: DotGeneralConfig,
+        lhs_shape: SmallVec<[usize; 8]>,
+        rhs_shape: SmallVec<[usize; 8]>,
+        config: GemmConfigKey,
         dims: Option<GemmDims>,
     ) {
         if slot >= GEMM_ANALYSIS_CACHE_MAX {
@@ -539,9 +565,9 @@ where
         cache.store(
             slot,
             cache_kind,
-            lhs.shape().to_vec(),
-            rhs.shape().to_vec(),
-            config.clone(),
+            lhs.shape().iter().copied().collect(),
+            rhs.shape().iter().copied().collect(),
+            GemmConfigKey::from_config(config),
             dims.clone(),
         );
     }
@@ -1176,6 +1202,13 @@ where
     let b_ok = b_rs == 1 || b_cs == 1;
     let c_ok = c_rs == 1;
     if !a_ok || !b_ok || !c_ok {
+        return Ok(None);
+    }
+    // `BlasGemm::strided_gemm_with_conj` maps row-contiguous operands to
+    // CblasNoTrans, which cannot express conjugation without materializing.
+    // Detect that before acquiring the output buffer for a path that will
+    // return Ok(false).
+    if (lhs_conj && a_rs == 1) || (rhs_conj && b_rs == 1) {
         return Ok(None);
     }
 
