@@ -28,10 +28,11 @@ use computegraph::types::ValRef;
 use omeco::ScoreFunction;
 use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
-use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use tenferro_tensor::TensorBackend;
 
 use super::checkpoint::CheckpointNode;
+use super::einsum_subscripts::{parse_einsum_subscripts, to_einsum_subscripts};
 use super::engine::{Engine, ParsedEinsum};
 use super::error::{Error, Result};
 use super::metadata::{metadata_scopes_with_new, register_scoped_fragment_metadata};
@@ -221,6 +222,31 @@ pub fn einsum<B: TensorBackend>(
     einsum_with(engine, inputs, subscripts, EinsumOptimize::default())
 }
 
+/// N-ary einsum using integer labels and the default contraction strategy.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::traced_tensor::einsum_subscripts;
+/// use tenferro::{CpuBackend, Engine, EinsumSubscripts, Tensor, TracedTensor};
+///
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
+/// let mut dot = einsum_subscripts(&mut engine, &[&a, &b], &subscripts).unwrap();
+/// let result = dot.eval(&mut engine).unwrap();
+///
+/// assert_eq!(result.as_slice::<f64>().unwrap(), &[32.0]);
+/// ```
+pub fn einsum_subscripts<B: TensorBackend>(
+    engine: &mut Engine<B>,
+    inputs: &[&TracedTensor],
+    subscripts: &EinsumSubscripts,
+) -> Result<TracedTensor> {
+    einsum_subscripts_with(engine, inputs, subscripts, EinsumOptimize::default())
+}
+
 /// N-ary einsum with explicit contraction strategy.
 ///
 /// See [`EinsumOptimize`] for all available strategies and examples.
@@ -246,14 +272,46 @@ pub fn einsum_with<B: TensorBackend>(
     subscripts: &str,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
+    let parsed = cached_subscripts(engine, subscripts)?;
+    einsum_subscripts_with(engine, inputs, &parsed.subscripts, optimize)
+}
+
+/// N-ary einsum with integer labels and explicit contraction strategy.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::traced_tensor::{einsum_subscripts_with, EinsumOptimize};
+/// use tenferro::{CpuBackend, Engine, EinsumSubscripts, Tensor, TracedTensor};
+///
+/// let mut engine = Engine::new(CpuBackend::new());
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
+/// let mut dot = einsum_subscripts_with(
+///     &mut engine,
+///     &[&a, &b],
+///     &subscripts,
+///     EinsumOptimize::False,
+/// )
+/// .unwrap();
+/// let result = dot.eval(&mut engine).unwrap();
+///
+/// assert_eq!(result.as_slice::<f64>().unwrap(), &[32.0]);
+/// ```
+pub fn einsum_subscripts_with<B: TensorBackend>(
+    engine: &mut Engine<B>,
+    inputs: &[&TracedTensor],
+    subscripts: &EinsumSubscripts,
+    optimize: EinsumOptimize,
+) -> Result<TracedTensor> {
     if inputs.is_empty() {
         return Err(Error::ContractionError(
             "einsum requires at least one input tensor".into(),
         ));
     }
 
-    let parsed = cached_subscripts(engine, subscripts)?;
-    let subs = &parsed.subscripts;
+    let subs = to_einsum_subscripts(subscripts);
     if subs.inputs.len() != inputs.len() {
         return Err(Error::ContractionError(format!(
             "einsum subscripts expect {} inputs, got {}",
@@ -262,11 +320,7 @@ pub fn einsum_with<B: TensorBackend>(
         )));
     }
     if inputs.iter().any(|tensor| !has_concrete_shape(tensor)) {
-        return Ok(build_symbolic_nary_einsum(
-            inputs,
-            parsed.notation.as_ref(),
-            subs,
-        ));
+        return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
     }
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| concrete_shape(t)).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(|s| s.as_slice()).collect();
@@ -274,7 +328,7 @@ pub fn einsum_with<B: TensorBackend>(
     match optimize {
         // Reuse TreeSA results for repeated calls with the same equation and input shapes.
         EinsumOptimize::Auto(opts) => {
-            let cache_key = (Arc::clone(&parsed.notation), shapes.clone());
+            let cache_key = (subscripts.clone(), shapes.clone());
             let tree = if let Some(cached) = engine.einsum_cache.get(&cache_key) {
                 cached.clone()
             } else {
@@ -309,12 +363,8 @@ fn cached_subscripts<B: TensorBackend>(
         return Ok(Arc::clone(cached));
     }
 
-    let parsed =
-        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
-    let cached = Arc::new(ParsedEinsum {
-        notation: Arc::<str>::from(subscripts),
-        subscripts: parsed,
-    });
+    let parsed = parse_einsum_subscripts(subscripts)?;
+    let cached = Arc::new(ParsedEinsum { subscripts: parsed });
     engine
         .einsum_parse_cache
         .put(subscripts.to_owned(), Arc::clone(&cached));
@@ -323,7 +373,7 @@ fn cached_subscripts<B: TensorBackend>(
 
 fn build_symbolic_nary_einsum(
     inputs: &[&TracedTensor],
-    subscripts: &str,
+    subscripts: &EinsumSubscripts,
     parsed: &Subscripts,
 ) -> TracedTensor {
     let mut builder = FragmentBuilder::new();
@@ -347,7 +397,7 @@ fn build_symbolic_nary_einsum(
 
     let outputs = builder.add_op(
         StdTensorOp::NaryEinsum {
-            subscripts: subscripts.to_string(),
+            subscripts: subscripts.clone(),
         },
         input_vals,
         computegraph::types::OpMode::Primal,

@@ -6,6 +6,7 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
+use crate::einsum_subscripts::to_einsum_subscripts;
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
@@ -68,8 +69,9 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::NaryEinsum { subscripts, .. } = op {
-        return Ok(vec![tenferro_einsum::eager_einsum(
-            backend, inputs, subscripts,
+        let parsed = to_einsum_subscripts(subscripts);
+        return Ok(vec![tenferro_einsum::eager_einsum_subscripts(
+            backend, inputs, &parsed,
         )?]);
     }
 

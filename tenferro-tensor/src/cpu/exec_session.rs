@@ -3,7 +3,7 @@ use crate::buffer_pool::BufferPool;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::Tensor;
+use crate::{Tensor, TensorRead};
 
 use super::backend::{reclaim_typed, unsupported_dtype};
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
@@ -274,6 +274,41 @@ impl TensorExec for CpuExecSession<'_> {
                 rhs: rhs.dtype(),
             }),
         }
+    }
+
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        #[cfg(feature = "cpu-faer")]
+        if let Some(result) = gemm::dot_general_read_cached(
+            self.buffers,
+            self.gemm_analysis_cache,
+            None,
+            self.ctx,
+            lhs,
+            rhs,
+            config,
+        )? {
+            return Ok(result);
+        }
+        #[cfg(feature = "cpu-blas")]
+        if let Some(result) = gemm::dot_general_read_cached(
+            self.buffers,
+            self.gemm_analysis_cache,
+            None,
+            lhs,
+            rhs,
+            config,
+        )? {
+            return Ok(result);
+        }
+
+        let lhs = lhs.to_tensor();
+        let rhs = rhs.to_tensor();
+        self.dot_general_cached(None, &lhs, &rhs, config)
     }
 
     fn dot_general_with_conj(

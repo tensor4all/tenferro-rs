@@ -14,6 +14,55 @@ use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
+/// Canonical N-ary einsum subscripts using integer labels.
+///
+/// String notation is a user-facing convenience handled by higher-level
+/// crates. Graph ops keep this integer representation so execution, shape
+/// inference, and AD do not need to parse strings.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct EinsumSubscripts {
+    /// Index labels for each input tensor.
+    pub inputs: Vec<Vec<u32>>,
+    /// Index labels for the output tensor.
+    pub output: Vec<u32>,
+}
+
+impl EinsumSubscripts {
+    /// Create subscripts from integer label arrays.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::std_tensor_op::EinsumSubscripts;
+    ///
+    /// let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    ///
+    /// assert_eq!(subscripts.inputs, vec![vec![0, 1], vec![1, 2]]);
+    /// assert_eq!(subscripts.output, vec![0, 2]);
+    /// ```
+    pub fn new(inputs: &[&[u32]], output: &[u32]) -> Self {
+        Self {
+            inputs: inputs.iter().map(|labels| labels.to_vec()).collect(),
+            output: output.to_vec(),
+        }
+    }
+
+    /// Number of input operands described by this specification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::std_tensor_op::EinsumSubscripts;
+    ///
+    /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
+    ///
+    /// assert_eq!(subscripts.n_inputs(), 2);
+    /// ```
+    pub fn n_inputs(&self) -> usize {
+        self.inputs.len()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum StdTensorOp {
     // Semiring arithmetic core
@@ -103,7 +152,7 @@ pub enum StdTensorOp {
     /// N-ary einsum kept as a single graph node.
     /// Contraction path is optimized at execution time from actual input shapes.
     NaryEinsum {
-        subscripts: String,
+        subscripts: EinsumSubscripts,
     },
     Concatenate {
         axis: usize,
@@ -549,15 +598,6 @@ fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
     max_idx.max(min_inputs)
 }
 
-/// Count the number of inputs in an einsum subscript string.
-///
-/// The subscript string is expected to be in the form `"<in_1>,<in_2>,...-><out>"`.
-/// This counts comma-separated input subscripts before the `->` marker.
-pub(crate) fn n_inputs_from_einsum_subscripts(subscripts: &str) -> usize {
-    let input_part = subscripts.split_once("->").map_or(subscripts, |(i, _)| i);
-    input_part.split(',').count()
-}
-
 impl GraphOp for StdTensorOp {
     type Operand = tenferro_tensor::Tensor;
     type Context = ();
@@ -591,7 +631,7 @@ impl GraphOp for StdTensorOp {
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
-            Self::NaryEinsum { subscripts } => n_inputs_from_einsum_subscripts(subscripts),
+            Self::NaryEinsum { subscripts } => subscripts.n_inputs(),
             Self::Concatenate { n_inputs, .. } => *n_inputs,
             Self::Abs
             | Self::Sign

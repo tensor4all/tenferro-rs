@@ -352,7 +352,7 @@ fn gpu_nary_einsum_program() -> ExecProgram {
     ExecProgram {
         instructions: vec![ExecInstruction {
             op: ExecOp::NaryEinsum {
-                subscripts: "ij,jk->ik".into(),
+                subscripts: tenferro::parse_einsum_subscripts("ij,jk->ik").unwrap(),
             },
             input_slots: vec![0, 1],
             output_slots: vec![2],

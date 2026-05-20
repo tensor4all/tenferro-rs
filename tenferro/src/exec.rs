@@ -11,7 +11,7 @@ use computegraph::types::{GlobalValKey, ValRef};
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::validate::validate_nonsingular_u;
 use tenferro_tensor::Error as TensorError;
@@ -48,7 +48,7 @@ pub enum ExecOp {
         rhs_conj: bool,
     },
     NaryEinsum {
-        subscripts: String,
+        subscripts: EinsumSubscripts,
     },
     ReduceSum {
         axes: Vec<usize>,
@@ -944,13 +944,11 @@ fn collect_tensor_refs<'a>(
 fn execute_nary_einsum<B: TensorBackend>(
     backend: &mut B,
     inputs: &[&Tensor],
-    subscripts: &str,
+    subscripts: &EinsumSubscripts,
     mode: DispatchMode,
     cache: &mut NaryEinsumCache,
 ) -> Result<Tensor> {
-    use tenferro_einsum::{
-        build_einsum_fragment, ContractionOptimizerOptions, ContractionTree, Subscripts,
-    };
+    use tenferro_einsum::{build_einsum_fragment, ContractionOptimizerOptions, ContractionTree};
 
     if inputs.is_empty() {
         return Err(Error::ContractionError(
@@ -958,14 +956,13 @@ fn execute_nary_einsum<B: TensorBackend>(
         ));
     }
 
-    let subs =
-        Subscripts::parse(subscripts).map_err(|e| Error::InvalidSubscripts(format!("{e}")))?;
+    let subs = crate::einsum_subscripts::to_einsum_subscripts(subscripts);
     let shapes: Vec<Vec<usize>> = inputs
         .iter()
         .map(|tensor| tensor.shape().to_vec())
         .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
-    let cache_key = (Arc::<str>::from(subscripts), shapes.clone());
+    let cache_key = (subscripts.clone(), shapes.clone());
     let tree_arc = if let Some(cached) = cache.get(&cache_key) {
         cached.clone()
     } else {
@@ -1018,7 +1015,7 @@ fn execute_nary_einsum<B: TensorBackend>(
                 let input_idx = *id as usize;
                 let tensor = inputs.get(input_idx).ok_or_else(|| {
                     Error::Internal(format!(
-                        "runtime nary einsum input {input_idx} missing for subscripts {subscripts}"
+                        "runtime nary einsum input {input_idx} missing for subscripts {subscripts:?}"
                     ))
                 })?;
                 program_inputs.push((*tensor).clone());

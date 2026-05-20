@@ -1,7 +1,7 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{register_extension_rule, ExtensionAdRule, ExtensionOp};
-use crate::std_tensor_op::StdTensorOp;
+use crate::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use crate::{SymDim, TensorMeta};
 use chainrules_core::{ADRuleKind, ADRuleResult, PrimitiveOp};
 use computegraph::fragment::{Fragment, FragmentBuilder};
@@ -21,6 +21,35 @@ macro_rules! shape {
     ($($dim:expr),* $(,)?) => {
         DimExpr::from_concrete(&[$($dim),*])
     };
+}
+
+fn subs_ij_jk_ik() -> EinsumSubscripts {
+    EinsumSubscripts::new(
+        &[&[b'i' as u32, b'j' as u32], &[b'j' as u32, b'k' as u32]],
+        &[b'i' as u32, b'k' as u32],
+    )
+}
+
+fn subs_ij_jk_kl_il() -> EinsumSubscripts {
+    EinsumSubscripts::new(
+        &[
+            &[b'i' as u32, b'j' as u32],
+            &[b'j' as u32, b'k' as u32],
+            &[b'k' as u32, b'l' as u32],
+        ],
+        &[b'i' as u32, b'l' as u32],
+    )
+}
+
+fn subs_il_ij_kl_jk() -> EinsumSubscripts {
+    EinsumSubscripts::new(
+        &[
+            &[b'i' as u32, b'l' as u32],
+            &[b'i' as u32, b'j' as u32],
+            &[b'k' as u32, b'l' as u32],
+        ],
+        &[b'j' as u32, b'k' as u32],
+    )
 }
 
 fn tensor_input_key(id: u64) -> TensorInputKey {
@@ -282,7 +311,7 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::DynamicUpdateSlice.n_inputs(), 3);
     assert_eq!(
         StdTensorOp::NaryEinsum {
-            subscripts: "ij,jk,kl->il".into(),
+            subscripts: subs_ij_jk_kl_il(),
         }
         .n_inputs(),
         3
@@ -310,7 +339,7 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::constant_f64(1.0).n_outputs(), 1);
     assert_eq!(
         StdTensorOp::NaryEinsum {
-            subscripts: "ij,jk->ik".into(),
+            subscripts: subs_ij_jk_ik(),
         }
         .n_outputs(),
         1
@@ -563,7 +592,7 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
             to: DType::C64,
         },
         StdTensorOp::NaryEinsum {
-            subscripts: "ij,jk,kl->il".into(),
+            subscripts: subs_ij_jk_kl_il(),
         },
         StdTensorOp::Concatenate {
             axis: 1,
@@ -594,7 +623,7 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
 #[test]
 fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
     let op = StdTensorOp::NaryEinsum {
-        subscripts: "ij,jk,kl->il".into(),
+        subscripts: subs_ij_jk_kl_il(),
     };
     let (result, fragment) = run_linearize_case(op.clone(), 3, 0, &[true, false, true]);
 
@@ -620,7 +649,7 @@ fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
 #[test]
 fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
     let op = StdTensorOp::NaryEinsum {
-        subscripts: "ij,jk,kl->il".into(),
+        subscripts: subs_ij_jk_kl_il(),
     };
     let (result, _, fragment) = run_transpose_case(op, 3, &[false, true, false], true);
 
@@ -633,7 +662,7 @@ fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
     assert_eq!(
         fragment.ops()[2].op,
         StdTensorOp::NaryEinsum {
-            subscripts: "il,ij,kl->jk".into(),
+            subscripts: subs_il_ij_kl_jk(),
         }
     );
     assert_eq!(

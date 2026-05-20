@@ -2,6 +2,7 @@ use computegraph::compile::{CompiledProgram, Instruction};
 use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
 use tenferro::exec::ExecOp;
+use tenferro::parse_einsum_subscripts;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
@@ -123,7 +124,7 @@ fn compile_std_to_exec_wires_nary_einsum_with_shape_and_dtype() {
     let program = CompiledProgram {
         instructions: vec![make_instr(
             StdTensorOp::NaryEinsum {
-                subscripts: "ij,jk->ik".into(),
+                subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
             },
             vec![0, 1],
             vec![2],
@@ -141,7 +142,8 @@ fn compile_std_to_exec_wires_nary_einsum_with_shape_and_dtype() {
 
     assert!(matches!(
         exec.instructions[0].op,
-        ExecOp::NaryEinsum { ref subscripts } if subscripts == "ij,jk->ik"
+        ExecOp::NaryEinsum { ref subscripts }
+            if subscripts == &parse_einsum_subscripts("ij,jk->ik").unwrap()
     ));
     assert_eq!(exec.instructions[0].dtype, DType::F32);
     assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);

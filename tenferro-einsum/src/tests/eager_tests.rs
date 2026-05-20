@@ -1,6 +1,6 @@
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend};
+use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TensorRead, TensorView};
 
-use crate::{eager_einsum, eager_einsum_owned};
+use crate::{eager_einsum, eager_einsum_owned, eager_einsum_read_subscripts, Subscripts};
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
     assert_eq!(tensor.shape(), shape);
@@ -74,6 +74,76 @@ fn eager_einsum_handles_higher_rank_repeated_labels() {
         diagonal.as_slice::<f64>(),
         Some([1.0, 4.0, 5.0, 8.0, 9.0, 12.0].as_slice())
     );
+}
+
+#[test]
+fn eager_einsum_read_views_match_owned_inputs() {
+    let a_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let b_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let a_shape = [2, 3];
+    let b_shape = [3, 2];
+    let a_owned = Tensor::from_vec(a_shape.to_vec(), a_data.to_vec());
+    let b_owned = Tensor::from_vec(b_shape.to_vec(), b_data.to_vec());
+
+    let mut owned_ctx = CpuBackend::new();
+    let owned = eager_einsum(&mut owned_ctx, &[&a_owned, &b_owned], "ij,jk->ik").unwrap();
+
+    let inputs = [
+        TensorRead::from_view(TensorView::f64(&a_shape, &a_data).unwrap()),
+        TensorRead::from_view(TensorView::f64(&b_shape, &b_data).unwrap()),
+    ];
+    let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
+    let mut read_ctx = CpuBackend::new();
+    let read = eager_einsum_read_subscripts(&mut read_ctx, &inputs, &subscripts).unwrap();
+
+    assert_eq!(read.shape(), owned.shape());
+    assert_eq!(read.as_slice::<f64>(), owned.as_slice::<f64>());
+}
+
+#[test]
+fn eager_einsum_binary_contract_reorders_fast_path_output() {
+    let mut ctx = CpuBackend::new();
+    let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let result = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ki").unwrap();
+
+    assert_f64_tensor(&result, &[2, 2], &[22.0, 49.0, 28.0, 64.0]);
+}
+
+#[test]
+fn eager_einsum_read_fast_path_handles_batched_contracts() {
+    let lhs_data = [
+        1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+    ];
+    let rhs_data = [
+        0.5_f64, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5,
+    ];
+    let lhs_shape = [2, 2, 3];
+    let rhs_shape = [2, 3, 2];
+    let mut expected = vec![0.0; 2 * 2 * 2];
+    for b in 0..2 {
+        for i in 0..2 {
+            for k in 0..2 {
+                let mut value = 0.0;
+                for j in 0..3 {
+                    value += lhs_data[b + 2 * (i + 2 * j)] * rhs_data[b + 2 * (j + 3 * k)];
+                }
+                expected[b + 2 * (i + 2 * k)] = value;
+            }
+        }
+    }
+
+    let inputs = [
+        TensorRead::from_view(TensorView::f64(&lhs_shape, &lhs_data).unwrap()),
+        TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+    ];
+    let subscripts = Subscripts::parse("bij,bjk->bik").unwrap();
+    let mut read_ctx = CpuBackend::new();
+    let read = eager_einsum_read_subscripts(&mut read_ctx, &inputs, &subscripts).unwrap();
+
+    assert_eq!(read.shape(), &[2, 2, 2]);
+    assert_eq!(read.as_slice::<f64>(), Some(expected.as_slice()));
 }
 
 #[test]

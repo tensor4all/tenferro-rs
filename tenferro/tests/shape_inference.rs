@@ -1,3 +1,4 @@
+use tenferro::parse_einsum_subscripts;
 use tenferro::shape_infer::{infer_output_extents, infer_output_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -269,7 +270,7 @@ fn test_structural_indexing_and_dynamic_shapes() {
     );
 
     let einsum = StdTensorOp::NaryEinsum {
-        subscripts: "ij,jk->ik".into(),
+        subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
     };
     let lhs = vec![cst(3), cst(4)];
     let rhs = vec![cst(4), cst(6)];

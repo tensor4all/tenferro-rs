@@ -6,16 +6,16 @@ use lru::LruCache;
 
 use super::exec::ExecProgram;
 use tenferro_einsum::{ContractionTree, Subscripts};
+use tenferro_ops::std_tensor_op::EinsumSubscripts;
 use tenferro_tensor::{buffer_pool::BufferPoolStats, cpu::CpuBackend, Tensor, TensorBackend};
 
 /// Parsed einsum notation retained separately from shape-specific plans.
 pub(crate) struct ParsedEinsum {
-    pub(crate) notation: Arc<str>,
-    pub(crate) subscripts: Subscripts,
+    pub(crate) subscripts: EinsumSubscripts,
 }
 
-/// Key used for the N-ary einsum cache: `(interned_subscripts, shapes)`.
-pub(crate) type EinsumCacheKey = (Arc<str>, Vec<Vec<usize>>);
+/// Key used for the N-ary einsum cache: `(integer_subscripts, shapes)`.
+pub(crate) type EinsumCacheKey = (EinsumSubscripts, Vec<Vec<usize>>);
 
 /// LRU cache of optimized contraction trees keyed by einsum subscripts + input shapes.
 pub(crate) type NaryEinsumCache = LruCache<EinsumCacheKey, Arc<ContractionTree>>;
@@ -207,8 +207,22 @@ impl<B: TensorBackend> Engine<B> {
     /// assert!(!engine.einsum_cache_contains(&key));
     /// ```
     pub fn einsum_cache_contains(&self, key: &(String, Vec<Vec<usize>>)) -> bool {
-        let key = (Arc::<str>::from(key.0.as_str()), key.1.clone());
+        let subscripts = Subscripts::parse(&key.0)
+            .map(|subscripts| EinsumSubscripts {
+                inputs: subscripts.inputs,
+                output: subscripts.output,
+            })
+            .expect("invalid einsum_cache_contains key");
+        let key = (subscripts, key.1.clone());
         self.einsum_cache.contains(&key)
+    }
+
+    /// Returns `true` if the einsum cache contains a tree for integer labels.
+    pub fn einsum_cache_contains_subscripts(
+        &self,
+        key: &(EinsumSubscripts, Vec<Vec<usize>>),
+    ) -> bool {
+        self.einsum_cache.contains(key)
     }
 
     /// Look up a cached ExecProgram, or cache and return the given one.
