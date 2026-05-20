@@ -1,7 +1,7 @@
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::Tensor;
+use crate::{Tensor, TensorRead};
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
 #[doc(hidden)]
@@ -132,6 +132,23 @@ pub trait TensorExec {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            _ => {
+                let lhs = lhs.to_tensor();
+                let rhs = rhs.to_tensor();
+                self.dot_general(&lhs, &rhs, config)
+            }
+        }
+    }
 
     #[doc(hidden)]
     fn dot_general_cached(
@@ -267,6 +284,15 @@ macro_rules! forward_exec_to_backend {
 }
 
 impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        self.backend.dot_general_read(lhs, rhs, config)
+    }
+
     forward_exec_to_backend! {
         add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -446,6 +472,23 @@ pub trait TensorBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
+            _ => {
+                let lhs = self.upload_host_tensor(&lhs.to_tensor())?;
+                let rhs = self.upload_host_tensor(&rhs.to_tensor())?;
+                self.dot_general(&lhs, &rhs, config)
+            }
+        }
+    }
 
     #[doc(hidden)]
     fn dot_general_cached(

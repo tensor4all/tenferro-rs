@@ -1,5 +1,9 @@
+use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::env;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 use computegraph::fragment::Fragment;
 use computegraph::{GlobalValKey, ValRef};
@@ -25,6 +29,91 @@ use crate::traced::next_input_key;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
+
+#[derive(Debug, Default, Clone)]
+struct EagerOpProfileEntry {
+    calls: usize,
+    total_time: Duration,
+}
+
+thread_local! {
+    static EAGER_OP_PROFILE_STATE: RefCell<HashMap<&'static str, EagerOpProfileEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn eager_op_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_OP_AGG").is_ok())
+}
+
+pub(crate) fn record_eager_op_profile(section: &'static str, elapsed: Duration) {
+    if !eager_op_profile_enabled() {
+        return;
+    }
+    EAGER_OP_PROFILE_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let entry = state.entry(section).or_default();
+        entry.calls += 1;
+        entry.total_time += elapsed;
+    });
+}
+
+pub(crate) fn profile_eager_op_section<T>(section: &'static str, f: impl FnOnce() -> T) -> T {
+    if !eager_op_profile_enabled() {
+        return f();
+    }
+    let started = Instant::now();
+    let result = f();
+    record_eager_op_profile(section, started.elapsed());
+    result
+}
+
+pub(crate) fn maybe_print_eager_op_profile() {
+    if !eager_op_profile_enabled() {
+        return;
+    }
+    let Ok(print_every) = env::var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY") else {
+        return;
+    };
+    let Ok(print_every) = print_every.parse::<usize>() else {
+        return;
+    };
+    if print_every == 0 {
+        return;
+    }
+
+    let should_print = EAGER_OP_PROFILE_STATE.with(|state| {
+        state
+            .borrow()
+            .get("nary_op.total")
+            .is_some_and(|entry| entry.calls % print_every == 0)
+    });
+    if should_print {
+        print_and_reset_eager_op_profile();
+    }
+}
+
+pub(crate) fn print_and_reset_eager_op_profile() {
+    EAGER_OP_PROFILE_STATE.with(|state| {
+        let mut entries: Vec<_> = state
+            .borrow()
+            .iter()
+            .map(|(section, entry)| (*section, entry.clone()))
+            .collect();
+        state.borrow_mut().clear();
+        entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
+
+        eprintln!("=== tenferro eager op profile ===");
+        for (section, entry) in entries {
+            eprintln!(
+                "{section}: calls={} total={:.6}ms per_call={:.3}us",
+                entry.calls,
+                entry.total_time.as_secs_f64() * 1.0e3,
+                entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64,
+            );
+        }
+    });
+}
 
 /// Shared eager execution context for tensors on a backend.
 ///
@@ -751,8 +840,12 @@ pub(crate) fn exec_single_output<B: TensorBackend>(
     inputs: &[&Tensor],
     ctx: &EagerContext<B>,
 ) -> Result<Tensor> {
-    let mut backend = ctx.backend.lock().unwrap();
-    let mut outputs = exec_op_on_tensors(op, inputs, &mut *backend)?;
+    let mut backend = profile_eager_op_section("exec_single_output.lock_backend", || {
+        ctx.backend.lock().unwrap()
+    });
+    let mut outputs = profile_eager_op_section("exec_single_output.exec_op", || {
+        exec_op_on_tensors(op, inputs, &mut *backend)
+    })?;
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(
             "expected one eager output for {:?}, got {}",
@@ -760,7 +853,10 @@ pub(crate) fn exec_single_output<B: TensorBackend>(
             outputs.len()
         )));
     }
-    Ok(outputs.remove(0))
+    Ok(profile_eager_op_section(
+        "exec_single_output.remove_output",
+        || outputs.remove(0),
+    ))
 }
 
 pub(crate) fn zero_like_tensor<B: TensorBackend>(input: &Tensor, _backend: &mut B) -> Tensor {

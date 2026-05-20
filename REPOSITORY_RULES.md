@@ -5,6 +5,23 @@
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
 - When the public API changes, check for stale names, stale capability claims, and deleted paths in `README`, rustdoc, and examples before considering the work complete.
 
+## Public Surface Discipline
+
+- Keep the public API intentionally small. Prefer `pub(crate)` for types,
+  functions, traits, modules, fields, and helper constructors unless external
+  users are expected to call them directly.
+- Do not make implementation details public just because another module needs
+  them. First consider whether the code belongs in the same crate/module, or
+  whether a narrower crate-private helper is the right abstraction.
+- Public APIs should be selected deliberately and documented as user-facing
+  contracts. If an item is primarily for tests, benchmarks, internal planning,
+  execution dispatch, lowering, caching, or backend glue, it should normally be
+  private or `pub(crate)`.
+- Before adding or keeping a `pub` item, ask whether it is useful outside this
+  repository and whether tenferro is prepared to support its semantics as a
+  public contract. If the answer is unclear, keep it `pub(crate)` and expose a
+  smaller high-level API instead.
+
 ## Oracle Gate
 
 - Do not add or keep an AD `frule` or `rrule` in the mainline without a corresponding oracle family.

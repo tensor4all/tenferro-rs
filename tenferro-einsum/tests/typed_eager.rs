@@ -1,7 +1,10 @@
-use tenferro_einsum::typed_eager_einsum;
+use tenferro_einsum::{
+    eager_einsum_owned_subscripts, eager_einsum_read_subscripts, eager_einsum_subscripts,
+    typed_eager_einsum, Subscripts,
+};
 use tenferro_tensor::{
     cpu::CpuBackend, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TypedTensor,
+    SliceConfig, Tensor, TensorBackend, TensorRead, TensorView, TypedTensor,
 };
 
 #[derive(Default)]
@@ -94,6 +97,10 @@ impl TensorBackend for WrongDTypeBackend {
 
 #[test]
 fn typed_einsum_f64() {
+    unsafe {
+        std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_AGG", "1");
+        std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_PRINT_EVERY", "1");
+    }
     let mut ctx = CpuBackend::new();
     let lhs = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let rhs = TypedTensor::<f64>::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -102,6 +109,54 @@ fn typed_einsum_f64() {
 
     assert_eq!(result.shape, vec![2, 2]);
     assert_eq!(result.as_slice(), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn eager_einsum_subscripts_and_read_views_use_integer_api() {
+    unsafe {
+        std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_AGG", "1");
+        std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_PRINT_EVERY", "1");
+    }
+    let mut ctx = CpuBackend::new();
+    let lhs = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs_shape = [3usize, 2];
+    let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let rhs = Tensor::from_vec(rhs_shape.to_vec(), rhs_data.to_vec());
+    let subscripts = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+
+    let borrowed = eager_einsum_subscripts(&mut ctx, &[&lhs, &rhs], &subscripts).unwrap();
+    let read = eager_einsum_read_subscripts(
+        &mut ctx,
+        &[
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+        ],
+        &subscripts,
+    )
+    .unwrap();
+
+    assert_eq!(
+        borrowed.as_slice::<f64>().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
+    assert_eq!(read.as_slice::<f64>(), borrowed.as_slice::<f64>());
+}
+
+#[test]
+fn eager_einsum_owned_subscripts_handles_three_operands() {
+    let mut ctx = CpuBackend::new();
+    let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = Tensor::from_vec(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let c = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]);
+    let subscripts = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+
+    let result = eager_einsum_owned_subscripts(&mut ctx, vec![a, b, c], &subscripts).unwrap();
+
+    assert_eq!(result.shape(), &[2, 2]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[152.0, 200.0, 385.0, 508.0]
+    );
 }
 
 #[test]
@@ -154,6 +209,26 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
             .unwrap();
     assert_eq!(direct.shape(), &[2, 2]);
 
+    let read = TensorBackend::dot_general_read(
+        &mut backend,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(read.shape(), &[2, 2]);
+
+    let rhs_shape = [1usize, 1];
+    let rhs_data = [3.0_f64];
+    let read_view = TensorBackend::dot_general_read(
+        &mut backend,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(read_view.shape(), &[2, 2]);
+
     let folded =
         TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true)
             .unwrap();
@@ -166,7 +241,14 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
         let folded = exec
             .dot_general_with_conj_cached(Some(5), &lhs, &rhs, &config, false, false)
             .unwrap();
-        cached.shape().len() + folded.shape().len()
+        let read = exec
+            .dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
+                &config,
+            )
+            .unwrap();
+        cached.shape().len() + folded.shape().len() + read.shape().len()
     });
-    assert_eq!(value, 4);
+    assert_eq!(value, 6);
 }

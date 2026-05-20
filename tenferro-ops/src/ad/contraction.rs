@@ -5,7 +5,7 @@ use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
-use crate::std_tensor_op::StdTensorOp;
+use crate::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use crate::sym_dim::SymDim;
 
 pub fn linearize_dot_general(
@@ -73,7 +73,7 @@ pub fn linearize_nary_einsum(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
-    subscripts: &str,
+    subscripts: &EinsumSubscripts,
 ) -> Vec<Option<LocalValId>> {
     let mut terms = Vec::new();
 
@@ -93,7 +93,7 @@ pub fn linearize_nary_einsum(
 
         let out = builder.add_op(
             StdTensorOp::NaryEinsum {
-                subscripts: subscripts.to_string(),
+                subscripts: subscripts.clone(),
             },
             inputs,
             OpMode::Linear {
@@ -329,12 +329,10 @@ pub fn transpose_nary_einsum(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
-    subscripts: &str,
+    subscripts: &EinsumSubscripts,
 ) -> Vec<Option<LocalValId>> {
-    let Some((input_part, output_labels)) = subscripts.split_once("->") else {
-        panic!("NaryEinsum subscripts must contain '->': {subscripts}");
-    };
-    let input_labels: Vec<&str> = input_part.split(',').collect();
+    let input_labels = &subscripts.inputs;
+    let output_labels = &subscripts.output;
     let n_inputs = input_labels.len();
 
     let ct = match cotangent_out[0] {
@@ -354,10 +352,10 @@ pub fn transpose_nary_einsum(
             continue;
         }
 
-        let mut vjp_input_parts = Vec::with_capacity(n_inputs);
+        let mut vjp_input_labels = Vec::with_capacity(n_inputs);
         let mut vjp_inputs = Vec::with_capacity(n_inputs);
 
-        vjp_input_parts.push(output_labels.to_string());
+        vjp_input_labels.push(output_labels.clone());
         vjp_inputs.push(ValRef::Local(ct));
 
         for input_idx in 0..n_inputs {
@@ -365,7 +363,7 @@ pub fn transpose_nary_einsum(
                 continue;
             }
 
-            vjp_input_parts.push(input_labels[input_idx].to_string());
+            vjp_input_labels.push(input_labels[input_idx].clone());
             let conjugated = emitter.add_op(
                 StdTensorOp::Conj,
                 vec![inputs[input_idx].clone()],
@@ -376,11 +374,10 @@ pub fn transpose_nary_einsum(
 
         let out = emitter.add_op(
             StdTensorOp::NaryEinsum {
-                subscripts: format!(
-                    "{}->{}",
-                    vjp_input_parts.join(","),
-                    input_labels[active_idx]
-                ),
+                subscripts: EinsumSubscripts {
+                    inputs: vjp_input_labels,
+                    output: input_labels[active_idx].clone(),
+                },
             },
             vjp_inputs,
             OpMode::Linear {

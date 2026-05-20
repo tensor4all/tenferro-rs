@@ -163,6 +163,39 @@ pub struct TypedTensor<T> {
     pub placement: Placement,
 }
 
+/// Read-only borrowed view of a typed, contiguous column-major tensor.
+///
+/// This is intentionally not a general tensor storage variant. It is an input
+/// view for synchronous eager kernels that can consume host slices without
+/// taking ownership of them.
+#[derive(Clone, Copy, Debug)]
+pub struct TypedTensorView<'a, T> {
+    pub data: &'a [T],
+    pub shape: &'a [usize],
+}
+
+impl<'a, T> TypedTensorView<'a, T> {
+    /// Create a borrowed tensor view from a column-major slice.
+    pub fn new(shape: &'a [usize], data: &'a [T]) -> crate::Result<Self> {
+        let n: usize = shape.iter().product();
+        if data.len() != n {
+            return Err(crate::Error::InvalidConfig {
+                op: "TensorView::new",
+                message: format!(
+                    "data length {} does not match shape product {}",
+                    data.len(),
+                    n
+                ),
+            });
+        }
+        Ok(Self { data, shape })
+    }
+
+    pub fn as_slice(&self) -> &'a [T] {
+        self.data
+    }
+}
+
 /// Runtime scalar dtype tag.
 ///
 /// # Examples
@@ -441,6 +474,23 @@ pub enum Tensor {
     C64(TypedTensor<Complex<f64>>),
 }
 
+/// Dynamic read-only borrowed tensor view.
+#[derive(Clone, Copy, Debug)]
+pub enum TensorView<'a> {
+    F32(TypedTensorView<'a, f32>),
+    F64(TypedTensorView<'a, f64>),
+    I64(TypedTensorView<'a, i64>),
+    C32(TypedTensorView<'a, Complex<f32>>),
+    C64(TypedTensorView<'a, Complex<f64>>),
+}
+
+/// Read-only tensor input accepted by synchronous eager kernels.
+#[derive(Clone, Copy, Debug)]
+pub enum TensorRead<'a> {
+    Tensor(&'a Tensor),
+    View(TensorView<'a>),
+}
+
 /// Wrap an `f64` [`TypedTensor`] into the corresponding [`Tensor`] variant.
 ///
 /// # Examples
@@ -534,6 +584,96 @@ impl From<TypedTensor<Complex<f64>>> for Tensor {
 impl From<TypedTensor<Complex<f32>>> for Tensor {
     fn from(t: TypedTensor<Complex<f32>>) -> Self {
         Tensor::C32(t)
+    }
+}
+
+impl<'a> TensorView<'a> {
+    pub fn f32(shape: &'a [usize], data: &'a [f32]) -> crate::Result<Self> {
+        Ok(Self::F32(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn f64(shape: &'a [usize], data: &'a [f64]) -> crate::Result<Self> {
+        Ok(Self::F64(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn i64(shape: &'a [usize], data: &'a [i64]) -> crate::Result<Self> {
+        Ok(Self::I64(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
+        Ok(Self::C32(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn c64(shape: &'a [usize], data: &'a [Complex64]) -> crate::Result<Self> {
+        Ok(Self::C64(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I64(_) => DType::I64,
+            Self::C32(_) => DType::C32,
+            Self::C64(_) => DType::C64,
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::F32(t) => t.shape,
+            Self::F64(t) => t.shape,
+            Self::I64(t) => t.shape,
+            Self::C32(t) => t.shape,
+            Self::C64(t) => t.shape,
+        }
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        match self {
+            Self::F32(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+            Self::F64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+            Self::I64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+            Self::C32(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+            Self::C64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+        }
+    }
+}
+
+impl<'a> TensorRead<'a> {
+    pub fn from_tensor(tensor: &'a Tensor) -> Self {
+        Self::Tensor(tensor)
+    }
+
+    pub fn from_view(view: TensorView<'a>) -> Self {
+        Self::View(view)
+    }
+
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::Tensor(tensor) => tensor.dtype(),
+            Self::View(view) => view.dtype(),
+        }
+    }
+
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.shape(),
+            Self::View(view) => view.shape(),
+        }
+    }
+
+    pub fn as_tensor(&self) -> Option<&'a Tensor> {
+        match self {
+            Self::Tensor(tensor) => Some(*tensor),
+            Self::View(_) => None,
+        }
+    }
+
+    pub fn to_tensor(&self) -> Tensor {
+        match self {
+            Self::Tensor(tensor) => (*tensor).clone(),
+            Self::View(view) => view.to_tensor(),
+        }
     }
 }
 

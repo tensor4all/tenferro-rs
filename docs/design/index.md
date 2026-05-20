@@ -15,6 +15,7 @@ architecture see [Architecture](../architecture/). For normative specs see
 | [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
+| [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape metadata contract |
 | [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration for einsum + frontend |
 | [gpu-backend-design.md](./gpu-backend-design.md) | GPU backend architecture |

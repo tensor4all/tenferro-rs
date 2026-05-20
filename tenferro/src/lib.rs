@@ -28,6 +28,7 @@ pub(crate) mod eager_ops_elementwise;
 pub(crate) mod eager_ops_linalg;
 pub mod eager_tensor;
 mod einsum;
+mod einsum_subscripts;
 pub mod engine;
 pub mod error;
 pub mod exec;
@@ -45,11 +46,16 @@ pub mod traced_tensor;
 pub mod typed_tensor;
 
 pub use eager::{EagerContext, EagerTensor};
+pub use einsum_subscripts::parse_einsum_subscripts;
 pub use engine::Engine;
 pub use error::ContextId;
 pub use sym_dim::SymDim;
+pub use tenferro_ops::std_tensor_op::EinsumSubscripts;
 pub use tenferro_tensor::cpu::CpuBackend;
-pub use tenferro_tensor::{DType, Tensor, TensorBackend, TensorScalar, TypedTensor};
+pub use tenferro_tensor::{
+    DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TypedTensor,
+    TypedTensorView,
+};
 pub use traced::TracedTensor;
 
 #[cfg(feature = "cubecl")]

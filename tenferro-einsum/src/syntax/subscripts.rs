@@ -42,7 +42,7 @@ use crate::syntax::notation::{char_to_label, split_and_validate_notation};
 /// assert_eq!(embed.output, vec![b'i' as u32, b'i' as u32]);
 /// assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Subscripts {
     /// Index labels for each input tensor.
     pub inputs: Vec<Vec<u32>>,

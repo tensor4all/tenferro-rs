@@ -18,7 +18,7 @@ use crate::cpu::{
     reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
     CpuBackend, CpuContext,
 };
-use crate::types::{DType, Tensor, TypedTensor};
+use crate::types::{DType, Tensor, TensorRead, TensorView, TypedTensor};
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {
@@ -1139,6 +1139,44 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
             );
         }
     }
+}
+
+#[test]
+fn test_dot_general_read_accepts_tensor_and_view_inputs() {
+    let lhs = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs_shape = [3usize, 2];
+    let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let rhs_view = TensorView::f64(&rhs_shape, &rhs_data).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut backend = CpuBackend::new();
+
+    let direct = backend
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(rhs_view),
+            &config,
+        )
+        .unwrap();
+    assert_eq!(direct.shape(), &[2, 2]);
+    assert_eq!(direct.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let session = backend.with_exec_session(|exec| {
+        exec.dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(rhs_view),
+            &config,
+        )
+    });
+    let session = session.unwrap();
+    assert_eq!(
+        session.as_slice::<f64>().unwrap(),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
 }
 
 #[test]
@@ -3735,8 +3773,90 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         }
     }
 
+    struct DefaultOnlyExec;
+
+    impl crate::backend::TensorExec for DefaultOnlyExec {
+        panic_backend_methods! {
+            add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            neg(input: &Tensor) -> crate::Result<Tensor>;
+            div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            abs(input: &Tensor) -> crate::Result<Tensor>;
+            sign(input: &Tensor) -> crate::Result<Tensor>;
+            maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
+            select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
+            clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+            exp(input: &Tensor) -> crate::Result<Tensor>;
+            log(input: &Tensor) -> crate::Result<Tensor>;
+            sin(input: &Tensor) -> crate::Result<Tensor>;
+            cos(input: &Tensor) -> crate::Result<Tensor>;
+            tanh(input: &Tensor) -> crate::Result<Tensor>;
+            sqrt(input: &Tensor) -> crate::Result<Tensor>;
+            rsqrt(input: &Tensor) -> crate::Result<Tensor>;
+            pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+            expm1(input: &Tensor) -> crate::Result<Tensor>;
+            log1p(input: &Tensor) -> crate::Result<Tensor>;
+            transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
+            reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
+            broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
+            convert(input: &Tensor, to: DType) -> crate::Result<Tensor>;
+            extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
+            embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
+            tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
+            triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
+            reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+            reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+            reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+            reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+            gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
+            scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> crate::Result<Tensor>;
+            slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
+            dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> crate::Result<Tensor>;
+            dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
+            pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
+            concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
+            reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+            cholesky(input: &Tensor) -> crate::Result<Tensor>;
+            triangular_solve(
+                a: &Tensor,
+                b: &Tensor,
+                left_side: bool,
+                lower: bool,
+                transpose_a: bool,
+                unit_diagonal: bool
+            ) -> crate::Result<Tensor>;
+            lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+            full_piv_lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+            full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> crate::Result<Tensor>;
+            svd(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+            qr(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+            eigh(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+            eig(input: &Tensor) -> crate::Result<Vec<Tensor>>;
+        }
+
+        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+            CpuBackend::new().conj(input)
+        }
+
+        fn dot_general(
+            &mut self,
+            lhs: &Tensor,
+            rhs: &Tensor,
+            config: &DotGeneralConfig,
+        ) -> crate::Result<Tensor> {
+            CpuBackend::new().dot_general(lhs, rhs, config)
+        }
+
+        fn reclaim_buffer(&mut self, _tensor: Tensor) {}
+    }
+
     let lhs = Tensor::from_vec(vec![1, 1], vec![2.0_f64]);
     let rhs = Tensor::from_vec(vec![1, 1], vec![3.0_f64]);
+    let one_shape = [1usize, 1];
+    let lhs_data = [2.0_f64];
+    let rhs_data = [3.0_f64];
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -3755,6 +3875,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, false)
             .unwrap();
     assert_eq!(lhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
+
+    let both_folded =
+        TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true)
+            .unwrap();
+    assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
+
+    let read_views = TensorBackend::dot_general_read(
+        &mut backend,
+        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
+        TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
     let rhs_folded = TensorBackend::dot_general_with_conj_cached(
         &mut backend,
@@ -3796,6 +3930,44 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         cached.as_slice::<f64>().unwrap()[0] + folded.as_slice::<f64>().unwrap()[0]
     });
     assert_eq!(session_value, 12.0);
+
+    let mut exec = DefaultOnlyExec;
+    let exec_read_tensor = crate::backend::TensorExec::dot_general_read(
+        &mut exec,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
+    let exec_read_views = crate::backend::TensorExec::dot_general_read(
+        &mut exec,
+        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
+        TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
+    let exec_no_conj = crate::backend::TensorExec::dot_general_with_conj(
+        &mut exec, &lhs, &rhs, &config, false, false,
+    )
+    .unwrap();
+    assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);
+    let exec_lhs_conj = crate::backend::TensorExec::dot_general_with_conj(
+        &mut exec, &lhs, &rhs, &config, true, false,
+    )
+    .unwrap();
+    assert_eq!(exec_lhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
+    let exec_rhs_conj = crate::backend::TensorExec::dot_general_with_conj(
+        &mut exec, &lhs, &rhs, &config, false, true,
+    )
+    .unwrap();
+    assert_eq!(exec_rhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
+    let exec_both_conj = crate::backend::TensorExec::dot_general_with_conj(
+        &mut exec, &lhs, &rhs, &config, true, true,
+    )
+    .unwrap();
+    assert_eq!(exec_both_conj.as_slice::<f64>().unwrap(), &[6.0]);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
+use tenferro::parse_einsum_subscripts;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::cpu::CpuBackend;
@@ -521,7 +522,7 @@ fn eval_exec_ir_executes_nary_einsum_via_nested_program() {
     let mut backend = CpuBackend::new();
     let program = single_instruction_program(
         ExecOp::NaryEinsum {
-            subscripts: "ij,jk->ik".into(),
+            subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
         },
         2,
     );

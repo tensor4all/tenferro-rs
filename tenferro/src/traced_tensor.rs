@@ -6,7 +6,9 @@
 
 use crate::DotGeneralConfig;
 
-pub use crate::einsum::{einsum, einsum_with, EinsumOptimize};
+pub use crate::einsum::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, EinsumOptimize,
+};
 pub use crate::linalg_api::{
     cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu,
     full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,

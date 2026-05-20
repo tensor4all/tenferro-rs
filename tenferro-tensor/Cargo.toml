@@ -51,3 +51,7 @@ criterion.workspace = true
 [[bench]]
 name = "element_access"
 harness = false
+
+[[bench]]
+name = "dot_general_overhead"
+harness = false

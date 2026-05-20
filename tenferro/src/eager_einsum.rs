@@ -16,11 +16,12 @@
 //! assert_eq!(y.grad().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0]);
 //! ```
 
-use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use tenferro_tensor::TensorBackend;
 
 use crate::eager::EagerTensor;
 use crate::error::Result;
+use crate::parse_einsum_subscripts;
 
 /// Execute an einsum eagerly and record it when any input requires gradients.
 ///
@@ -48,10 +49,19 @@ pub fn einsum<B: TensorBackend>(
     inputs: &[&EagerTensor<B>],
     subscripts: &str,
 ) -> Result<EagerTensor<B>> {
+    let subscripts = parse_einsum_subscripts(subscripts)?;
+    einsum_subscripts(inputs, &subscripts)
+}
+
+/// Execute an einsum eagerly from integer labels and record it when any input requires gradients.
+pub fn einsum_subscripts<B: TensorBackend>(
+    inputs: &[&EagerTensor<B>],
+    subscripts: &EinsumSubscripts,
+) -> Result<EagerTensor<B>> {
     EagerTensor::nary_op(
         inputs,
         StdTensorOp::NaryEinsum {
-            subscripts: subscripts.to_string(),
+            subscripts: subscripts.clone(),
         },
     )
 }

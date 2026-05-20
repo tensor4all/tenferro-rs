@@ -5,10 +5,9 @@
 
 use std::collections::HashMap;
 
-use tenferro_einsum::Subscripts;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
@@ -777,19 +776,17 @@ fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Vec<DimExpr> {
     output_shape
 }
 
-fn einsum_output_shape(subscripts: &str, input_shapes: &[&[DimExpr]]) -> Vec<DimExpr> {
-    let parsed = Subscripts::parse(subscripts)
-        .unwrap_or_else(|err| panic!("invalid einsum subscripts {subscripts:?}: {err}"));
+fn einsum_output_shape(subscripts: &EinsumSubscripts, input_shapes: &[&[DimExpr]]) -> Vec<DimExpr> {
     assert_eq!(
-        parsed.inputs.len(),
+        subscripts.inputs.len(),
         input_shapes.len(),
         "einsum subscripts expect {} inputs, got {}",
-        parsed.inputs.len(),
+        subscripts.inputs.len(),
         input_shapes.len()
     );
 
     let mut label_dims: HashMap<u32, DimExpr> = HashMap::new();
-    for (labels, shape) in parsed.inputs.iter().zip(input_shapes.iter()) {
+    for (labels, shape) in subscripts.inputs.iter().zip(input_shapes.iter()) {
         assert_eq!(
             labels.len(),
             shape.len(),
@@ -811,7 +808,7 @@ fn einsum_output_shape(subscripts: &str, input_shapes: &[&[DimExpr]]) -> Vec<Dim
         }
     }
 
-    parsed
+    subscripts
         .output
         .iter()
         .map(|label| {

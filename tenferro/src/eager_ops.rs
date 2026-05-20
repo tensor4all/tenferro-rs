@@ -7,7 +7,10 @@ use tenferro_tensor::{
     TensorBackend,
 };
 
-use crate::eager::{exec_single_output, record_eager_outputs, EagerTensor};
+use crate::eager::{
+    exec_single_output, maybe_print_eager_op_profile, profile_eager_op_section,
+    record_eager_op_profile, record_eager_outputs, EagerTensor,
+};
 use crate::eager_exec::{exec_dot_general_with_conj_on_tensors, exec_op_on_tensors};
 use crate::error::{Error, Result};
 use crate::metadata::push_metadata_scope;
@@ -699,6 +702,7 @@ impl<B: TensorBackend> EagerTensor<B> {
     }
 
     pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
+        let total_started = std::time::Instant::now();
         let Some(first) = tensors.first() else {
             return Err(Error::Internal(
                 "nary eager op requires at least one input tensor".to_string(),
@@ -706,24 +710,41 @@ impl<B: TensorBackend> EagerTensor<B> {
         };
 
         let ctx = Arc::clone(&first.ctx);
-        for tensor in tensors.iter().skip(1) {
-            if !first.same_context(tensor) {
-                return Err(Error::ContextMismatch {
-                    lhs: first.ctx_id(),
-                    rhs: tensor.ctx_id(),
-                });
+        profile_eager_op_section("nary_op.context_check", || -> Result<()> {
+            for tensor in tensors.iter().skip(1) {
+                if !first.same_context(tensor) {
+                    return Err(Error::ContextMismatch {
+                        lhs: first.ctx_id(),
+                        rhs: tensor.ctx_id(),
+                    });
+                }
             }
-        }
+            Ok(())
+        })?;
 
-        let inputs: Vec<&Tensor> = tensors.iter().map(|tensor| tensor.data.as_ref()).collect();
-        let output = exec_single_output(&op, &inputs, &ctx)?;
-        if !tensors.iter().any(|tensor| tensor.requires_grad) {
-            return Ok(Self::new_untracked_result(ctx, output));
+        let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
+            tensors.iter().map(|tensor| tensor.data.as_ref()).collect()
+        });
+        let output = profile_eager_op_section("nary_op.exec_single_output", || {
+            exec_single_output(&op, &inputs, &ctx)
+        })?;
+        let any_requires_grad = profile_eager_op_section("nary_op.requires_grad_scan", || {
+            tensors.iter().any(|tensor| tensor.requires_grad)
+        });
+        if !any_requires_grad {
+            let result = profile_eager_op_section("nary_op.new_untracked_result", || {
+                Self::new_untracked_result(ctx, output)
+            });
+            record_eager_op_profile("nary_op.total", total_started.elapsed());
+            maybe_print_eager_op_profile();
+            return Ok(result);
         }
 
         let output = Arc::new(output);
         let outputs = vec![Arc::clone(&output)];
-        let mut recorded = record_eager_outputs(&op, &outputs, tensors);
+        let mut recorded = profile_eager_op_section("nary_op.record_outputs", || {
+            record_eager_outputs(&op, &outputs, tensors)
+        });
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
@@ -734,13 +755,18 @@ impl<B: TensorBackend> EagerTensor<B> {
             }
         }
 
-        Ok(Self::new_result(
-            ctx,
-            trace.key,
-            output.as_ref().clone(),
-            trace.requires_grad,
-            trace.node,
-            metadata_scopes,
-        ))
+        let result = profile_eager_op_section("nary_op.new_tracked_result", || {
+            Self::new_result(
+                ctx,
+                trace.key,
+                output.as_ref().clone(),
+                trace.requires_grad,
+                trace.node,
+                metadata_scopes,
+            )
+        });
+        record_eager_op_profile("nary_op.total", total_started.elapsed());
+        maybe_print_eager_op_profile();
+        Ok(result)
     }
 }

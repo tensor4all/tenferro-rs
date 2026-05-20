@@ -1,4 +1,8 @@
-use std::sync::Arc;
+use std::cmp::Reverse;
+use std::collections::HashMap;
+use std::env;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::backend::{TensorBackend, TensorExec};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
@@ -6,10 +10,96 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::validate::validate_nonsingular_u;
-use crate::{Buffer, Tensor, TypedTensor};
+use crate::{Buffer, Tensor, TensorRead, TypedTensor};
 
 use super::exec_session::CpuExecSession;
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
+
+#[derive(Debug, Default, Clone)]
+struct CpuSessionProfileEntry {
+    calls: usize,
+    total_time: Duration,
+}
+
+fn cpu_session_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_CPU_SESSION").is_ok())
+}
+
+fn cpu_session_profile_print_every() -> Option<usize> {
+    static PRINT_EVERY: OnceLock<Option<usize>> = OnceLock::new();
+    *PRINT_EVERY.get_or_init(|| {
+        env::var("TENFERRO_PROFILE_CPU_SESSION_PRINT_EVERY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|&value| value > 0)
+    })
+}
+
+fn cpu_session_profile_state() -> &'static Mutex<HashMap<&'static str, CpuSessionProfileEntry>> {
+    static STATE: OnceLock<Mutex<HashMap<&'static str, CpuSessionProfileEntry>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_cpu_session_profile(section: &'static str, elapsed: Duration) {
+    if !cpu_session_profile_enabled() {
+        return;
+    }
+    let mut state = cpu_session_profile_state()
+        .lock()
+        .expect("CPU session profile mutex poisoned");
+    let entry = state.entry(section).or_default();
+    entry.calls += 1;
+    entry.total_time += elapsed;
+}
+
+fn profile_cpu_session_section<T>(section: &'static str, f: impl FnOnce() -> T) -> T {
+    if !cpu_session_profile_enabled() {
+        return f();
+    }
+    let started = Instant::now();
+    let result = f();
+    record_cpu_session_profile(section, started.elapsed());
+    result
+}
+
+fn maybe_print_cpu_session_profile() {
+    let Some(print_every) = cpu_session_profile_print_every() else {
+        return;
+    };
+    let should_print = {
+        let state = cpu_session_profile_state()
+            .lock()
+            .expect("CPU session profile mutex poisoned");
+        state
+            .get("with_exec_session_cached.total")
+            .is_some_and(|entry| entry.calls % print_every == 0)
+    };
+    if !should_print {
+        return;
+    }
+    let mut entries = {
+        let mut state = cpu_session_profile_state()
+            .lock()
+            .expect("CPU session profile mutex poisoned");
+        let entries = state
+            .iter()
+            .map(|(section, entry)| (*section, entry.clone()))
+            .collect::<Vec<_>>();
+        state.clear();
+        entries
+    };
+    entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
+    eprintln!("=== tenferro CPU session profile ===");
+    for (section, entry) in entries {
+        eprintln!(
+            "{section}: calls={} total={:.6}ms per_call={:.3}us",
+            entry.calls,
+            entry.total_time.as_secs_f64() * 1.0e3,
+            entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64,
+        );
+    }
+}
 
 /// CPU execution backend.
 ///
@@ -458,6 +548,42 @@ impl TensorBackend for CpuBackend {
                 rhs: rhs.dtype(),
             }),
         })
+    }
+
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        #[cfg(feature = "cpu-faer")]
+        let ctx = Arc::clone(&self.ctx);
+        let direct = self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+            #[cfg(feature = "cpu-faer")]
+            {
+                gemm::dot_general_read_cached(
+                    buffers,
+                    cache,
+                    Some(0),
+                    ctx.as_ref(),
+                    lhs,
+                    rhs,
+                    config,
+                )
+            }
+            #[cfg(feature = "cpu-blas")]
+            {
+                gemm::dot_general_read_cached(buffers, cache, Some(0), lhs, rhs, config)
+            }
+        })?;
+        if let Some(result) = direct {
+            return Ok(result);
+        }
+
+        let lhs = lhs.to_tensor();
+        let rhs = rhs.to_tensor();
+        self.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, config)
     }
 
     fn dot_general_with_conj(
@@ -1062,7 +1188,9 @@ impl TensorBackend for CpuBackend {
     }
 
     fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        let mut cache = gemm::GemmAnalysisCache::default();
+        let mut cache = profile_cpu_session_section("with_exec_session.cache_default", || {
+            gemm::GemmAnalysisCache::default()
+        });
         self.with_exec_session_cached(&mut cache, f)
     }
 
@@ -1071,18 +1199,56 @@ impl TensorBackend for CpuBackend {
         cache: &mut Self::RuntimeCache,
         f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
     ) -> R {
-        let mut buffers = std::mem::take(&mut self.buffers);
+        if !cpu_session_profile_enabled() {
+            let mut buffers = std::mem::take(&mut self.buffers);
+            let ctx = Arc::clone(&self.ctx);
+            let (result, buffers) = ctx.install(|| {
+                let mut session = CpuExecSession {
+                    ctx: ctx.as_ref(),
+                    buffers: &mut buffers,
+                    gemm_analysis_cache: cache,
+                };
+                let result = f(&mut session);
+                (result, buffers)
+            });
+            self.buffers = buffers;
+            return result;
+        }
+
+        let total_started = Instant::now();
+        let mut buffers =
+            profile_cpu_session_section("with_exec_session_cached.take_buffers", || {
+                std::mem::take(&mut self.buffers)
+            });
         let ctx = Arc::clone(&self.ctx);
-        let (result, buffers) = ctx.install(|| {
-            let mut session = CpuExecSession {
-                ctx: ctx.as_ref(),
-                buffers: &mut buffers,
-                gemm_analysis_cache: cache,
-            };
-            let result = f(&mut session);
-            (result, buffers)
+        let (result, buffers) =
+            profile_cpu_session_section("with_exec_session_cached.ctx_install", || {
+                ctx.install(|| {
+                    let session_started = Instant::now();
+                    let mut session = CpuExecSession {
+                        ctx: ctx.as_ref(),
+                        buffers: &mut buffers,
+                        gemm_analysis_cache: cache,
+                    };
+                    record_cpu_session_profile(
+                        "with_exec_session_cached.session_construct",
+                        session_started.elapsed(),
+                    );
+
+                    let exec_started = Instant::now();
+                    let result = f(&mut session);
+                    record_cpu_session_profile(
+                        "with_exec_session_cached.exec_body",
+                        exec_started.elapsed(),
+                    );
+                    (result, buffers)
+                })
+            });
+        profile_cpu_session_section("with_exec_session_cached.restore_buffers", || {
+            self.buffers = buffers;
         });
-        self.buffers = buffers;
+        record_cpu_session_profile("with_exec_session_cached.total", total_started.elapsed());
+        maybe_print_cpu_session_profile();
         result
     }
 
