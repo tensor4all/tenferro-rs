@@ -11,10 +11,9 @@
 //!   `MinPlus`). Max-mul is a possible later addition.
 //! - [`FusedTropicalDotGeneralOp`] — the [`ExtensionOp`] payload, carrying
 //!   only the [`TropicalKind`].
-//! - [`FusedTropicalDotGeneralFactory`] — the [`ExtensionFactory`] that
-//!   registers the family in the process-local registry.
-//! - [`register_fused_tropical`] — explicit registration entry point. Tests
-//!   should call it once before use; duplicate registrations are tolerated.
+//! - [`register_fused_tropical`] — explicit AD rule registration entry point.
+//!   Tests should call it once before AD use; duplicate registrations are
+//!   tolerated.
 //!
 //! # Semantics
 //!
@@ -57,12 +56,13 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{
-    register_extension, ExtensionFactory, ExtensionOp, ExtensionRegistryError,
+    register_extension_rule, ExtensionAdRule, ExtensionOp, ExtensionRegistryError,
 };
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
@@ -263,7 +263,10 @@ impl ExtensionOp for FusedTropicalDotGeneralOp {
         }
     }
 
-    fn linearize(
+}
+
+impl FusedTropicalDotGeneralOp {
+    fn linearize_rule(
         &self,
         builder: &mut FragmentBuilder<StdTensorOp>,
         primal_in: &[GlobalValKey<StdTensorOp>],
@@ -350,7 +353,7 @@ impl ExtensionOp for FusedTropicalDotGeneralOp {
         vec![Some(out_dot)]
     }
 
-    fn transpose_rule(
+    fn transpose_rule_impl(
         &self,
         emitter: &mut dyn OpEmitter<StdTensorOp>,
         cotangent_out: &[Option<LocalValId>],
@@ -917,6 +920,7 @@ fn zero_bytes(dtype: DType) -> Vec<u8> {
             b.extend_from_slice(&0.0_f64.to_le_bytes());
             b
         }
+        DType::I64 => 0_i64.to_le_bytes().to_vec(),
     }
 }
 
@@ -936,6 +940,7 @@ fn one_bytes(dtype: DType) -> Vec<u8> {
             b.extend_from_slice(&0.0_f64.to_le_bytes());
             b
         }
+        DType::I64 => 1_i64.to_le_bytes().to_vec(),
     }
 }
 
@@ -1030,35 +1035,67 @@ fn tropical_gemm_f32(
 }
 
 // ----------------------------------------------------------------------
-// Factory and registration.
+// AD rule registration.
 // ----------------------------------------------------------------------
 
-/// [`ExtensionFactory`] for [`FusedTropicalDotGeneralOp`].
 #[derive(Debug, Default)]
-pub struct FusedTropicalDotGeneralFactory;
+struct FusedTropicalDotGeneralAdRule;
 
-impl ExtensionFactory for FusedTropicalDotGeneralFactory {
+impl ExtensionAdRule for FusedTropicalDotGeneralAdRule {
     fn family_id(&self) -> &'static str {
         FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID
     }
 
-    fn version(&self) -> u32 {
-        1
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let op = fused_payload(op, ADRuleKind::Linearize)?;
+        Ok(op.linearize_rule(builder, primal_in, primal_out, tangent_in, ctx))
+    }
+
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let op = fused_payload(op, ADRuleKind::Transpose)?;
+        Ok(op.transpose_rule_impl(emitter, cotangent_out, inputs, mode, ctx))
     }
 }
 
-/// Explicitly register the `FusedTropicalDotGeneral` family with the
-/// extension registry. Idempotent across calls within a single process.
+fn fused_payload<'a>(
+    op: &'a dyn ExtensionOp,
+    rule: ADRuleKind,
+) -> ADRuleResult<&'a FusedTropicalDotGeneralOp> {
+    op.as_any()
+        .downcast_ref::<FusedTropicalDotGeneralOp>()
+        .ok_or_else(|| ADRuleError::unsupported(FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID, rule))
+}
+
+/// Explicitly register the `FusedTropicalDotGeneral` AD rule.
+///
+/// The op payload itself is carried directly as `Arc<dyn ExtensionOp>` and
+/// does not need process-global registration. AD requires this rule
+/// registration before gradients pass through the fused op.
 ///
 /// Registration style: **explicit** (user / test code calls this, usually
 /// once at startup). Implementation tolerates duplicate calls by silently
-/// swallowing the `Duplicate` error after the first successful registration
-/// — this keeps test-harness ordering simple (multiple integration test
-/// binaries may run in the same address space on some runners).
+/// swallowing the `DuplicateRule` error after the first successful
+/// registration — this keeps test-harness ordering simple.
 ///
 /// Returns `Err(MalformedFamilyId)` if the compiled-in family id ever
 /// drifts from the normative format — a defensive check, not a normal
-/// failure mode. Duplicate registration is mapped to `Ok(())`.
+/// failure mode. Duplicate rule registration is mapped to `Ok(())`.
 ///
 /// # Examples
 ///
@@ -1074,13 +1111,8 @@ pub fn register_fused_tropical() -> Result<(), ExtensionRegistryError> {
     if *guard {
         return Ok(());
     }
-    match register_extension(Arc::new(FusedTropicalDotGeneralFactory)) {
-        Ok(()) => {
-            *guard = true;
-            Ok(())
-        }
-        Err(ExtensionRegistryError::Duplicate { .. }) => {
-            // Another path already registered the family — still fine.
+    match register_extension_rule(Arc::new(FusedTropicalDotGeneralAdRule)) {
+        Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => {
             *guard = true;
             Ok(())
         }

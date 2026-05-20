@@ -40,8 +40,7 @@ use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{FftNum, FftPlanner};
 use tenferro::extension::{
-    apply, register_extension, register_extension_rule, ExtensionAdRuleTrait, ExtensionFactory,
-    ExtensionOpTrait, ExtensionRegistryError,
+    apply, register_extension_rule, ExtensionAdRuleTrait, ExtensionOpTrait, ExtensionRegistryError,
 };
 use tenferro::TracedTensor;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -49,7 +48,6 @@ use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
-const FFT_VERSION: u32 = 1;
 
 /// FFT normalization convention.
 ///
@@ -274,28 +272,6 @@ impl ExtensionOpTrait for FftOp {
 }
 
 #[derive(Debug)]
-struct FftFactory;
-
-impl ExtensionFactory for FftFactory {
-    fn family_id(&self) -> &'static str {
-        FFT_FAMILY_ID
-    }
-
-    fn version(&self) -> u32 {
-        FFT_VERSION
-    }
-
-    fn instantiate_default(&self) -> Option<Arc<dyn ExtensionOpTrait>> {
-        Some(Arc::new(FftOp::new(
-            FftKind::C2C { forward: true },
-            0,
-            None,
-            FftNorm::Backward,
-        )))
-    }
-}
-
-#[derive(Debug)]
 struct FftAdRule;
 
 impl ExtensionAdRuleTrait for FftAdRule {
@@ -368,7 +344,7 @@ impl ExtensionAdRuleTrait for FftAdRule {
     }
 }
 
-/// Register the FFT extension family and its AD rule.
+/// Register the FFT extension AD rule.
 ///
 /// Calling this function more than once in a process is harmless. The public
 /// wrapper functions call it automatically before building traced graphs.
@@ -380,10 +356,6 @@ impl ExtensionAdRuleTrait for FftAdRule {
 /// tenferro_fft::register_fft().unwrap();
 /// ```
 pub fn register_fft() -> Result<(), ExtensionRegistryError> {
-    match register_extension(Arc::new(FftFactory)) {
-        Ok(()) | Err(ExtensionRegistryError::Duplicate { .. }) => {}
-        Err(err) => return Err(err),
-    }
     match register_extension_rule(Arc::new(FftAdRule)) {
         Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => {}
         Err(err) => return Err(err),

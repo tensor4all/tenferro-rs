@@ -23,9 +23,9 @@
 //! rules — no new AD math is introduced there.
 //!
 //! The fused path packages a primal (conceptually a tropical GEMM kernel) as a
-//! single `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` node routed through
-//! the extension registry. The AD rule remains expressed over core ops
-//! (indicator-based VJP/JVP), preserving the AD closure contract.
+//! single `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` node. The registered
+//! AD rule remains expressed over core ops (indicator-based VJP/JVP),
+//! preserving the AD closure contract.
 //!
 //! See:
 //!
@@ -68,8 +68,8 @@ pub mod newtype;
 pub mod traced;
 
 pub use fused::{
-    register_fused_tropical, FusedTropicalDotGeneralFactory, FusedTropicalDotGeneralOp,
-    TropicalKind, FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID,
+    register_fused_tropical, FusedTropicalDotGeneralOp, TropicalKind,
+    FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID,
 };
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
 pub use traced::{
