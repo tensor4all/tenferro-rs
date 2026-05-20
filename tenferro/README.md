@@ -30,9 +30,10 @@ einsum helpers, and public multi-output linalg helpers.
 ## Eager Example
 
 ```rust
-use tenferro::{EagerTensor, Tensor};
+use tenferro::{EagerContext, Tensor};
 
-let x = EagerTensor::requires_grad(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+let ctx = EagerContext::new();
+let x = ctx.variable_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 

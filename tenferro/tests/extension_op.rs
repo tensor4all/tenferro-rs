@@ -545,7 +545,7 @@ fn scale_by_2_grad_against_reduce_sum() {
 fn scale_by_2_eager_backward_uses_registered_rule() {
     ensure_scale_by_2_registered();
 
-    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let x =
         EagerTensor::requires_grad_in(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]), ctx);
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
@@ -582,7 +582,7 @@ fn missing_extension_rule_errors_in_traced_grad() {
 
 #[test]
 fn missing_extension_rule_errors_in_eager_backward() {
-    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
         .expect("forward-only eager extension apply")
@@ -619,7 +619,7 @@ fn apply_rejects_mismatched_output_metadata_count() {
 
 #[test]
 fn apply_eager_rejects_empty_input_list() {
-    let err = match apply_eager::<CpuBackend>(Arc::new(TestScaleBy2), &[]) {
+    let err = match apply_eager(Arc::new(TestScaleBy2), &[]) {
         Ok(_) => panic!("empty eager extension input list unexpectedly succeeded"),
         Err(err) => err,
     };
@@ -629,7 +629,7 @@ fn apply_eager_rejects_empty_input_list() {
 
 #[test]
 fn apply_eager_rejects_wrong_input_count() {
-    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
@@ -642,8 +642,8 @@ fn apply_eager_rejects_wrong_input_count() {
 
 #[test]
 fn apply_eager_rejects_cross_context_inputs() {
-    let lhs_ctx = EagerContext::with_backend(CpuBackend::new());
-    let rhs_ctx = EagerContext::with_backend(CpuBackend::new());
+    let lhs_ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+    let rhs_ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let lhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), lhs_ctx);
     let rhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![2.0_f64]), rhs_ctx);
 
@@ -660,7 +660,7 @@ fn apply_eager_rejects_cross_context_inputs() {
 
 #[test]
 fn apply_eager_rejects_mismatched_output_count() {
-    let ctx = EagerContext::with_backend(CpuBackend::new());
+    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {

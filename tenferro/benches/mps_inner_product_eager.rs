@@ -78,10 +78,7 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
     }
 }
 
-fn eager_mps_tensors(
-    ctx: &Arc<EagerContext<CpuBackend>>,
-    tensors: &[Tensor],
-) -> Vec<EagerTensor<CpuBackend>> {
+fn eager_mps_tensors(ctx: &Arc<EagerContext>, tensors: &[Tensor]) -> Vec<EagerTensor> {
     tensors
         .iter()
         .cloned()
@@ -90,11 +87,11 @@ fn eager_mps_tensors(
 }
 
 fn eager_inner_product_local_path(
-    ctx: &Arc<EagerContext<CpuBackend>>,
-    bra: &[EagerTensor<CpuBackend>],
-    ket: &[EagerTensor<CpuBackend>],
+    ctx: &Arc<EagerContext>,
+    bra: &[EagerTensor],
+    ket: &[EagerTensor],
     configs: &LocalPathConfigs,
-) -> EagerTensor<CpuBackend> {
+) -> EagerTensor {
     let mut env = EagerTensor::from_tensor_in(
         Tensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]),
         ctx.clone(),
@@ -117,7 +114,7 @@ fn bench_mps_inner_product_eager(c: &mut Criterion) {
     let mut group = c.benchmark_group("mps_inner_product_eager/c64/one_thread");
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
-        let ctx = EagerContext::with_backend(CpuBackend::with_threads(1));
+        let ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
         let bra = eager_mps_tensors(&ctx, &fixture.bra_tensors);
         let ket = eager_mps_tensors(&ctx, &fixture.ket_tensors);
         let configs = LocalPathConfigs::new();

@@ -171,7 +171,7 @@ explicitly when you want a fresh pass.
 ```rust
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 
-let ctx = EagerContext::with_backend(CpuBackend::new());
+let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
 let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
 
@@ -204,4 +204,4 @@ assert!(y.grad().is_none());
 | Exploratory computation | Eager |
 | Need scalar-loss reverse-mode gradients | Eager (`EagerTensor::backward()`) |
 | Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `Engine<B>`) |
-| CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor<B>`) or lazy traced (`TracedTensor` + `Engine<B>`) with explicit upload/download |
+| CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `Engine<B>`) with explicit upload/download |

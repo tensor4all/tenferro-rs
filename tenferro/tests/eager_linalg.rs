@@ -2,9 +2,9 @@ use num_complex::Complex64;
 use std::sync::{Arc, OnceLock};
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
 
-fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
-    static CTX: OnceLock<Arc<EagerContext<CpuBackend>>> = OnceLock::new();
-    CTX.get_or_init(|| EagerContext::with_backend(CpuBackend::new()))
+fn test_ctx() -> Arc<EagerContext> {
+    static CTX: OnceLock<Arc<EagerContext>> = OnceLock::new();
+    CTX.get_or_init(|| EagerContext::with_cpu_backend(CpuBackend::new()))
         .clone()
 }
 

@@ -6,8 +6,8 @@ const FD_H: f64 = 1.0e-6;
 const TOL: f64 = 1.0e-10;
 const FD_TOL: f64 = 5.0e-4;
 
-fn test_ctx() -> Arc<EagerContext<CpuBackend>> {
-    EagerContext::with_backend(CpuBackend::new())
+fn test_ctx() -> Arc<EagerContext> {
+    EagerContext::with_cpu_backend(CpuBackend::new())
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {

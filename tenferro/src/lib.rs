@@ -20,6 +20,7 @@ pub use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConf
 mod checkpoint;
 pub mod compiler;
 mod eager;
+mod eager_backend;
 mod eager_einsum;
 mod eager_emitter;
 pub mod eager_exec;

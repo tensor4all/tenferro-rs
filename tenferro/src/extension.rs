@@ -34,7 +34,7 @@ use computegraph::GraphOp;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::Tensor;
 
 use crate::checkpoint::CheckpointNode;
 use crate::eager::{record_eager_outputs, EagerTensor};
@@ -198,10 +198,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
 /// usual eager execution path, then records the same `StdTensorOp::Extension`
 /// node used by traced graphs. Eager backward therefore uses registered
 /// [`ExtensionAdRuleTrait`] rules through the same AD source of truth.
-pub fn apply_eager<B: TensorBackend>(
-    op: Arc<dyn ExtensionOp>,
-    inputs: &[&EagerTensor<B>],
-) -> Result<Vec<EagerTensor<B>>> {
+pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let Some(first) = inputs.first() else {
         return Err(Error::Internal(
             "extension::apply_eager requires at least one input tensor".to_string(),
