@@ -8,10 +8,10 @@ pub mod sym_dim;
 
 pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
 pub use ext_op::{
-    is_extension_registered, is_extension_rule_registered, linearize_extension_rule,
-    lookup_extension_factory, lookup_extension_rule, register_extension, register_extension_rule,
-    transpose_extension_rule, ExtensionAdRule, ExtensionFactory, ExtensionOp,
-    ExtensionRegistryError,
+    is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
+    register_extension_chain_rule, register_extension_rule, transpose_extension_rule, AdValue,
+    ExtensionAdRule, ExtensionChainRule, ExtensionOp, ExtensionRegistryError, FruleBuilder,
+    RRuleBuilder,
 };
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;

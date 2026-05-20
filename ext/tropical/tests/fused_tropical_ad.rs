@@ -1,18 +1,17 @@
 //! Integration tests for the fused tropical `ExtensionOp`.
 //!
 //! These tests are the extension contract self-test: they exercise the full
-//! path from `register_extension` through `TracedTensor` graph building,
+//! path from AD rule registration through `TracedTensor` graph building,
 //! primal execution, and both linearize- and transpose-based AD. They also
 //! cross-check the fused path against the composition-based wrapper to confirm
 //! the forward primal and AD gradient agree (modulo tie-breaking).
 
 use std::sync::Arc;
 
-use tenferro::extension::{register_extension, ExtensionFactory, ExtensionRegistryError};
 use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
 use tenferro_ext_tropical::fused::{
-    register_fused_tropical, FusedTropicalDotGeneralFactory, FusedTropicalDotGeneralOp,
-    TropicalKind, FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID,
+    register_fused_tropical, FusedTropicalDotGeneralOp, TropicalKind,
+    FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID,
 };
 use tenferro_ext_tropical::traced::{
     min_plus_dot_general, min_plus_dot_general_fused, tropical_dot_general,
@@ -271,52 +270,6 @@ fn family_id_matches_spec_format() {
 }
 
 #[test]
-fn duplicate_factory_registration_is_rejected() {
-    // Install the real factory first (tolerating any prior registration
-    // from other parallel tests in the same binary).
-    register_fused_tropical().expect("register");
-
-    // Now try to register another factory with the same family_id — this
-    // must fail with Duplicate, regardless of prior state.
-    struct DupFactory;
-    impl ExtensionFactory for DupFactory {
-        fn family_id(&self) -> &'static str {
-            FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID
-        }
-        fn version(&self) -> u32 {
-            1
-        }
-    }
-    let err = register_extension(Arc::new(DupFactory)).expect_err("duplicate family_id must error");
-    assert!(matches!(
-        err,
-        ExtensionRegistryError::Duplicate {
-            family_id: "tenferro-ext-tropical.fused_dot_general.v1"
-        }
-    ));
-}
-
-#[test]
-fn malformed_family_id_is_rejected() {
-    struct BadFactory;
-    impl ExtensionFactory for BadFactory {
-        fn family_id(&self) -> &'static str {
-            "no-version-suffix"
-        }
-        fn version(&self) -> u32 {
-            1
-        }
-    }
-    let err = register_extension(Arc::new(BadFactory)).expect_err("malformed family_id must error");
-    assert!(matches!(
-        err,
-        ExtensionRegistryError::MalformedFamilyId {
-            family_id: "no-version-suffix"
-        }
-    ));
-}
-
-#[test]
 fn payload_eq_requires_kind_match() {
     let max =
         Arc::new(FusedTropicalDotGeneralOp::new(TropicalKind::MaxPlus)) as Arc<dyn ExtensionOp>;
@@ -329,13 +282,6 @@ fn payload_eq_requires_kind_match() {
     assert!(max.payload_eq(max2.as_ref()));
     // Different kind => payload_eq is false.
     assert!(!max.payload_eq(min.as_ref()));
-}
-
-#[test]
-fn factory_reports_version_and_family_id() {
-    let f = FusedTropicalDotGeneralFactory;
-    assert_eq!(f.family_id(), FUSED_TROPICAL_DOT_GENERAL_FAMILY_ID);
-    assert_eq!(f.version(), 1);
 }
 
 #[test]

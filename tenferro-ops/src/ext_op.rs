@@ -12,29 +12,13 @@
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
 //!   `Clone + Hash + Eq + Send + Sync + 'static` (computegraph's
 //!   `GraphOp` requirements).
-//! - AD rules are registered separately through [`ExtensionAdRule`] and
-//!   [`register_extension_rule`]. A rule may emit core [`StdTensorOp`] values
-//!   and registered `Extension` values so out-of-tree operations remain in the
-//!   same graph.
-//! - [`ExtensionFactory`] is registered at program start via
-//!   [`register_extension`]; the registry is an
-//!   `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionFactory>>>>`
-//!   keyed by [`ExtensionOp::family_id`].
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use std::sync::Arc;
-//! use tenferro_ops::ext_op::{register_extension, ExtensionFactory};
-//!
-//! # struct MyFactory;
-//! # impl ExtensionFactory for MyFactory {
-//! #     fn family_id(&self) -> &'static str { "my-crate.my_op.v1" }
-//! #     fn version(&self) -> u32 { 1 }
-//! # }
-//! let factory: Arc<dyn ExtensionFactory> = Arc::new(MyFactory);
-//! register_extension(factory).expect("registration");
-//! ```
+//! - AD rules are registered separately through [`ExtensionChainRule`] and
+//!   [`register_extension_chain_rule`] for ChainRules-style code, or through
+//!   the lower-level [`ExtensionAdRule`] / [`register_extension_rule`] adapter
+//!   interface. A rule may emit core [`StdTensorOp`] values and registered
+//!   `Extension` values so out-of-tree operations remain in the same graph.
+//! - Extension ops themselves do not require process-global registration.
+//!   Frontends carry them directly as `Arc<dyn ExtensionOp>`.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -45,10 +29,11 @@ use std::sync::{Arc, OnceLock, RwLock};
 use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
+use computegraph::{GraphOp, OpEmitter};
 use tenferro_tensor::{DType, Tensor};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
@@ -64,7 +49,8 @@ use crate::sym_dim::SymDim;
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
 /// - forward dispatch via [`eager_execute`][Self::eager_execute] (used by both
 ///   the eager and compiled paths);
-/// - AD via a separately registered [`ExtensionAdRule`].
+/// - AD via a separately registered [`ExtensionChainRule`] or
+///   [`ExtensionAdRule`].
 ///
 /// # Downcast convention
 ///
@@ -76,38 +62,40 @@ use crate::sym_dim::SymDim;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
+/// # use std::any::Any;
 /// use std::sync::Arc;
 /// use tenferro_ops::ext_op::ExtensionOp;
+/// use tenferro_ops::SymDim;
+/// use tenferro_tensor::{DType, Tensor};
 ///
-/// # struct MyExt;
-/// # impl std::fmt::Debug for MyExt { fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { Ok(()) } }
-/// # impl ExtensionOp for MyExt { /* ... */
-/// #     fn family_id(&self) -> &'static str { "my-crate.my_op.v1" }
-/// #     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
-/// #     fn payload_eq(&self, _other: &dyn ExtensionOp) -> bool { true }
-/// #     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { unimplemented!() }
-/// #     fn n_inputs(&self) -> usize { 0 }
-/// #     fn n_outputs(&self) -> usize { 0 }
-/// #     fn infer_output_meta(&self, _: &[tenferro_tensor::DType], _: &[&[tenferro_ops::SymDim]]) -> Vec<(tenferro_tensor::DType, Vec<tenferro_ops::SymDim>)> { vec![] }
-/// #     fn eager_execute(&self, _: &[&tenferro_tensor::Tensor]) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> { unimplemented!() }
-/// #     fn linearize(
-/// #         &self,
-/// #         _: &mut computegraph::fragment::FragmentBuilder<tenferro_ops::std_tensor_op::StdTensorOp>,
-/// #         _: &[computegraph::types::GlobalValKey<tenferro_ops::std_tensor_op::StdTensorOp>],
-/// #         _: &[computegraph::types::GlobalValKey<tenferro_ops::std_tensor_op::StdTensorOp>],
-/// #         _: &[Option<computegraph::types::LocalValId>],
-/// #         _: &mut tenferro_ops::ShapeGuardContext,
-/// #     ) -> Vec<Option<computegraph::types::LocalValId>> { vec![] }
-/// #     fn transpose_rule(
-/// #         &self,
-/// #         _: &mut dyn computegraph::OpEmitter<tenferro_ops::std_tensor_op::StdTensorOp>,
-/// #         _: &[Option<computegraph::types::LocalValId>],
-/// #         _: &[computegraph::types::ValRef<tenferro_ops::std_tensor_op::StdTensorOp>],
-/// #         _: &computegraph::types::OpMode,
-/// #         _: &mut tenferro_ops::ShapeGuardContext,
-/// #     ) -> Vec<Option<computegraph::types::LocalValId>> { vec![] }
-/// # }
+/// #[derive(Clone, Debug)]
+/// struct IdentityExt;
+///
+/// impl ExtensionOp for IdentityExt {
+///     fn family_id(&self) -> &'static str { "example.identity.v1" }
+///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+///         other.as_any().downcast_ref::<IdentityExt>().is_some()
+///     }
+///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
+///     fn as_any(&self) -> &dyn Any { self }
+///     fn n_inputs(&self) -> usize { 1 }
+///     fn n_outputs(&self) -> usize { 1 }
+///     fn infer_output_meta(
+///         &self,
+///         dtypes: &[DType],
+///         shapes: &[&[SymDim]],
+///     ) -> Vec<(DType, Vec<SymDim>)> {
+///         vec![(dtypes[0], shapes[0].to_vec())]
+///     }
+///     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+///         Ok(vec![inputs[0].clone()])
+///     }
+/// }
+///
+/// let op: Arc<dyn ExtensionOp> = Arc::new(IdentityExt);
+/// assert_eq!(op.n_inputs(), 1);
 /// ```
 pub trait ExtensionOp: Debug + Send + Sync + 'static {
     // ----- Identity, hashing, equality (spec Section 5) -----
@@ -184,56 +172,16 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// be placed on a device the caller can consume.
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
 
-    // ----- AD rules (spec Section 10) -----
-
-    /// Emit the linear (JVP) rule.
-    ///
-    /// This legacy inline hook is retained so existing impl blocks remain
-    /// source-compatible. AD dispatch uses registered [`ExtensionAdRule`]
-    /// providers; new extension crates should register a rule instead of
-    /// relying on this method.
-    fn linearize(
-        &self,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        _tangent_in: &[Option<LocalValId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        panic!(
-            "extension family {:?} has no inline linearize rule; register an ExtensionAdRule",
-            self.family_id()
-        )
-    }
-
-    /// Emit the transpose (VJP) rule.
-    ///
-    /// This legacy inline hook is retained so existing impl blocks remain
-    /// source-compatible. AD dispatch uses registered [`ExtensionAdRule`]
-    /// providers; new extension crates should register a rule instead of
-    /// relying on this method.
-    fn transpose_rule(
-        &self,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        _cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        panic!(
-            "extension family {:?} has no inline transpose rule; register an ExtensionAdRule",
-            self.family_id()
-        )
-    }
+    // AD rules are registered separately; see [`ExtensionChainRule`].
 }
 
 /// AD rule provider for an extension family.
 ///
-/// Rules are registered independently from [`ExtensionFactory`] so an
-/// out-of-tree crate can provide a primal operation and AD behavior as separate
-/// components. Rule methods receive the concrete [`ExtensionOp`] payload as a
-/// trait object; implementations should downcast through [`ExtensionOp::as_any`]
-/// when they need payload-specific parameters.
+/// Rules are registered independently from the primal operation so an
+/// out-of-tree crate can provide forward execution without AD, or gate AD
+/// support behind an optional feature. Rule methods receive the concrete
+/// [`ExtensionOp`] payload as a trait object; implementations should downcast
+/// through [`ExtensionOp::as_any`] when they need payload-specific parameters.
 pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     /// The extension family this rule handles.
     fn family_id(&self) -> &'static str;
@@ -261,47 +209,594 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 }
 
-/// Factory trait used at registration time.
+/// Opaque value handle used by extension `frule` and `rrule` builders.
 ///
-/// An [`ExtensionFactory`] identifies a single extension family by its
-/// [`ExtensionOp::family_id`] string and advertises the currently-registered
-/// `version`. Serialization consumers use `version` to detect drift against
-/// the on-wire `family_id`.
+/// Extension rule authors receive `AdValue`s from [`FruleBuilder::tangent`],
+/// [`FruleBuilder::primal`], [`RRuleBuilder::cotangent`], and
+/// [`RRuleBuilder::primal`], then feed them into builder helper methods. This
+/// keeps `LocalValId` construction inside tenferro while still allowing rules
+/// to emit core and extension ops.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use std::sync::Arc;
-/// use tenferro_ops::ext_op::{register_extension, ExtensionFactory, ExtensionOp};
-///
-/// struct MyFactory;
-/// impl ExtensionFactory for MyFactory {
-///     fn family_id(&self) -> &'static str { "my-crate.my_op.v1" }
-///     fn version(&self) -> u32 { 1 }
-/// }
-///
-/// let _ = register_extension(Arc::new(MyFactory));
 /// ```
-pub trait ExtensionFactory: Send + Sync + 'static {
-    /// The [`ExtensionOp::family_id`] that this factory is registered under.
-    fn family_id(&self) -> &'static str;
+/// use tenferro_ops::ext_op::AdValue;
+///
+/// fn inspect(value: &AdValue) -> bool {
+///     value.is_active()
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdValue {
+    value: ValRef<StdTensorOp>,
+}
 
-    /// Current in-process version for this family.
-    fn version(&self) -> u32;
+impl AdValue {
+    fn local(local_id: LocalValId) -> Self {
+        Self {
+            value: ValRef::Local(local_id),
+        }
+    }
 
-    /// Optional: produce a default / zero-payload [`ExtensionOp`] instance
-    /// for diagnostic or cross-process reconstruction purposes.
-    fn instantiate_default(&self) -> Option<Arc<dyn ExtensionOp>> {
-        None
+    fn external(key: GlobalValKey<StdTensorOp>) -> Self {
+        Self {
+            value: ValRef::External(key),
+        }
+    }
+
+    fn as_val_ref(&self) -> &ValRef<StdTensorOp> {
+        &self.value
+    }
+
+    fn into_val_ref(self) -> ValRef<StdTensorOp> {
+        self.value
+    }
+
+    fn local_id(&self) -> Option<LocalValId> {
+        match self.value {
+            ValRef::Local(local_id) => Some(local_id),
+            ValRef::External(_) => None,
+        }
+    }
+
+    /// Returns `true` when this value is part of the active linear graph.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::AdValue;
+    ///
+    /// fn is_linear_value(value: &AdValue) -> bool {
+    ///     value.is_active()
+    /// }
+    /// ```
+    pub fn is_active(&self) -> bool {
+        self.local_id().is_some()
     }
 }
 
-/// Errors returned from [`register_extension`].
+/// ChainRules-style AD rule provider for an extension family.
+///
+/// Implement [`Self::frule`] for JVP and [`Self::rrule`] for VJP. The builder
+/// arguments provide named accessors such as `tangent(0)` and `cotangent(0)`
+/// plus helper methods that emit `StdTensorOp` or registered extension ops.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules_core::ADRuleResult;
+/// use tenferro_ops::ext_op::{ExtensionChainRule, ExtensionOp, FruleBuilder, RRuleBuilder};
+///
+/// #[derive(Debug)]
+/// struct IdentityRule;
+///
+/// impl ExtensionChainRule for IdentityRule {
+///     fn family_id(&self) -> &'static str { "example.identity.v1" }
+///     fn frule(&self, _op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
+///         let dx = cx.tangent(0)?;
+///         cx.set_output_tangent(0, dx)
+///     }
+///     fn rrule(&self, _op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
+///         let dy = cx.cotangent(0)?;
+///         cx.set_input_cotangent(0, dy)
+///     }
+/// }
+/// ```
+pub trait ExtensionChainRule: Debug + Send + Sync + 'static {
+    /// The extension family this rule handles.
+    fn family_id(&self) -> &'static str;
+
+    /// Emit the forward-mode rule.
+    fn frule(&self, op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()>;
+
+    /// Emit the reverse-mode rule.
+    fn rrule(&self, op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()>;
+}
+
+/// Builder passed to [`ExtensionChainRule::frule`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ext_op::FruleBuilder;
+///
+/// fn accepts_builder(_cx: &mut FruleBuilder<'_>) {}
+/// ```
+pub struct FruleBuilder<'a> {
+    family_id: &'static str,
+    builder: &'a mut FragmentBuilder<StdTensorOp>,
+    primal_in: &'a [GlobalValKey<StdTensorOp>],
+    primal_out: &'a [GlobalValKey<StdTensorOp>],
+    tangent_in: &'a [Option<LocalValId>],
+    ctx: &'a mut ShapeGuardContext,
+    output_tangents: Vec<Option<LocalValId>>,
+}
+
+impl<'a> FruleBuilder<'a> {
+    fn new(
+        family_id: &'static str,
+        op: &dyn ExtensionOp,
+        builder: &'a mut FragmentBuilder<StdTensorOp>,
+        primal_in: &'a [GlobalValKey<StdTensorOp>],
+        primal_out: &'a [GlobalValKey<StdTensorOp>],
+        tangent_in: &'a [Option<LocalValId>],
+        ctx: &'a mut ShapeGuardContext,
+    ) -> Self {
+        Self {
+            family_id,
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            ctx,
+            output_tangents: vec![None; op.n_outputs()],
+        }
+    }
+
+    /// Return the tangent for primal input `input_index`, if active.
+    pub fn tangent(&self, input_index: usize) -> ADRuleResult<Option<AdValue>> {
+        self.tangent_in
+            .get(input_index)
+            .copied()
+            .map(|tangent| tangent.map(AdValue::local))
+            .ok_or_else(|| self.error(ADRuleKind::Linearize, "input tangent index out of bounds"))
+    }
+
+    /// Return the primal input value for `input_index`.
+    pub fn primal(&self, input_index: usize) -> ADRuleResult<AdValue> {
+        self.primal_in
+            .get(input_index)
+            .cloned()
+            .map(AdValue::external)
+            .ok_or_else(|| self.error(ADRuleKind::Linearize, "primal input index out of bounds"))
+    }
+
+    /// Return the primal output value for `output_index`.
+    pub fn output(&self, output_index: usize) -> ADRuleResult<AdValue> {
+        self.primal_out
+            .get(output_index)
+            .cloned()
+            .map(AdValue::external)
+            .ok_or_else(|| self.error(ADRuleKind::Linearize, "primal output index out of bounds"))
+    }
+
+    /// Return the rank of primal input `input_index`.
+    pub fn input_rank(&mut self, input_index: usize) -> ADRuleResult<usize> {
+        let primal = self.primal(input_index)?;
+        self.ctx
+            .try_shape_of(primal.as_val_ref())
+            .map(|shape| shape.len())
+            .ok_or_else(|| self.error(ADRuleKind::Linearize, "missing input shape metadata"))
+    }
+
+    /// Emit an arbitrary standard tensor op.
+    pub fn emit(&mut self, op: StdTensorOp, inputs: Vec<AdValue>) -> ADRuleResult<Vec<AdValue>> {
+        emit_with_builder(
+            self.family_id,
+            ADRuleKind::Linearize,
+            self.builder,
+            op,
+            inputs,
+        )
+    }
+
+    /// Emit `lhs + rhs`.
+    pub fn add(&mut self, lhs: AdValue, rhs: AdValue) -> ADRuleResult<AdValue> {
+        self.emit_one(StdTensorOp::Add, vec![lhs, rhs])
+    }
+
+    /// Emit `lhs * rhs`.
+    pub fn mul(&mut self, lhs: AdValue, rhs: AdValue) -> ADRuleResult<AdValue> {
+        self.emit_one(StdTensorOp::Mul, vec![lhs, rhs])
+    }
+
+    /// Emit `sum(value)` over axes `0..rank`.
+    pub fn reduce_sum_all(&mut self, value: AdValue, rank: usize) -> ADRuleResult<AdValue> {
+        self.emit_one(
+            StdTensorOp::ReduceSum {
+                axes: (0..rank).collect(),
+            },
+            vec![value],
+        )
+    }
+
+    /// Broadcast a scalar-like value to the shape of primal input `input_index`.
+    pub fn broadcast_scalar_to_input(
+        &mut self,
+        value: AdValue,
+        input_index: usize,
+    ) -> ADRuleResult<AdValue> {
+        let primal = self.primal(input_index)?;
+        let shape = self.input_shape_as_dim_exprs(input_index, 1)?;
+        let inputs = if shape.is_empty() {
+            vec![value]
+        } else {
+            vec![value, primal]
+        };
+        self.emit_one(
+            StdTensorOp::BroadcastInDim {
+                shape,
+                dims: Vec::new(),
+            },
+            inputs,
+        )
+    }
+
+    /// Emit a registered extension op inside this rule.
+    pub fn apply_extension(
+        &mut self,
+        op: Arc<dyn ExtensionOp>,
+        inputs: Vec<AdValue>,
+    ) -> ADRuleResult<Vec<AdValue>> {
+        self.emit(StdTensorOp::Extension(op), inputs)
+    }
+
+    /// Set the tangent for output `output_index`.
+    pub fn set_output_tangent(
+        &mut self,
+        output_index: usize,
+        tangent: Option<AdValue>,
+    ) -> ADRuleResult<()> {
+        let local = tangent
+            .map(|value| {
+                value.local_id().ok_or_else(|| {
+                    self.error(
+                        ADRuleKind::Linearize,
+                        "output tangent must be an emitted local value",
+                    )
+                })
+            })
+            .transpose()?;
+        if output_index >= self.output_tangents.len() {
+            return Err(self.error(ADRuleKind::Linearize, "output tangent index out of bounds"));
+        }
+        self.output_tangents[output_index] = local;
+        Ok(())
+    }
+
+    fn emit_one(&mut self, op: StdTensorOp, inputs: Vec<AdValue>) -> ADRuleResult<AdValue> {
+        let mut outputs = self.emit(op, inputs)?;
+        debug_assert_eq!(outputs.len(), 1);
+        Ok(outputs.remove(0))
+    }
+
+    fn input_shape_as_dim_exprs(
+        &mut self,
+        input_index: usize,
+        source_idx: usize,
+    ) -> ADRuleResult<Vec<DimExpr>> {
+        let rank = self.input_rank(input_index)?;
+        Ok((0..rank)
+            .map(|axis| DimExpr::InputDim {
+                input_idx: source_idx,
+                axis,
+            })
+            .collect())
+    }
+
+    fn finish(self) -> Vec<Option<LocalValId>> {
+        self.output_tangents
+    }
+
+    fn error(&self, rule: ADRuleKind, message: &str) -> ADRuleError {
+        chain_rule_error(self.family_id, rule, message)
+    }
+}
+
+/// Builder passed to [`ExtensionChainRule::rrule`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ext_op::RRuleBuilder;
+///
+/// fn accepts_builder(_cx: &mut RRuleBuilder<'_>) {}
+/// ```
+pub struct RRuleBuilder<'a> {
+    family_id: &'static str,
+    emitter: &'a mut dyn OpEmitter<StdTensorOp>,
+    cotangent_out: &'a [Option<LocalValId>],
+    inputs: &'a [ValRef<StdTensorOp>],
+    ctx: &'a mut ShapeGuardContext,
+    input_cotangents: Vec<Option<LocalValId>>,
+}
+
+impl<'a> RRuleBuilder<'a> {
+    fn new(
+        family_id: &'static str,
+        op: &dyn ExtensionOp,
+        emitter: &'a mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &'a [Option<LocalValId>],
+        inputs: &'a [ValRef<StdTensorOp>],
+        ctx: &'a mut ShapeGuardContext,
+    ) -> Self {
+        Self {
+            family_id,
+            emitter,
+            cotangent_out,
+            inputs,
+            ctx,
+            input_cotangents: vec![None; op.n_inputs()],
+        }
+    }
+
+    /// Return the cotangent for primal output `output_index`, if active.
+    pub fn cotangent(&self, output_index: usize) -> ADRuleResult<Option<AdValue>> {
+        self.cotangent_out
+            .get(output_index)
+            .copied()
+            .map(|cotangent| cotangent.map(AdValue::local))
+            .ok_or_else(|| {
+                self.error(
+                    ADRuleKind::Transpose,
+                    "output cotangent index out of bounds",
+                )
+            })
+    }
+
+    /// Return the primal input value for `input_index`.
+    pub fn primal(&self, input_index: usize) -> ADRuleResult<AdValue> {
+        self.inputs
+            .get(input_index)
+            .cloned()
+            .map(|value| AdValue { value })
+            .ok_or_else(|| self.error(ADRuleKind::Transpose, "primal input index out of bounds"))
+    }
+
+    /// Return the rank of primal input `input_index`.
+    pub fn input_rank(&mut self, input_index: usize) -> ADRuleResult<usize> {
+        let primal = self.primal(input_index)?;
+        self.ctx
+            .try_shape_of(primal.as_val_ref())
+            .map(|shape| shape.len())
+            .ok_or_else(|| self.error(ADRuleKind::Transpose, "missing input shape metadata"))
+    }
+
+    /// Emit an arbitrary standard tensor op.
+    pub fn emit(&mut self, op: StdTensorOp, inputs: Vec<AdValue>) -> ADRuleResult<Vec<AdValue>> {
+        emit_with_emitter(
+            self.family_id,
+            ADRuleKind::Transpose,
+            self.emitter,
+            op,
+            inputs,
+        )
+    }
+
+    /// Emit `lhs + rhs`.
+    pub fn add(&mut self, lhs: AdValue, rhs: AdValue) -> ADRuleResult<AdValue> {
+        self.emit_one(StdTensorOp::Add, vec![lhs, rhs])
+    }
+
+    /// Emit `lhs * rhs`.
+    pub fn mul(&mut self, lhs: AdValue, rhs: AdValue) -> ADRuleResult<AdValue> {
+        self.emit_one(StdTensorOp::Mul, vec![lhs, rhs])
+    }
+
+    /// Emit `sum(value)` over axes `0..rank`.
+    pub fn reduce_sum_all(&mut self, value: AdValue, rank: usize) -> ADRuleResult<AdValue> {
+        self.emit_one(
+            StdTensorOp::ReduceSum {
+                axes: (0..rank).collect(),
+            },
+            vec![value],
+        )
+    }
+
+    /// Broadcast a scalar-like value to the shape of primal input `input_index`.
+    pub fn broadcast_scalar_to_input(
+        &mut self,
+        value: AdValue,
+        input_index: usize,
+    ) -> ADRuleResult<AdValue> {
+        let primal = self.primal(input_index)?;
+        let shape = self.input_shape_as_dim_exprs(input_index, 1)?;
+        let inputs = if shape.is_empty() {
+            vec![value]
+        } else {
+            vec![value, primal]
+        };
+        self.emit_one(
+            StdTensorOp::BroadcastInDim {
+                shape,
+                dims: Vec::new(),
+            },
+            inputs,
+        )
+    }
+
+    /// Emit a registered extension op inside this rule.
+    pub fn apply_extension(
+        &mut self,
+        op: Arc<dyn ExtensionOp>,
+        inputs: Vec<AdValue>,
+    ) -> ADRuleResult<Vec<AdValue>> {
+        self.emit(StdTensorOp::Extension(op), inputs)
+    }
+
+    /// Set the cotangent for input `input_index`.
+    pub fn set_input_cotangent(
+        &mut self,
+        input_index: usize,
+        cotangent: Option<AdValue>,
+    ) -> ADRuleResult<()> {
+        let local = cotangent
+            .map(|value| {
+                value.local_id().ok_or_else(|| {
+                    self.error(
+                        ADRuleKind::Transpose,
+                        "input cotangent must be an emitted local value",
+                    )
+                })
+            })
+            .transpose()?;
+        if input_index >= self.input_cotangents.len() {
+            return Err(self.error(ADRuleKind::Transpose, "input cotangent index out of bounds"));
+        }
+        self.input_cotangents[input_index] = local;
+        Ok(())
+    }
+
+    fn emit_one(&mut self, op: StdTensorOp, inputs: Vec<AdValue>) -> ADRuleResult<AdValue> {
+        let mut outputs = self.emit(op, inputs)?;
+        debug_assert_eq!(outputs.len(), 1);
+        Ok(outputs.remove(0))
+    }
+
+    fn input_shape_as_dim_exprs(
+        &mut self,
+        input_index: usize,
+        source_idx: usize,
+    ) -> ADRuleResult<Vec<DimExpr>> {
+        let rank = self.input_rank(input_index)?;
+        Ok((0..rank)
+            .map(|axis| DimExpr::InputDim {
+                input_idx: source_idx,
+                axis,
+            })
+            .collect())
+    }
+
+    fn finish(self) -> Vec<Option<LocalValId>> {
+        self.input_cotangents
+    }
+
+    fn error(&self, rule: ADRuleKind, message: &str) -> ADRuleError {
+        chain_rule_error(self.family_id, rule, message)
+    }
+}
+
+#[derive(Debug)]
+struct ChainRuleAdapter {
+    rule: Arc<dyn ExtensionChainRule>,
+}
+
+impl ExtensionAdRule for ChainRuleAdapter {
+    fn family_id(&self) -> &'static str {
+        self.rule.family_id()
+    }
+
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let mut cx = FruleBuilder::new(
+            self.family_id(),
+            op,
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            ctx,
+        );
+        self.rule.frule(op, &mut cx)?;
+        Ok(cx.finish())
+    }
+
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let mut cx = RRuleBuilder::new(self.family_id(), op, emitter, cotangent_out, inputs, ctx);
+        self.rule.rrule(op, &mut cx)?;
+        Ok(cx.finish())
+    }
+}
+
+fn emit_with_builder(
+    family_id: &'static str,
+    rule: ADRuleKind,
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    op: StdTensorOp,
+    inputs: Vec<AdValue>,
+) -> ADRuleResult<Vec<AdValue>> {
+    let input_count = op.n_inputs();
+    if inputs.len() != input_count {
+        return Err(chain_rule_error(
+            family_id,
+            rule,
+            "emitted op input count does not match op arity",
+        ));
+    }
+    let mode = mode_for(&inputs);
+    let inputs = inputs.into_iter().map(AdValue::into_val_ref).collect();
+    Ok(builder
+        .add_op(op, inputs, mode)
+        .into_iter()
+        .map(AdValue::local)
+        .collect())
+}
+
+fn emit_with_emitter(
+    family_id: &'static str,
+    rule: ADRuleKind,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
+    op: StdTensorOp,
+    inputs: Vec<AdValue>,
+) -> ADRuleResult<Vec<AdValue>> {
+    let input_count = op.n_inputs();
+    if inputs.len() != input_count {
+        return Err(chain_rule_error(
+            family_id,
+            rule,
+            "emitted op input count does not match op arity",
+        ));
+    }
+    let mode = mode_for(&inputs);
+    let inputs = inputs.into_iter().map(AdValue::into_val_ref).collect();
+    Ok(emitter
+        .add_op(op, inputs, mode)
+        .into_iter()
+        .map(AdValue::local)
+        .collect())
+}
+
+fn mode_for(inputs: &[AdValue]) -> OpMode {
+    let active_mask = inputs.iter().map(AdValue::is_active).collect::<Vec<_>>();
+    if active_mask.iter().any(|&active| active) {
+        OpMode::Linear { active_mask }
+    } else {
+        OpMode::Primal
+    }
+}
+
+fn chain_rule_error(family_id: &'static str, rule: ADRuleKind, message: &str) -> ADRuleError {
+    ADRuleError::unsupported(format!("{family_id}: {message}"), rule)
+}
+
+/// Errors returned from extension registries.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtensionRegistryError {
-    /// A factory with the same `family_id` was already registered.
-    #[error("family_id {family_id:?} already registered")]
-    Duplicate { family_id: &'static str },
     /// An AD rule with the same `family_id` was already registered.
     #[error("AD rule for family_id {family_id:?} already registered")]
     DuplicateRule { family_id: &'static str },
@@ -311,13 +806,7 @@ pub enum ExtensionRegistryError {
     MalformedFamilyId { family_id: &'static str },
 }
 
-type FactoryMap = HashMap<&'static str, Arc<dyn ExtensionFactory>>;
 type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
-
-fn registry() -> &'static RwLock<FactoryMap> {
-    static REG: OnceLock<RwLock<FactoryMap>> = OnceLock::new();
-    REG.get_or_init(|| RwLock::new(HashMap::new()))
-}
 
 fn rule_registry() -> &'static RwLock<RuleMap> {
     static REG: OnceLock<RwLock<RuleMap>> = OnceLock::new();
@@ -356,51 +845,11 @@ fn is_valid_family_id(family_id: &str) -> bool {
     true
 }
 
-/// Register a new extension factory.
-///
-/// The factory's `family_id` MUST follow the reserved format
-/// `"<crate-name>.<op-name>.v<major>"` (spec Section 5) and MUST NOT collide
-/// with any already-registered family. Returns
-/// [`ExtensionRegistryError::Duplicate`] on collision and
-/// [`ExtensionRegistryError::MalformedFamilyId`] on format violation.
-///
-/// # Examples
-///
-/// ```ignore
-/// use std::sync::Arc;
-/// use tenferro_ops::ext_op::{register_extension, ExtensionFactory};
-///
-/// struct MyFactory;
-/// impl ExtensionFactory for MyFactory {
-///     fn family_id(&self) -> &'static str { "my-crate.my_op.v1" }
-///     fn version(&self) -> u32 { 1 }
-/// }
-///
-/// register_extension(Arc::new(MyFactory)).expect("first registration");
-/// ```
-pub fn register_extension(
-    factory: Arc<dyn ExtensionFactory>,
-) -> Result<(), ExtensionRegistryError> {
-    let family_id = factory.family_id();
-    if !is_valid_family_id(family_id) {
-        return Err(ExtensionRegistryError::MalformedFamilyId { family_id });
-    }
-    let mut guard = registry()
-        .write()
-        .expect("extension registry RwLock poisoned");
-    if guard.contains_key(family_id) {
-        return Err(ExtensionRegistryError::Duplicate { family_id });
-    }
-    guard.insert(family_id, factory);
-    Ok(())
-}
-
 /// Register a new extension AD rule.
 ///
-/// The rule's `family_id` uses the same validation as
-/// [`register_extension`]. Registering a rule does not require registering a
-/// factory first; this lets crates split primal construction and AD support
-/// across modules or optional features.
+/// The rule's `family_id` MUST follow the reserved format
+/// `"<crate-name>.<op-name>.v<major>"`. Registering a rule does not require
+/// registering the primal op first; frontends carry the op payload directly.
 pub fn register_extension_rule(
     rule: Arc<dyn ExtensionAdRule>,
 ) -> Result<(), ExtensionRegistryError> {
@@ -418,24 +867,42 @@ pub fn register_extension_rule(
     Ok(())
 }
 
-/// Look up a factory by `family_id`.
+/// Register a ChainRules-style extension AD rule.
 ///
-/// Returns `None` if no factory is registered for the given identifier.
-/// Callers decide how to surface the absence (spec Section 12).
+/// This is the preferred API for new extension crates. Internally it adapts
+/// [`ExtensionChainRule::frule`] and [`ExtensionChainRule::rrule`] to the
+/// lower-level [`ExtensionAdRule`] registry used by the AD dispatcher.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use tenferro_ops::ext_op::lookup_extension_factory;
-///
-/// assert!(lookup_extension_factory("unknown.op.v1").is_none());
 /// ```
-pub fn lookup_extension_factory(family_id: &str) -> Option<Arc<dyn ExtensionFactory>> {
-    registry()
-        .read()
-        .expect("extension registry RwLock poisoned")
-        .get(family_id)
-        .cloned()
+/// use std::sync::Arc;
+/// use chainrules_core::ADRuleResult;
+/// use tenferro_ops::ext_op::{
+///     register_extension_chain_rule, ExtensionChainRule, ExtensionOp, FruleBuilder, RRuleBuilder,
+/// };
+///
+/// #[derive(Debug)]
+/// struct IdentityRule;
+///
+/// impl ExtensionChainRule for IdentityRule {
+///     fn family_id(&self) -> &'static str { "example.register_chain_rule.v1" }
+///     fn frule(&self, _op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
+///         let dx = cx.tangent(0)?;
+///         cx.set_output_tangent(0, dx)
+///     }
+///     fn rrule(&self, _op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
+///         let dy = cx.cotangent(0)?;
+///         cx.set_input_cotangent(0, dy)
+///     }
+/// }
+///
+/// let _ = register_extension_chain_rule(Arc::new(IdentityRule));
+/// ```
+pub fn register_extension_chain_rule(
+    rule: Arc<dyn ExtensionChainRule>,
+) -> Result<(), ExtensionRegistryError> {
+    register_extension_rule(Arc::new(ChainRuleAdapter { rule }))
 }
 
 /// Look up an extension AD rule by `family_id`.
@@ -481,19 +948,6 @@ pub fn transpose_extension_rule(
             ADRuleKind::Transpose,
         )),
     }
-}
-
-/// Returns `true` when a factory with `family_id` is currently registered.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_ops::ext_op::is_extension_registered;
-///
-/// assert!(!is_extension_registered("unknown.op.v1"));
-/// ```
-pub fn is_extension_registered(family_id: &str) -> bool {
-    lookup_extension_factory(family_id).is_some()
 }
 
 /// Returns `true` when an AD rule with `family_id` is currently registered.

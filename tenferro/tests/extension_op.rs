@@ -4,9 +4,9 @@
 //! `tenferro-ops` facades:
 //!
 //! - `TestScaleBy2`: single-input, single-output. Forward computes
-//!   `input * 2.0` via the eager backend; `linearize` and
-//!   `transpose_rule` emit core `StdTensorOp::Add` ops so the extension
-//!   participates in AD through the closure invariant.
+//!   `input * 2.0` via the eager backend; its registered AD rule emits core
+//!   `StdTensorOp::Add` ops so the extension participates in AD through the
+//!   closure invariant.
 //! - `TestSwap`: two inputs, two outputs (input-swap). Exercises
 //!   multi-input / multi-output plumbing.
 //!
@@ -22,10 +22,7 @@ use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro::extension::{
-    apply, apply_eager, register_extension, register_extension_rule, ExtensionAdRuleTrait,
-    ExtensionFactory,
-};
+use tenferro::extension::{apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait};
 use tenferro::{CpuBackend, EagerContext, EagerTensor, Engine, Tensor, TracedTensor};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -33,28 +30,9 @@ use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_tensor::{DType, TypedTensor};
 
 // ----------------------------------------------------------------------
-// Test-only registration guard. Integration tests may share a process,
+// Test-only AD rule registration guard. Integration tests may share a process,
 // so register each family at most once per process.
 // ----------------------------------------------------------------------
-fn register_once(factory: Arc<dyn ExtensionFactory>) {
-    static REGISTERED: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
-    let guard = REGISTERED.get_or_init(|| Mutex::new(Vec::new()));
-    let mut ids = guard.lock().expect("test registry mutex");
-    let family_id = factory.family_id();
-    if ids.contains(&family_id) {
-        return;
-    }
-    if let Err(err) = register_extension(factory) {
-        match err {
-            tenferro::extension::ExtensionRegistryError::Duplicate { .. } => {
-                // Already registered by another parallel test binary — fine.
-            }
-            other => panic!("register_extension failed: {other}"),
-        }
-    }
-    ids.push(family_id);
-}
-
 fn register_rule_once(rule: Arc<dyn ExtensionAdRuleTrait>) {
     static REGISTERED: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
     let guard = REGISTERED.get_or_init(|| Mutex::new(Vec::new()));
@@ -139,70 +117,9 @@ impl ExtensionOp for TestScaleBy2 {
             }),
         }
     }
-
-    fn linearize(
-        &self,
-        builder: &mut FragmentBuilder<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        // y = x + x  =>  y_dot = x_dot + x_dot  (linear in x_dot).
-        match tangent_in[0] {
-            Some(dx) => {
-                let sum = builder.add_op(
-                    StdTensorOp::Add,
-                    vec![ValRef::Local(dx), ValRef::Local(dx)],
-                    OpMode::Linear {
-                        active_mask: vec![true, true],
-                    },
-                );
-                vec![Some(sum[0])]
-            }
-            None => vec![None],
-        }
-    }
-
-    fn transpose_rule(
-        &self,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        // cot_x = cot_y + cot_y (dual of y_dot = x_dot + x_dot)
-        match cotangent_out[0] {
-            Some(ct) => {
-                let sum = emitter.add_op(
-                    StdTensorOp::Add,
-                    vec![ValRef::Local(ct), ValRef::Local(ct)],
-                    OpMode::Linear {
-                        active_mask: vec![true, true],
-                    },
-                );
-                vec![Some(sum[0])]
-            }
-            None => vec![None],
-        }
-    }
-}
-
-struct TestScaleBy2Factory;
-
-impl ExtensionFactory for TestScaleBy2Factory {
-    fn family_id(&self) -> &'static str {
-        "tenferro-tests.scale_by_2.v1"
-    }
-
-    fn version(&self) -> u32 {
-        1
-    }
 }
 
 fn ensure_scale_by_2_registered() {
-    register_once(Arc::new(TestScaleBy2Factory));
     register_rule_once(Arc::new(TestScaleBy2Rule));
 }
 
@@ -317,46 +234,9 @@ impl ExtensionOp for TestSwap {
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         Ok(vec![inputs[1].clone(), inputs[0].clone()])
     }
-
-    fn linearize(
-        &self,
-        _builder: &mut FragmentBuilder<StdTensorOp>,
-        _primal_in: &[GlobalValKey<StdTensorOp>],
-        _primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        // Tangent rule is the same swap: [ta, tb] -> [tb, ta].
-        vec![tangent_in[1], tangent_in[0]]
-    }
-
-    fn transpose_rule(
-        &self,
-        _emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        _inputs: &[ValRef<StdTensorOp>],
-        _mode: &OpMode,
-        _ctx: &mut ShapeGuardContext,
-    ) -> Vec<Option<LocalValId>> {
-        // Transpose of swap is swap.
-        vec![cotangent_out[1], cotangent_out[0]]
-    }
-}
-
-struct TestSwapFactory;
-
-impl ExtensionFactory for TestSwapFactory {
-    fn family_id(&self) -> &'static str {
-        "tenferro-tests.swap.v1"
-    }
-
-    fn version(&self) -> u32 {
-        1
-    }
 }
 
 fn ensure_swap_registered() {
-    register_once(Arc::new(TestSwapFactory));
     register_rule_once(Arc::new(TestSwapRule));
 }
 
@@ -795,15 +675,15 @@ fn extension_carrier_hash_and_eq_are_stable() {
 }
 
 #[test]
-fn duplicate_registration_is_rejected() {
+fn duplicate_rule_registration_is_rejected() {
     use tenferro::extension::ExtensionRegistryError;
 
     ensure_scale_by_2_registered();
-    let err = register_extension(Arc::new(TestScaleBy2Factory))
-        .expect_err("second registration must error");
+    let err = register_extension_rule(Arc::new(TestScaleBy2Rule))
+        .expect_err("second rule registration must error");
     assert!(matches!(
         err,
-        ExtensionRegistryError::Duplicate {
+        ExtensionRegistryError::DuplicateRule {
             family_id: "tenferro-tests.scale_by_2.v1"
         }
     ));
@@ -813,17 +693,38 @@ fn duplicate_registration_is_rejected() {
 fn malformed_family_id_is_rejected() {
     use tenferro::extension::ExtensionRegistryError;
 
-    struct BadFactory;
-    impl ExtensionFactory for BadFactory {
+    #[derive(Debug)]
+    struct BadRule;
+    impl ExtensionAdRuleTrait for BadRule {
         fn family_id(&self) -> &'static str {
             "no-version-suffix"
         }
-        fn version(&self) -> u32 {
-            1
+        fn linearize(
+            &self,
+            _op: &dyn ExtensionOp,
+            _builder: &mut FragmentBuilder<StdTensorOp>,
+            _primal_in: &[GlobalValKey<StdTensorOp>],
+            _primal_out: &[GlobalValKey<StdTensorOp>],
+            _tangent_in: &[Option<LocalValId>],
+            _ctx: &mut ShapeGuardContext,
+        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+            Ok(vec![])
+        }
+        fn transpose_rule(
+            &self,
+            _op: &dyn ExtensionOp,
+            _emitter: &mut dyn OpEmitter<StdTensorOp>,
+            _cotangent_out: &[Option<LocalValId>],
+            _inputs: &[ValRef<StdTensorOp>],
+            _mode: &OpMode,
+            _ctx: &mut ShapeGuardContext,
+        ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+            Ok(vec![])
         }
     }
 
-    let err = register_extension(Arc::new(BadFactory)).expect_err("malformed family_id must error");
+    let err =
+        register_extension_rule(Arc::new(BadRule)).expect_err("malformed family_id must error");
     assert!(matches!(
         err,
         ExtensionRegistryError::MalformedFamilyId { .. }

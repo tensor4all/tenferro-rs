@@ -63,5 +63,6 @@ website:
               - spec/primitive-catalog.md
               - spec/backend-contract.md
               - spec/ad-contract.md
+              - spec/extension-op.md
               - spec/optimizer-passes.md
               - spec/tensor-semantics.md

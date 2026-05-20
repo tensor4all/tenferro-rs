@@ -2,27 +2,20 @@
 //!
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
 //! `tenferro` facade. External crates implement
-//! [`tenferro_ops::ext_op::ExtensionOp`], register an
-//! [`ExtensionFactory`] through [`register_extension`], register AD rules
-//! through [`register_extension_rule`], and build traced or eager graphs
-//! containing the extension via [`apply`] / [`apply_eager`].
+//! [`tenferro_ops::ext_op::ExtensionOp`], optionally register ChainRules-style
+//! AD rules through [`register_extension_chain_rule`], and build traced or
+//! eager graphs containing the extension via [`apply`] / [`apply_eager`].
 //!
 //! See `docs/spec/extension-op.md` for the normative contract.
 //!
 //! # Examples
 //!
 //! ```ignore
-//! use std::sync::Arc;
-//! use tenferro::extension::{apply, register_extension, ExtensionFactory, ExtensionOp};
+//! use tenferro::extension::{apply, ExtensionOp};
 //!
-//! # struct MyFactory;
-//! # impl ExtensionFactory for MyFactory {
-//! #     fn family_id(&self) -> &'static str { "my-crate.my_op.v1" }
-//! #     fn version(&self) -> u32 { 1 }
-//! # }
-//! register_extension(Arc::new(MyFactory)).expect("register");
-//! // Once registered, construct an `Arc<dyn ExtensionOp>` and call
-//! // `apply(op, &[input])` to lower it into a `TracedTensor`.
+//! // Construct an `Arc<dyn ExtensionOp>` and call `apply(op, &[input])`
+//! // to lower it into a `TracedTensor`. AD support is added separately
+//! // with `register_extension_chain_rule`.
 //! ```
 
 use std::collections::HashMap;
@@ -44,16 +37,17 @@ use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
 pub use tenferro_ops::ext_op::{
-    is_extension_registered, is_extension_rule_registered, lookup_extension_factory,
-    lookup_extension_rule, register_extension, register_extension_rule,
-    ExtensionAdRule as _ExtensionAdRuleReexport, ExtensionFactory,
-    ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError,
+    is_extension_rule_registered, lookup_extension_rule, register_extension_chain_rule,
+    register_extension_rule, AdValue, ExtensionAdRule as _ExtensionAdRuleReexport,
+    ExtensionChainRule, ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError, FruleBuilder,
+    RRuleBuilder,
 };
 
 // Re-export under a canonical name (the `_ExtensionOpReexport` alias above
 // exists only so the macro-generated doc-test type bounds can find the
 // trait; downstream callers should use this name).
 pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
+pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
 pub use tenferro_ops::ExtensionFamilyId;
 
