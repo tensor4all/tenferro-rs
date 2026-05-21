@@ -49,6 +49,53 @@ let mut engine = Engine::new(CpuBackend::with_threads(4));
 - Reuse it across repeated evaluations.
 - Avoid rebuilding the engine in tight loops unless you need to reset backend state.
 
+## Cache management
+
+`Engine` owns the long-lived runtime caches used by traced execution: compiled
+execution programs, parsed einsum notation, optimized N-ary einsum plans, and
+backend-specific analysis such as CPU GEMM shape analysis. These caches are
+bounded by default and can be inspected or cleared explicitly.
+
+```rust
+use std::num::NonZeroUsize;
+use tenferro::{CpuBackend, Engine};
+
+let mut engine = Engine::new(CpuBackend::new());
+
+engine.set_compile_cache_capacity(NonZeroUsize::new(128).unwrap());
+engine.set_einsum_cache_capacity(NonZeroUsize::new(128).unwrap());
+engine.set_gemm_analysis_cache_capacity(512);
+
+let stats = engine.cache_stats();
+assert_eq!(stats.compile.entries, 0);
+assert_eq!(stats.einsum_plans.entries, 0);
+assert_eq!(stats.backend.entries, 0);
+
+engine.clear_caches();
+```
+
+For CPU engines, `cpu_cache_stats()` also reports the CPU buffer pool and the
+process-wide CPU thread-pool handle cache. `clear_all_caches()` clears
+engine-owned caches, the CPU buffer pool, and the process-wide CPU thread-pool
+handle cache. Existing `CpuContext` values remain usable after the shared
+thread-pool cache is cleared because they hold their own handles.
+
+```rust
+use tenferro::{CpuBackend, Engine};
+
+let mut engine = Engine::new(CpuBackend::new());
+engine.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
+
+let stats = engine.cpu_cache_stats();
+assert_eq!(stats.buffer_pool.entries, 0);
+
+engine.clear_all_caches();
+assert_eq!(engine.cpu_cache_stats().thread_pools.entries, 0);
+```
+
+`retained_bytes` in cache stats is tenferro's logical retained-payload estimate.
+It is not operating-system RSS and does not include allocator arena slack.
+
 ## Buffer reuse is automatic
 
 You do not need to manage scratch buffers manually. Keep your code simple, reuse the same `Engine`, and let tenferro reuse temporary storage behind the scenes.
@@ -68,3 +115,8 @@ For multi-input contractions, tenferro chooses a contraction order automatically
 - Start with plain `einsum(&mut engine, ...)`.
 - Reuse the same engine for repeated shapes and subscripts.
 - Benchmark before trying to outsmart the optimizer.
+
+Standalone eager einsum in the `tenferro-einsum` crate has its own per-thread
+bounded plan cache. Use `eager_einsum_cache_stats()`,
+`set_eager_einsum_cache_capacity(...)`, and `clear_eager_einsum_cache()` when
+calling that crate directly outside the `tenferro::Engine` path.

@@ -10,7 +10,7 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::validate::validate_nonsingular_u;
-use crate::{Buffer, Tensor, TensorRead, TypedTensor};
+use crate::{Buffer, CacheStats, Tensor, TensorRead, TypedTensor};
 
 use super::exec_session::CpuExecSession;
 use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
@@ -169,6 +169,31 @@ impl CpuBackend {
         }
     }
 
+    /// Create a CPU backend from an existing context and buffer-pool retention cap.
+    ///
+    /// The cap is measured in retained vector capacity bytes. A cap of zero
+    /// disables buffer retention.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuContext};
+    ///
+    /// let ctx = Arc::new(CpuContext::with_threads(1));
+    /// let backend = CpuBackend::from_context_with_buffer_pool_limit(ctx, 0);
+    /// assert_eq!(backend.buffer_pool_limit_bytes(), 0);
+    /// ```
+    pub fn from_context_with_buffer_pool_limit(
+        ctx: Arc<CpuContext>,
+        max_retained_capacity_bytes: usize,
+    ) -> Self {
+        Self {
+            ctx,
+            buffers: BufferPool::with_max_retained_capacity_bytes(max_retained_capacity_bytes),
+        }
+    }
+
     /// Create a CPU backend with a custom thread count.
     ///
     /// # Examples
@@ -254,6 +279,60 @@ impl CpuBackend {
     /// ```
     pub fn buffer_pool_stats(&self) -> BufferPoolStats {
         self.buffers.stats()
+    }
+
+    /// Return cache-style stats for the CPU buffer pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::new();
+    /// let stats = backend.buffer_pool_cache_stats();
+    /// assert_eq!(stats.entries, 0);
+    /// assert_eq!(stats.retained_bytes, 0);
+    /// ```
+    pub fn buffer_pool_cache_stats(&self) -> CacheStats {
+        self.buffers.cache_stats()
+    }
+
+    /// Current CPU buffer-pool retention limit in bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuContext};
+    ///
+    /// let backend = CpuBackend::from_context_with_buffer_pool_limit(
+    ///     Arc::new(CpuContext::with_threads(1)),
+    ///     4096,
+    /// );
+    /// assert_eq!(backend.buffer_pool_limit_bytes(), 4096);
+    /// ```
+    pub fn buffer_pool_limit_bytes(&self) -> usize {
+        self.buffers.max_retained_capacity_bytes()
+    }
+
+    /// Update the CPU buffer-pool retention limit in bytes.
+    ///
+    /// Shrinking the limit evicts retained buffers immediately. A limit of zero
+    /// disables buffer retention.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.set_buffer_pool_limit_bytes(0);
+    /// assert_eq!(backend.buffer_pool_limit_bytes(), 0);
+    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// ```
+    pub fn set_buffer_pool_limit_bytes(&mut self, max_retained_capacity_bytes: usize) {
+        self.buffers
+            .set_max_retained_capacity_bytes(max_retained_capacity_bytes);
     }
 
     /// Reset reusable typed host buffers currently retained by this backend.

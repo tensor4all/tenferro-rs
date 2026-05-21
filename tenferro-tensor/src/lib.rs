@@ -35,6 +35,11 @@ pub mod buffer_pool;
     any(feature = "cpu-faer", feature = "cpu-blas"),
     not(all(feature = "cpu-faer", feature = "cpu-blas"))
 ))]
+pub mod cache;
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
 pub mod config;
 #[cfg(all(
     any(feature = "cpu-faer", feature = "cpu-blas"),
@@ -83,6 +88,11 @@ pub use backend::{
     default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
     TensorBackend, TensorExec,
 };
+#[cfg(all(
+    any(feature = "cpu-faer", feature = "cpu-blas"),
+    not(all(feature = "cpu-faer", feature = "cpu-blas"))
+))]
+pub use cache::{CacheStats, RuntimeCacheControl};
 #[cfg(all(
     any(feature = "cpu-faer", feature = "cpu-blas"),
     not(all(feature = "cpu-faer", feature = "cpu-blas"))

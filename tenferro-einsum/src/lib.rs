@@ -47,8 +47,9 @@ pub(crate) mod util;
 // Re-exports for convenience
 pub use builder::build_einsum_fragment;
 pub use eager::{
-    eager_einsum, eager_einsum_owned, eager_einsum_owned_subscripts, eager_einsum_read_subscripts,
-    eager_einsum_subscripts,
+    clear_eager_einsum_cache, eager_einsum, eager_einsum_cache_capacity, eager_einsum_cache_stats,
+    eager_einsum_owned, eager_einsum_owned_subscripts, eager_einsum_read_subscripts,
+    eager_einsum_subscripts, set_eager_einsum_cache_capacity, DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
 };
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use syntax::nested::NestedEinsum;

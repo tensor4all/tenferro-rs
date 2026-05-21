@@ -18,6 +18,8 @@ use std::mem::size_of;
 
 use num_complex::{Complex32, Complex64};
 
+use crate::CacheStats;
+
 /// Environment variable overriding the CPU buffer-pool retention cap in bytes.
 ///
 /// The value is parsed as an unsigned integer. Invalid values fall back to
@@ -296,6 +298,28 @@ impl BufferPool {
         self.max_retained_capacity_bytes
     }
 
+    /// Update the maximum retained typed host-buffer capacity in bytes.
+    ///
+    /// Shrinking below the currently retained capacity immediately evicts
+    /// retained buffers until the new cap is satisfied. A cap of zero disables
+    /// retention.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::with_max_retained_capacity_bytes(1024);
+    /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(128));
+    /// pool.set_max_retained_capacity_bytes(0);
+    /// assert_eq!(pool.max_retained_capacity_bytes(), 0);
+    /// assert!(pool.is_empty());
+    /// ```
+    pub fn set_max_retained_capacity_bytes(&mut self, max_retained_capacity_bytes: usize) {
+        self.max_retained_capacity_bytes = max_retained_capacity_bytes;
+        self.enforce_retention_limit();
+    }
+
     /// Number of retained buffers across all typed pools.
     ///
     /// # Examples
@@ -351,6 +375,30 @@ impl BufferPool {
                 + pool_len(&self.c64_pool)
                 + pool_len(&self.c32_pool),
             capacity_bytes: self.retained_capacity_bytes,
+        }
+    }
+
+    /// Return cache-style stats for the buffers retained by this pool.
+    ///
+    /// `entries` is the number of retained buffers, and `retained_bytes` is the
+    /// total retained vector capacity in bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
+    ///
+    /// let mut pool = BufferPool::new();
+    /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
+    /// let stats = pool.cache_stats();
+    /// assert_eq!(stats.entries, 1);
+    /// assert_eq!(stats.retained_bytes, 16);
+    /// ```
+    pub fn cache_stats(&self) -> CacheStats {
+        let stats = self.stats();
+        CacheStats {
+            entries: stats.buffers,
+            retained_bytes: stats.capacity_bytes,
         }
     }
 

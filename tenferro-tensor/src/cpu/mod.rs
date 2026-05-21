@@ -18,7 +18,7 @@ use crate::{Buffer, TypedTensor};
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::CpuBackend;
-pub use context::CpuContext;
+pub use context::{CpuContext, DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY};
 pub use elementwise::{
     abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, select, sign,
 };
