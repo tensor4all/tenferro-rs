@@ -3,16 +3,22 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::mem::size_of;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use lru::LruCache;
 use tenferro_tensor::{
-    DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead, TensorView,
+    CacheStats, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead,
+    TensorView,
 };
 
 use crate::{ContractionTree, Subscripts};
 
 const EAGER_EINSUM_OP: &str = "eager_einsum";
+/// Default number of eager einsum contraction plans retained per thread.
+pub const DEFAULT_EAGER_EINSUM_CACHE_CAPACITY: usize = 256;
 
 #[derive(Debug, Default, Clone)]
 struct EagerEinsumProfileEntry {
@@ -23,11 +29,140 @@ struct EagerEinsumProfileEntry {
 thread_local! {
     static EAGER_EINSUM_PROFILE_STATE: RefCell<HashMap<&'static str, EagerEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
-    static EAGER_EINSUM_PLAN_CACHE: RefCell<HashMap<EagerEinsumPlanCacheKey, Arc<ContractionTree>>> =
-        RefCell::new(HashMap::new());
+    static EAGER_EINSUM_PLAN_CACHE: RefCell<EagerEinsumPlanCache> =
+        RefCell::new(EagerEinsumPlanCache::new(default_eager_einsum_cache_capacity()));
 }
 
 type EagerEinsumPlanCacheKey = (Subscripts, Vec<Vec<usize>>);
+
+struct EagerEinsumPlanCache {
+    plans: LruCache<EagerEinsumPlanCacheKey, Arc<ContractionTree>>,
+}
+
+impl EagerEinsumPlanCache {
+    fn new(capacity: NonZeroUsize) -> Self {
+        Self {
+            plans: LruCache::new(capacity),
+        }
+    }
+
+    fn capacity(&self) -> NonZeroUsize {
+        self.plans.cap()
+    }
+
+    fn set_capacity(&mut self, capacity: NonZeroUsize) {
+        self.plans.resize(capacity);
+    }
+
+    fn clear(&mut self) {
+        self.plans.clear();
+    }
+
+    fn stats(&self) -> CacheStats {
+        let mut retained_bytes = 0usize;
+        for (key, tree) in self.plans.iter() {
+            retained_bytes += eager_plan_key_retained_bytes(key)
+                + size_of::<Arc<ContractionTree>>()
+                + tree.retained_bytes_for_cache_stats();
+        }
+        CacheStats {
+            entries: self.plans.len(),
+            retained_bytes,
+        }
+    }
+}
+
+fn default_eager_einsum_cache_capacity() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_EAGER_EINSUM_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
+}
+
+fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity() * size_of::<T>()
+}
+
+fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
+    values.iter().map(vec_retained_bytes).sum()
+}
+
+fn subscripts_retained_bytes(subscripts: &Subscripts) -> usize {
+    vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
+}
+
+fn eager_plan_key_retained_bytes(key: &EagerEinsumPlanCacheKey) -> usize {
+    subscripts_retained_bytes(&key.0) + vec_of_vec_retained_bytes(&key.1)
+}
+
+/// Return the current thread's eager einsum plan-cache capacity.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::{
+///     eager_einsum_cache_capacity, DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
+/// };
+///
+/// assert_eq!(
+///     eager_einsum_cache_capacity().get(),
+///     DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
+/// );
+/// ```
+#[must_use]
+pub fn eager_einsum_cache_capacity() -> NonZeroUsize {
+    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().capacity())
+}
+
+/// Resize the current thread's eager einsum plan cache.
+///
+/// Shrinking below the current length evicts least-recently-used entries.
+///
+/// # Examples
+///
+/// ```
+/// use std::num::NonZeroUsize;
+/// use tenferro_einsum::{
+///     eager_einsum_cache_capacity, set_eager_einsum_cache_capacity,
+/// };
+///
+/// set_eager_einsum_cache_capacity(NonZeroUsize::new(1).unwrap());
+/// assert_eq!(eager_einsum_cache_capacity().get(), 1);
+/// ```
+pub fn set_eager_einsum_cache_capacity(capacity: NonZeroUsize) {
+    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().set_capacity(capacity));
+}
+
+/// Clear the current thread's eager einsum plan cache.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::{clear_eager_einsum_cache, eager_einsum_cache_stats};
+///
+/// clear_eager_einsum_cache();
+/// assert_eq!(eager_einsum_cache_stats().entries, 0);
+/// ```
+pub fn clear_eager_einsum_cache() {
+    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Return stats for the current thread's eager einsum plan cache.
+///
+/// `retained_bytes` is an owned payload estimate for cached contraction plans,
+/// not process RSS.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::{clear_eager_einsum_cache, eager_einsum_cache_stats};
+///
+/// clear_eager_einsum_cache();
+/// let stats = eager_einsum_cache_stats();
+/// assert_eq!(stats.entries, 0);
+/// assert_eq!(stats.retained_bytes, 0);
+/// ```
+#[must_use]
+pub fn eager_einsum_cache_stats() -> CacheStats {
+    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().stats())
+}
 
 fn eager_einsum_profile_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -352,7 +487,7 @@ fn cached_plan_subscripts(
     });
 
     if let Some(tree) = profile_eager_einsum_section("plan_cache_lookup", || {
-        EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+        EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().plans.get(&key).cloned())
     }) {
         return Ok(tree);
     }
@@ -362,7 +497,7 @@ fn cached_plan_subscripts(
     })?;
     let tree = Arc::new(tree);
     EAGER_EINSUM_PLAN_CACHE.with(|cache| {
-        cache.borrow_mut().insert(key, Arc::clone(&tree));
+        cache.borrow_mut().plans.put(key, Arc::clone(&tree));
     });
     Ok(tree)
 }

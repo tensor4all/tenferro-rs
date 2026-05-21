@@ -1,7 +1,7 @@
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Tensor, TensorRead};
+use crate::{RuntimeCacheControl, Tensor, TensorRead};
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
 #[doc(hidden)]
@@ -406,7 +406,7 @@ pub fn default_exec_session<B: TensorBackend + ?Sized, R: Send>(
 /// ```
 pub trait TensorBackend {
     #[doc(hidden)]
-    type RuntimeCache: Default;
+    type RuntimeCache: RuntimeCacheControl;
 
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;

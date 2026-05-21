@@ -76,10 +76,16 @@
   buried in backend internals.
 - Every cache must have a bounded default, a user-facing way to configure that
   bound, and a user-facing way to clear it.
+- Every cache must expose user-facing introspection for the number of retained
+  entries and retained bytes. Report retained bytes as the cache's owned/logical
+  payload estimate, not operating-system RSS or allocator arena usage.
+- Top-level runtime objects that own multiple caches must provide aggregate
+  clear and aggregate stats APIs in addition to cache-specific controls.
 - Backend resource pools such as buffer pools may live on the backend, but they
-  still need explicit limit/clear controls and documentation.
+  still need explicit limit/clear controls, stats APIs, and documentation.
 - Do not add a new cache without documenting its owner, lifetime, default
-  capacity, memory behavior, and clear/configuration path.
+  capacity, memory behavior, entry/byte accounting, and
+  clear/configuration/stats path.
 
 ## CPU Threading Contract
 

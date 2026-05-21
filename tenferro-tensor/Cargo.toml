@@ -28,6 +28,7 @@ num-traits.workspace = true
 num-complex.workspace = true
 smallvec.workspace = true
 libloading.workspace = true
+lru.workspace = true
 rayon = "1"
 strided-kernel.workspace = true
 thiserror.workspace = true

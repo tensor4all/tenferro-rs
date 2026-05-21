@@ -54,7 +54,7 @@ pub use sym_dim::SymDim;
 pub use tenferro_ops::std_tensor_op::EinsumSubscripts;
 pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{
-    DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TypedTensor,
+    CacheStats, DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TypedTensor,
     TypedTensorView,
 };
 pub use traced::TracedTensor;

@@ -18,6 +18,7 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-ops = { path = "../tenferro-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true
+lru.workspace = true
 omeco.workspace = true
 
 [dev-dependencies]

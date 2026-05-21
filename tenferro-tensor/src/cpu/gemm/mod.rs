@@ -1,7 +1,9 @@
 use num_traits::{One, Zero};
-use smallvec::SmallVec;
+use smallvec::{Array, SmallVec};
+use std::mem::size_of;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::cache::{CacheStats, RuntimeCacheControl};
 use crate::config::DotGeneralConfig;
 #[cfg(feature = "cpu-blas")]
 use crate::cpu::elementwise::typed_conj_with_pool;
@@ -58,7 +60,7 @@ struct GemmConfigKey {
     rhs_batch_dims: SmallVec<[usize; 4]>,
 }
 
-const GEMM_ANALYSIS_CACHE_MAX: usize = 1024;
+pub(crate) const DEFAULT_GEMM_ANALYSIS_CACHE_CAPACITY: usize = 1024;
 
 #[derive(Default)]
 struct GemmAnalysisCacheSlot {
@@ -158,13 +160,31 @@ impl GemmAnalysisCacheSlot {
     }
 }
 
-#[derive(Default)]
 #[doc(hidden)]
 pub struct GemmAnalysisCache {
     slots: Vec<GemmAnalysisCacheSlot>,
+    max_slots: usize,
 }
 
 impl GemmAnalysisCache {
+    pub(crate) fn with_capacity(max_slots: usize) -> Self {
+        Self {
+            slots: Vec::new(),
+            max_slots,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn capacity(&self) -> usize {
+        self.max_slots
+    }
+
+    #[doc(hidden)]
+    pub fn set_capacity(&mut self, max_slots: usize) {
+        self.max_slots = max_slots;
+        self.slots.truncate(max_slots);
+    }
+
     fn cached_dims<L, R, T>(
         &self,
         slot: usize,
@@ -193,7 +213,7 @@ impl GemmAnalysisCache {
         config: GemmConfigKey,
         dims: Option<GemmDims>,
     ) {
-        if slot >= GEMM_ANALYSIS_CACHE_MAX {
+        if slot >= self.max_slots {
             return;
         }
         if self.slots.len() <= slot {
@@ -209,6 +229,64 @@ impl GemmAnalysisCache {
             },
         );
     }
+}
+
+impl Default for GemmAnalysisCache {
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_GEMM_ANALYSIS_CACHE_CAPACITY)
+    }
+}
+
+impl RuntimeCacheControl for GemmAnalysisCache {
+    fn clear(&mut self) {
+        self.slots.clear();
+    }
+
+    fn stats(&self) -> CacheStats {
+        let mut entries = 0usize;
+        let mut retained_bytes = self.slots.capacity() * size_of::<GemmAnalysisCacheSlot>();
+        for slot in &self.slots {
+            if let Some(plan) = &slot.direct {
+                entries += 1;
+                retained_bytes += gemm_analysis_plan_retained_bytes(plan);
+            }
+            if let Some(plan) = &slot.canonical {
+                entries += 1;
+                retained_bytes += gemm_analysis_plan_retained_bytes(plan);
+            }
+        }
+        CacheStats {
+            entries,
+            retained_bytes,
+        }
+    }
+}
+
+fn smallvec_retained_bytes<A: Array>(values: &SmallVec<A>) -> usize {
+    if values.spilled() {
+        values.capacity() * size_of::<A::Item>()
+    } else {
+        0
+    }
+}
+
+fn gemm_dims_retained_bytes(dims: &GemmDims) -> usize {
+    smallvec_retained_bytes(&dims.out_shape)
+}
+
+fn gemm_config_key_retained_bytes(config: &GemmConfigKey) -> usize {
+    smallvec_retained_bytes(&config.lhs_contracting_dims)
+        + smallvec_retained_bytes(&config.rhs_contracting_dims)
+        + smallvec_retained_bytes(&config.lhs_batch_dims)
+        + smallvec_retained_bytes(&config.rhs_batch_dims)
+}
+
+fn gemm_analysis_plan_retained_bytes(plan: &GemmAnalysisPlan) -> usize {
+    size_of::<GemmAnalysisPlan>()
+        + smallvec_retained_bytes(&plan.lhs_shape)
+        + smallvec_retained_bytes(&plan.rhs_shape)
+        + gemm_config_key_retained_bytes(&plan.config)
+        + plan.dims.as_ref().map_or(0, gemm_dims_retained_bytes)
 }
 
 fn validate_axis_list(
@@ -552,7 +630,7 @@ where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
 {
-    let cache_slot = cache_slot.filter(|&slot| slot < GEMM_ANALYSIS_CACHE_MAX);
+    let cache_slot = cache_slot.filter(|&slot| slot < cache.max_slots);
     if let Some(slot) = cache_slot {
         if let Some(cached) = cache.cached_dims(slot, cache_kind, lhs, rhs, config) {
             return Ok(cached);
