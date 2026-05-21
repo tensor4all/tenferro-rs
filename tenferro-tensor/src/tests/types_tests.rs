@@ -76,6 +76,50 @@ fn tensor_owned_export_reports_dtype_mismatch() {
 }
 
 #[test]
+fn typed_tensor_explicit_memory_order_constructors_match_logical_matrix() {
+    let row =
+        TypedTensor::<f64>::from_vec_row_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let col =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+
+    assert_eq!(row.shape, vec![2, 3]);
+    assert_eq!(row.as_slice(), col.as_slice());
+    assert_eq!(row.get(&[0, 0]), &1.0);
+    assert_eq!(row.get(&[1, 0]), &4.0);
+    assert_eq!(row.get(&[0, 2]), &3.0);
+    assert_eq!(row.get(&[1, 2]), &6.0);
+}
+
+#[test]
+fn typed_tensor_explicit_memory_order_exports_requested_order() {
+    let tensor =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+
+    let (shape, col) = tensor.clone().try_into_vec_col_major().unwrap();
+    assert_eq!(shape, vec![2, 3]);
+    assert_eq!(col, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+
+    let (shape, row) = tensor.try_into_vec_row_major().unwrap();
+    assert_eq!(shape, vec![2, 3]);
+    assert_eq!(row, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+}
+
+#[test]
+fn tensor_explicit_memory_order_roundtrips_dynamic_dtype() {
+    let tensor = Tensor::from_vec_row_major(vec![2, 2], vec![1_i64, 2, 3, 4]);
+
+    assert_eq!(tensor.as_slice::<i64>().unwrap(), &[1, 3, 2, 4]);
+    assert_eq!(
+        tensor.clone().try_into_vec_col_major::<i64>().unwrap(),
+        (vec![2, 2], vec![1, 3, 2, 4]),
+    );
+    assert_eq!(
+        tensor.try_into_vec_row_major::<i64>().unwrap(),
+        (vec![2, 2], vec![1, 2, 3, 4]),
+    );
+}
+
+#[test]
 fn col_major_typed_tensor_uses_logical_indices() {
     let tensor = TypedTensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
