@@ -3,9 +3,9 @@
 ## Overview
 
 `TensorExec` is the execution-time primitive surface. Ops run within a
-backend-owned execution scope when the backend has one, such as the owned rayon
-pool used by CPU execution. Individual ops must not re-enter the same backend
-scope.
+backend-owned execution scope when the backend has one, such as a GPU runtime
+or the CPU backend's reusable buffer scope. Individual ops must not re-enter
+the same backend scope.
 
 `TensorBackend::with_exec_session` creates the scope. `eval_exec_ir` runs
 inside the session.
@@ -24,21 +24,22 @@ eval_exec_ir(backend, program, inputs)
 
 ## Why Sessions
 
-Without sessions, each backend method independently enters the execution
-context (e.g., `rayon::ThreadPool::install()` for CPU). For N-ary einsum
-with hundreds of small GEMM steps, this per-step overhead dominates.
+Without sessions, each backend method independently prepares its execution
+state and scratch-buffer access. For N-ary einsum with hundreds of small GEMM
+steps, repeating that setup per instruction can dominate.
 
-Sessions amortize the context-entry cost: one `install()` call for the
-entire `eval_exec_ir` loop instead of one per instruction.
+Sessions amortize that setup by creating one `TensorExec` for the entire
+`eval_exec_ir` loop instead of one per instruction.
 
 ## Backend Mapping
 
 ### CPU (faer)
 
-faer's `Par::rayon(0)` uses `rayon::current_num_threads()` and
-`rayon::scope()` internally. It relies on the rayon "current pool" context
-set by `ThreadPool::install()` — there is no API to pass a ThreadPool
-reference directly.
+`CpuContext` stores the requested CPU thread count as a faer parallelism hint.
+It does not own a Rayon thread pool and `CpuContext::install` runs the closure
+on the caller thread. faer-backed kernels use `Par::Seq` for one thread and
+`Par::rayon(n)` otherwise, letting faer/rayon use the current or global Rayon
+pool without a tenferro-owned pool entry on each session.
 
 ```rust
 impl TensorBackend for CpuBackend {
@@ -48,11 +49,8 @@ impl TensorBackend for CpuBackend {
     ) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
         let ctx = Arc::clone(&self.ctx);
-        let result = ctx.install(|| {
-            // rayon context active for entire session
-            let mut session = CpuExecSession { ctx: &ctx, buffers: &mut buffers };
-            f(&mut session)
-        });
+        let mut session = CpuExecSession { ctx: &ctx, buffers: &mut buffers };
+        let result = f(&mut session);
         self.buffers = buffers;
         result
     }
@@ -60,7 +58,7 @@ impl TensorBackend for CpuBackend {
 ```
 
 `CpuExecSession` implements `TensorExec` by calling kernel functions
-directly — no `install()` or `install_with_pool()` per op.
+directly, with no Rayon pool entry per op.
 
 ### CubeCL/CUDA
 
@@ -75,11 +73,11 @@ or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
 
 | CPU concept | CubeCL/CUDA concept |
 |---|---|
-| `CpuContext` (rayon ThreadPool) | `CubeclRuntime` (CUDA device/client) |
-| `ctx.install()` | CubeCL launch through the stored runtime |
+| `CpuContext` (thread-count hint) | `CubeclRuntime` (CUDA device/client) |
+| `Par::rayon(n)` / `Par::Seq` | CubeCL launch through the stored runtime |
 | `BufferPool` (host `Vec<T>`) | CubeCL device buffers plus upload/download helpers |
-| `Par::rayon(0)` | kernel launch on stream |
-| per-step `install()` overhead | per-kernel launch/runtime dispatch overhead |
+| faer/rayon CPU work | kernel launch on stream |
+| per-step session setup overhead | per-kernel launch/runtime dispatch overhead |
 
 Future CubeCL work may introduce a dedicated GPU exec session if there is a
 measurable benefit from binding temporary workspace, stream state, or device
@@ -95,7 +93,7 @@ which wraps the backend itself as a `TensorExec` via `BackendExecAdapter`.
 
 ```
 TensorBackend          — factory: creates sessions, owns long-lived state
-  with_exec_session()  — enters execution scope
+  with_exec_session()  — creates execution scope
   dot_general()        — standalone op (with per-op context entry)
   ...
 

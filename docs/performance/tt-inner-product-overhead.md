@@ -21,6 +21,8 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
   - Compares normal per-call execution with cached GEMM analysis.
 - `tenferro-tensor/benches/cpu_install_overhead.rs`
   - Measures `CpuContext::install` and the surrounding buffer-pool wrapper.
+    Current `install` runs inline; older results in this note measured a
+    tenferro-owned Rayon pool entry.
 - `tenferro-tensor/benches/openblas_direct_overhead.rs`
   - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
   - Requires the `cpu-blas` feature and is intended for `src-openblas` runs.
@@ -192,9 +194,9 @@ validation, GEMM analysis/cache lookup, output allocation through `BufferPool`,
 `TypedTensor` construction, and complex conjugation/materialization when BLAS
 cannot represent the requested conjugation as a transpose flag.
 
-## Install Overhead
+## Historical Install Overhead
 
-Measured on one thread:
+Measured on one thread before `CpuContext::install` was changed to run inline:
 
 | Case | Time |
 |---|---:|
@@ -204,8 +206,10 @@ Measured on one thread:
 | `ctx.install` + `BufferPool` take/restore | 5.71 us |
 | `ctx.install` + `BufferPool` + GEMM cache borrow | 5.97 us |
 
-The bottleneck is mostly `rayon::ThreadPool::install`. Buffer-pool movement is
-only about 0.2 us.
+The bottleneck was mostly `rayon::ThreadPool::install`. Buffer-pool movement is
+only about 0.2 us. Current CPU execution no longer owns or enters a Rayon pool
+in `CpuContext::install`; the benchmark is retained to measure the remaining
+caller-thread wrapper cost.
 
 For `site_update`, which performs two GEMMs, this adds roughly 11-12 us of
 fixed cost when each GEMM enters the backend separately.
@@ -232,20 +236,14 @@ pub enum Parallelism {
 ```
 
 Both APIs describe the requested thread count, not the thread pool that must run
-the work. faer and spindle rely on the current Rayon context through
+the work. faer and spindle rely on the current or global Rayon context through
 `rayon::current_num_threads`, `rayon::scope`, `into_par_iter`, and
-`spindle::for_each`. Therefore tenferro currently uses
-`CpuContext::install(...)` to make its owned Rayon pool the current execution
-context before calling faer.
+`spindle::for_each`.
 
-As an upper-bound experiment, the faer backend was run with an experimental
-switch that bypasses `CpuContext::install` and lets faer/spindle use the
-current or global Rayon pool directly:
-
-```bash
-TENFERRO_EXPERIMENTAL_FAER_GLOBAL_RAYON=1
-TENFERRO_PAIRWISE_THREADS=<1|2|4|8>
-```
+The faer backend is therefore run without a tenferro-owned Rayon pool.
+`CpuContext` stores the requested thread count, maps one thread to `Par::Seq`,
+and maps multi-threaded execution to `Par::rayon(n)`. faer/rayon then uses the
+current or global Rayon pool directly.
 
 The benchmark below is cached `site_update`, `Complex64`, `d = 2`, with all
 known BLAS/OpenMP thread pools set to one thread. Times are Criterion means in
@@ -267,19 +265,16 @@ increasing faer thread count does not help; it usually adds parallel dispatch
 overhead. The important optimization is removing per-GEMM `install`, not making
 each tiny GEMM parallel.
 
-The experiment should not be treated as a production backend policy. Bypassing
-`install` lets faer use the current/global Rayon pool, so `CpuContext` no longer
-fully controls pool isolation, thread count, or affinity. It is useful as a
-ceiling measurement and as evidence that coarse-grained pool entry is the main
-direction to pursue.
+The global-Rayon columns became the production policy. This removes the pool
+entry cost, but it also means `CpuContext` no longer provides pool isolation or
+affinity. Its `num_threads` value is a faer parallelism hint rather than a
+private worker-pool size.
 
 Design implications:
 
-- For one-thread faer, `Par::Seq` makes `install` unnecessary and a caller-thread
-  fast path is safe.
-- For multi-thread faer, keep tenferro pool semantics by entering the pool once
-  per larger unit of work, such as one TT contraction, one compiled graph, or
-  one linalg batch.
+- For one-thread faer, `Par::Seq` avoids Rayon dispatch.
+- For multi-thread faer, prefer process- or MPI-level workload partitioning when
+  pool isolation and CPU affinity matter.
 - Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
   backend context has more than one thread.
 - A true pool-handle patch would need changes across faer, spindle, and the
@@ -315,8 +310,8 @@ This preserves Rayon pool semantics, but it is expensive for tiny GEMMs.
 - For the `cpu-blas` backend, LAPACK-backed linalg methods now use the same
   caller-thread pool wrapper. This covers `cholesky`, `triangular_solve`, `lu`,
   `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, and `eig`. The
-  `cpu-faer` backend still uses `install` because faer depends on the Rayon CPU
-  context for parallel policy.
+  `cpu-faer` backend now also avoids a tenferro-owned Rayon pool and passes the
+  `CpuContext` thread count to faer as `Par::Seq` or `Par::rayon(n)`.
 - The BLAS conjugation path now detects row-contiguous conjugated operands before
   acquiring an output buffer for a direct BLAS attempt that cannot succeed.
 
@@ -384,24 +379,22 @@ entry point without making normal eager contractions context-dependent.
 
 ## Optimization Candidates
 
-1. Keep `CpuContext::install` public semantics unchanged.
-2. Avoid broad "skip install when `num_threads == 1`" changes.
-3. Consider a private, narrow fast path for one-thread sequential GEMM only:
-   - `ctx.num_threads() == 1`
-   - faer parallel policy is `Par::Seq`
-   - operation is known GEMM-only
-4. Improve segmented execution so FFI GEMMs can run through an existing
+1. Keep `CpuContext` as the thread-count source for faer `Par`, not as an owned
+   worker-pool handle.
+2. Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
+   backend context has more than one thread.
+3. Improve segmented execution so FFI GEMMs can run through an existing
    `TensorExec` session instead of returning to backend-level calls.
-5. Add scalar-like contraction fast paths for `nnz == 1`.
-6. Add tiny GEMM direct-loop fast paths for small `m`, `n`, `k`.
-7. Consider fixed-rank / tuple-based internal paths for common rank-2/rank-3
+4. Add scalar-like contraction fast paths for `nnz == 1`.
+5. Add tiny GEMM direct-loop fast paths for small `m`, `n`, `k`.
+6. Consider fixed-rank / tuple-based internal paths for common rank-2/rank-3
    contractions, while keeping the public `DotGeneralConfig` stable unless a
    broader API cleanup is desired.
-8. Further reduce BLAS conjugation fallback cost by going directly to a
+7. Further reduce BLAS conjugation fallback cost by going directly to a
    preconjugated or specialized contraction path when the stride pattern makes
    `CblasConjTrans` impossible. The obvious failed direct-BLAS/output-buffer
    attempt is already avoided.
-9. Add a direct tiny-complex contraction path for TT site updates, especially
+8. Add a direct tiny-complex contraction path for TT site updates, especially
    shapes equivalent to `(chi x chi)' * (chi x d*chi)` and
    `(chi*d x chi)' * (chi*d x chi)`.
 

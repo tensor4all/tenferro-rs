@@ -66,11 +66,14 @@ does not support. Higher layers must not silently fall back across devices.
 - `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
 
 CPU execution uses strided-kernel for elementwise/reduction/structural work and
-faer or BLAS/LAPACK for GEMM and linalg. `CpuContext` owns the rayon policy and
-is the single source of truth for faer parallelism.
+faer or BLAS/LAPACK for GEMM and linalg. `CpuContext` stores the CPU thread
+count as the single source of truth for faer parallelism, but it does not own a
+Rayon thread pool.
 
-`CpuBackend::with_exec_session` installs the owned rayon pool once and runs the
-whole compiled program through `CpuExecSession`, avoiding per-op pool entry.
+`CpuBackend::with_exec_session` runs the whole compiled program through
+`CpuExecSession`, reusing the backend buffer pool and avoiding per-op session
+setup. faer-backed kernels receive `Par::Seq` for one thread or `Par::rayon(n)`
+for multi-threaded execution.
 
 ## CubeCL Backend
 

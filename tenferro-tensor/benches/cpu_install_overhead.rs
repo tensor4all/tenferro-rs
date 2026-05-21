@@ -5,15 +5,15 @@ use tenferro_tensor::{
     TensorBackend,
 };
 
-fn bench_cpu_install_overhead(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cpu_install_overhead/one_thread");
+fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cpu_context_entry_overhead/one_thread");
 
-    group.bench_function("ctx_install_empty", |b| {
+    group.bench_function("ctx_install_inline_empty", |b| {
         let ctx = CpuContext::with_threads(1);
         b.iter(|| ctx.install(|| black_box(1usize)));
     });
 
-    group.bench_function("backend_install_empty", |b| {
+    group.bench_function("backend_install_inline_empty", |b| {
         let backend = CpuBackend::with_threads(1);
         b.iter(|| backend.install(|| black_box(1usize)));
     });
@@ -26,7 +26,7 @@ fn bench_cpu_install_overhead(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("ctx_install_with_buffer_pool", |b| {
+    group.bench_function("ctx_install_inline_with_buffer_pool", |b| {
         let ctx = CpuContext::with_threads(1);
         let mut buffers = BufferPool::new();
         b.iter(|| {
@@ -40,7 +40,7 @@ fn bench_cpu_install_overhead(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("ctx_install_with_buffer_pool_and_cache", |b| {
+    group.bench_function("ctx_install_inline_with_buffer_pool_and_cache", |b| {
         let ctx = CpuContext::with_threads(1);
         let mut buffers = BufferPool::new();
         let mut cache = <CpuBackend as TensorBackend>::RuntimeCache::default();
@@ -59,5 +59,5 @@ fn bench_cpu_install_overhead(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cpu_install_overhead);
+criterion_group!(benches, bench_cpu_context_entry_overhead);
 criterion_main!(benches);

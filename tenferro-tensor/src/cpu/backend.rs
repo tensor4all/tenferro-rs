@@ -101,12 +101,6 @@ fn maybe_print_cpu_session_profile() {
     }
 }
 
-#[cfg(feature = "cpu-faer")]
-fn faer_global_rayon_bypass_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_EXPERIMENTAL_FAER_GLOBAL_RAYON").is_ok())
-}
-
 /// CPU execution backend.
 ///
 /// # Examples
@@ -354,7 +348,7 @@ impl CpuBackend {
         self.buffers.clear();
     }
 
-    /// Run a closure inside this backend's shared rayon thread pool.
+    /// Run a closure in this backend's CPU execution scope.
     ///
     /// # Examples
     ///
@@ -365,30 +359,13 @@ impl CpuBackend {
     /// let value = backend.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
-    pub fn install<R>(&self, op: impl FnOnce() -> R + Send) -> R
-    where
-        R: Send,
-    {
+    pub fn install<R>(&self, op: impl FnOnce() -> R) -> R {
         self.ctx.install(op)
     }
 
-    fn install_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R
-    where
-        R: Send,
-    {
-        #[cfg(feature = "cpu-faer")]
-        if faer_global_rayon_bypass_enabled() {
-            let mut buffers = std::mem::take(&mut self.buffers);
-            let result = op(&mut buffers);
-            self.buffers = buffers;
-            return result;
-        }
-
+    fn install_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
-        let (result, buffers) = self.ctx.install(|| {
-            let result = op(&mut buffers);
-            (result, buffers)
-        });
+        let result = op(&mut buffers);
         self.buffers = buffers;
         result
     }
@@ -402,10 +379,7 @@ impl CpuBackend {
     }
 
     #[cfg(feature = "cpu-faer")]
-    fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R
-    where
-        R: Send,
-    {
+    fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         self.install_with_pool(op)
     }
 
@@ -418,23 +392,10 @@ impl CpuBackend {
     fn install_with_pool_and_gemm_cache<R>(
         &mut self,
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
-    ) -> R
-    where
-        R: Send,
-    {
-        if faer_global_rayon_bypass_enabled() {
-            let mut buffers = std::mem::take(&mut self.buffers);
-            let result = op(&mut buffers, gemm_analysis_cache);
-            self.buffers = buffers;
-            return result;
-        }
-
+        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
+    ) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
-        let (result, buffers) = self.ctx.install(|| {
-            let result = op(&mut buffers, gemm_analysis_cache);
-            (result, buffers)
-        });
+        let result = op(&mut buffers, gemm_analysis_cache);
         self.buffers = buffers;
         result
     }
@@ -1341,15 +1302,12 @@ impl TensorBackend for CpuBackend {
         if !cpu_session_profile_enabled() {
             let mut buffers = std::mem::take(&mut self.buffers);
             let ctx = Arc::clone(&self.ctx);
-            let (result, buffers) = ctx.install(|| {
-                let mut session = CpuExecSession {
-                    ctx: ctx.as_ref(),
-                    buffers: &mut buffers,
-                    gemm_analysis_cache: cache,
-                };
-                let result = f(&mut session);
-                (result, buffers)
-            });
+            let mut session = CpuExecSession {
+                ctx: ctx.as_ref(),
+                buffers: &mut buffers,
+                gemm_analysis_cache: cache,
+            };
+            let result = f(&mut session);
             self.buffers = buffers;
             return result;
         }
@@ -1360,29 +1318,26 @@ impl TensorBackend for CpuBackend {
                 std::mem::take(&mut self.buffers)
             });
         let ctx = Arc::clone(&self.ctx);
-        let (result, buffers) =
-            profile_cpu_session_section("with_exec_session_cached.ctx_install", || {
-                ctx.install(|| {
-                    let session_started = Instant::now();
-                    let mut session = CpuExecSession {
-                        ctx: ctx.as_ref(),
-                        buffers: &mut buffers,
-                        gemm_analysis_cache: cache,
-                    };
-                    record_cpu_session_profile(
-                        "with_exec_session_cached.session_construct",
-                        session_started.elapsed(),
-                    );
+        let result = profile_cpu_session_section("with_exec_session_cached.exec_session", || {
+            let session_started = Instant::now();
+            let mut session = CpuExecSession {
+                ctx: ctx.as_ref(),
+                buffers: &mut buffers,
+                gemm_analysis_cache: cache,
+            };
+            record_cpu_session_profile(
+                "with_exec_session_cached.session_construct",
+                session_started.elapsed(),
+            );
 
-                    let exec_started = Instant::now();
-                    let result = f(&mut session);
-                    record_cpu_session_profile(
-                        "with_exec_session_cached.exec_body",
-                        exec_started.elapsed(),
-                    );
-                    (result, buffers)
-                })
-            });
+            let exec_started = Instant::now();
+            let result = f(&mut session);
+            record_cpu_session_profile(
+                "with_exec_session_cached.exec_body",
+                exec_started.elapsed(),
+            );
+            result
+        });
         profile_cpu_session_section("with_exec_session_cached.restore_buffers", || {
             self.buffers = buffers;
         });
