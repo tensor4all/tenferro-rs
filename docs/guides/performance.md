@@ -33,13 +33,52 @@ or write literals directly in column-major order. Owned export through
 
 ## Control CPU thread count
 
-Use `CpuBackend::with_threads(n)` when you want explicit CPU parallelism control.
+Use `CpuBackend::with_threads(n)` when you want an engine-specific CPU
+parallelism hint:
 
 ```rust
 use tenferro::{CpuBackend, Engine};
 
-let mut engine = Engine::new(CpuBackend::with_threads(4));
+let engine = Engine::new(CpuBackend::with_threads(4));
+assert_eq!(engine.backend().num_threads(), 4);
 ```
+
+`CpuBackend::new()` reads `RAYON_NUM_THREADS` and falls back to the
+process-visible CPU count when the variable is unset. This is convenient for
+applications that configure parallelism at process startup:
+
+```bash
+RAYON_NUM_THREADS=4 cargo run --release
+```
+
+For the default `cpu-faer` backend, tenferro passes this value to faer as a
+kernel parallelism hint: one thread uses sequential execution, and larger values
+use faer's Rayon-backed parallel path. tenferro does not create a private Rayon
+thread pool and does not pin faer work to a socket. `RAYON_NUM_THREADS` still
+matters for applications that rely on the process-global Rayon pool, so set it
+consistently with the backend thread budget.
+
+If you need socket-level placement or independent worker pools, split the
+workload at the process level for example with MPI or `taskset`/`numactl`, and
+give each process its own CPU thread budget.
+
+For `cpu-blas` builds, also configure the BLAS/OpenMP provider. A common
+single-process setup is:
+
+```bash
+RAYON_NUM_THREADS=4 \
+OPENBLAS_NUM_THREADS=4 \
+OMP_NUM_THREADS=4 \
+MKL_NUM_THREADS=4 \
+VECLIB_MAXIMUM_THREADS=4 \
+./your-tenferro-app
+```
+
+Set only the variables used by your BLAS provider. When running many processes
+or outer task parallelism, lower both `RAYON_NUM_THREADS` and BLAS/OpenMP thread
+counts per process to avoid oversubscription. For small tensor-network
+contractions, start with one CPU thread per process and increase only after
+benchmarking the target workload.
 
 ## Reuse the same engine
 
@@ -74,11 +113,10 @@ assert_eq!(stats.backend.entries, 0);
 engine.clear_caches();
 ```
 
-For CPU engines, `cpu_cache_stats()` also reports the CPU buffer pool and the
-process-wide CPU thread-pool handle cache. `clear_all_caches()` clears
-engine-owned caches, the CPU buffer pool, and the process-wide CPU thread-pool
-handle cache. Existing `CpuContext` values remain usable after the shared
-thread-pool cache is cleared because they hold their own handles.
+For CPU engines, `cpu_cache_stats()` also reports the CPU buffer pool.
+`clear_all_caches()` clears engine-owned caches and the CPU buffer pool.
+CPU thread count is a kernel-level parallelism hint; tenferro does not retain
+or expose a process-wide CPU thread-pool cache.
 
 ```rust
 use tenferro::{CpuBackend, Engine};
@@ -90,7 +128,7 @@ let stats = engine.cpu_cache_stats();
 assert_eq!(stats.buffer_pool.entries, 0);
 
 engine.clear_all_caches();
-assert_eq!(engine.cpu_cache_stats().thread_pools.entries, 0);
+assert_eq!(engine.cpu_cache_stats().buffer_pool.entries, 0);
 ```
 
 `retained_bytes` in cache stats is tenferro's logical retained-payload estimate.

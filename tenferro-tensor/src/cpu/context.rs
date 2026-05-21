@@ -1,16 +1,12 @@
 use std::env;
-use std::mem::size_of;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, OnceLock};
 
-use lru::LruCache;
+use crate::{Error, Result};
 
-use crate::{CacheStats, Error, Result};
-
-/// Default number of distinct CPU thread-pool sizes retained process-wide.
-pub const DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY: usize = 16;
-
-/// Reusable CPU execution context backed by an owned rayon thread pool.
+/// Reusable CPU execution context carrying CPU parallelism policy.
+///
+/// `CpuContext` stores the requested thread count as a kernel-level
+/// parallelism hint. It does not own a Rayon thread pool; faer-backed kernels
+/// use Rayon through faer's global/current-pool integration.
 ///
 /// # Examples
 ///
@@ -18,89 +14,13 @@ pub const DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY: usize = 16;
 /// use tenferro_tensor::cpu::CpuContext;
 ///
 /// let ctx = CpuContext::with_threads(1);
-/// let seen = ctx.install(|| rayon::current_num_threads());
-/// assert_eq!(seen, 1);
+/// let value = ctx.install(|| 1 + 1);
+/// assert_eq!(value, 2);
+/// assert_eq!(ctx.num_threads(), 1);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CpuContext {
-    pool: Arc<rayon::ThreadPool>,
-}
-
-struct SharedThreadPoolCache {
-    pools: LruCache<usize, Arc<rayon::ThreadPool>>,
-}
-
-impl SharedThreadPoolCache {
-    fn new(capacity: NonZeroUsize) -> Self {
-        Self {
-            pools: LruCache::new(capacity),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.pools.clear();
-    }
-
-    fn set_capacity(&mut self, capacity: NonZeroUsize) {
-        self.pools.resize(capacity);
-    }
-
-    fn stats(&self) -> CacheStats {
-        CacheStats {
-            entries: self.pools.len(),
-            retained_bytes: self.pools.len()
-                * (size_of::<usize>() + size_of::<Arc<rayon::ThreadPool>>()),
-        }
-    }
-}
-
-fn default_thread_pool_cache_capacity() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
-}
-
-fn shared_pools() -> &'static Mutex<SharedThreadPoolCache> {
-    static POOLS: OnceLock<Mutex<SharedThreadPoolCache>> = OnceLock::new();
-    POOLS.get_or_init(|| {
-        Mutex::new(SharedThreadPoolCache::new(
-            default_thread_pool_cache_capacity(),
-        ))
-    })
-}
-
-fn lock_shared_pools() -> std::sync::MutexGuard<'static, SharedThreadPoolCache> {
-    match shared_pools().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            eprintln!("tenferro-tensor: CPU thread-pool cache mutex was poisoned; recovering");
-            poisoned.into_inner()
-        }
-    }
-}
-
-pub(crate) fn try_get_or_create_pool(num_threads: usize) -> Result<Arc<rayon::ThreadPool>> {
-    if num_threads == 0 {
-        return Err(Error::InvalidConfig {
-            op: "CpuContext::try_with_threads",
-            message: "thread count must be at least 1".into(),
-        });
-    }
-
-    let mut pools = lock_shared_pools();
-    if let Some(pool) = pools.pools.get(&num_threads) {
-        return Ok(Arc::clone(pool));
-    }
-
-    let pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .map_err(|err| Error::BackendFailure {
-                op: "CpuContext::try_with_threads",
-                message: format!("failed to create rayon thread pool: {err}"),
-            })?,
-    );
-    pools.pools.put(num_threads, Arc::clone(&pool));
-    Ok(pool)
+    num_threads: usize,
 }
 
 impl CpuContext {
@@ -113,7 +33,7 @@ impl CpuContext {
     /// use tenferro_tensor::cpu::CpuContext;
     ///
     /// let ctx = CpuContext::from_env();
-    /// let _ = ctx.num_threads();
+    /// assert!(ctx.num_threads() >= 1);
     /// ```
     pub fn from_env() -> Self {
         Self::try_from_env()
@@ -129,7 +49,7 @@ impl CpuContext {
     ///
     /// let ctx = CpuContext::try_from_env()
     ///     .unwrap_or_else(|_| CpuContext::with_threads(1));
-    /// let _ = ctx.num_threads();
+    /// assert!(ctx.num_threads() >= 1);
     /// ```
     pub fn try_from_env() -> Result<Self> {
         match env::var("RAYON_NUM_THREADS") {
@@ -142,10 +62,6 @@ impl CpuContext {
                     Error::InvalidConfig { message, .. } => Error::InvalidConfig {
                         op: "CpuContext::try_from_env",
                         message: format!("invalid RAYON_NUM_THREADS value {value:?}: {message}"),
-                    },
-                    Error::BackendFailure { message, .. } => Error::BackendFailure {
-                        op: "CpuContext::try_from_env",
-                        message,
                     },
                     err => err,
                 })
@@ -160,7 +76,7 @@ impl CpuContext {
         }
     }
 
-    /// Create a CPU context with a fixed rayon thread-pool size.
+    /// Create a CPU context with a fixed parallelism hint.
     ///
     /// # Examples
     ///
@@ -177,7 +93,7 @@ impl CpuContext {
         }
     }
 
-    /// Try to create a CPU context with a fixed rayon thread-pool size.
+    /// Try to create a CPU context with a fixed parallelism hint.
     ///
     /// # Examples
     ///
@@ -188,82 +104,16 @@ impl CpuContext {
     /// assert_eq!(ctx.num_threads(), 1);
     /// ```
     pub fn try_with_threads(num_threads: usize) -> Result<Self> {
-        Ok(Self {
-            pool: try_get_or_create_pool(num_threads)?,
-        })
+        if num_threads == 0 {
+            return Err(Error::InvalidConfig {
+                op: "CpuContext::try_with_threads",
+                message: "thread count must be at least 1".into(),
+            });
+        }
+        Ok(Self { num_threads })
     }
 
-    /// Current process-wide CPU thread-pool cache capacity.
-    ///
-    /// The cache is keyed by requested thread count. Retained-byte stats only
-    /// count tenferro's cache handles, not OS thread stacks owned by live pools.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::cpu::CpuContext;
-    ///
-    /// assert!(CpuContext::shared_pool_cache_capacity().get() > 0);
-    /// ```
-    pub fn shared_pool_cache_capacity() -> NonZeroUsize {
-        lock_shared_pools().pools.cap()
-    }
-
-    /// Resize the process-wide CPU thread-pool cache.
-    ///
-    /// Shrinking evicts least-recently-used cached handles. Existing
-    /// [`CpuContext`] values keep their own `Arc` handles alive.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro_tensor::cpu::CpuContext;
-    ///
-    /// CpuContext::set_shared_pool_cache_capacity(NonZeroUsize::new(1).unwrap());
-    /// assert_eq!(CpuContext::shared_pool_cache_capacity().get(), 1);
-    /// ```
-    pub fn set_shared_pool_cache_capacity(capacity: NonZeroUsize) {
-        lock_shared_pools().set_capacity(capacity);
-    }
-
-    /// Clear all cached process-wide CPU thread-pool handles.
-    ///
-    /// Existing [`CpuContext`] values remain usable because they own `Arc`
-    /// handles to their pools.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::cpu::CpuContext;
-    ///
-    /// CpuContext::clear_shared_pool_cache();
-    /// assert_eq!(CpuContext::shared_pool_cache_stats().entries, 0);
-    /// ```
-    pub fn clear_shared_pool_cache() {
-        lock_shared_pools().clear();
-    }
-
-    /// Return process-wide CPU thread-pool cache stats.
-    ///
-    /// `retained_bytes` reports tenferro's retained cache handles, not OS thread
-    /// stacks or rayon's internal allocations.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::cpu::CpuContext;
-    ///
-    /// CpuContext::clear_shared_pool_cache();
-    /// let stats = CpuContext::shared_pool_cache_stats();
-    /// assert_eq!(stats.entries, 0);
-    /// assert_eq!(stats.retained_bytes, 0);
-    /// ```
-    pub fn shared_pool_cache_stats() -> CacheStats {
-        lock_shared_pools().stats()
-    }
-
-    /// Return the number of threads in this context's owned rayon pool.
+    /// Return this context's CPU parallelism hint.
     ///
     /// # Examples
     ///
@@ -274,10 +124,13 @@ impl CpuContext {
     /// assert_eq!(ctx.num_threads(), 2);
     /// ```
     pub fn num_threads(&self) -> usize {
-        self.pool.current_num_threads()
+        self.num_threads
     }
 
-    /// Run a closure inside this context's owned rayon thread pool.
+    /// Run a closure on the caller thread.
+    ///
+    /// This method preserves the public execution-scope API without creating or
+    /// entering a tenferro-owned Rayon pool.
     ///
     /// # Examples
     ///
@@ -288,46 +141,27 @@ impl CpuContext {
     /// let value = ctx.install(|| 1 + 1);
     /// assert_eq!(value, 2);
     /// ```
-    pub fn install<R>(&self, op: impl FnOnce() -> R + Send) -> R
-    where
-        R: Send,
-    {
-        self.pool.install(op)
+    pub fn install<R>(&self, op: impl FnOnce() -> R) -> R {
+        op()
     }
 
     /// Return the faer parallelism policy for this context.
     #[cfg(feature = "cpu-faer")]
     pub(crate) fn faer_par(&self) -> faer::Par {
-        if self.num_threads() == 1 {
+        if self.num_threads == 1 {
             faer::Par::Seq
         } else {
-            faer::Par::rayon(0)
+            faer::Par::rayon(self.num_threads)
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
-    use super::{CpuContext, DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY};
+    use super::CpuContext;
 
     #[test]
-    fn shared_pool_cache_is_bounded_and_clearable() {
-        CpuContext::clear_shared_pool_cache();
-        CpuContext::set_shared_pool_cache_capacity(NonZeroUsize::new(1).unwrap());
-
-        let _one = CpuContext::with_threads(1);
-        let _two = CpuContext::with_threads(2);
-
-        let stats = CpuContext::shared_pool_cache_stats();
-        assert_eq!(stats.entries, 1);
-        assert!(stats.retained_bytes > 0);
-
-        CpuContext::clear_shared_pool_cache();
-        assert_eq!(CpuContext::shared_pool_cache_stats().entries, 0);
-        CpuContext::set_shared_pool_cache_capacity(
-            NonZeroUsize::new(DEFAULT_CPU_THREAD_POOL_CACHE_CAPACITY).unwrap(),
-        );
+    fn try_with_threads_rejects_zero() {
+        assert!(CpuContext::try_with_threads(0).is_err());
     }
 }

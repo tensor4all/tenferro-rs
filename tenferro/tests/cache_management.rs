@@ -78,6 +78,5 @@ fn cpu_cache_stats_include_buffer_pool_and_clear_all_caches() {
     assert_eq!(after.engine.einsum_parse.entries, 0);
     assert_eq!(after.engine.backend.entries, 0);
     assert_eq!(after.buffer_pool.entries, 0);
-    assert_eq!(after.thread_pools.entries, 0);
     assert_eq!(engine.buffer_pool_len(), 0);
 }

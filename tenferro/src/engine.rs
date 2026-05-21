@@ -8,9 +8,8 @@ use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_einsum::{ContractionTree, Subscripts};
 use tenferro_ops::std_tensor_op::EinsumSubscripts;
 use tenferro_tensor::{
-    buffer_pool::BufferPoolStats,
-    cpu::{CpuBackend, CpuContext},
-    CacheStats, RuntimeCacheControl, Tensor, TensorBackend,
+    buffer_pool::BufferPoolStats, cpu::CpuBackend, CacheStats, RuntimeCacheControl, Tensor,
+    TensorBackend,
 };
 
 /// Parsed einsum notation retained separately from shape-specific plans.
@@ -71,7 +70,6 @@ pub struct EngineCacheStats {
 ///
 /// The CPU buffer pool is reported with cache-style accounting: entries are
 /// retained buffers, and retained bytes are retained vector capacity.
-/// `thread_pools` reports the process-wide CPU thread-pool handle cache.
 ///
 /// # Examples
 ///
@@ -81,7 +79,6 @@ pub struct EngineCacheStats {
 /// let stats = CpuEngineCacheStats {
 ///     engine: EngineCacheStats::default(),
 ///     buffer_pool: CacheStats::empty(),
-///     thread_pools: CacheStats::empty(),
 /// };
 /// assert_eq!(stats.buffer_pool.retained_bytes, 0);
 /// ```
@@ -91,8 +88,6 @@ pub struct CpuEngineCacheStats {
     pub engine: EngineCacheStats,
     /// CPU backend buffer pool.
     pub buffer_pool: CacheStats,
-    /// Process-wide CPU thread-pool handle cache.
-    pub thread_pools: CacheStats,
 }
 
 /// Cache key derived from the compiled graph topology.
@@ -638,7 +633,6 @@ impl Engine<CpuBackend> {
         CpuEngineCacheStats {
             engine: self.cache_stats(),
             buffer_pool: self.backend.buffer_pool_cache_stats(),
-            thread_pools: CpuContext::shared_pool_cache_stats(),
         }
     }
 
@@ -656,7 +650,6 @@ impl Engine<CpuBackend> {
     pub fn clear_all_caches(&mut self) {
         self.clear_caches();
         self.reset_buffer_pool();
-        CpuContext::clear_shared_pool_cache();
     }
 
     /// Return the CPU GEMM analysis-cache slot capacity.

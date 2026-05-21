@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::{ffi::OsString, sync::MutexGuard};
@@ -319,7 +320,7 @@ fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
 }
 
 #[test]
-fn test_with_exec_session_runs_in_thread_pool() {
+fn test_with_exec_session_runs_compiled_ops() {
     let mut backend = CpuBackend::with_threads(2);
     let result = backend.with_exec_session(|session| {
         session
@@ -331,6 +332,35 @@ fn test_with_exec_session_runs_in_thread_pool() {
     });
     assert_eq!(get_f64(&result, &[0]), 4.0);
     assert_eq!(get_f64(&result, &[1]), 6.0);
+}
+
+#[test]
+fn cpu_context_install_runs_on_caller_thread() {
+    let ctx = CpuContext::with_threads(2);
+    let caller_thread = std::thread::current().id();
+    let seen_thread = ctx.install(|| std::thread::current().id());
+    assert_eq!(seen_thread, caller_thread);
+}
+
+#[test]
+fn cpu_install_accepts_non_send_state() {
+    let ctx = CpuContext::with_threads(2);
+    let state = Rc::new(41usize);
+    let seen = ctx.install(|| *state + 1);
+    assert_eq!(seen, 42);
+
+    let backend = CpuBackend::with_threads(2);
+    let state = Rc::new(20usize);
+    let seen = backend.install(|| *state + 2);
+    assert_eq!(seen, 22);
+}
+
+#[test]
+fn cpu_backend_exec_session_runs_on_caller_thread() {
+    let mut backend = CpuBackend::with_threads(2);
+    let caller_thread = std::thread::current().id();
+    let seen_thread = backend.with_exec_session(|_| std::thread::current().id());
+    assert_eq!(seen_thread, caller_thread);
 }
 
 #[test]
@@ -369,10 +399,10 @@ fn cpu_context_with_threads_reports_requested_size() {
 }
 
 #[test]
-fn cpu_context_install_uses_owned_pool() {
+fn cpu_context_install_executes_closure() {
     let ctx = CpuContext::with_threads(1);
-    let seen = ctx.install(|| rayon::current_num_threads());
-    assert_eq!(seen, 1);
+    let seen = ctx.install(|| 1 + 1);
+    assert_eq!(seen, 2);
 }
 
 fn env_lock() -> MutexGuard<'static, ()> {
