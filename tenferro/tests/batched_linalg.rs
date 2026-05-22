@@ -1,8 +1,6 @@
 mod support;
 use num_complex::Complex64;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::traced::TracedTensor;
 use tenferro::traced_tensor::{cholesky, qr, solve, svd, triangular_solve};
 use tenferro::GraphExecutor;
@@ -34,7 +32,7 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
 
 fn eval(traced: TracedTensor) -> Tensor {
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let mut traced = traced;
+    let traced = traced;
     traced.run_with(&mut engine).unwrap().clone()
 }
 

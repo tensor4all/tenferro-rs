@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
 //!
 //! let mut pool = BufferPool::new();
@@ -55,7 +55,7 @@ pub struct BufferPoolStats {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
@@ -80,7 +80,7 @@ pub struct BufferPool {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
@@ -101,7 +101,7 @@ pub trait PoolScalar: Copy + Sized + Send + private::Sealed {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
@@ -117,7 +117,7 @@ pub trait PoolScalar: Copy + Sized + Send + private::Sealed {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
@@ -232,7 +232,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
@@ -249,7 +249,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(1024);
@@ -274,7 +274,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::unbounded();
@@ -288,7 +288,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(4096);
@@ -324,7 +324,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
@@ -343,7 +343,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
@@ -358,7 +358,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
@@ -409,7 +409,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
@@ -434,7 +434,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
@@ -456,7 +456,7 @@ impl BufferPool {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();

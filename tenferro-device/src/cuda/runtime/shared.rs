@@ -5,7 +5,7 @@ use crate::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::ContiguousOrder;
 ///
 /// let order = ContiguousOrder::ColumnMajor;
@@ -23,7 +23,7 @@ pub enum ContiguousOrder {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::TriangularHalf;
 ///
 /// let half = TriangularHalf::Lower;
@@ -53,7 +53,7 @@ impl TriangularHalf {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::{ContiguousOrder, StridedCopySpec};
 ///
 /// let spec = StridedCopySpec::to_contiguous(&[4, 2, 3], &[6, 1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
@@ -73,7 +73,7 @@ impl StridedCopySpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{ContiguousOrder, StridedCopySpec};
     ///
     /// let spec = StridedCopySpec::to_contiguous(&[2, 3], &[1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
@@ -106,7 +106,7 @@ impl StridedCopySpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{ContiguousOrder, StridedCopySpec};
     ///
     /// let spec = StridedCopySpec::to_contiguous(&[2, 3], &[1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
@@ -120,7 +120,7 @@ impl StridedCopySpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{ContiguousOrder, StridedCopySpec};
     ///
     /// let spec = StridedCopySpec::to_contiguous(&[2, 3], &[1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
@@ -137,7 +137,7 @@ impl StridedCopySpec {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::StridedCopyTransform;
 ///
 /// assert_eq!(StridedCopyTransform::None, StridedCopyTransform::None);
@@ -157,7 +157,7 @@ pub enum StridedCopyTransform {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
 ///
 /// let spec = TriangularPartSpec::new(
@@ -187,7 +187,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(
@@ -240,7 +240,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 2], &[1, 2], 0, &[1, 2], 0, 1, TriangularHalf::Lower).unwrap();
@@ -254,7 +254,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 2], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Upper).unwrap();
@@ -268,7 +268,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
@@ -282,7 +282,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
@@ -296,7 +296,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 4, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
@@ -310,7 +310,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
@@ -324,7 +324,7 @@ impl TriangularPartSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
     ///
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 5, 0, TriangularHalf::Lower).unwrap();
@@ -343,7 +343,7 @@ impl TriangularPartSpec {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::TriangularMergeSpec;
 ///
 /// let spec = TriangularMergeSpec::new(
@@ -373,7 +373,7 @@ impl TriangularMergeSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::TriangularMergeSpec;
     ///
     /// let spec = TriangularMergeSpec::new(
@@ -466,7 +466,7 @@ impl TriangularMergeSpec {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::RealUnaryOp;
 ///
 /// let op = RealUnaryOp::Abs;
@@ -486,7 +486,7 @@ pub enum RealUnaryOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::ComplexRealUnaryOp;
 ///
 /// let op = ComplexRealUnaryOp::Abs;
@@ -507,7 +507,7 @@ pub enum ComplexRealUnaryOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::RealBinaryOp;
 ///
 /// let op = RealBinaryOp::Add;
@@ -530,7 +530,7 @@ pub enum RealBinaryOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::RealTernaryOp;
 ///
 /// let op = RealTernaryOp::Where;
@@ -545,7 +545,7 @@ pub enum RealTernaryOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::RealReductionOp;
 ///
 /// let op = RealReductionOp::Sum;
@@ -566,7 +566,7 @@ pub enum RealReductionOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::ZeroTrailingByCountsSpec;
 ///
 /// let spec = ZeroTrailingByCountsSpec::new(
@@ -600,7 +600,7 @@ impl ZeroTrailingByCountsSpec {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::ZeroTrailingByCountsSpec;
     ///
     /// let spec = ZeroTrailingByCountsSpec::new(
@@ -1069,7 +1069,7 @@ pub(super) trait RuntimeRealScalar: cudarc::driver::DeviceRepr + Copy + 'static 
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime::RuntimeKeepCountScalar;
 ///
 /// fn needs_counts<T: RuntimeKeepCountScalar>() {}

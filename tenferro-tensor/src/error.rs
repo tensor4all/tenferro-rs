@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::Error;
 //!
 //! let err = Error::AxisOutOfBounds {
@@ -17,7 +17,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::Error;
 ///
 /// let err = Error::MissingValue { slot: 3 };
@@ -73,7 +73,7 @@ pub enum Error {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{Error, Result};
 ///
 /// let output: Result<()> = Err(Error::MissingValue { slot: 0 });

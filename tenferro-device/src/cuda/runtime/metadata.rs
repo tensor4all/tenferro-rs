@@ -91,7 +91,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -132,7 +132,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -174,7 +174,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -215,7 +215,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -271,7 +271,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -327,7 +327,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -383,7 +383,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -440,7 +440,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -535,7 +535,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     /// let runtime = runtime::get_or_init(0).unwrap();
     /// let lhs = runtime.alloc_raw::<i32>(4).unwrap();
@@ -628,7 +628,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     /// let runtime = runtime::get_or_init(0).unwrap();
     /// let lhs = runtime.alloc_raw::<u8>(4).unwrap();
@@ -719,7 +719,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -809,7 +809,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -896,7 +896,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -961,7 +961,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -1026,7 +1026,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -1091,7 +1091,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();

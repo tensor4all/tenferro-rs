@@ -10,10 +10,10 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use tenferro::extension::{apply, ExtensionOp};
+//! ```rust
+//! use tenferro::extension::{apply, ExtensionOpTrait};
 //!
-//! // Construct an `Arc<dyn ExtensionOp>` and call `apply(op, &[input])`
+//! // Construct an `Arc<dyn ExtensionOpTrait>` and call `apply(op, &[input])`
 //! // to lower it into a `TracedTensor`. AD support is added separately
 //! // with `register_extension_chain_rule`.
 //! ```
@@ -66,14 +66,39 @@ pub use tenferro_ops::ExtensionFamilyId;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
+/// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro::extension::apply;
+/// use tenferro::extension::{apply, ExtensionOpTrait};
+/// use tenferro::{DType, SymDim, Tensor, TracedTensor};
 ///
-/// # let op: Arc<dyn tenferro::extension::ExtensionOpTrait> = unimplemented!();
-/// # let a: tenferro::TracedTensor = unimplemented!();
-/// # let b: tenferro::TracedTensor = unimplemented!();
-/// let outputs = apply(op, &[&a, &b]);
+/// # #[derive(Clone, Debug)]
+/// # struct IdentityExt;
+/// # impl ExtensionOpTrait for IdentityExt {
+/// #     fn family_id(&self) -> &'static str { "example.identity.v1" }
+/// #     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+/// #     fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+/// #         other.as_any().downcast_ref::<IdentityExt>().is_some()
+/// #     }
+/// #     fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> { Arc::new(self.clone()) }
+/// #     fn as_any(&self) -> &dyn Any { self }
+/// #     fn n_inputs(&self) -> usize { 1 }
+/// #     fn n_outputs(&self) -> usize { 1 }
+/// #     fn infer_output_meta(
+/// #         &self,
+/// #         dtypes: &[DType],
+/// #         shapes: &[&[SymDim]],
+/// #     ) -> Vec<(DType, Vec<SymDim>)> {
+/// #         vec![(dtypes[0], shapes[0].to_vec())]
+/// #     }
+/// #     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+/// #         Ok(vec![inputs[0].clone()])
+/// #     }
+/// # }
+/// let op: Arc<dyn ExtensionOpTrait> = Arc::new(IdentityExt);
+/// let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let outputs = apply(op, &[&a]);
+/// assert_eq!(outputs.len(), 1);
 /// ```
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTensor> {
     assert_eq!(

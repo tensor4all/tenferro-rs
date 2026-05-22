@@ -13,9 +13,7 @@
 //! symbolic-shape tests in this file.
 
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
@@ -30,7 +28,7 @@ fn grad_of_sum_of_squares_against_symbolic_input() {
     let sq = &x * &x;
     let loss = sq.reduce_sum(&[0]);
 
-    let mut g = loss.grad(&x).expect("grad build");
+    let g = loss.grad(&x).expect("grad build");
 
     let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -52,14 +50,14 @@ fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
-    let mut g1 = g_template.clone();
+    let g1 = g_template.clone();
     let b1 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let out1 = g1
         .run_with_inputs_auto(&mut engine, &[(&x, &b1)])
         .expect("eval1");
     assert_eq!(f64_data(&out1), &[2.0, 4.0, 6.0]);
 
-    let mut g2 = g_template.clone();
+    let g2 = g_template.clone();
     let b2 = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
     let out2 = g2
         .run_with_inputs_auto(&mut engine, &[(&x, &b2)])
@@ -75,8 +73,8 @@ fn grad_of_dot_product_against_two_symbolic_inputs() {
     let b = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let loss = (&a * &b).reduce_sum(&[0]);
 
-    let mut grad_a = loss.grad(&a).expect("grad a");
-    let mut grad_b = loss.grad(&b).expect("grad b");
+    let grad_a = loss.grad(&a).expect("grad a");
+    let grad_b = loss.grad(&b).expect("grad b");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -99,7 +97,7 @@ fn grad_with_concrete_shape_placeholder() {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[3]);
     let sq = &x * &x;
     let loss = sq.reduce_sum(&[0]);
-    let mut g = loss.grad(&x).expect("grad build");
+    let g = loss.grad(&x).expect("grad build");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);

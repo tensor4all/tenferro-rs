@@ -9,7 +9,7 @@ use crate::dim_expr::DimExpr;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_ops::sym_dim::SymDim;
 ///
 /// let rows = SymDim::from(3usize);
@@ -36,7 +36,7 @@ impl SymDim {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::sym_dim::SymDim;
     ///
     /// let clipped = SymDim::from(5usize).min(8usize);
@@ -52,7 +52,7 @@ impl SymDim {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::sym_dim::SymDim;
     ///
     /// let batch = SymDim::from(2usize).max(1usize);
@@ -115,7 +115,7 @@ impl SymDim {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::sym_dim::SymDim;
     ///
     /// let lhs = SymDim::tensor_axis(7, 0);

@@ -37,7 +37,7 @@
 //! back to the host afterwards (no implicit CPU↔GPU transfer, following the PyTorch
 //! convention).
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::cubecl::{CubeclBackend, upload_tensor, download_tensor};
 //! use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 //!

@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro::error::Error;
 //!
 //! let err = Error::InvalidSubscripts("bad label".into());
@@ -15,7 +15,7 @@ use tenferro_tensor::DType;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro::error::Error;
 ///
 /// let err = Error::InvalidSubscripts("rank mismatch".into());

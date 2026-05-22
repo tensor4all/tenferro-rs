@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::validate::validate_nonsingular_u;
 //! use tenferro_tensor::{Tensor, TypedTensor};
 //!
@@ -62,7 +62,7 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::validate::check_singular_diagonal;
 /// use tenferro_tensor::TypedTensor;
 ///
@@ -118,7 +118,7 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::validate::validate_nonsingular_u;
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///

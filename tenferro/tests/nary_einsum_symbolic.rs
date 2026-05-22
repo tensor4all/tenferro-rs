@@ -5,9 +5,7 @@
 //! Inspects the resulting fragment's ops directly.
 
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{einsum, RunTraced};
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
@@ -103,7 +101,7 @@ fn symbolic_einsum_evaluates_correctly_via_run_with_inputs() {
     let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
-    let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum sym");
+    let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum sym");
 
     let ta = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let tb = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);

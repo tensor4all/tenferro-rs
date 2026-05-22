@@ -18,9 +18,7 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 
 use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
@@ -396,7 +394,7 @@ fn scale_by_2_forward_roundtrip() {
     let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let outputs = apply(Arc::new(TestScaleBy2), &[&x]);
     assert_eq!(outputs.len(), 1);
-    let mut y = outputs.into_iter().next().unwrap();
+    let y = outputs.into_iter().next().unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -417,7 +415,7 @@ fn scale_by_2_grad_against_reduce_sum() {
         .unwrap();
     let loss = scaled.reduce_sum(&[0]);
 
-    let mut g = loss.grad(&x).expect("grad build");
+    let g = loss.grad(&x).expect("grad build");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g.run_with(&mut engine).unwrap();
 
@@ -574,7 +572,7 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
         .unwrap();
     let loss = scaled.reduce_sum(&[0]);
 
-    let mut g = loss.grad(&x).expect("grad build");
+    let g = loss.grad(&x).expect("grad build");
     let bound = Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -595,8 +593,8 @@ fn swap_forward_roundtrip() {
     let outputs = apply(Arc::new(TestSwap), &[&a, &b]);
     assert_eq!(outputs.len(), 2);
     let mut iter = outputs.into_iter();
-    let mut out_first = iter.next().unwrap();
-    let mut out_second = iter.next().unwrap();
+    let out_first = iter.next().unwrap();
+    let out_second = iter.next().unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let t0 = out_first.run_with(&mut engine).unwrap().clone();
@@ -623,8 +621,8 @@ fn swap_grad_routes_cotangents_across_inputs() {
     let combined = &out0 + &out1;
     let loss = combined.reduce_sum(&[0]);
 
-    let mut grad_a = loss.grad(&a).expect("grad a");
-    let mut grad_b = loss.grad(&b).expect("grad b");
+    let grad_a = loss.grad(&a).expect("grad a");
+    let grad_b = loss.grad(&b).expect("grad b");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ga = grad_a.run_with(&mut engine).unwrap().clone();
@@ -648,7 +646,7 @@ fn swap_grad_routes_only_through_active_output() {
     let out1 = iter.next().unwrap();
     let loss = out1.reduce_sum(&[0]);
 
-    let mut grad_a = loss.grad(&a).expect("grad a");
+    let grad_a = loss.grad(&a).expect("grad a");
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ga = grad_a.run_with(&mut engine).unwrap().clone();
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);

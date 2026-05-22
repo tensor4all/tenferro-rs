@@ -12,7 +12,7 @@ use crate::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime;
 ///
 /// let runtime = runtime::get_or_init(0).unwrap();
@@ -40,7 +40,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -54,7 +54,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -83,7 +83,7 @@ impl CudaRuntime {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime;
 ///
 /// let runtime = runtime::get_or_init(0).unwrap();
@@ -115,7 +115,7 @@ impl<T> CudaBuffer<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -130,7 +130,7 @@ impl<T> CudaBuffer<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -145,7 +145,7 @@ impl<T> CudaBuffer<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -170,7 +170,7 @@ impl<T> Drop for CudaBuffer<T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::cuda::runtime;
 ///
 /// let runtime = runtime::get_or_init(0).unwrap();

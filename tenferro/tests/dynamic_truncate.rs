@@ -1,7 +1,5 @@
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-5;
@@ -35,7 +33,7 @@ fn dynamic_truncate_basic() {
     ));
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
 
-    let mut result = x.dynamic_truncate(&size, 0);
+    let result = x.dynamic_truncate(&size, 0);
     let data = get_f64_data(&result.run_with(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0]);
 }
@@ -49,7 +47,7 @@ fn dynamic_truncate_2d_axis1() {
     ));
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
 
-    let mut result = x.dynamic_truncate(&size, 1);
+    let result = x.dynamic_truncate(&size, 1);
     let out = result.run_with(&mut engine).unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(get_f64_data(&out), vec![1.0, 5.0, 2.0, 6.0]);
@@ -61,7 +59,7 @@ fn dynamic_truncate_clamps_oversize() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(10.0));
 
-    let mut result = x.dynamic_truncate(&size, 0);
+    let result = x.dynamic_truncate(&size, 0);
     let data = get_f64_data(&result.run_with(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0]);
 }
@@ -72,7 +70,7 @@ fn dynamic_truncate_accepts_i64_size() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
     let size = TracedTensor::from_tensor_concrete_shape(i64_scalar(2));
 
-    let mut result = x.dynamic_truncate(&size, 0);
+    let result = x.dynamic_truncate(&size, 0);
     let out = result.run_with(&mut engine).unwrap();
     assert_eq!(out.shape(), &[2]);
     assert_eq!(get_f64_data(&out), vec![1.0, 2.0]);
@@ -84,7 +82,7 @@ fn pad_to_match_basic() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5]));
 
-    let mut result = x.pad_to_match(&reference, 0);
+    let result = x.pad_to_match(&reference, 0);
     let data = get_f64_data(&result.run_with(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0, 0.0, 0.0]);
 }
@@ -95,7 +93,7 @@ fn pad_to_match_no_op_when_same_size() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
     let reference = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![0.0; 4]));
 
-    let mut result = x.pad_to_match(&reference, 0);
+    let result = x.pad_to_match(&reference, 0);
     let data = get_f64_data(&result.run_with(&mut engine).unwrap());
     assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
 }
@@ -112,7 +110,7 @@ fn dynamic_truncate_vjp_correct() {
     let truncated = x.dynamic_truncate(&size, 0);
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
 
-    let mut grad = loss.grad(&x).unwrap();
+    let grad = loss.grad(&x).unwrap();
     let grad_data = get_f64_data(&grad.run_with(&mut engine).unwrap());
     assert_eq!(grad_data, vec![2.0, 4.0, 6.0, 0.0, 0.0]);
 }
@@ -130,7 +128,7 @@ fn dynamic_truncate_jvp_correct() {
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
 
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
-    let mut jvp_result = loss.jvp(&x, &v);
+    let jvp_result = loss.jvp(&x, &v);
     let jvp_value = get_f64_data(&jvp_result.run_with(&mut engine).unwrap())[0];
     assert!(
         (jvp_value - 12.0).abs() < TOL,
@@ -152,7 +150,7 @@ fn dynamic_truncate_hvp_correct() {
 
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5]));
-    let mut hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     assert_eq!(hv_data.len(), 5);
@@ -178,7 +176,7 @@ fn dynamic_truncate_hvp_finite_diff() {
         let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
         let truncated = x.dynamic_truncate(&size, 0);
         let loss = (&truncated * &truncated).reduce_sum(&[0]);
-        let mut grad = loss.grad(&x).unwrap();
+        let grad = loss.grad(&x).unwrap();
         get_f64_data(&grad.run_with(&mut engine).unwrap())
     };
 
@@ -203,7 +201,7 @@ fn dynamic_truncate_hvp_finite_diff() {
     let loss = (&truncated * &truncated).reduce_sum(&[0]);
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], v_data));
-    let mut hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     for (index, (actual, expected)) in hv_data.iter().zip(&fd_hv).enumerate() {
@@ -230,7 +228,7 @@ fn pad_to_match_vjp_correct() {
     let padded = x.pad_to_match(&reference, 0);
     let loss = (&padded * &padded).reduce_sum(&[0]);
 
-    let mut grad = loss.grad(&x).unwrap();
+    let grad = loss.grad(&x).unwrap();
     let grad_data = get_f64_data(&grad.run_with(&mut engine).unwrap());
     assert_eq!(grad_data, vec![2.0, 4.0, 6.0]);
 }
@@ -245,7 +243,7 @@ fn pad_to_match_jvp_correct() {
     let loss = (&padded * &padded).reduce_sum(&[0]);
 
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
-    let mut jvp_result = loss.jvp(&x, &v);
+    let jvp_result = loss.jvp(&x, &v);
     let jvp_val = get_f64_data(&jvp_result.run_with(&mut engine).unwrap())[0];
     // dot(grad, v) = 2+4+6 = 12
     assert!((jvp_val - 12.0).abs() < TOL, "jvp={jvp_val}, expected=12");
@@ -264,7 +262,7 @@ fn pad_to_match_hvp_correct() {
 
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0]));
-    let mut hv = grad.jvp(&x, &v);
+    let hv = grad.jvp(&x, &v);
     let hv_data = get_f64_data(&hv.run_with(&mut engine).unwrap());
 
     for (i, val) in hv_data.iter().enumerate() {

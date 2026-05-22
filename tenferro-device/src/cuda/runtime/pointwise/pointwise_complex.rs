@@ -44,7 +44,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use num_complex::Complex64;
     /// use tenferro_device::cuda::runtime::{self, KernelComplex64};
     ///
@@ -366,7 +366,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use num_complex::Complex32;
     /// use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
     ///
@@ -424,7 +424,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use num_complex::Complex64;
     /// use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
     ///

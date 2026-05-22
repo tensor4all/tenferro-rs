@@ -1,7 +1,5 @@
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-4;
@@ -42,7 +40,7 @@ fn checkpoint_truncate_loop_grad() {
     }
 
     let loss = x.reduce_sum(&[0]);
-    let mut grad = loss.grad(&a).unwrap();
+    let grad = loss.grad(&a).unwrap();
     let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
 
     let f_concrete = |a_value: f64| {

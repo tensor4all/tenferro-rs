@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 //!
 //! let mut backend = CpuBackend::new();

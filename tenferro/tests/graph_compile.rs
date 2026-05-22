@@ -100,6 +100,24 @@ fn graph_compiler_validates_placeholder_specs() {
 }
 
 #[test]
+fn graph_program_input_accessors_report_compiled_contract() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = x.neg();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
+        .unwrap();
+    let program = std::hint::black_box(program);
+    let input = std::hint::black_box(&program.input_specs()[0]);
+
+    assert_eq!(std::hint::black_box(&program).input_count(), 1);
+    assert_eq!(std::hint::black_box(&program).output_count(), 1);
+    assert_eq!(input.dtype(), DType::F64);
+    assert_eq!(input.shape(), &[4]);
+}
+
+#[test]
 fn graph_compiler_cache_is_bounded_and_reports_stats() {
     let mut compiler = GraphCompiler::new();
     compiler.set_compile_cache_capacity(NonZeroUsize::new(1).unwrap());

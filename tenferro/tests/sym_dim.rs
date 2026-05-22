@@ -1,7 +1,5 @@
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::error::Error;
 use tenferro::GraphExecutor;
 use tenferro::{CpuBackend, Tensor, TracedTensor, TypedTensor};
@@ -25,7 +23,7 @@ fn reshape_sym_uses_symbolic_input_axes() {
     ));
     let rows = x.sym_size(0) * x.sym_size(1);
     let cols = x.sym_size(2);
-    let mut y = x.reshape_sym(&[rows, cols]).unwrap();
+    let y = x.reshape_sym(&[rows, cols]).unwrap();
 
     assert_eq!(y.rank, 2);
 
@@ -44,7 +42,7 @@ fn reshape_sym_supports_mixed_usize_arithmetic() {
         vec![2, 3, 4],
         (1..=24).map(|value| value as f64).collect(),
     ));
-    let mut y = x
+    let y = x
         .reshape_sym(&[
             2usize * x.sym_size(0).max(1usize),
             (x.sym_size(1) * x.sym_size(2).min(4usize)) / 2usize,
@@ -92,7 +90,7 @@ fn sym_dim_sub_and_div_operators() {
     // Instead: reshape [12] -> [dim0 / 4, dim0 / 3] = [3, 4]
     let a = x.sym_size(0) / 4usize;
     let b = x.sym_size(0) / 3usize;
-    let mut y = x.reshape_sym(&[a, b]).unwrap();
+    let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -108,7 +106,7 @@ fn sym_dim_sub_operator() {
     // reshape [6] -> [dim0 - 4, dim0 - 3] = [2, 3]
     let a = x.sym_size(0) - 4usize;
     let b = x.sym_size(0) - 3usize;
-    let mut y = x.reshape_sym(&[a, b]).unwrap();
+    let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -125,7 +123,7 @@ fn sym_dim_usize_lhs_operators() {
     // Use: 3usize + (dim0 - dim0) = 3, dim0 - 4usize = 2 => [3, 2]
     let a = 3usize + (x.sym_size(0) - x.sym_size(0));
     let b = x.sym_size(0) - 4usize;
-    let mut y = x.reshape_sym(&[a, b]).unwrap();
+    let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -142,7 +140,7 @@ fn sym_dim_usize_sub_and_div_lhs() {
     // 5usize - dim0 = 3, 6usize / dim1 = 2 => [3, 2]
     let a = 5usize - x.sym_size(0);
     let b = 6usize / x.sym_size(1);
-    let mut y = x.reshape_sym(&[a, b]).unwrap();
+    let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -158,7 +156,7 @@ fn sym_dim_min_max_methods() {
     // min(dim0, dim1) = 2, max(dim0, dim1) = 3 => [2, 3]
     let a = x.sym_size(0).min(x.sym_size(1));
     let b = x.sym_size(0).max(x.sym_size(1));
-    let mut y = x.reshape_sym(&[a, b]).unwrap();
+    let y = x.reshape_sym(&[a, b]).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = y.run_with(&mut engine).unwrap();
@@ -181,7 +179,7 @@ fn reshape_sym_graph_reuse_with_different_shapes() {
     // First execution: shape [2, 3]
     let data_a: Vec<f64> = (1..=6).map(|v| v as f64).collect();
     let x_a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], data_a.clone()));
-    let mut y_a = build_flatten(&x_a);
+    let y_a = build_flatten(&x_a);
     let result_a = y_a.run_with(&mut engine).unwrap();
     assert_eq!(result_a.shape(), &[6]);
     assert_eq!(get_f64_data(&result_a), &data_a);
@@ -189,7 +187,7 @@ fn reshape_sym_graph_reuse_with_different_shapes() {
     // Second execution: shape [4, 5] — same graph pattern, different sizes
     let data_b: Vec<f64> = (1..=20).map(|v| v as f64).collect();
     let x_b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 5], data_b.clone()));
-    let mut y_b = build_flatten(&x_b);
+    let y_b = build_flatten(&x_b);
     let result_b = y_b.run_with(&mut engine).unwrap();
     assert_eq!(result_b.shape(), &[20]);
     assert_eq!(get_f64_data(&result_b), &data_b);

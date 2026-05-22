@@ -11,9 +11,7 @@
 
 mod support;
 use std::collections::HashSet;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{run_many_traced_with, RunTraced};
 
 use computegraph::fragment::Fragment;
 use tenferro::traced::TracedTensor;
@@ -94,7 +92,7 @@ fn fixed_point_traced(
         let x_new = a * &x.cos();
 
         // Convergence check — eval() must NOT break the graph
-        let mut x_check = x_new.clone();
+        let x_check = x_new.clone();
         let val = get_f64_scalar(&x_check.run_with(engine).unwrap());
 
         if (val - prev_val).abs() < conv_tol {
@@ -122,7 +120,7 @@ fn eval_mid_loop_preserves_graph_connectivity() {
     // x_final is still a TracedTensor connected to `a`.
     // Verify by computing grad — if the graph were broken, this would give 0.
     let grad = x_final.grad(&a).unwrap();
-    let mut grad_clone = grad.clone();
+    let grad_clone = grad.clone();
     let grad_val = get_f64_scalar(&grad_clone.run_with(&mut engine).unwrap());
     assert!(
         grad_val.abs() > 1e-10,
@@ -146,8 +144,8 @@ fn iterative_ad_gradient_matches_finite_diff() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &mut engine);
 
-    let mut loss = x_final;
-    let mut grad = loss.grad(&a).unwrap();
+    let loss = x_final;
+    let grad = loss.grad(&a).unwrap();
     let results = run_many_traced_with(&mut engine, &[&loss, &grad]).unwrap();
     let ad_grad = get_f64_scalar(&results[1]);
 
@@ -175,8 +173,8 @@ fn eval_all_evaluates_primal_and_gradient() {
 
     let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
 
-    let mut primal = x_final.clone();
-    let mut grad = x_final.grad(&a).unwrap();
+    let primal = x_final.clone();
+    let grad = x_final.grad(&a).unwrap();
 
     // run_many_traced_with merges fragments and deduplicates shared subexpressions.
     // If this panics or returns wrong values, deduplication is broken.

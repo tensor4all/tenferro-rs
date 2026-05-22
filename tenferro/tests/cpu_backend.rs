@@ -3,9 +3,7 @@
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{einsum, RunTraced};
 use tenferro::traced::TracedTensor;
 use tenferro::GraphExecutor;
 use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
@@ -52,7 +50,7 @@ fn test_faer_gemm_basic_f64() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -74,7 +72,7 @@ fn test_faer_gemm_basic_f32() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -104,7 +102,7 @@ fn test_faer_gemm_identity() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut tc = ta.dot_general(&ti, config);
+    let tc = ta.dot_general(&ti, config);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -145,7 +143,7 @@ fn test_batched_gemm() {
         lhs_batch_dims: vec![2],       // batch over dim 2
         rhs_batch_dims: vec![2],       // batch over dim 2
     };
-    let mut tc = ta.dot_general(&tb, config);
+    let tc = ta.dot_general(&tb, config);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -181,7 +179,7 @@ fn test_batched_gemm_via_einsum() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let mut tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk").unwrap();
+    let tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk").unwrap();
 
     let result = tc.run_with(&mut engine).unwrap();
     let data = get_f64_data(&result);
@@ -213,7 +211,7 @@ fn test_strided_input_via_einsum() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let mut tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik").unwrap();
+    let tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik").unwrap();
 
     let result = tc.run_with(&mut engine).unwrap();
     let data = get_f64_data(&result);
@@ -239,7 +237,7 @@ fn test_vector_dot_product() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut tc = tv.dot_general(&tw, config);
+    let tc = tv.dot_general(&tw, config);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tc.run_with(&mut engine).unwrap();
@@ -260,7 +258,7 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone());
     let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone());
     let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone());
-    let mut out1 = einsum(&mut engine, &[&ta1, &tb1, &tc1], "ij,jk,kl->il").unwrap();
+    let out1 = einsum(&mut engine, &[&ta1, &tb1, &tc1], "ij,jk,kl->il").unwrap();
 
     let result1 = out1.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
@@ -271,7 +269,7 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let ta2 = TracedTensor::from_tensor_concrete_shape(a);
     let tb2 = TracedTensor::from_tensor_concrete_shape(b);
     let tc2 = TracedTensor::from_tensor_concrete_shape(c);
-    let mut out2 = einsum(&mut engine, &[&ta2, &tb2, &tc2], "ij,jk,kl->il").unwrap();
+    let out2 = einsum(&mut engine, &[&ta2, &tb2, &tc2], "ij,jk,kl->il").unwrap();
 
     let result2 = out2.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);

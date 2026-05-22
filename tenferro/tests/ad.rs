@@ -1,9 +1,7 @@
 mod support;
 use std::collections::HashMap;
 use std::sync::Arc;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{einsum, run_many_traced_with, RunTraced};
 
 use chainrules_core::ADKey;
 use computegraph::compile::compile;
@@ -259,7 +257,7 @@ fn register_fragment_metadata_for_test(
     register_scoped_global_metadata_batch(registrations)
 }
 
-fn eval_tensor(mut traced: TracedTensor) -> Tensor {
+fn eval_tensor(traced: TracedTensor) -> Tensor {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     traced.run_with(&mut engine).unwrap().clone()
 }
@@ -1910,9 +1908,9 @@ fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
         vec![Complex64::new(3.0, -7.0), Complex64::new(-2.5, 4.0)],
     ));
 
-    let mut roundtrip = x.convert(DType::C64).convert(DType::F64);
-    let mut jvp = x.convert(DType::C64).jvp(&x, &dx);
-    let mut vjp = x.convert(DType::C64).vjp(&x, &cotangent);
+    let roundtrip = x.convert(DType::C64).convert(DType::F64);
+    let jvp = x.convert(DType::C64).jvp(&x, &dx);
+    let vjp = x.convert(DType::C64).vjp(&x, &cotangent);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let results = run_many_traced_with(&mut engine, &[&roundtrip, &jvp, &vjp]).unwrap();
@@ -1932,10 +1930,10 @@ fn grad_real_sum_of_eigvals_matches_trace_gradient() {
         vec![1.0, 0.0, 0.0, 0.2, 2.0, 0.0, -0.1, 0.3, 4.0],
     ));
 
-    let mut loss = tenferro::traced_tensor::eigvals(&a)
+    let loss = tenferro::traced_tensor::eigvals(&a)
         .convert(DType::F64)
         .reduce_sum(&[0]);
-    let mut grad = loss.grad(&a).unwrap();
+    let grad = loss.grad(&a).unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let results = run_many_traced_with(&mut engine, &[&loss, &grad]).unwrap();

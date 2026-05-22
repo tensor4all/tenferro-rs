@@ -1212,3 +1212,6 @@ pub fn eager_einsum_owned_subscripts(
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
     ctx.with_exec_session(|exec| eager_einsum_exec_values(exec, values, tree.as_ref()))
 }
+
+#[cfg(test)]
+mod tests;

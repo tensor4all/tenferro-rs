@@ -10,7 +10,7 @@ mod shape_packing;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::MemoryKind;
 ///
 /// let kind = MemoryKind::UnpinnedHost;
@@ -27,7 +27,7 @@ pub enum MemoryKind {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::ComputeDevice;
 ///
 /// let device = ComputeDevice { kind: "cuda".into(), ordinal: 0 };
@@ -42,7 +42,7 @@ pub struct ComputeDevice {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{ComputeDevice, MemoryKind, Placement};
 ///
 /// let placement = Placement {
@@ -60,7 +60,7 @@ pub struct Placement {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::BufferHandle;
 ///
 /// let handle = BufferHandle::<f64>::new(7);
@@ -76,7 +76,7 @@ impl<T> BufferHandle<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::BufferHandle;
     ///
     /// let handle = BufferHandle::<f64>::new(1);
@@ -94,7 +94,7 @@ impl<T> BufferHandle<T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::Buffer;
 ///
 /// let host = Buffer::Host(vec![1.0_f64, 2.0]);
@@ -200,7 +200,7 @@ impl<'a, T> TypedTensorView<'a, T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::DType;
 ///
 /// assert_eq!(DType::F64 as u8, DType::F64 as u8);
@@ -459,7 +459,7 @@ impl TensorScalar for Complex32 {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
 /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
@@ -681,7 +681,7 @@ impl<'a> TensorRead<'a> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::col_major_strides;
 ///
 /// assert_eq!(col_major_strides(&[2, 3]), vec![1, 2]);
@@ -816,7 +816,7 @@ impl<T: Clone + Zero> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
@@ -837,7 +837,7 @@ impl<T: Clone + One + Zero> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::ones(vec![2]);
@@ -951,7 +951,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
@@ -965,7 +965,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
@@ -1006,7 +1006,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let mut t = TypedTensor::<f64>::zeros(vec![2]);
@@ -1031,7 +1031,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
@@ -1045,7 +1045,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
@@ -1060,7 +1060,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let mut t = TypedTensor::<f64>::zeros(vec![1]);
@@ -1141,7 +1141,7 @@ impl Tensor {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
     /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
@@ -1161,7 +1161,7 @@ impl Tensor {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{DType, Tensor, TypedTensor};
     ///
     /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![1.0]));

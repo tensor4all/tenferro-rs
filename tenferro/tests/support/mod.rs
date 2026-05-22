@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use tenferro::error::Result;
 use tenferro::traced_tensor::EinsumOptimize;
 use tenferro::{

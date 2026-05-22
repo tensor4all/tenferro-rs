@@ -56,7 +56,7 @@ pub enum ElementwiseFusionOp {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 ///
 /// let mut backend = CpuBackend::new();
@@ -381,7 +381,7 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{cpu::CpuBackend, default_exec_session};
 ///
 /// let mut backend = CpuBackend::new();
@@ -399,7 +399,7 @@ pub fn default_exec_session<B: TensorBackend + ?Sized, R: Send>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
 ///
 /// let mut backend = CpuBackend::new();
@@ -607,7 +607,7 @@ pub trait TensorBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
     ///
     /// let mut backend = CpuBackend::new();
@@ -675,7 +675,7 @@ pub trait TensorBackend {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
     ///
     /// let mut backend = CpuBackend::new();

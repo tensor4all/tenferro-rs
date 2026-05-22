@@ -560,8 +560,11 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// let maybe_dx = loss.try_grad(&x)?;
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// # let loss = x.scale_real(2.0);
+    /// let maybe_dx = loss.try_grad(&x).unwrap();
     /// ```
     pub fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
         if self.rank != 0 {
@@ -911,7 +914,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
     /// ```
@@ -932,7 +938,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.mul(&z);
     /// let y2 = &x * &z;
     /// ```
@@ -953,7 +962,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.div(&z);
     /// let y2 = &x / &z;
     /// ```
@@ -974,7 +986,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.neg();
     /// let y2 = -&x;
     /// ```
@@ -986,7 +1000,13 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use num_complex::Complex64;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
+    /// #     vec![2],
+    /// #     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    /// # );
     /// let y = x.conj();
     /// ```
     pub fn conj(&self) -> TracedTensor {
@@ -997,7 +1017,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]);
     /// let y = x.abs();
     /// ```
     pub fn abs(&self) -> TracedTensor {
@@ -1008,7 +1030,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]);
     /// let y = x.sign();
     /// ```
     pub fn sign(&self) -> TracedTensor {
@@ -1019,7 +1043,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.scale_real(2.0);
     /// ```
     pub fn scale_real(&self, factor: f64) -> TracedTensor {
@@ -1040,8 +1066,13 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use num_complex::Complex64;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
+    /// #     vec![2],
+    /// #     vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    /// # );
     /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
     /// ```
     pub fn scale_complex(&self, factor: Complex64) -> TracedTensor {
@@ -1063,7 +1094,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.exp();
     /// ```
     pub fn exp(&self) -> TracedTensor {
@@ -1074,7 +1107,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.log();
     /// ```
     pub fn log(&self) -> TracedTensor {
@@ -1085,7 +1120,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.sin();
     /// ```
     pub fn sin(&self) -> TracedTensor {
@@ -1096,7 +1133,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.cos();
     /// ```
     pub fn cos(&self) -> TracedTensor {
@@ -1107,7 +1146,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.tanh();
     /// ```
     pub fn tanh(&self) -> TracedTensor {
@@ -1118,7 +1159,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
     /// let y = x.sqrt();
     /// ```
     pub fn sqrt(&self) -> TracedTensor {
@@ -1129,7 +1172,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
     /// let y = x.rsqrt();
     /// ```
     pub fn rsqrt(&self) -> TracedTensor {
@@ -1140,7 +1185,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let base = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+    /// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]);
     /// let y = base.pow(&exp);
     /// ```
     pub fn pow(&self, other: &TracedTensor) -> TracedTensor {
@@ -1158,7 +1206,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.expm1();
     /// ```
     pub fn expm1(&self) -> TracedTensor {
@@ -1169,7 +1219,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.log1p();
     /// ```
     pub fn log1p(&self) -> TracedTensor {
@@ -1183,8 +1235,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use tenferro::DType;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     ///
     /// let y = x.convert(DType::C64);
     /// ```
@@ -1209,7 +1263,16 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::{DotGeneralConfig, TracedTensor};
+    /// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    /// # let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    /// # let config = DotGeneralConfig {
+    /// #     lhs_contracting_dims: vec![1],
+    /// #     rhs_contracting_dims: vec![0],
+    /// #     lhs_batch_dims: vec![],
+    /// #     rhs_batch_dims: vec![],
+    /// # };
     /// let y = a.dot_general(&b, config);
     /// ```
     pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
@@ -1257,7 +1320,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_sum(&[0]);
     /// let y2 = x.sum(&[0]);
     /// ```
@@ -1285,7 +1350,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_max(&[0]);
     /// ```
     pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
@@ -1312,7 +1379,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_min(&[0]);
     /// ```
     pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
@@ -1336,7 +1405,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_prod(&[0]);
     /// ```
     pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
@@ -1360,7 +1431,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]);
     /// let y = x.reshape(&[2, 2]);
     /// ```
     pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
@@ -1392,10 +1465,12 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let rows = x.sym_size(0);
     /// let cols = x.sym_size(1);
-    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// ```
     pub fn sym_size(&self, axis: usize) -> SymDim {
         assert!(
@@ -1476,10 +1551,12 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let rows = x.sym_size(0);
     /// let cols = x.sym_size(1);
-    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// ```
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
         let tensor_map = [(self.id, 0usize)];
@@ -1500,7 +1577,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
     /// let y = x.broadcast_in_dim(&[2, 3], &[1]);
     /// let y2 = x.broadcast(&[2, 3], &[1]);
     /// ```
@@ -1611,7 +1690,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let y = x.transpose(&[1, 0]);
     /// ```
     pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
@@ -1633,7 +1714,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.extract_diag(0, 1);
     /// ```
     pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
@@ -1660,7 +1743,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]);
     /// let y = x.embed_diag(0, 1);
     /// ```
     pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
@@ -1685,7 +1770,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.sum(&[0]);
     /// ```
     pub fn sum(&self, axes: &[usize]) -> TracedTensor {
@@ -1696,7 +1783,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
     /// let y = x.broadcast(&[2, 3], &[1]);
     /// ```
     pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {

@@ -298,7 +298,7 @@ impl LapackProviderPtrSet {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
@@ -348,7 +348,7 @@ impl BlasGemmFnPtrSet {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::inject::{
 ///     register_lapack_full_piv_lu_fn_ptrs, LapackFullPivLuFnPtrSet,
 /// };
@@ -451,7 +451,7 @@ fn lapack_registration_status(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
 ///
 /// unsafe {
@@ -490,7 +490,7 @@ pub unsafe fn register_blas_gemm_fn_ptrs(ptrs: BlasGemmFnPtrSet) {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::inject::{
 ///     register_lapack_full_piv_lu_fn_ptrs, LapackFullPivLuFnPtrSet,
 /// };

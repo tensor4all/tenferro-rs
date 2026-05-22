@@ -4,9 +4,7 @@
 //! matching JAX's standard HVP pattern.
 
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{einsum, RunTraced};
 use tenferro::traced::TracedTensor;
 use tenferro::traced_tensor::{qr, svd};
 use tenferro::GraphExecutor;
@@ -32,7 +30,7 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let mut t = traced;
+    let t = traced;
     t.run_with(&mut engine).unwrap().clone()
 }
 

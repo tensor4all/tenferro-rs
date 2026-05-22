@@ -12,9 +12,7 @@
 //! * Mixed graphs (static leaves + placeholder leaves) route data correctly.
 
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::RunTraced;
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
@@ -25,7 +23,7 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 #[test]
 fn identity_on_symbolic_input_rank_1() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let mut y = x.clone();
+    let y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
@@ -41,7 +39,7 @@ fn identity_on_symbolic_input_rank_1() {
 fn addition_of_two_symbolic_inputs() {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let b = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    let mut y = &a + &b;
+    let y = &a + &b;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -57,7 +55,7 @@ fn addition_of_two_symbolic_inputs() {
 #[test]
 fn matrix_symbolic_input_uses_column_major_values() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let mut y = &x + &x;
+    let y = &x + &x;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
@@ -78,7 +76,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     // First eval: shape [2].
-    let mut g1 = graph.clone();
+    let g1 = graph.clone();
     let bound_small = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let out_small = g1
         .run_with_inputs_auto(&mut engine, &[(&x, &bound_small)])
@@ -87,7 +85,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
     assert_eq!(f64_data(&out_small), &[2.0, 4.0]);
 
     // Second eval: shape [5].
-    let mut g2 = graph.clone();
+    let g2 = graph.clone();
     let bound_big = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
     let out_big = g2
         .run_with_inputs_auto(&mut engine, &[(&x, &bound_big)])
@@ -100,7 +98,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
 fn concrete_shape_placeholder_accepts_exact_shape() {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]);
     assert!(x.is_concrete_shape());
-    let mut y = x.clone();
+    let y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -119,7 +117,7 @@ fn mixed_graph_static_and_placeholder_inputs() {
     // placeholder here.
     let static_leaf = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]);
     let placeholder = TracedTensor::input_concrete_shape(DType::F64, &[2]);
-    let mut sum = &static_leaf + &placeholder;
+    let sum = &static_leaf + &placeholder;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -135,7 +133,7 @@ fn mixed_graph_static_and_placeholder_inputs() {
 fn eval_with_empty_bindings_behaves_like_eval_for_all_static_graph() {
     let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let b = TracedTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]);
-    let mut y = &a + &b;
+    let y = &a + &b;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let out = y
@@ -169,7 +167,7 @@ fn from_tensor_symbolic_shape_drops_shape_but_keeps_data() {
 
     // Even though shape is advertised as symbolic, data is attached so plain
     // `eval` (via the no-bindings shortcut) still works.
-    let mut y = x.clone();
+    let y = x.clone();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let out = y.run_with(&mut engine).expect("eval with attached data");
     assert_eq!(out.shape(), &[4]);

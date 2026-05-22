@@ -1,7 +1,5 @@
 mod support;
-use support::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
-};
+use support::{einsum, RunTraced};
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-6;
@@ -20,7 +18,7 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let mut traced = traced;
+    let traced = traced;
     traced.run_with(&mut engine).unwrap().clone()
 }
 
@@ -48,7 +46,7 @@ fn checkpoint_downstream_eval_uses_leaf() {
     y.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let one = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
-    let mut z = &y + &one;
+    let z = &y + &one;
     let value = get_f64_scalar(&z.run_with(&mut engine).unwrap());
     assert!((value - 10.0).abs() < 1.0e-12);
 }
@@ -66,7 +64,7 @@ fn checkpoint_grad_correct() {
 
     let z = &y * &y;
     let grad = z.grad(&x).unwrap();
-    let mut grad = grad;
+    let grad = grad;
     let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
 
     let fd = (((x_value + FD_H).powi(4)) - ((x_value - FD_H).powi(4))) / (2.0 * FD_H);
@@ -129,7 +127,7 @@ fn checkpoint_loop_grad_correct() {
     }
 
     let grad = x.grad(&a).unwrap();
-    let mut grad = grad;
+    let grad = grad;
     let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
 
     let f_concrete = |a_value: f64| {
@@ -164,7 +162,7 @@ fn grad_both_independently_checkpointed_add_wrt_rhs() {
     let z = &x2 + &y2;
 
     let grad_y = z.grad(&y).unwrap();
-    let mut grad_y = grad_y;
+    let grad_y = grad_y;
     let grad_y_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(
         (grad_y_value - 6.0).abs() < TOL,
@@ -190,7 +188,7 @@ fn grad_both_independently_checkpointed_add_wrt_lhs() {
     let z = &x2 + &y2;
 
     let grad_x = z.grad(&x).unwrap();
-    let mut grad_x = grad_x;
+    let grad_x = grad_x;
     let grad_x_value = get_f64_scalar(&grad_x.run_with(&mut engine).unwrap());
     assert!(
         (grad_x_value - 4.0).abs() < TOL,
@@ -216,7 +214,7 @@ fn grad_both_independently_checkpointed_mul_wrt_rhs() {
     let z = &x2 * &y2;
 
     let grad_y = z.grad(&y).unwrap();
-    let mut grad_y = grad_y;
+    let grad_y = grad_y;
     let grad_y_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     let expected = 2.0 * 3.0 * 4.0;
     assert!(
@@ -243,7 +241,7 @@ fn grad_both_independently_checkpointed_matches_fd() {
     x2.checkpoint(&mut compiler, &mut executor).unwrap();
     y2.checkpoint(&mut compiler, &mut executor).unwrap();
     let z = &x2 + &y2;
-    let mut grad_y = z.grad(&y).unwrap();
+    let grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(
         (ad_value - fd).abs() < TOL,
@@ -269,7 +267,7 @@ fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
 
     let grad_y = z.grad(&y).unwrap();
-    let mut grad_y = grad_y;
+    let grad_y = grad_y;
     let grad_y_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(
         (grad_y_value - 24.0).abs() < TOL,
@@ -295,7 +293,7 @@ fn grad_einsum_both_independently_checkpointed_wrt_lhs() {
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
 
     let grad_x = z.grad(&x).unwrap();
-    let mut grad_x = grad_x;
+    let grad_x = grad_x;
     let grad_x_value = get_f64_scalar(&grad_x.run_with(&mut engine).unwrap());
     assert!(
         (grad_x_value - 36.0).abs() < TOL,
@@ -321,7 +319,7 @@ fn grad_einsum_both_independently_checkpointed_matches_fd() {
     x2.checkpoint(&mut compiler, &mut executor).unwrap();
     y2.checkpoint(&mut compiler, &mut executor).unwrap();
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
-    let mut grad_y = z.grad(&y).unwrap();
+    let grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(
         (ad_value - fd).abs() < TOL,
