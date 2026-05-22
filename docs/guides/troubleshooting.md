@@ -57,10 +57,12 @@ supported scalar type.
 
 ## Column-Major and Row-Major Confusion
 
-`Tensor::from_vec` reads flat data as column-major. When porting PyTorch,
-NumPy, or JAX examples that use row-major flat data, convert the data to
-column-major before construction. If another library expects row-major output,
-convert the exported `try_into_vec::<T>()` buffer at that boundary.
+`Tensor::from_vec_col_major` expects tenferro's physical column-major order.
+When porting PyTorch, NumPy, or JAX examples that use row-major flat data, use
+`Tensor::from_vec_row_major` at the import boundary. If another library expects
+row-major output, export with `try_into_vec_row_major::<T>()`; use
+`try_into_vec_col_major::<T>()` when the consumer expects tenferro's physical
+order.
 See [Memory Order](memory-order.md).
 
 ## CPU Backend Feature Conflicts

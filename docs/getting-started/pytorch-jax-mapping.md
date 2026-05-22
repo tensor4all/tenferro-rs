@@ -6,21 +6,23 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 | Concept | PyTorch | JAX | tenferro |
 |---|---|---|---|
-| Eager tensor | `numpy.ndarray` | — | `Tensor` + a backend |
-| Tensor handle | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `TracedTensor` |
+| Typed concrete tensor | `torch.Tensor` with fixed dtype | `jax.Array` with fixed dtype | `TypedTensor<T>` |
+| Dynamic concrete tensor | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `Tensor` + a backend |
+| Graph-building tensor handle | `torch.Tensor` under compiled/tracing tools | traced `jax.Array` values | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `GraphExecutor::run` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor`) |
 | Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
-| Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro::traced_tensor::einsum` |
+| Matrix contraction | `torch.einsum` | `jnp.einsum` | `typed_tensor::einsum`, `tensor::einsum`, `eager_tensor::einsum`, or `traced_tensor::einsum` |
 
 ## Function mapping
 
 | Task | PyTorch | JAX | tenferro (eager) | tenferro (lazy/AD) |
 |---|---|---|---|---|
-| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
+| Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
+| Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
 | Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut ctx)` | `tenferro::traced_tensor::matmul(&a, &b)` |
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
@@ -61,7 +63,11 @@ between devices implicitly. Upload CPU tensors with
 `tenferro::cuda::upload_tensor` before CUDA backend operations, and download
 with `tenferro::cuda::download_tensor` before inspecting values on the host.
 
-CUDA support targets NVIDIA CUDA through the CubeCL backend. See
+For eager CUDA execution, operation calls submit work and return CUDA tensor
+handles. The host synchronizes at download/read boundaries or at operations
+that must inspect device-side status; there is no user-visible ready flag.
+
+CUDA support targets NVIDIA CUDA. See
 [Devices and GPU](../guides/devices-and-gpu.md) for the current coverage and
 setup commands.
 

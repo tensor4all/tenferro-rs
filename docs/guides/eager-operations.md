@@ -1,9 +1,9 @@
 # Eager Operations
 
-This guide covers using tenferro for direct computation with eager
-reverse-mode autodiff on scalar losses: the path you would choose for
-NumPy-like workflows where you control the computation explicitly and call
-`backward()` when you need gradients.
+This guide covers immediate execution: direct no-AD tensor computation and
+PyTorch-like eager reverse-mode autodiff on scalar losses. Start with
+`TypedTensor<T>` or `Tensor` for no-AD work. Use `EagerTensor` only when the
+workflow needs gradient accumulation and `backward()`.
 
 ## Setup
 
@@ -13,18 +13,24 @@ use tenferro::{CpuBackend, Tensor, TypedTensor};
 let mut ctx = CpuBackend::new();
 ```
 
-Every eager operation requires a backend context. `CpuBackend` is the standard
-CPU backend using the faer linear algebra library. With the `cuda` feature, the
-same concrete and eager APIs can execute supported operations on the CubeCL/CUDA
-backend when tensors are explicitly placed on the GPU.
+Every direct tensor operation requires a backend context. `CpuBackend` is the
+standard CPU backend using the faer linear algebra library. With the `cuda`
+feature, the same concrete and eager surfaces can execute supported operations
+on the CUDA backend when tensors are explicitly placed on the GPU.
 
 `EagerRuntime` is the gradient-owning wrapper for eager AD state. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most eager operations are methods on `Tensor`. `TypedTensor<T>` is useful when
-you want compile-time dtype safety for construction or direct host-side data
-access.
+Most broad concrete operations are methods on `Tensor`. `TypedTensor<T>` is the
+first layer to consider when you want compile-time dtype safety, typed
+host-side data, or typed linalg/einsum wrappers.
+
+For CUDA, eager means the operation is submitted immediately. It does not mean
+the host waits after every GPU kernel. Host synchronization happens at
+download/read boundaries or inside operations that must inspect device-side
+status. See [Execution Models](execution-models.md) and
+[Devices and GPU](devices-and-gpu.md).
 
 ## Creating tensors
 
@@ -195,13 +201,15 @@ assert!(x.grad().is_none());
 assert!(y.grad().is_none());
 ```
 
-## When to use eager vs lazy
+## When To Use Each Immediate Layer
 
 | Scenario | Recommended |
 |----------|-------------|
-| Data preprocessing | Eager (`Tensor` + a backend) |
-| TCI inner loops | Eager |
-| Exploratory computation | Eager |
+| Fixed scalar type and no AD | `TypedTensor<T>` |
+| Dynamic dtype and no AD | `Tensor` + a backend |
+| Data preprocessing | `Tensor` + a backend |
+| TCI inner loops | Direct/eager execution |
+| Exploratory computation | Direct/eager execution |
 | Need scalar-loss reverse-mode gradients | Eager (`EagerTensor::backward()`) |
 | Need transform AD (`grad` / `vjp` / `jvp` / HVP) | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
 | CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphExecutor<B>`) with explicit upload/download |

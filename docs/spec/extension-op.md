@@ -68,7 +68,7 @@ This document does **not** own:
 ## 3. Why a spec is needed before implementation
 
 A raw `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` carrier is simple to add
-but underspecified on its own. This specification answers five questions that
+but underspecified on its own. This specification answers six questions that
 must be fixed for graph interning, AD caching, serialization boundaries, and
 runtime dispatch to remain deterministic:
 
@@ -84,6 +84,8 @@ runtime dispatch to remain deterministic:
 5. **How do caches stay stable across processes or versions?** Answered
    normatively in Section 11 (serialization compatibility) and
    Section 12 (failure modes).
+6. **Where may extension runtime caches live?** Answered normatively in
+   Section 4 under runtime cache ownership.
 
 This document is the normative answer for all five.
 
@@ -240,6 +242,32 @@ This design parallels how `std::any::Any`-style downcasts work in Rust:
 identity and equality are carried by a type-erased handle, and the
 concrete type is recovered only when the implementer explicitly chooses
 to compare.
+
+### Runtime cache ownership
+
+Extension payload identity and extension runtime caching are separate
+contracts.
+
+An `ExtensionOp` payload MUST describe operation semantics. Payload hashing and
+equality MUST NOT depend on cache warmth, vendor plan handles, allocated
+workspace, stream state, or other mutable runtime state. If such state changes
+the mathematical result or device placement contract, it is not a cache and
+MUST be represented as semantic payload instead.
+
+Extension crates that need plan caches or vendor handles MUST own them in an
+explicit runtime/cache object outside the semantic payload contract. That owner
+MUST be bounded by default and SHOULD expose clear, capacity, and stats APIs
+consistent with the workspace cache ownership rules. The op payload MAY hold an
+`Arc` to the extension-owned cache object only when that cache is a performance
+detail and two equal payloads remain interchangeable when their cache handles
+differ.
+
+There is no monolithic core runtime owner for extension cache state, and the
+current `EagerRuntime`, `GraphCompiler`, and `GraphExecutor` do not expose a
+general public extension cache slot. Compiled extension execution delegates to
+`ExtensionOp::eager_execute`, so eager and traced execution use the same
+extension-owned runtime cache path. First-class extension cache slots are
+tracked in [issue #878](https://github.com/tensor4all/tenferro-rs/issues/878).
 
 ### Rationale
 

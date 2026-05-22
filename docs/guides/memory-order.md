@@ -1,12 +1,37 @@
 # Memory Order
 
-tenferro dense tensors use column-major flat buffers. The leftmost dimension
-varies fastest in memory.
+tenferro dense tensors use contiguous column-major storage. The leftmost
+dimension varies fastest in memory.
+
+This is intentional. tenferro is designed to feel natural for Fortran, Julia,
+MATLAB, Eigen/LAPACK-oriented, and scientific computing workflows where
+column-major arrays are common. It also gives a clear convention for batched
+linear algebra: keep compute dimensions on the left and batch dimensions on
+the right.
+
+## Shape And Flat Buffer
+
+For a logical `[2, 3]` matrix:
+
+```text
+[[1, 2, 3],
+ [4, 5, 6]]
+```
+
+the column-major flat buffer is:
+
+```text
+[1, 4, 2, 5, 3, 6]
+```
 
 ```rust
 use tenferro::Tensor;
 
-let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+let tensor = Tensor::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+);
+
 assert_eq!(tensor.shape(), &[2, 3]);
 assert_eq!(
     tensor.as_slice::<f64>().unwrap(),
@@ -14,46 +39,40 @@ assert_eq!(
 );
 ```
 
-The logical matrix is:
-
-```text
-[[1, 2, 3],
- [4, 5, 6]]
-```
-
 ## Importing Row-Major Data
 
-PyTorch, NumPy, and JAX examples often show row-major flat buffers. Convert
-those buffers to column-major before constructing a tenferro tensor.
+PyTorch, NumPy, JAX, and many C-style examples present flat buffers in
+row-major order. Use `from_vec_row_major` at the boundary when the input buffer
+is written row by row.
 
 ```rust
 use tenferro::Tensor;
 
-fn row_major_to_column_major<T: Copy>(shape: &[usize], data: &[T]) -> Vec<T> {
-    assert_eq!(shape.len(), 2);
-    let rows = shape[0];
-    let cols = shape[1];
-    assert_eq!(data.len(), rows * cols);
-
-    let mut out = Vec::with_capacity(data.len());
-    for col in 0..cols {
-        for row in 0..rows {
-            out.push(data[row * cols + col]);
-        }
-    }
-    out
-}
-
-let shape = vec![2, 3];
-let row_major = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-let column_major = row_major_to_column_major(&shape, &row_major);
-let tensor = Tensor::from_vec_col_major(shape, column_major);
+let tensor = Tensor::from_vec_row_major(
+    vec![2, 3],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+);
 
 assert_eq!(
     tensor.as_slice::<f64>().unwrap(),
     &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
 );
 ```
+
+Use `from_vec_col_major` when the buffer already follows tenferro's physical
+order. Use `from_vec_row_major` when the buffer follows the order shown in most
+PyTorch, NumPy, and JAX snippets.
+
+## Batch Axes
+
+Because tenferro is column-major, trailing batch axes are natural for batched
+matrix operations and einsum. In a shape like `[m, k, batch]`, each batch slice
+contains a contiguous `[m, k]` matrix, so the backend can operate on each matrix
+without treating batch as the fastest-varying dimension.
+
+This differs from many PyTorch examples that place batch first. When porting
+code, prefer moving batch axes to the right if the tensor will feed repeated
+linear algebra or contraction kernels.
 
 ## Owned Export
 
@@ -63,7 +82,7 @@ Owned export returns the column-major host buffer:
 use tenferro::Tensor;
 
 let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-let (shape, data) = tensor.try_into_vec::<f64>().unwrap();
+let (shape, data) = tensor.try_into_vec_col_major::<f64>().unwrap();
 
 assert_eq!(shape, vec![2, 2]);
 assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);

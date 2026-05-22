@@ -1,13 +1,21 @@
 # Autodiff
 
-tenferro exposes transform-oriented autodiff directly on `TracedTensor`.
-Eager tensors also support scalar-loss reverse-mode via `backward()`, but this
-page focuses on graph transforms that you compile and execute explicitly.
+tenferro supports two autodiff workflows on top of the same dense tensor stack:
+
+- PyTorch-like scalar-loss eager AD with `EagerTensor::backward()`,
+- JAX-like transform AD on `TracedTensor`.
+
+This page focuses on graph transforms that you compile and execute explicitly.
+For eager accumulation semantics, see [Eager Operations](eager-operations.md).
 
 - `grad` for scalar-loss reverse mode
 - `vjp` for vector-Jacobian products
 - `jvp` for Jacobian-vector products
 - Higher-order AD via composition, such as `jvp(grad(f))` for HVPs
+
+AD rules are extensible outside the core crate. Extension crates can register
+JVP/VJP rules for their operations; [`tenferro-fft`](tenferro-fft.md) is the
+current example.
 
 ## Reverse-mode gradient with `grad`
 
@@ -110,3 +118,14 @@ let mut executor = GraphExecutor::new(CpuBackend::new());
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
+
+## Extension AD Rules
+
+External operations can participate in autodiff when the extension crate
+registers the corresponding rules. If an extension does not support a given AD
+path, tenferro reports that path as unsupported rather than silently returning
+an incorrect gradient.
+
+The `tenferro-fft` extension demonstrates this pattern for supported
+complex-to-complex FFT transforms. See [Custom Tensor Operations](custom-operations.md)
+for the extension model.

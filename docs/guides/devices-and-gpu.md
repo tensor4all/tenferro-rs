@@ -1,11 +1,40 @@
 # Devices and GPU
 
-tenferro follows the PyTorch convention: no implicit CPU/GPU transfer. Upload
-CPU tensors before CUDA backend operations and download results before host
-inspection.
+tenferro follows the PyTorch convention: no implicit CPU/GPU transfer. A tensor
+must already live on the device required by the backend operation.
 
-CUDA support targets NVIDIA CUDA through the CubeCL backend. AMD/ROCm is not a
+CUDA is a backend/device axis, not a separate tensor layer. The same concrete,
+eager, and traced surfaces can run supported CUDA operations when tensors are
+explicitly uploaded to CUDA memory and the executor/backend is CUDA-backed.
+
+CUDA support targets NVIDIA CUDA. AMD/ROCm is not a
 supported execution path yet.
+
+## Transfer Model
+
+| Boundary | What happens |
+| --- | --- |
+| CPU tensor to CUDA backend | Upload first with `tenferro::cuda::upload_tensor` |
+| CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
+| CUDA tensor to CPU backend | Programming error or explicit failure; download first |
+| CUDA tensor to host inspection | Download with `tenferro::cuda::download_tensor` |
+| Unsupported CUDA op or dtype | Error, not silent CPU fallback |
+
+Keep tensors on CUDA across a CUDA workload. Download only when the host needs
+to inspect values or hand data to CPU-only code.
+
+## Eager GPU Synchronization
+
+Eager CUDA execution submits work immediately and returns a CUDA-resident
+`Tensor` handle. It does not expose a user-visible ready flag, and normal
+kernel launches do not imply host synchronization after every op. Subsequent
+CUDA ops can consume the returned handle on the same backend stream.
+
+The host waits when a value is downloaded or otherwise inspected on the host.
+Some library-backed operations also synchronize internally when they must read
+device-side status.
+
+For a time-axis diagram, see [Execution Models](execution-models.md).
 
 ## CUDA Quickstart
 
@@ -42,13 +71,23 @@ cargo check -p tenferro --features cuda --example cuda_quickstart
 Run it on a configured CUDA machine:
 
 ```bash
-CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:$LD_LIBRARY_PATH \
   cargo run -p tenferro --features cuda --example cuda_quickstart
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+
+## CUDA Across Tensor Layers
+
+| Tensor layer | CUDA model |
+| --- | --- |
+| `TypedTensor<T>` | Concrete CUDA storage is possible after upload; typed operation coverage depends on the operation family |
+| `Tensor` | Main concrete CUDA value for backend execution |
+| `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
+| `TracedTensor` | Graphs can be executed by `GraphExecutor<CudaBackend>` for supported ops |
+
+CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 
 ## Coverage
 

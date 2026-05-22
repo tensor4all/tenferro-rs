@@ -1,31 +1,41 @@
 # Core Concepts
 
-## Data And Execution
+tenferro separates tensor data, execution timing, automatic differentiation,
+and device placement. That separation is the main design point: users can stay
+in no-AD typed tensor code for ordinary numeric work, move to eager AD for
+PyTorch-like training loops, or move to traced graphs for JAX-like transforms
+and compile/run reuse.
 
-tenferro keeps tensor values, eager AD state, graph compilation, and backend
-execution as separate pieces. That separation is intentional: it makes memory
-order, compilation reuse, and backend placement explicit.
+## The Three Axes
 
-| Piece | Use |
-| --- | --- |
-| `TypedTensor<T>` | Concrete tensor storage with a compile-time scalar type |
-| `Tensor` | Concrete tensor storage with a runtime dtype enum |
-| `EagerTensor` + `EagerRuntime` | PyTorch-style scalar-loss `backward()` |
-| `TracedTensor` | Lazy graph-building handle for transform AD and reuse |
-| `GraphCompiler` | Lowers traced outputs into reusable `GraphProgram`s |
-| `GraphExecutor<B>` | Runs compiled programs on a backend such as `CpuBackend` |
+| Axis | What it controls | User-facing choices |
+| --- | --- | --- |
+| Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
+| Execution model | When operations run | Direct, eager AD, traced compile/run |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro::cuda::CudaBackend` |
 
-Choose the smallest surface that matches the workflow:
+CUDA is not a separate tensor layer. The same concrete, eager, and traced
+surfaces can run supported operations on CUDA tensors when data is explicitly
+uploaded to a CUDA backend.
 
-- Direct numeric work -> `Tensor` or `TypedTensor<T>` with a backend.
-- Scalar-loss eager AD -> `EagerTensor` inside an `EagerRuntime`.
-- Transform AD, graph reuse, or symbolic inputs -> `TracedTensor` compiled by
-  `GraphCompiler` and run by `GraphExecutor`.
+## Tensor Layers
 
-## Memory Order
+| Layer | Role | Good fit |
+| --- | --- | --- |
+| `TypedTensor<T>` | Concrete no-AD tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
+| `Tensor` | Concrete no-AD tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
+| `EagerTensor` | Concrete tensor plus eager gradient state | Scalar-loss reverse-mode AD with `backward()` |
+| `TracedTensor` | Symbolic graph-building tensor | Transform AD, graph optimization, repeated execution |
 
-tenferro stores dense tensors in column-major order. Constructors name the input
-order explicitly:
+Use the smallest layer that matches the job. AD is optional, and many projects
+should never leave the concrete tensor layers.
+
+## Memory Model
+
+tenferro stores dense tensors as contiguous column-major buffers. The leftmost
+dimension varies fastest in memory. This matches Fortran, Julia, MATLAB, and
+LAPACK-oriented workflows, and makes trailing batch axes natural for batched
+linear algebra and contractions.
 
 ```rust
 use tenferro::{Tensor, TypedTensor};
@@ -43,16 +53,17 @@ let dynamic = Tensor::from_vec_row_major(
 assert_eq!(dynamic.as_slice::<f64>().unwrap(), typed.as_slice());
 ```
 
-Use `from_vec_row_major` for data written in the conventional row-by-row style.
-Use `from_vec_col_major` when the buffer is already in tenferro's physical
-order.
+Use `from_vec_row_major` for data copied from PyTorch, NumPy, JAX, or C-style
+examples. Use `from_vec_col_major` when the flat buffer is already in tenferro's
+physical order.
 
 ## Direct Tensor Execution
 
-`Tensor` and `TypedTensor<T>` operations run immediately through a backend.
+`Tensor` operations run immediately through an explicit backend. Use this for
+ordinary no-AD computation when runtime dtype is useful.
 
 ```rust
-use tenferro::{CpuBackend, Tensor, TensorBackend};
+use tenferro::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -62,10 +73,27 @@ let c = a.matmul(&b, &mut backend).unwrap();
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
+`TypedTensor<T>` is the compile-time scalar type layer. It is useful when the
+project already knows it is working with `f64`, `f32`, complex values, or
+another supported scalar type.
+
+```rust
+use tenferro::typed_tensor::einsum;
+use tenferro::{CpuBackend, TypedTensor};
+
+let mut backend = CpuBackend::new();
+let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+
+let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
+assert_eq!(c.shape.as_slice(), &[2, 2]);
+```
+
 ## Eager AD
 
 `EagerTensor` wraps concrete values in an `EagerRuntime` that owns gradient
-state. It is the right fit for scalar-loss reverse-mode workflows.
+state. It matches the PyTorch scalar-loss pattern: compute now, inspect now,
+call `backward()`, and clear gradients when you want a fresh accumulation.
 
 ```rust
 use tenferro::{EagerRuntime, Tensor};
@@ -80,8 +108,9 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
 ## Traced Graph Execution
 
-`TracedTensor` operations are lazy. Build a graph, compile it once, then run the
-compiled program through a backend executor.
+`TracedTensor` operations are lazy. They build a graph. A `GraphCompiler`
+lowers that graph into a reusable program, and a `GraphExecutor<B>` runs the
+program on a backend.
 
 ```rust
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
@@ -98,22 +127,5 @@ let result = executor.run(&program).unwrap();
 assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 ```
 
-For symbolic placeholders, provide input specs at compile time and concrete
-bindings at run time:
-
-```rust
-use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
-
-let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-let y = &x + &x;
-
-let mut compiler = GraphCompiler::new();
-let program = compiler
-    .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
-    .unwrap();
-let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
-
-assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
-```
+Traced mode is the right layer for transform AD (`grad`, `vjp`, `jvp`, HVP),
+symbolic inputs, graph optimization, and repeated execution.
