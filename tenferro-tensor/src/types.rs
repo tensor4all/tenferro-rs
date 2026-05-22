@@ -755,6 +755,33 @@ fn for_each_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
     }
 }
 
+fn for_each_row_major_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
+    if shape.is_empty() {
+        f(&[]);
+        return;
+    }
+    if shape.iter().any(|&dim| dim == 0) {
+        return;
+    }
+
+    let mut index = vec![0; shape.len()];
+    loop {
+        f(&index);
+        let mut axis = shape.len();
+        loop {
+            axis -= 1;
+            index[axis] += 1;
+            if index[axis] < shape[axis] {
+                break;
+            }
+            index[axis] = 0;
+            if axis == 0 {
+                return;
+            }
+        }
+    }
+}
+
 fn row_major_to_col_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
     checked_shape_len(shape, data.len(), "from_vec_row_major");
     let mut out = Vec::with_capacity(data.len());
@@ -770,15 +797,11 @@ fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
         return data;
     }
 
-    let mut indexed = Vec::with_capacity(data.len());
-    for_each_index(shape, |index| {
-        indexed.push((row_major_offset(shape, index), linear_offset(shape, index)));
+    let mut out = Vec::with_capacity(data.len());
+    for_each_row_major_index(shape, |index| {
+        out.push(data[linear_offset(shape, index)].clone());
     });
-    indexed.sort_by_key(|&(row_offset, _)| row_offset);
-    indexed
-        .into_iter()
-        .map(|(_, col_offset)| data[col_offset].clone())
-        .collect()
+    out
 }
 
 pub(crate) fn default_placement() -> Placement {

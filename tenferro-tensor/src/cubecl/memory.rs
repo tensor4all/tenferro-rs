@@ -140,7 +140,7 @@ fn download_typed<T: CubeElement + Clone>(
             message: format!("{err:?}"),
         })?;
     let data = T::from_bytes(&bytes).to_vec();
-    Ok(TypedTensor::from_vec(typed.shape.clone(), data))
+    Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
 }
 
 fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl::server::Handle> {

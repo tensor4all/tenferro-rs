@@ -867,10 +867,10 @@ where
     }
 
     Ok((
-        TypedTensor::from_vec(p_shape, p_data),
-        TypedTensor::from_vec(l_shape, l_data),
-        TypedTensor::from_vec(u_shape, u_data),
-        TypedTensor::from_vec(parity_shape, parity_data),
+        TypedTensor::from_vec_col_major(p_shape, p_data),
+        TypedTensor::from_vec_col_major(l_shape, l_data),
+        TypedTensor::from_vec_col_major(u_shape, u_data),
+        TypedTensor::from_vec_col_major(parity_shape, parity_data),
     ))
 }
 
@@ -900,7 +900,7 @@ where
     let parity_len = batch_count(batch_shape);
     let parity = upload_host_tensor(
         rt,
-        TypedTensor::from_vec(parity_shape, vec![T::one(); parity_len.max(1)]),
+        TypedTensor::from_vec_col_major(parity_shape, vec![T::one(); parity_len.max(1)]),
     )?;
     Ok((
         alloc_output(rt, &p_shape),
@@ -1047,7 +1047,7 @@ where
             message: format!("failed to download tensor: {err:?}"),
         }
     })?;
-    Ok(TypedTensor::from_vec(
+    Ok(TypedTensor::from_vec_col_major(
         tensor.shape.clone(),
         T::from_bytes(&bytes).to_vec(),
     ))

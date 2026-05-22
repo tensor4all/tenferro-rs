@@ -231,7 +231,7 @@ impl CubeclBackend {
                 })
             }
         };
-        let converted = Tensor::F64(TypedTensor::from_vec(
+        let converted = Tensor::F64(TypedTensor::from_vec_col_major(
             indices.shape.clone(),
             host_values.into_iter().map(|value| value as f64).collect(),
         ));

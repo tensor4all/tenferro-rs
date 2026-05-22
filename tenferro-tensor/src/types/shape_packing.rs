@@ -61,7 +61,10 @@ fn index_select_parts(
             })
         })
         .collect::<crate::Result<Vec<_>>>()?;
-    let indices = Tensor::I64(TypedTensor::from_vec(vec![positions.len(), 1], index_data));
+    let indices = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![positions.len(), 1],
+        index_data,
+    ));
 
     let config = GatherConfig {
         offset_dims,

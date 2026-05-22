@@ -122,7 +122,10 @@ where
             .map_err(|err| backend_failure(label, err))?;
     }
 
-    Ok(TypedTensor::from_vec(output_shape, current.into_data()))
+    Ok(TypedTensor::from_vec_col_major(
+        output_shape,
+        current.into_data(),
+    ))
 }
 
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>

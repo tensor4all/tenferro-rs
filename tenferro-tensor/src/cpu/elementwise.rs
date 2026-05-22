@@ -151,7 +151,7 @@ fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
 where
     T: Copy + Clone + Zero,
 {
-    TypedTensor::from_vec(vec![], vec![Complex::new(scalar, T::zero())])
+    TypedTensor::from_vec_col_major(vec![], vec![Complex::new(scalar, T::zero())])
 }
 
 fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
