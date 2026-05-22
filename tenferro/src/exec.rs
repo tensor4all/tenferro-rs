@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::compiler::compile_std_to_exec;
-use crate::engine::NaryEinsumCache;
 use crate::error::{Error, Result};
+use crate::graph::cache::NaryEinsumCache;
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::materialize::materialize_merge;
@@ -327,7 +327,7 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
     let mut cache = NaryEinsumCache::new(
-        std::num::NonZeroUsize::new(crate::engine::DEFAULT_EINSUM_CACHE_CAPACITY)
+        std::num::NonZeroUsize::new(crate::graph::cache::DEFAULT_EINSUM_CACHE_CAPACITY)
             .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
     );
     eval_exec_ir_unsegmented_with_cache(backend, program, inputs, &mut cache)

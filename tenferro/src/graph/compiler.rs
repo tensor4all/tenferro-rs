@@ -195,54 +195,6 @@ impl GraphCompiler {
         self.compile_many_with_descriptors(&[output], &binding_specs, output.inputs_map.as_ref())
     }
 
-    pub(crate) fn compile_with_tensor_bindings(
-        &mut self,
-        output: &TracedTensor,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<(GraphProgram, Vec<Tensor>)> {
-        let mut binding_specs = HashMap::new();
-        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
-            validate_placeholder_tensor(index, placeholder, tensor)?;
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-            if binding_specs
-                .insert(
-                    key.clone(),
-                    InputDescriptor {
-                        key: key.clone(),
-                        dtype: tensor.dtype(),
-                        shape: tensor.shape().to_vec(),
-                        default_tensor: Some(Arc::new((*tensor).clone())),
-                    },
-                )
-                .is_some()
-            {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        let program = self.compile_many_with_descriptors(
-            &[output],
-            &binding_specs,
-            output.inputs_map.as_ref(),
-        )?;
-        let mut input_tensors = Vec::with_capacity(program.inputs.len());
-        for input in &program.inputs {
-            let tensor =
-                input
-                    .default_tensor
-                    .as_ref()
-                    .ok_or_else(|| Error::UnboundPlaceholder {
-                        input_key: format!("{:?}", input.key),
-                    })?;
-            input_tensors.push(tensor.as_ref().clone());
-        }
-        Ok((program, input_tensors))
-    }
-
     /// Number of compiled programs currently retained.
     ///
     /// # Examples
@@ -507,29 +459,6 @@ fn validate_placeholder_spec(
         });
     }
     validate_placeholder_shape(placeholder, shape)
-}
-
-fn validate_placeholder_tensor(
-    index: usize,
-    placeholder: &TracedTensor,
-    tensor: &Tensor,
-) -> Result<()> {
-    if placeholder.data.is_some() {
-        return Err(Error::UnexpectedBinding {
-            binding_index: index,
-        });
-    }
-    let _ = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-        binding_index: index,
-    })?;
-
-    if placeholder.dtype != tensor.dtype() {
-        return Err(Error::PlaceholderDtypeMismatch {
-            expected: placeholder.dtype,
-            actual: tensor.dtype(),
-        });
-    }
-    validate_placeholder_shape(placeholder, tensor.shape())
 }
 
 fn validate_placeholder_shape(placeholder: &TracedTensor, shape: &[usize]) -> Result<()> {

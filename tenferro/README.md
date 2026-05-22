@@ -6,14 +6,16 @@ User-facing tensor facade for the `tenferro-rs` v2 workspace.
 It exposes eager execution through `EagerTensor` and `EagerRuntime`, including
 scalar-loss reverse-mode accumulation via `backward()`, and it exposes
 traced, transform-oriented AD through `TracedTensor` with `grad`, `vjp`,
-`jvp`, and HVP composition. The crate also owns the execution engine
-(`Engine<B>`), StableHLO-style lowering, execution-IR compilation, public
-einsum helpers, and public multi-output linalg helpers.
+`jvp`, and HVP composition. The crate also owns explicit graph compilation
+through `GraphCompiler`, backend execution through `GraphExecutor<B>`,
+StableHLO-style lowering, execution-IR compilation, public einsum helpers,
+and public multi-output linalg helpers.
 
 ## Public Surface
 
 - `TracedTensor`
-- `Engine`
+- `GraphCompiler`
+- `GraphExecutor`
 - `EagerTensor`
 - `EagerRuntime`
 - `traced_tensor::einsum` and `traced_tensor::einsum_with`
@@ -44,7 +46,7 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
 ```rust
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec(shape, data))
@@ -60,9 +62,10 @@ fn main() {
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
-    let out = c.eval(&mut engine).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let program = compiler.compile(&c).unwrap();
+    let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
 }

@@ -13,17 +13,21 @@
 //! The tests verify forward results and backward (`grad`) results against
 //! hand-computed expected values.
 
+mod support;
 use std::any::Any;
 use std::hash::Hasher;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 
 use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro::extension::{apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait};
-use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Engine, Tensor, TracedTensor};
+use tenferro::{CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
@@ -394,11 +398,11 @@ fn scale_by_2_forward_roundtrip() {
     assert_eq!(outputs.len(), 1);
     let mut y = outputs.into_iter().next().unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
 
     assert_eq!(result.shape(), &[3]);
-    assert_eq!(f64_slice(result), &[2.0, 4.0, 6.0]);
+    assert_eq!(f64_slice(&result), &[2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -414,11 +418,11 @@ fn scale_by_2_grad_against_reduce_sum() {
     let loss = scaled.reduce_sum(&[0]);
 
     let mut g = loss.grad(&x).expect("grad build");
-    let mut engine = Engine::new(CpuBackend::new());
-    let grad_out = g.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let grad_out = g.run_with(&mut engine).unwrap();
 
     assert_eq!(grad_out.shape(), &[4]);
-    assert_eq!(f64_slice(grad_out), &[2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(f64_slice(&grad_out), &[2.0, 2.0, 2.0, 2.0]);
 }
 
 #[test]
@@ -568,13 +572,13 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
     let mut g = loss.grad(&x).expect("grad build");
     let bound = Tensor::from_vec(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g
-        .eval_with_inputs(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("grad eval");
 
     assert_eq!(grad_out.shape(), &[5]);
-    assert_eq!(f64_slice(grad_out), &[2.0, 2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(f64_slice(&grad_out), &[2.0, 2.0, 2.0, 2.0, 2.0]);
 }
 
 #[test]
@@ -589,9 +593,9 @@ fn swap_forward_roundtrip() {
     let mut out_first = iter.next().unwrap();
     let mut out_second = iter.next().unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let t0 = out_first.eval(&mut engine).unwrap().clone();
-    let t1 = out_second.eval(&mut engine).unwrap().clone();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let t0 = out_first.run_with(&mut engine).unwrap().clone();
+    let t1 = out_second.run_with(&mut engine).unwrap().clone();
 
     // (a, b) -> (b, a)
     assert_eq!(f64_slice(&t0), &[100.0, 200.0]);
@@ -617,9 +621,9 @@ fn swap_grad_routes_cotangents_across_inputs() {
     let mut grad_a = loss.grad(&a).expect("grad a");
     let mut grad_b = loss.grad(&b).expect("grad b");
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let ga = grad_a.eval(&mut engine).unwrap().clone();
-    let gb = grad_b.eval(&mut engine).unwrap().clone();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let ga = grad_a.run_with(&mut engine).unwrap().clone();
+    let gb = grad_b.run_with(&mut engine).unwrap().clone();
 
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);
     assert_eq!(f64_slice(&gb), &[1.0, 1.0, 1.0]);
@@ -640,8 +644,8 @@ fn swap_grad_routes_only_through_active_output() {
     let loss = out1.reduce_sum(&[0]);
 
     let mut grad_a = loss.grad(&a).expect("grad a");
-    let mut engine = Engine::new(CpuBackend::new());
-    let ga = grad_a.eval(&mut engine).unwrap().clone();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let ga = grad_a.run_with(&mut engine).unwrap().clone();
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);
 
     // grad wrt b: sum(out1) does not depend on b; try_grad returns None.

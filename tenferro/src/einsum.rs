@@ -1,8 +1,8 @@
 //! N-ary einsum with configurable contraction strategy.
 //!
 //! This module provides free functions [`einsum`] and [`einsum_with`]. They
-//! build a lazy computation graph; call `.eval(&mut engine)` on the result to
-//! trigger execution.
+//! build a lazy computation graph; compile it with [`GraphCompiler`] and run
+//! the compiled program with [`crate::GraphExecutor`].
 //!
 //! # Quick start
 //!

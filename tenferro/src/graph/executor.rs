@@ -558,16 +558,12 @@ fn resolve_inputs(
         let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
             binding_index: index,
         })?;
+        validate_binding_placeholder(index, placeholder, tensor)?;
         let is_program_input = program_keys.contains(&key);
         if !is_program_input && !tangent_root_specs.contains_key(&key) {
             return Err(Error::UnexpectedBinding {
                 binding_index: index,
             });
-        }
-        if !is_program_input {
-            if let Some(input) = tangent_root_specs.get(&key) {
-                validate_input_tensor(input, tensor)?;
-            }
         }
         if binding_map.insert(key.clone(), *tensor).is_some() {
             return Err(Error::DuplicateBinding {
@@ -612,6 +608,43 @@ fn resolve_input(
     };
     validate_input_tensor(input, &tensor)?;
     Ok(tensor)
+}
+
+fn validate_binding_placeholder(
+    index: usize,
+    placeholder: &TracedTensor,
+    tensor: &Tensor,
+) -> Result<()> {
+    if placeholder.data.is_some() {
+        return Err(Error::UnexpectedBinding {
+            binding_index: index,
+        });
+    }
+    if placeholder.dtype != tensor.dtype() {
+        return Err(Error::PlaceholderDtypeMismatch {
+            expected: placeholder.dtype,
+            actual: tensor.dtype(),
+        });
+    }
+    match placeholder.try_concrete_shape() {
+        Some(expected_shape) => {
+            if expected_shape.as_slice() != tensor.shape() {
+                return Err(Error::PlaceholderShapeMismatch {
+                    expected: expected_shape,
+                    actual: tensor.shape().to_vec(),
+                });
+            }
+        }
+        None => {
+            if placeholder.rank != tensor.shape().len() {
+                return Err(Error::PlaceholderRankMismatch {
+                    expected: placeholder.rank,
+                    actual: tensor.shape().len(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_input_tensor(input: &GraphProgramInput, tensor: &Tensor) -> Result<()> {

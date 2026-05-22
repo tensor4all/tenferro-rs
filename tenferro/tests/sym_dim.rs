@@ -1,5 +1,9 @@
-use tenferro::engine::Engine;
+mod support;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 use tenferro::error::Error;
+use tenferro::GraphExecutor;
 use tenferro::{CpuBackend, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -25,11 +29,11 @@ fn reshape_sym_uses_symbolic_input_axes() {
 
     assert_eq!(y.rank, 2);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[6, 4]);
     assert_eq!(
-        get_f64_data(result),
+        get_f64_data(&result),
         &(1..=24).map(|value| value as f64).collect::<Vec<_>>()
     );
 }
@@ -49,11 +53,11 @@ fn reshape_sym_supports_mixed_usize_arithmetic() {
 
     assert_eq!(y.rank, 2);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[4, 6]);
     assert_eq!(
-        get_f64_data(result),
+        get_f64_data(&result),
         &(1..=24).map(|value| value as f64).collect::<Vec<_>>()
     );
 }
@@ -90,8 +94,8 @@ fn sym_dim_sub_and_div_operators() {
     let b = x.sym_size(0) / 3usize;
     let mut y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3, 4]);
 }
 
@@ -106,8 +110,8 @@ fn sym_dim_sub_operator() {
     let b = x.sym_size(0) - 3usize;
     let mut y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[2, 3]);
 }
 
@@ -123,8 +127,8 @@ fn sym_dim_usize_lhs_operators() {
     let b = x.sym_size(0) - 4usize;
     let mut y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3, 2]);
 }
 
@@ -140,8 +144,8 @@ fn sym_dim_usize_sub_and_div_lhs() {
     let b = 6usize / x.sym_size(1);
     let mut y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3, 2]);
 }
 
@@ -156,8 +160,8 @@ fn sym_dim_min_max_methods() {
     let b = x.sym_size(0).max(x.sym_size(1));
     let mut y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[2, 3]);
 }
 
@@ -172,21 +176,21 @@ fn reshape_sym_graph_reuse_with_different_shapes() {
         input.reshape_sym(&[total]).unwrap()
     }
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
 
     // First execution: shape [2, 3]
     let data_a: Vec<f64> = (1..=6).map(|v| v as f64).collect();
     let x_a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], data_a.clone()));
     let mut y_a = build_flatten(&x_a);
-    let result_a = y_a.eval(&mut engine).unwrap();
+    let result_a = y_a.run_with(&mut engine).unwrap();
     assert_eq!(result_a.shape(), &[6]);
-    assert_eq!(get_f64_data(result_a), &data_a);
+    assert_eq!(get_f64_data(&result_a), &data_a);
 
     // Second execution: shape [4, 5] — same graph pattern, different sizes
     let data_b: Vec<f64> = (1..=20).map(|v| v as f64).collect();
     let x_b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 5], data_b.clone()));
     let mut y_b = build_flatten(&x_b);
-    let result_b = y_b.eval(&mut engine).unwrap();
+    let result_b = y_b.run_with(&mut engine).unwrap();
     assert_eq!(result_b.shape(), &[20]);
-    assert_eq!(get_f64_data(result_b), &data_b);
+    assert_eq!(get_f64_data(&result_b), &data_b);
 }

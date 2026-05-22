@@ -1,5 +1,9 @@
+mod support;
 use std::collections::HashMap;
 use std::sync::Arc;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 
 use chainrules_core::ADKey;
 use computegraph::compile::compile;
@@ -12,9 +16,8 @@ use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
 use tenferro::exec::eval_exec_ir;
 use tenferro::shape_infer::{infer_output_dtype, infer_output_extents};
-use tenferro::traced_tensor::einsum;
 use tenferro::traced_tensor::matmul;
-use tenferro::{Engine, TracedTensor};
+use tenferro::{GraphExecutor, TracedTensor};
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
@@ -257,8 +260,8 @@ fn register_fragment_metadata_for_test(
 }
 
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
-    let mut engine = Engine::new(CpuBackend::new());
-    traced.eval(&mut engine).unwrap().clone()
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    traced.run_with(&mut engine).unwrap().clone()
 }
 
 fn eval_scalar(traced: TracedTensor) -> f64 {
@@ -1755,7 +1758,7 @@ fn grad_batched_matmul_sum() {
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), a_data.clone()));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let product = einsum(&mut engine, &[&a, &b], "bij,bjk->bik").unwrap();
     let loss = product.reduce_sum(&[0, 1, 2]);
     let grad = loss.grad(&a).unwrap();
@@ -1767,7 +1770,7 @@ fn grad_batched_matmul_sum() {
         let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(a_shape.clone(), xs.to_vec()));
         let b =
             TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()));
-        let mut engine = Engine::new(CpuBackend::new());
+        let mut engine = GraphExecutor::new(CpuBackend::new());
         let product = einsum(&mut engine, &[&a, &b], "bij,bjk->bik").unwrap();
         let loss = product.reduce_sum(&[0, 1, 2]);
         eval_scalar(loss)
@@ -1911,9 +1914,8 @@ fn convert_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
     let mut jvp = x.convert(DType::C64).jvp(&x, &dx);
     let mut vjp = x.convert(DType::C64).vjp(&x, &cotangent);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results =
-        tenferro::traced::eval_all(&mut engine, &mut [&mut roundtrip, &mut jvp, &mut vjp]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&roundtrip, &jvp, &vjp]).unwrap();
 
     assert_close_slice(get_f64_data(&results[0]), &[1.25, -2.5]);
     assert_close_slice_c64(
@@ -1935,8 +1937,8 @@ fn grad_real_sum_of_eigvals_matches_trace_gradient() {
         .reduce_sum(&[0]);
     let mut grad = loss.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = tenferro::traced::eval_all(&mut engine, &mut [&mut loss, &mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&loss, &grad]).unwrap();
 
     assert_close_slice(get_f64_data(&results[0]), &[7.0]);
     assert_close_slice(

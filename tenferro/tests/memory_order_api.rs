@@ -1,15 +1,17 @@
-use tenferro::{Tensor, TracedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]
 fn traced_tensor_row_major_constructor_stores_column_major_input() {
     let traced =
         TracedTensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let compiled = traced.compile_with_inputs(&[]).unwrap();
-    assert_eq!(compiled.inputs.len(), 1);
-    assert_eq!(compiled.inputs[0].shape(), &[2, 3]);
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&traced).unwrap();
+    assert_eq!(program.input_count(), 1);
+    assert_eq!(program.input_specs()[0].shape(), &[2, 3]);
+    let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     assert_eq!(
-        compiled.inputs[0].as_slice::<f64>().unwrap(),
+        out.as_slice::<f64>().unwrap(),
         &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
     );
 }
@@ -18,12 +20,11 @@ fn traced_tensor_row_major_constructor_stores_column_major_input() {
 fn traced_tensor_col_major_constructor_keeps_physical_order() {
     let traced = TracedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4]);
 
-    let compiled = traced.compile_with_inputs(&[]).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&traced).unwrap();
+    let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     assert_eq!(
-        compiled.inputs[0]
-            .clone()
-            .try_into_vec_col_major::<i64>()
-            .unwrap(),
+        out.try_into_vec_col_major::<i64>().unwrap(),
         (vec![2, 2], vec![1, 3, 2, 4]),
     );
 }

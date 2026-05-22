@@ -223,20 +223,17 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
 ///
 /// ```
 /// use tenferro::traced_tensor::full_piv_lu;
-/// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
 /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
 ///     vec![2, 2],
 ///     vec![0.0_f64, 2.0, 1.0, 3.0],
 /// ));
-/// let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
+/// let (p, l, u, q, parity) = full_piv_lu(&a);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let outputs = tenferro::traced::eval_all(
-///     &mut engine,
-///     &mut [&mut p, &mut l, &mut u, &mut q, &mut parity],
-/// )
-/// .unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
+/// let outputs = GraphExecutor::new(CpuBackend::new()).run_many(&program).unwrap();
 ///
 /// assert_eq!(outputs[0].shape(), &[2, 2]);
 /// assert_eq!(outputs[4].shape(), &[] as &[usize]);
@@ -369,7 +366,7 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 ///
 /// ```
 /// use tenferro::traced_tensor::full_piv_lu_solve;
-/// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
 /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
 ///     vec![2, 2],
@@ -379,10 +376,11 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 ///     vec![2, 1],
 ///     vec![-1.0_f64, 5.0],
 /// ));
-/// let mut x = full_piv_lu_solve(&a, &b);
+/// let x = full_piv_lu_solve(&a, &b);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = x.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&x).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 ///
 /// assert_eq!(out.shape(), &[2, 1]);
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, -1.0]);

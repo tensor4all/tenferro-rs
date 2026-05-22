@@ -1,4 +1,8 @@
+mod support;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 
 use tenferro::traced::TracedTensor;
 use tenferro_tensor::cpu::CpuBackend;
@@ -76,8 +80,8 @@ fn traced_dot_general_accepts_valid_config() {
         rhs_batch_dims: vec![],
     };
     let mut c = a.dot_general(&b, config);
-    let mut engine = tenferro::engine::Engine::new(CpuBackend::new());
-    let result = c.eval(&mut engine).unwrap();
+    let mut engine = tenferro::GraphExecutor::new(CpuBackend::new());
+    let result = c.run_with(&mut engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();
     assert_eq!(data.len(), 4);
 }
@@ -235,8 +239,8 @@ fn traced_dot_general_accepts_batched_valid_config() {
         rhs_batch_dims: vec![1, 2],
     };
     let mut c = a.dot_general(&b, config);
-    let mut engine = tenferro::engine::Engine::new(CpuBackend::new());
-    let result = c.eval(&mut engine).unwrap();
+    let mut engine = tenferro::GraphExecutor::new(CpuBackend::new());
+    let result = c.run_with(&mut engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();
     assert_eq!(data.len(), 4);
 }

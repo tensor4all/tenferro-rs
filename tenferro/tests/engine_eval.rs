@@ -1,5 +1,5 @@
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro::{CpuBackend, DType, Engine, Tensor, TypedTensor};
+use tenferro::{CpuBackend, DType, GraphExecutor, Tensor, TypedTensor};
 
 #[test]
 fn eval_exec_ir_non_consuming_preserves_caller_inputs() {
@@ -22,7 +22,7 @@ fn eval_exec_ir_non_consuming_preserves_caller_inputs() {
     let rhs = Tensor::F64(TypedTensor::from_vec(vec![], vec![3.0]));
     let inputs = vec![lhs, rhs];
 
-    let mut engine = Engine::new(CpuBackend::with_threads(1));
+    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
     let outputs = engine
         .eval_exec_ir_non_consuming(&program, &inputs)
         .expect("non-consuming eval should succeed");

@@ -283,16 +283,18 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::from_tensor_concrete_shape(
     ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
     /// );
-    /// let mut y = x.index_select(-1, &[2, 0]).unwrap();
-    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let y = x.index_select(-1, &[2, 0]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     ///
     /// assert_eq!(
-    ///     y.eval(&mut engine).unwrap().as_slice::<f64>().unwrap(),
+    ///     out.as_slice::<f64>().unwrap(),
     ///     &[30.0, 10.0],
     /// );
     /// ```
@@ -317,15 +319,17 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![], vec![1.0_f64]));
     /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![], vec![2.0_f64]));
-    /// let mut out = TracedTensor::stack(&[&a, &b], -1).unwrap();
-    /// let mut engine = Engine::new(CpuBackend::new());
+    /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&stacked).unwrap();
+    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     ///
     /// assert_eq!(
-    ///     out.eval(&mut engine).unwrap().as_slice::<f64>().unwrap(),
+    ///     out.as_slice::<f64>().unwrap(),
     ///     &[1.0, 2.0],
     /// );
     /// ```

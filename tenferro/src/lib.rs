@@ -8,11 +8,15 @@
 //!
 //! # Examples
 //!
-//! ```rust,ignore
-//! use tenferro::{CpuBackend, Engine, TracedTensor};
+//! ```
+//! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 //!
-//! let mut engine = Engine::new(CpuBackend::default());
-//! // ... build and execute traced computations
+//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+//! let y = &x + &x;
+//! let mut compiler = GraphCompiler::new();
+//! let program = compiler.compile(&y).unwrap();
+//! let out = GraphExecutor::new(CpuBackend::default()).run(&program).unwrap();
+//! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
 pub use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
@@ -30,7 +34,6 @@ pub(crate) mod eager_ops_linalg;
 pub mod eager_tensor;
 mod einsum;
 mod einsum_subscripts;
-pub mod engine;
 pub mod error;
 pub mod exec;
 pub mod extension;
@@ -49,7 +52,6 @@ pub mod typed_tensor;
 
 pub use eager::{EagerRuntime, EagerTensor};
 pub use einsum_subscripts::parse_einsum_subscripts;
-pub use engine::Engine;
 pub use error::ContextId;
 pub use graph::{
     CpuGraphExecutorCacheStats, GraphCompiler, GraphCompilerCacheStats, GraphExecutor,

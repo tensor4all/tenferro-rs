@@ -1,7 +1,10 @@
+mod support;
 use num_complex::Complex64;
-use tenferro::engine::Engine;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 use tenferro::traced::TracedTensor;
-use tenferro::traced_tensor::einsum;
+use tenferro::GraphExecutor;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TypedTensor};
 
@@ -60,8 +63,8 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
 }
 
 fn eval_tensor(mut traced: TracedTensor) -> Tensor {
-    let mut engine = Engine::new(CpuBackend::new());
-    traced.eval(&mut engine).unwrap().clone()
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    traced.run_with(&mut engine).unwrap().clone()
 }
 
 fn eval_scalar(traced: TracedTensor) -> f64 {
@@ -166,7 +169,7 @@ fn grad_einsum_matmul_real() {
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone()));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
 
@@ -176,7 +179,7 @@ fn grad_einsum_matmul_real() {
     let f = |xs: &[f64]| {
         let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec()));
         let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()));
-        let mut engine = Engine::new(CpuBackend::new());
+        let mut engine = GraphExecutor::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
         eval_scalar(y.reduce_sum(&[0, 1]))
     };
@@ -187,7 +190,7 @@ fn grad_einsum_matmul_real() {
 fn grad_einsum_trace_real() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let loss = einsum(&mut engine, &[&a], "ii->").unwrap();
     let grad = loss.grad(&a).unwrap();
 
@@ -212,7 +215,7 @@ fn grad_einsum_matmul_complex() {
 
     let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], a_data.clone()));
     let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], b_data.clone()));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
     let loss = real_scalar(&norm_sq);
@@ -224,7 +227,7 @@ fn grad_einsum_matmul_complex() {
     let f = |xs: &[Complex64]| {
         let a = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], xs.to_vec()));
         let b = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2, 2], b_data.clone()));
-        let mut engine = Engine::new(CpuBackend::new());
+        let mut engine = GraphExecutor::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
         let norm_sq = (&y.conj() * &y).reduce_sum(&[0, 1]);
         eval_real_c64_scalar(real_scalar(&norm_sq))
@@ -243,7 +246,7 @@ fn jvp_einsum_matmul() {
     let da_data = vec![1.0, -0.5, 0.25, 0.0, 2.0, -1.0];
     let da = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], da_data.clone()));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let dy = y.jvp(&a, &da);
 
@@ -265,7 +268,7 @@ fn jvp_symbolic_einsum_matmul() {
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a_symbolic, &b_symbolic], "ij,jk->ik").unwrap();
     let dy = y.jvp(&a, &da);
 
@@ -286,7 +289,7 @@ fn vjp_einsum_matmul() {
     let cotangent =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], ct_data.clone()));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b], "ij,jk->ik").unwrap();
     let ct_a = y.vjp(&a, &cotangent);
 
@@ -304,7 +307,7 @@ fn grad_einsum_three_way() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone()));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
     let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
     let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
 
@@ -315,7 +318,7 @@ fn grad_einsum_three_way() {
         let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec()));
         let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], b_data.clone()));
         let c = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], c_data.clone()));
-        let mut engine = Engine::new(CpuBackend::new());
+        let mut engine = GraphExecutor::new(CpuBackend::new());
         let y = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
         eval_scalar(y.reduce_sum(&[0, 1]))
     };
@@ -334,7 +337,7 @@ fn grad_symbolic_einsum_three_way() {
     let a_symbolic = symbolic_identity_2d(&a);
     let b_symbolic = symbolic_identity_2d(&b);
     let c_symbolic = symbolic_identity_2d(&c);
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(
         &mut engine,
         &[&a_symbolic, &b_symbolic, &c_symbolic],
@@ -353,7 +356,7 @@ fn grad_symbolic_einsum_three_way() {
         let a_symbolic = symbolic_identity_2d(&a);
         let b_symbolic = symbolic_identity_2d(&b);
         let c_symbolic = symbolic_identity_2d(&c);
-        let mut engine = Engine::new(CpuBackend::new());
+        let mut engine = GraphExecutor::new(CpuBackend::new());
         let y = einsum(
             &mut engine,
             &[&a_symbolic, &b_symbolic, &c_symbolic],

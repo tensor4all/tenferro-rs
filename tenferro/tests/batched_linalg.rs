@@ -1,7 +1,11 @@
+mod support;
 use num_complex::Complex64;
-use tenferro::engine::Engine;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 use tenferro::traced::TracedTensor;
 use tenferro::traced_tensor::{cholesky, qr, solve, svd, triangular_solve};
+use tenferro::GraphExecutor;
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 
 const TOL: f64 = 1.0e-9;
@@ -29,9 +33,9 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
 }
 
 fn eval(traced: TracedTensor) -> Tensor {
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let mut traced = traced;
-    traced.eval(&mut engine).unwrap().clone()
+    traced.run_with(&mut engine).unwrap().clone()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64]) {

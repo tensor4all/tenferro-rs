@@ -1,5 +1,9 @@
+mod support;
 use num_complex::{Complex32, Complex64};
-use tenferro::{CpuBackend, Engine, Tensor, TensorScalar, TracedTensor};
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
+use tenferro::{CpuBackend, GraphExecutor, Tensor, TensorScalar, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]
@@ -8,8 +12,8 @@ fn traced_tensor_new_and_tensor_as_slice_cover_common_f64_flow() {
     let b = TracedTensor::from_vec(vec![2, 3], vec![6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]);
 
     let mut sum = &a + &b;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = sum.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = sum.run_with(&mut engine).unwrap();
 
     assert_eq!(
         result.as_slice::<f64>(),

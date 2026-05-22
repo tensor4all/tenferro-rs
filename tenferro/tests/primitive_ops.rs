@@ -1,7 +1,11 @@
-use tenferro::engine::Engine;
-use tenferro::traced::{eval_all, TracedTensor};
+mod support;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
+use tenferro::traced::TracedTensor;
 use tenferro::traced_tensor::pow;
 use tenferro::DType;
+use tenferro::GraphExecutor;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
@@ -34,9 +38,9 @@ fn test_add() {
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = &ta + &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[5.0, 7.0, 9.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[5.0, 7.0, 9.0]);
 }
 
 #[test]
@@ -46,10 +50,10 @@ fn test_add_broadcast_scalar_plus_vector() {
     let ta = TracedTensor::from_tensor_concrete_shape(scalar);
     let tb = TracedTensor::from_tensor_concrete_shape(vector);
     let mut tc = &ta + &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3]);
-    assert_eq!(get_f64_data(result), &[2.0, 3.0, 4.0]);
+    assert_eq!(get_f64_data(&result), &[2.0, 3.0, 4.0]);
 }
 
 #[test]
@@ -59,9 +63,9 @@ fn test_mul() {
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut tc = &ta * &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[4.0, 10.0, 18.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[4.0, 10.0, 18.0]);
 }
 
 #[test]
@@ -71,11 +75,11 @@ fn test_mul_broadcast_column_times_row() {
     let ta = TracedTensor::from_tensor_concrete_shape(column);
     let tb = TracedTensor::from_tensor_concrete_shape(row);
     let mut tc = &ta * &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3, 4]);
     assert_eq!(
-        get_f64_data(result),
+        get_f64_data(&result),
         &[10.0, 20.0, 30.0, 20.0, 40.0, 60.0, 30.0, 60.0, 90.0, 40.0, 80.0, 120.0]
     );
 }
@@ -87,36 +91,36 @@ fn test_div_broadcast_vector_by_scalar() {
     let ta = TracedTensor::from_tensor_concrete_shape(vector);
     let tb = TracedTensor::from_tensor_concrete_shape(scalar);
     let mut tc = &ta / &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[1.0, 2.0, 4.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[1.0, 2.0, 4.0]);
 }
 
 #[test]
 fn test_scale_real() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let mut y = x.scale_real(2.0);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[2.0, 4.0, 6.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[2.0, 4.0, 6.0]);
 }
 
 #[test]
 fn test_scale_real_operator_overload() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
     let mut y = &x * 3.0;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[3.0, 6.0, 9.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[3.0, 6.0, 9.0]);
 }
 
 #[test]
 fn test_scale_real_i64_rounds_factor() {
     let x = TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![3], vec![1, 2, -3]));
     let mut y = x.scale_real(2.7);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
-    assert_eq!(get_i64_data(result), &[3, 6, -9]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
+    assert_eq!(get_i64_data(&result), &[3, 6, -9]);
 }
 
 #[test]
@@ -124,10 +128,10 @@ fn test_pow_broadcast_vector_with_scalar_exponent() {
     let base = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, 3.0, 4.0]));
     let exp = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![2.0]));
     let mut out = pow(&base, &exp);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = out.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = out.run_with(&mut engine).unwrap();
     assert_eq!(result.shape(), &[3]);
-    assert_eq!(get_f64_data(result), &[4.0, 9.0, 16.0]);
+    assert_eq!(get_f64_data(&result), &[4.0, 9.0, 16.0]);
 }
 
 #[test]
@@ -135,9 +139,9 @@ fn test_neg() {
     let a = f64_tensor(vec![3], vec![1.0, -2.0, 3.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = -&ta;
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[-1.0, 2.0, -3.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tb.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[-1.0, 2.0, -3.0]);
 }
 
 #[test]
@@ -153,10 +157,10 @@ fn test_dot_general() {
         rhs_batch_dims: vec![],
     };
     let mut tc = ta.dot_general(&tb, config);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tc.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tc.run_with(&mut engine).unwrap();
     // C = [[22, 49], [28, 64]] col-major: [22, 28, 49, 64]
-    assert_eq!(get_f64_data(result), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(get_f64_data(&result), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]
@@ -165,9 +169,9 @@ fn test_broadcast_reduce() {
     let tv = TracedTensor::from_tensor_concrete_shape(v);
     let tb = tv.broadcast_in_dim(&[3, 2], &[0]);
     let mut tr = tb.reduce_sum(&[1]);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tr.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[2.0, 4.0, 6.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tr.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -175,9 +179,9 @@ fn test_transpose() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = ta.transpose(&[1, 0]);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tb.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -185,9 +189,9 @@ fn test_reshape() {
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let mut tb = ta.reshape(&[6]);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = tb.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(result), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = tb.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&result), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
 
 #[test]
@@ -203,8 +207,8 @@ fn traced_index_select_keeps_indices_integer_for_complex_operand() {
         ],
     ));
     let mut y = x.index_select(-1, &[2, 0]).unwrap();
-    let mut engine = Engine::new(CpuBackend::new());
-    let out = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let out = y.run_with(&mut engine).unwrap();
 
     assert_eq!(out.shape(), &[2]);
     assert_eq!(
@@ -237,11 +241,11 @@ fn traced_stack_trailing_axis_and_index_select_feed_batched_dot_general() {
         },
     );
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let out = c.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let out = c.run_with(&mut engine).unwrap();
 
     assert_eq!(out.shape(), &[2, 1, 2]);
-    assert_eq!(get_f64_data(out), &[19.0, 28.0, 31.0, 36.0]);
+    assert_eq!(get_f64_data(&out), &[19.0, 28.0, 31.0, 36.0]);
 }
 
 #[test]
@@ -310,23 +314,23 @@ fn traced_stack_positive_axis_promotes_mixed_input_dtypes() {
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, 4.0]));
 
     let mut out = TracedTensor::stack(&[&a, &b], 0).unwrap();
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = out.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = out.run_with(&mut engine).unwrap();
 
     assert_eq!(result.shape(), &[2, 2]);
-    assert_eq!(get_f64_data(result), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(get_f64_data(&result), &[1.0, 3.0, 2.0, 4.0]);
 }
 
 #[test]
-fn test_eval_all() {
+fn test_run_many_traced() {
     let a = f64_tensor(vec![2], vec![1.0, 2.0]);
     let b = f64_tensor(vec![2], vec![3.0, 4.0]);
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
     let mut sum = &ta + &tb;
     let mut prod = &ta * &tb;
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut sum, &mut prod]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&sum, &prod]).unwrap();
     assert_eq!(get_f64_data(&results[0]), &[4.0, 6.0]);
     assert_eq!(get_f64_data(&results[1]), &[3.0, 8.0]);
 }
@@ -341,7 +345,7 @@ fn test_chained_ops() {
     let tc = TracedTensor::from_tensor_concrete_shape(c);
     let sum = &ta + &tb;
     let mut result = &sum * &tc;
-    let mut engine = Engine::new(CpuBackend::new());
-    let out = result.eval(&mut engine).unwrap();
-    assert_eq!(get_f64_data(out), &[40.0, 120.0]);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let out = result.run_with(&mut engine).unwrap();
+    assert_eq!(get_f64_data(&out), &[40.0, 120.0]);
 }

@@ -46,7 +46,7 @@ pub enum Error {
     #[error(transparent)]
     ADRule(#[from] chainrules_core::ADRuleError),
 
-    /// A `TracedTensor` passed to `eval_with_inputs` bindings is not a
+    /// A `TracedTensor` passed to graph-executor input bindings is not a
     /// placeholder (has attached data).
     #[error(
         "binding #{binding_index} is not a placeholder; \
@@ -56,7 +56,7 @@ pub enum Error {
     UnexpectedBinding { binding_index: usize },
 
     /// A placeholder appearing in the graph has no binding supplied.
-    #[error("placeholder {input_key} has no binding in eval_with_inputs")]
+    #[error("placeholder {input_key} has no runtime input binding")]
     UnboundPlaceholder { input_key: String },
 
     /// The same placeholder was bound more than once in the `bindings` slice.

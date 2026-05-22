@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
-use tenferro::engine::Engine;
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, TracedTensor};
+use tenferro::{GraphCompiler, TracedTensor};
 
 use crate::dispatch::NamedTensor;
 
@@ -11,7 +10,7 @@ pub type ObservableResult = Result<Vec<NamedTensor>, String>;
 pub fn apply_observable(
     kind: &str,
     outputs: Vec<NamedTensor>,
-    engine: &mut Engine<CpuBackend>,
+    compiler: &mut GraphCompiler,
 ) -> ObservableResult {
     let outputs = output_map(outputs);
     match kind {
@@ -30,7 +29,7 @@ pub fn apply_observable(
             let s = required(&outputs, "s")?;
             let vh = required(&outputs, "vh")?;
             let subscripts = svd_uvh_subscripts(u.rank.saturating_sub(2))?;
-            let product = einsum(engine, &[u, vh], &subscripts).map_err(|err| err.to_string())?;
+            let product = einsum(compiler, &[u, vh], &subscripts).map_err(|err| err.to_string())?;
             Ok(vec![named("s", s.clone()), named("uvh", product)])
         }
         "eigh_values_vectors_abs" => Ok(vec![

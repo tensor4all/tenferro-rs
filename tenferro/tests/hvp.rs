@@ -3,10 +3,13 @@
 //! Primary approach: Forward-over-Reverse (FoR) = jvp(grad(f), x, v),
 //! matching JAX's standard HVP pattern.
 
-use tenferro::engine::Engine;
+mod support;
+use support::{
+    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, run_many_traced_with, RunTraced,
+};
 use tenferro::traced::TracedTensor;
-use tenferro::traced_tensor::einsum;
 use tenferro::traced_tensor::{qr, svd};
+use tenferro::GraphExecutor;
 use tenferro::{CpuBackend, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
@@ -28,9 +31,9 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let mut t = traced;
-    t.eval(&mut engine).unwrap().clone()
+    t.run_with(&mut engine).unwrap().clone()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {
@@ -146,7 +149,7 @@ fn hvp_for_quadratic_form() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
 
     let g = y.grad(&x).unwrap();
@@ -178,7 +181,7 @@ fn hvp_ror_quadratic_form() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
 
     let g = y.grad(&x).unwrap();

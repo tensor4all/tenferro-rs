@@ -1,9 +1,11 @@
-//! Error-path tests for `eval_with_inputs`.
+//! Error-path tests for graph input binding.
 //!
 //! One test per Error variant introduced by the placeholder binding API.
 
+mod support;
+use support::RunTraced;
 use tenferro::error::Error;
-use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]
@@ -11,10 +13,10 @@ fn unexpected_binding_for_data_carrying_leaf() {
     let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
     let mut y = x.clone();
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let extra = Tensor::from_vec(vec![2], vec![9.0_f64, 9.0]);
     let err = y
-        .eval_with_inputs(&mut engine, &[(&x, &extra)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &extra)])
         .expect_err("binding a non-placeholder must fail");
 
     assert!(
@@ -28,9 +30,9 @@ fn unbound_placeholder() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let mut y = x.clone();
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let err = y
-        .eval_with_inputs(&mut engine, &[])
+        .run_with_inputs_auto(&mut engine, &[])
         .expect_err("unbound placeholder must fail");
 
     assert!(
@@ -45,9 +47,9 @@ fn duplicate_binding() {
     let mut y = x.clone();
 
     let bound = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let err = y
-        .eval_with_inputs(&mut engine, &[(&x, &bound), (&x, &bound)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &bound), (&x, &bound)])
         .expect_err("duplicate binding must fail");
 
     assert!(matches!(err, Error::DuplicateBinding { .. }), "got {err:?}");
@@ -59,9 +61,9 @@ fn placeholder_dtype_mismatch() {
     let mut y = x.clone();
 
     let wrong_dtype = Tensor::from_vec(vec![2], vec![1.0_f32, 2.0]);
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let err = y
-        .eval_with_inputs(&mut engine, &[(&x, &wrong_dtype)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_dtype)])
         .expect_err("dtype mismatch must fail");
 
     assert!(
@@ -82,9 +84,9 @@ fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
     let mut y = x.clone();
 
     let wrong_shape = Tensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let err = y
-        .eval_with_inputs(&mut engine, &[(&x, &wrong_shape)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_shape)])
         .expect_err("shape mismatch must fail");
 
     match err {
@@ -102,9 +104,9 @@ fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
     let mut y = x.clone();
 
     let wrong_rank = Tensor::from_vec(vec![4], vec![1.0_f64; 4]);
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let err = y
-        .eval_with_inputs(&mut engine, &[(&x, &wrong_rank)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_rank)])
         .expect_err("rank mismatch must fail");
 
     assert!(
@@ -125,38 +127,42 @@ fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let mut y = x.clone();
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let bound = Tensor::from_vec(vec![7], vec![1.0_f64; 7]);
     let out = y
-        .eval_with_inputs(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("rank-only placeholder accepts arbitrary shape of that rank");
     assert_eq!(out.shape(), &[7]);
 }
 
 #[test]
-fn compile_with_inputs_validates_and_collects_bound_tensors() {
+fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let y = &x + &x;
     let bound = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
 
-    let compiled = y
-        .compile_with_inputs(&[(&x, &bound)])
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .expect("symbolic placeholder binding should compile");
-    assert_eq!(compiled.inputs.len(), 1);
-    assert_eq!(compiled.inputs[0].shape(), &[2]);
-    assert!(!compiled.program.instructions.is_empty());
+    assert_eq!(program.output_count(), 1);
 
-    let err = y.compile_with_inputs(&[]).unwrap_err();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let out = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+
+    let err = executor.run_with_inputs(&program, &[]).unwrap_err();
     assert!(matches!(err, Error::UnboundPlaceholder { .. }));
 
-    let err = y
-        .compile_with_inputs(&[(&x, &bound), (&x, &bound)])
+    let err = executor
+        .run_with_inputs(&program, &[(&x, &bound), (&x, &bound)])
         .unwrap_err();
     assert!(matches!(err, Error::DuplicateBinding { .. }));
 
     let concrete = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let err = concrete
-        .compile_with_inputs(&[(&concrete, &bound)])
+    let err = executor
+        .run_with_inputs(&program, &[(&concrete, &bound)])
         .unwrap_err();
     assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
 }
@@ -167,13 +173,14 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
     let y = &x + &x;
     let shape = [2usize];
 
-    let program = y
-        .compile_with_input_specs(&[(&x, DType::F64, shape.as_slice())])
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, shape.as_slice())])
         .expect("symbolic placeholder spec should compile");
-    assert!(!program.instructions.is_empty());
+    assert_eq!(program.output_count(), 1);
 
-    let err = y
-        .compile_with_input_specs(&[(&x, DType::F32, shape.as_slice())])
+    let err = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F32, shape.as_slice())])
         .unwrap_err();
     assert!(matches!(
         err,
@@ -184,8 +191,8 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
     ));
 
     let wrong_rank = [2usize, 1usize];
-    let err = y
-        .compile_with_input_specs(&[(&x, DType::F64, wrong_rank.as_slice())])
+    let err = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, wrong_rank.as_slice())])
         .unwrap_err();
     assert!(matches!(
         err,
@@ -198,25 +205,31 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
     let concrete = TracedTensor::input_concrete_shape(DType::F64, &[2]);
     let concrete_y = concrete.clone();
     let wrong_shape = [3usize];
-    let err = concrete_y
-        .compile_with_input_specs(&[(&concrete, DType::F64, wrong_shape.as_slice())])
+    let err = compiler
+        .compile_with_input_specs(
+            &concrete_y,
+            &[(&concrete, DType::F64, wrong_shape.as_slice())],
+        )
         .unwrap_err();
     assert!(matches!(err, Error::PlaceholderShapeMismatch { .. }));
 
     let data_leaf = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let err = data_leaf
-        .compile_with_input_specs(&[(&data_leaf, DType::F64, shape.as_slice())])
+    let err = compiler
+        .compile_with_input_specs(&data_leaf, &[(&data_leaf, DType::F64, shape.as_slice())])
         .unwrap_err();
     assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
 
-    let err = y
-        .compile_with_input_specs(&[
-            (&x, DType::F64, shape.as_slice()),
-            (&x, DType::F64, shape.as_slice()),
-        ])
+    let err = compiler
+        .compile_with_input_specs(
+            &y,
+            &[
+                (&x, DType::F64, shape.as_slice()),
+                (&x, DType::F64, shape.as_slice()),
+            ],
+        )
         .unwrap_err();
     assert!(matches!(err, Error::DuplicateBinding { .. }));
 
-    let err = y.compile_with_input_specs(&[]).unwrap_err();
+    let err = compiler.compile_with_input_specs(&y, &[]).unwrap_err();
     assert!(matches!(err, Error::UnboundPlaceholder { .. }));
 }

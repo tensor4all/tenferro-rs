@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, DType, Engine, TracedTensor};
+use tenferro::{DType, GraphCompiler, GraphProgram, TracedTensor};
 
 const PHYS_DIM: usize = 2;
 const CHI: usize = 32;
@@ -25,14 +25,14 @@ fn mps_shapes(sites: usize, phys_dim: usize, bond_dim: usize) -> Vec<Vec<usize>>
 }
 
 fn build_inner_product_graph(
-    engine: &mut Engine<CpuBackend>,
+    compiler: &mut GraphCompiler,
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
     let mut env = TracedTensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
-        env = einsum(engine, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
+        env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");
     }
     env.reshape(&[])
@@ -48,8 +48,8 @@ fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
         .iter()
         .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
         .collect::<Vec<_>>();
-    let mut build_engine = Engine::new(CpuBackend::with_threads(1));
-    let output = build_inner_product_graph(&mut build_engine, &bra_placeholders, &ket_placeholders);
+    let mut compiler = GraphCompiler::new();
+    let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);
 
     CompileCase {
         shapes,
@@ -59,7 +59,7 @@ fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
     }
 }
 
-fn compile_case(case: &CompileCase) -> tenferro::exec::ExecProgram {
+fn compile_case(case: &CompileCase) -> GraphProgram {
     let mut specs = Vec::with_capacity(case.shapes.len() * 2);
     for site in 0..case.shapes.len() {
         let shape = case.shapes[site].as_slice();
@@ -67,8 +67,9 @@ fn compile_case(case: &CompileCase) -> tenferro::exec::ExecProgram {
         specs.push((&case.ket_placeholders[site], DType::C64, shape));
     }
 
-    case.output
-        .compile_with_input_specs(&specs)
+    let mut compiler = GraphCompiler::new();
+    compiler
+        .compile_with_input_specs(&case.output, &specs)
         .expect("MPS inner-product graph should compile from specs")
 }
 
@@ -89,7 +90,7 @@ fn bench_mps_inner_product_compile(c: &mut Criterion) {
             b.iter(|| {
                 let case = build_compile_case(black_box(l), black_box(CHI));
                 let program = compile_case(black_box(&case));
-                black_box(program.instructions.len());
+                black_box(program.output_count());
             });
         });
 
@@ -97,7 +98,7 @@ fn bench_mps_inner_product_compile(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("compile_existing_graph", &params), |b| {
             b.iter(|| {
                 let program = compile_case(black_box(&case));
-                black_box(program.instructions.len());
+                black_box(program.output_count());
             });
         });
     }

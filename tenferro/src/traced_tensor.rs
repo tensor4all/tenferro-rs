@@ -14,7 +14,7 @@ pub use crate::linalg_api::{
     full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,
     triangular_solve,
 };
-pub use crate::traced::{eval_all, CompiledTracedTensor, TracedTensor, TracedTensorId};
+pub use crate::traced::{TracedTensor, TracedTensorId};
 
 /// Matrix multiplication helper for rank-2 traced tensors.
 ///
