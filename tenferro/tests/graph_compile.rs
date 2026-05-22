@@ -32,6 +32,12 @@ fn graph_compiler_validates_placeholder_specs() {
         .compile_with_input_specs(&y, &[(&x, DType::F32, &[3])])
         .unwrap_err();
     assert!(format!("{err}").contains("dtype"));
+
+    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]);
+    let err = compiler
+        .compile_with_input_specs(&z.neg(), &[(&z, DType::F64, &[2])])
+        .unwrap_err();
+    assert!(format!("{err}").contains("shape"));
 }
 
 #[test]
