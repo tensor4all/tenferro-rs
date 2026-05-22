@@ -37,11 +37,11 @@ website:
           - guides/einsum.md
           - guides/linear-algebra.md
           - guides/custom-operations.md
-          - guides/tenferro-fft.md
+          - text: "FFT (extension)"
+            href: guides/tenferro-fft.md
           - guides/autodiff.md
           - guides/devices-and-gpu.md
           - guides/memory-order.md
-          - guides/installation.md
           - guides/performance.md
           - guides/troubleshooting.md
       - section: "API"

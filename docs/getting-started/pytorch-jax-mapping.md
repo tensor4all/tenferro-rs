@@ -11,8 +11,8 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Graph-building tensor handle | `torch.Tensor` under compiled/tracing tools | traced `jax.Array` values | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `GraphExecutor::run` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor`) |
-| Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
-| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
+| Eager forward and gradients | eager ops plus `loss.backward()` | — | `EagerTensor` forward ops, with `backward()` for tracked scalar losses |
+| Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `typed_tensor::einsum`, `tensor::einsum`, `eager_tensor::einsum`, or `traced_tensor::einsum` |
@@ -80,7 +80,8 @@ resulting `GraphProgram` with `GraphExecutor`.
 
 ### Autodiff split
 
-Eager tenferro matches PyTorch's scalar-loss `loss.backward()` workflow with
+Eager tenferro matches PyTorch-style eager forward execution. When tensors are
+tracked, it also matches the scalar-loss `loss.backward()` workflow with
 accumulation semantics. Traced tenferro is the transform surface for
 `torch.autograd.grad`, `jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order
 compositions such as HVPs.

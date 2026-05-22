@@ -15,7 +15,7 @@ it clearly.
 
 An extension operation is a tensor operation supplied by another crate. The
 extension crate owns the public function names, validates arguments, and
-registers the operation with tenferro through `tenferro::extension`.
+applies extension op payloads through `tenferro::extension`.
 
 An extension can participate in the same eager and traced workflows as built-in
 tensor operations when it provides the required metadata and execution hooks.
@@ -78,54 +78,22 @@ Extension op payloads do not need process-global registration. Construct
 `Arc<dyn ExtensionOpTrait>` and pass it to `tenferro::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
-For AD, register a rule separately:
-
-```rust
-use std::sync::Arc;
-use chainrules_core::ADRuleResult;
-use tenferro::extension::{
-    register_extension_chain_rule, ExtensionChainRuleTrait, ExtensionOpTrait,
-    FruleBuilder, RRuleBuilder,
-};
-
-#[derive(Debug)]
-struct AddScalarRule;
-
-impl ExtensionChainRuleTrait for AddScalarRule {
-    fn family_id(&self) -> &'static str { "my-crate.add_scalar.v1" }
-
-    fn frule(&self, _op: &dyn ExtensionOpTrait, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
-        cx.set_output_tangent(0, cx.tangent(0)?)
-    }
-
-    fn rrule(&self, _op: &dyn ExtensionOpTrait, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
-        let Some(cot_y) = cx.cotangent(0)? else { return Ok(()); };
-        let cot_x = cot_y.clone();
-        let cot_a = cx.reduce_sum_all(cot_y, cx.input_rank(0)?)?;
-        cx.set_input_cotangent(0, Some(cot_x))?;
-        cx.set_input_cotangent(1, Some(cot_a))
-    }
-}
-
-register_extension_chain_rule(Arc::new(AddScalarRule)).expect("register AD rule");
-```
-
-The builder methods intentionally hide `LocalValId`. Use `tangent(i)` and
-`cotangent(i)` to read incoming AD values, use helpers such as `add`, `mul`,
-`reduce_sum_all`, `emit`, and `apply_extension` to create new values, then set
-the desired output or input cotangent.
+For AD, register a rule separately with
+`tenferro::extension::register_extension_chain_rule`. Rule builders expose
+incoming tangents/cotangents and helper methods for emitting tensor
+operations, so extension authors do not need to handle graph IDs directly.
 
 When porting Julia `frule` / `rrule` code:
 
 - map `NoTangent` / `ZeroTangent` to `None` when the tangent slot is inactive,
 - represent scalar parameters as tensor inputs when users need to vary them,
 - use `reduce_sum_all` for broadcasted scalar inputs,
-- emit only core `StdTensorOp` operations or extension ops whose AD rules are
+- emit only built-in tensor operations or extension ops whose AD rules are
   registered before a later AD pass reaches them.
 
-The lower-level `ExtensionAdRuleTrait` and `register_extension_rule` remain as
-an adapter surface for code that needs direct `FragmentBuilder` / `OpEmitter`
-control. New extension authors should start with `ExtensionChainRuleTrait`.
+The lower-level adapter surface remains available for specialized extension
+authors who need direct graph-builder control. New extension authors should
+start with `ExtensionChainRuleTrait`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
 removed; operation payloads are carried directly in the graph.
 
@@ -136,6 +104,6 @@ PyTorch or JAX operation.
 
 ## Example: FFT
 
-[`tenferro-fft`](tenferro-fft.md) is the first extension package following this
+[FFT (extension)](tenferro-fft.md) is the first extension package following this
 pattern. It provides Fourier transforms as tensor extension operations while
 keeping the core tenferro crate focused on the common dense operation set.

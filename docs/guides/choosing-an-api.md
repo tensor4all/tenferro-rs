@@ -6,18 +6,21 @@ backend/device placement.
 
 ## Start Here
 
-| If your project needs | Start with | Why |
-| --- | --- | --- |
-| No autodiff, scalar type known at compile time | `TypedTensor<T>` | Static dtype, direct owned data, typed linalg/einsum |
-| No autodiff, dtype selected at runtime | `Tensor` | Dynamic dtype enum and broad concrete op surface |
-| PyTorch-like scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` | Immediate execution with gradient accumulation |
-| JAX-like `grad`, `vjp`, `jvp`, HVP, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` | Build graph, transform/compile it, run it repeatedly |
-| CPU or CUDA execution | A backend: `CpuBackend` or `tenferro::cuda::CudaBackend` | Device is orthogonal to tensor layer |
-| Operation outside the built-in surface | An extension crate | External ops can also register AD rules |
+![Decision tree for choosing a tensor model](../assets/tensor-layer-decision.svg)
 
-For most non-AD projects, `TypedTensor<T>` or `Tensor` should come before any
-AD surface. Only move upward when the workflow needs gradient state or graph
-transforms.
+For most non-AD projects, `TypedTensor<T>` or `Tensor` should come first. Move
+to `EagerTensor` when you want immediate execution under an `EagerRuntime`;
+make tensors tracked only when the workflow needs scalar-loss `backward()`.
+Move to `TracedTensor` when the workflow needs graph transforms.
+
+Quick reference:
+
+| If your project needs | Start with |
+| --- | --- |
+| No autodiff, scalar type known at compile time | `TypedTensor<T>` |
+| No autodiff, dtype selected at runtime | `Tensor` |
+| Immediate forward execution in one runtime, optionally scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` |
+| JAX-like `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
 
 ## Data Layer
 
@@ -30,9 +33,10 @@ a runtime dtype enum. Use it when dtype must be selected dynamically, when you
 want the broad concrete tensor operation surface, or when you need to pass CPU
 or CUDA tensors through backend dispatch.
 
-`EagerTensor` is not a replacement for `Tensor`; it is `Tensor` plus eager AD
-state. Use it when the computation should run immediately and a scalar loss
-will call `backward()`.
+`EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
+`EagerRuntime`, so each operation computes a concrete result immediately.
+Untracked eager tensors are forward-only. Tracked eager tensors additionally
+record reverse-mode state for scalar-loss `backward()`.
 
 `TracedTensor` is a graph-building handle. It is the transform and compilation
 surface, not the default concrete tensor type.
@@ -42,7 +46,7 @@ surface, not the default concrete tensor type.
 | Model | Similar to | What happens on each op |
 | --- | --- | --- |
 | Direct tensor execution | NumPy-style explicit backend calls | The backend runs the op immediately and returns a concrete `Tensor` |
-| Eager AD | PyTorch eager/autograd | The op runs immediately and records enough state for `backward()` |
+| Eager execution | PyTorch eager/autograd | The op runs immediately; tracked values record enough state for `backward()` |
 | Traced execution | JAX tracing/jit/grad | The op records graph structure; compute runs after compile/execute |
 
 See [Execution Models](execution-models.md) for the time-axis diagram,
@@ -64,22 +68,28 @@ eager, and traced workflows. CPU/GPU transfer is explicit:
 The current CUDA operation and dtype table is in
 [Devices and GPU](devices-and-gpu.md).
 
-## Operation Availability
+## Operation Entry Points
 
-The operation guides describe each operation family across tensor layers:
+Choose the tensor layer first, then choose the operation family. CUDA is not a
+separate operation entry point; it is a backend/device choice for supported
+operations.
 
-| Operation family | Concrete no-AD | Eager AD | Traced graph | CUDA |
-| --- | --- | --- | --- | --- |
-| Elementwise and shape ops | `Tensor` | `EagerTensor` | `TracedTensor` | Supported subset |
-| Einsum | `typed_tensor::einsum`, `tensor::einsum` | Through eager execution | `traced_tensor::einsum` | Supported through backend coverage |
-| Linear algebra | `Tensor` and selected `TypedTensor<T>` methods | Through eager execution | `traced_tensor` helpers | Supported subset |
-| Transform AD | Not applicable | Not the transform surface | `grad`, `vjp`, `jvp`, HVP | Backend-dependent execution |
-| Extension ops | Extension-provided eager hooks | If the extension provides eager hooks and AD | If the extension provides graph hooks and AD | Extension-dependent |
+| Need | No-AD concrete path | Eager path | Traced path |
+| --- | --- | --- | --- |
+| Everyday tensor ops | `Tensor` methods; selected `TypedTensor<T>` wrappers | `EagerTensor` methods | `TracedTensor` methods |
+| Einsum | `typed_tensor::einsum` or `tensor::einsum` | `eager_tensor::einsum` | `traced_tensor::einsum` |
+| Linear algebra | `Tensor` methods; selected `TypedTensor<T>` methods | `EagerTensor` methods | `traced_tensor` helpers |
+| Automatic differentiation | Not applicable | Scalar-loss `backward()` on tracked values | `grad`, `vjp`, `jvp`, HVP via composition |
+| External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
+
+Use CPU or CUDA with these paths according to backend coverage. CUDA tensors
+must be moved explicitly with upload/download helpers, and unsupported CUDA
+operations do not silently fall back to CPU.
 
 ## Extension Story
 
 Automatic differentiation is externally extensible. An extension crate can add
 operations, eager/traced execution hooks, and AD rules without forcing the core
-crate to grow application-specific APIs. [`tenferro-fft`](tenferro-fft.md) is
+crate to grow application-specific APIs. [FFT (extension)](tenferro-fft.md) is
 the example extension package: it adds Fourier transform operations and
 registers AD rules for supported transforms.
