@@ -1,27 +1,69 @@
 # Linear Algebra
 
-tenferro exposes traced linear algebra under `tenferro::traced_tensor`. The
-helpers return `TracedTensor` values, so multi-output decompositions are best
-compiled with `GraphCompiler::compile_many`.
+tenferro exposes linear algebra across the concrete and traced tensor layers.
+Use `Tensor` or `TypedTensor<T>` for no-AD direct execution. Use
+`TracedTensor` when the linear algebra operation should be part of a graph,
+transform AD pass, or repeated compile/run workflow.
+
+## Layer Coverage
+
+| Layer | Linear algebra style |
+| --- | --- |
+| `TypedTensor<T>` | Selected typed methods such as `svd`, `qr`, `cholesky`, and `eigh` |
+| `Tensor` | Dynamic dtype methods such as `svd`, `qr`, `cholesky`, `eigh`, and `solve` |
+| `EagerTensor` | Immediate execution with scalar-loss gradient recording where AD rules support the operation |
+| `TracedTensor` | `tenferro::traced_tensor` helpers for graph execution and transform AD |
+| CUDA | Supported subset through cuSOLVER/cuBLAS; see [Devices and GPU](devices-and-gpu.md) |
+
+## Concrete Solve
+
+```rust
+use tenferro::{CpuBackend, Tensor};
+
+let mut backend = CpuBackend::new();
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
+let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]);
+
+let x = a.solve(&b, &mut backend).unwrap();
+
+assert_eq!(x.shape(), &[2, 1]);
+assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+```
+
+## Typed Cholesky
+
+```rust
+use tenferro::{CpuBackend, TypedTensor};
+
+let mut backend = CpuBackend::new();
+let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]);
+
+let factor = a.cholesky(&mut backend).unwrap();
+
+assert_eq!(factor.shape.as_slice(), &[2, 2]);
+assert_eq!(factor.host_data(), &[2.0, 0.0, 0.0, 3.0]);
+```
+
+## Direct Decompositions
+
+The same operation families are available outside traced graphs. Use concrete
+or typed tensors for direct no-AD execution, eager tensors when the result
+should remain connected to a scalar-loss AD tape, and traced helpers when the
+operation belongs in a reusable graph.
 
 ## Singular value decomposition
 
 ```rust
-use tenferro::traced_tensor::svd;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{CpuBackend, Tensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
-let (u, s, vt) = svd(&a);
+let mut backend = CpuBackend::new();
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+let (u, s, vt) = a.svd(&mut backend).unwrap();
 
-let mut compiler = GraphCompiler::new();
-let program = compiler.compile_many(&[&u, &s, &vt]).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
+assert_eq!(u.shape(), &[2, 2]);
+assert_eq!(vt.shape(), &[2, 2]);
 
-assert_eq!(outputs[0].shape(), &[2, 2]);
-assert_eq!(outputs[2].shape(), &[2, 2]);
-
-let mut singular_values = outputs[1].as_slice::<f64>().unwrap().to_vec();
+let mut singular_values = s.as_slice::<f64>().unwrap().to_vec();
 singular_values.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
 assert_eq!(singular_values, vec![1.0, 2.0]);
 ```
@@ -29,46 +71,36 @@ assert_eq!(singular_values, vec![1.0, 2.0]);
 ## QR decomposition
 
 ```rust
-use tenferro::traced_tensor::qr;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{CpuBackend, TypedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
-let (q, r) = qr(&a);
+let mut backend = CpuBackend::new();
+let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]);
+let (q, r) = a.qr(&mut backend).unwrap();
 
-let mut compiler = GraphCompiler::new();
-let program = compiler.compile_many(&[&q, &r]).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
-
-assert_eq!(outputs[0].shape(), &[2, 2]);
-assert_eq!(outputs[1].shape(), &[2, 2]);
-assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 1.0]);
-assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 1.0]);
+assert_eq!(q.shape.as_slice(), &[2, 2]);
+assert_eq!(r.shape.as_slice(), &[2, 2]);
+assert_eq!(q.host_data(), &[1.0, 0.0, 0.0, 1.0]);
+assert_eq!(r.host_data(), &[1.0, 0.0, 0.0, 1.0]);
 ```
 
 ## Hermitian eigenvalue decomposition
 
 ```rust
-use tenferro::traced_tensor::eigh;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{EagerRuntime, Tensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
-let (values, vectors) = eigh(&a);
+let ctx = EagerRuntime::new();
+let a = ctx.variable_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
+let (values, vectors) = a.eigh().unwrap();
 
-let mut compiler = GraphCompiler::new();
-let program = compiler.compile_many(&[&values, &vectors]).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
+assert_eq!(values.data().shape(), &[2]);
+assert_eq!(vectors.data().shape(), &[2, 2]);
 
-assert_eq!(outputs[0].shape(), &[2]);
-assert_eq!(outputs[1].shape(), &[2, 2]);
-
-let mut eigenvalues = outputs[0].as_slice::<f64>().unwrap().to_vec();
+let mut eigenvalues = values.data().as_slice::<f64>().unwrap().to_vec();
 eigenvalues.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
 assert_eq!(eigenvalues, vec![1.0, 3.0]);
 ```
 
-## Cholesky factorization
+## Traced Cholesky Factorization
 
 ```rust
 use tenferro::traced_tensor::cholesky;
@@ -86,7 +118,7 @@ assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ```
 
-## Solve a linear system
+## Traced Solve In A Graph
 
 ```rust
 use tenferro::traced_tensor::solve;
@@ -105,27 +137,20 @@ assert_eq!(result.shape(), &[2, 1]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ```
 
-## Complete-pivot LU solve
+## Complete-Pivot LU Solve
 
 ```rust
-use tenferro::traced_tensor::{full_piv_lu, full_piv_lu_solve};
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{CpuBackend, Tensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
-let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]);
+let mut backend = CpuBackend::new();
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]);
 
-let (p, l, u, q, parity) = full_piv_lu(&a);
-let x = full_piv_lu_solve(&a, &b);
+let (p, _l, _u, _q, parity) = a.full_piv_lu(&mut backend).unwrap();
+let x = a.full_piv_lu_solve(&b, &mut backend).unwrap();
 
-let mut compiler = GraphCompiler::new();
-let program = compiler
-    .compile_many(&[&p, &l, &u, &q, &parity, &x])
-    .unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
-
-assert_eq!(outputs[0].shape(), &[2, 2]);
-assert_eq!(outputs[4].shape(), &[] as &[usize]);
-assert_eq!(outputs[5].shape(), &[2, 1]);
-assert_eq!(outputs[5].as_slice::<f64>().unwrap(), &[4.0, -1.0]);
+assert_eq!(p.shape(), &[2, 2]);
+assert_eq!(parity.shape(), &[] as &[usize]);
+assert_eq!(x.shape(), &[2, 1]);
+assert_eq!(x.as_slice::<f64>().unwrap(), &[4.0, -1.0]);
 ```

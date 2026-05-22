@@ -1,8 +1,8 @@
 # Getting Started
 
-tenferro supports direct CPU tensor computation, eager scalar-loss AD, traced
+tenferro supports no-AD tensor computation, eager scalar-loss AD, traced
 execution, transform AD, einsum, linear algebra, and CUDA execution through the
-feature-gated CubeCL backend.
+feature-gated CUDA backend.
 
 ## Installation
 
@@ -62,9 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Next Steps
 
-- [Choosing an API](../guides/choosing-an-api.md)
-- [Devices and GPU](../guides/devices-and-gpu.md)
 - [Core concepts](./core-concepts.md)
+- [Choosing a tensor layer](../guides/choosing-an-api.md)
+- [Execution models](../guides/execution-models.md)
+- [Memory order](../guides/memory-order.md)
+- [Devices and GPU](../guides/devices-and-gpu.md)
 - [PyTorch and JAX mapping](./pytorch-jax-mapping.md)
 - [Eager operations guide](../guides/eager-operations.md)
 - [Tensor operations guide](../guides/tensor-operations.md)

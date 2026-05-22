@@ -1,0 +1,89 @@
+name: Bug report
+description: Report incorrect behavior, a panic, or a supported path that does not work.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Precise, reproducible reports are easiest for maintainers and AI agents to verify.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the incorrect behavior, panic, error, or surprising result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: Describe the behavior you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal reproducer
+      description: Prefer a small Rust snippet, test case, command, or repository link.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-area
+    attributes:
+      label: Affected area
+      description: Select every area that seems relevant.
+      multiple: true
+      options:
+        - TypedTensor
+        - Tensor
+        - EagerTensor
+        - TracedTensor
+        - CUDA/backend
+        - Automatic differentiation
+        - Documentation
+        - Performance
+        - Unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend-device
+    attributes:
+      label: Backend/device
+      options:
+        - CPU default backend
+        - CPU BLAS/LAPACK backend
+        - CUDA
+        - Not applicable
+        - Unsure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: tenferro-rs version or commit
+      placeholder: "crates.io version, git commit, or branch"
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, CUDA version, BLAS/LAPACK provider, and relevant feature flags if known.
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification hint
+      description: Optional. How should we know this is fixed?
+
+  - type: textarea
+    id: extra-context
+    attributes:
+      label: Additional context
+      description: Optional links, logs, screenshots, or related issues.

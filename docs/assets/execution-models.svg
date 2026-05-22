@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 560" role="img" aria-labelledby="exec-models-title exec-models-desc">
+  <title id="exec-models-title">Eager CPU, Eager GPU, and Traced execution timelines</title>
+  <desc id="exec-models-desc">Three horizontal timelines compare CPU eager execution, GPU eager execution, and traced graph execution from left to right.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 4 L 0 8 z" fill="#334155"/>
+    </marker>
+    <style>
+      .axis { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .lane { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 6; }
+      .label { font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .tiny { font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .cpu { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
+      .gpu { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.5; }
+      .host { fill: #f8fafc; stroke: #64748b; stroke-width: 1.5; }
+      .trace { fill: #fae8ff; stroke: #a21caf; stroke-width: 1.5; }
+      .sync { stroke: #dc2626; stroke-width: 2; stroke-dasharray: 7 5; }
+      .syncText { font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #b91c1c; }
+    </style>
+  </defs>
+
+  <text x="120" y="42" class="small">time</text>
+  <line x1="165" y1="36" x2="1005" y2="36" class="axis"/>
+
+  <text x="36" y="108" class="label">Eager CPU</text>
+  <line x1="165" y1="104" x2="1005" y2="104" class="lane"/>
+  <rect x="190" y="72" width="105" height="54" rx="4" class="host"/>
+  <text x="212" y="102" class="small">call op</text>
+  <rect x="325" y="72" width="190" height="54" rx="4" class="cpu"/>
+  <text x="357" y="94" class="small">CPU compute</text>
+  <text x="354" y="114" class="tiny">host waits here</text>
+  <rect x="545" y="72" width="185" height="54" rx="4" class="host"/>
+  <text x="577" y="94" class="small">return Tensor</text>
+  <text x="580" y="114" class="tiny">host-readable</text>
+  <rect x="760" y="72" width="120" height="54" rx="4" class="host"/>
+  <text x="786" y="102" class="small">next op</text>
+
+  <text x="36" y="246" class="label">Eager GPU</text>
+  <line x1="165" y1="242" x2="1005" y2="242" class="lane"/>
+  <rect x="190" y="210" width="105" height="54" rx="4" class="host"/>
+  <text x="212" y="240" class="small">call op</text>
+  <rect x="325" y="210" width="150" height="54" rx="4" class="host"/>
+  <text x="356" y="232" class="small">enqueue</text>
+  <text x="344" y="252" class="tiny">host submits</text>
+  <rect x="505" y="210" width="205" height="54" rx="4" class="host"/>
+  <text x="532" y="232" class="small">return GPU Tensor</text>
+  <text x="552" y="252" class="tiny">handle, no ready flag</text>
+  <rect x="740" y="210" width="150" height="54" rx="4" class="host"/>
+  <text x="771" y="232" class="small">enqueue</text>
+  <text x="764" y="252" class="tiny">next GPU op</text>
+  <rect x="360" y="300" width="330" height="54" rx="4" class="gpu"/>
+  <text x="451" y="322" class="small">GPU compute</text>
+  <text x="421" y="342" class="tiny">ordered on backend stream</text>
+  <rect x="730" y="300" width="155" height="54" rx="4" class="gpu"/>
+  <text x="765" y="322" class="small">GPU op 2</text>
+  <text x="762" y="342" class="tiny">same stream</text>
+  <line x1="930" y1="190" x2="930" y2="375" class="sync"/>
+  <rect x="910" y="210" width="95" height="54" rx="4" class="host"/>
+  <text x="931" y="232" class="small">read</text>
+  <text x="920" y="252" class="tiny">download</text>
+  <text x="900" y="398" class="syncText">sync point</text>
+
+  <text x="36" y="450" class="label">Traced</text>
+  <line x1="165" y1="446" x2="1005" y2="446" class="lane"/>
+  <rect x="190" y="414" width="185" height="54" rx="4" class="trace"/>
+  <text x="220" y="436" class="small">build graph</text>
+  <text x="212" y="456" class="tiny">no kernels yet</text>
+  <rect x="405" y="414" width="185" height="54" rx="4" class="trace"/>
+  <text x="436" y="436" class="small">compile</text>
+  <text x="432" y="456" class="tiny">plan/optimize</text>
+  <rect x="620" y="414" width="185" height="54" rx="4" class="cpu"/>
+  <text x="650" y="436" class="small">execute graph</text>
+  <text x="640" y="456" class="tiny">CPU or CUDA backend</text>
+  <rect x="835" y="414" width="145" height="54" rx="4" class="host"/>
+  <text x="863" y="436" class="small">return</text>
+  <text x="853" y="456" class="tiny">or download</text>
+</svg>

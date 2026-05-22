@@ -1,14 +1,78 @@
 # Einsum
 
 If you already use `torch.einsum(...)` or `jnp.einsum(...)`, tenferro keeps
-the same subscript language. The traced API builds an einsum graph with a
-`GraphCompiler`; a `GraphExecutor` runs the compiled program.
+the same subscript language. Einsum is not a traced-only feature: tenferro has
+typed, concrete, eager, and traced routes.
 
 - PyTorch: `torch.einsum("ij,jk->ik", a, b)`
 - JAX: `jnp.einsum("ij,jk->ik", a, b)`
-- tenferro: `tenferro::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")`
+- tenferro typed: `tenferro::typed_tensor::einsum(&mut backend, &[&a, &b], "ij,jk->ik")`
+- tenferro concrete: `tenferro::tensor::einsum(&mut backend, &[&a, &b], "ij,jk->ik")`
+- tenferro eager AD: `tenferro::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")`
+- tenferro traced: `tenferro::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")`
 
-## Matrix multiply
+## Layer Coverage
+
+| Layer | Einsum entry point |
+| --- | --- |
+| `TypedTensor<T>` | `tenferro::typed_tensor::einsum` |
+| `Tensor` | `tenferro::tensor::einsum` |
+| `EagerTensor` | `tenferro::eager_tensor::einsum` |
+| `TracedTensor` | `tenferro::traced_tensor::einsum` |
+| CUDA | Supported through the backend for CUDA-resident tensors |
+
+## Concrete Matrix Multiply
+
+Use the concrete route for no-AD backend execution.
+
+```rust
+use tenferro::tensor::einsum;
+use tenferro::{CpuBackend, Tensor};
+
+let mut backend = CpuBackend::new();
+let a = Tensor::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+);
+let b = Tensor::from_vec_col_major(
+    vec![3, 2],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+);
+
+let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
+
+assert_eq!(c.shape(), &[2, 2]);
+assert_eq!(c.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+```
+
+## Typed Matrix Multiply
+
+Use the typed route when all inputs share one compile-time scalar type.
+
+```rust
+use tenferro::typed_tensor::einsum;
+use tenferro::{CpuBackend, TypedTensor};
+
+let mut backend = CpuBackend::new();
+let a = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 2],
+    vec![1.0, 2.0, 3.0, 4.0],
+);
+let b = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 2],
+    vec![5.0, 6.0, 7.0, 8.0],
+);
+
+let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
+
+assert_eq!(c.shape.as_slice(), &[2, 2]);
+assert_eq!(c.host_data(), &[23.0, 34.0, 31.0, 46.0]);
+```
+
+## Traced Matrix Multiply
+
+Use the traced route when einsum should be part of a graph compiled by
+`GraphCompiler` and executed by `GraphExecutor`.
 
 ```rust
 use tenferro::traced_tensor::einsum;
@@ -40,46 +104,38 @@ Repeated labels select or reduce diagonals, matching the standard NumPy,
 PyTorch, and JAX idioms.
 
 ```rust
-use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::tensor::einsum;
+use tenferro::{CpuBackend, Tensor};
 
-let matrix = TracedTensor::from_vec_col_major(
+let mut backend = CpuBackend::new();
+let matrix = Tensor::from_vec_col_major(
     vec![3, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
 );
 
-let mut compiler = GraphCompiler::new();
-let trace = einsum(&mut compiler, &[&matrix], "ii->").unwrap();
-let diagonal = einsum(&mut compiler, &[&matrix], "ii->i").unwrap();
-let program = compiler.compile_many(&[&trace, &diagonal]).unwrap();
+let trace = einsum(&mut backend, &[&matrix], "ii->").unwrap();
+let diagonal = einsum(&mut backend, &[&matrix], "ii->i").unwrap();
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
-
-assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[15.0]);
-assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
+assert_eq!(trace.as_slice::<f64>().unwrap(), &[15.0]);
+assert_eq!(diagonal.as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
 ```
 
 ## Outer product and diagonal embedding
 
 ```rust
-use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::eager_tensor::einsum;
+use tenferro::{EagerRuntime, Tensor};
 
-let u = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-let v = TracedTensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]);
+let ctx = EagerRuntime::new();
+let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
+let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]));
 
-let mut compiler = GraphCompiler::new();
-let outer = einsum(&mut compiler, &[&u, &v], "i,j->ij").unwrap();
-let diag = einsum(&mut compiler, &[&v], "i->ii").unwrap();
-let program = compiler.compile_many(&[&outer, &diag]).unwrap();
+let outer = einsum(&[&u, &v], "i,j->ij").unwrap();
+let diag = einsum(&[&v], "i->ii").unwrap();
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
-
-assert_eq!(outputs[0].shape(), &[2, 3]);
-assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
-assert_eq!(outputs[1].shape(), &[3, 3]);
+assert_eq!(outer.data().shape(), &[2, 3]);
+assert_eq!(outer.data().as_slice::<f64>().unwrap(), &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0]);
+assert_eq!(diag.data().shape(), &[3, 3]);
 ```
 
 ## N-ary contraction
@@ -90,21 +146,17 @@ einsums are planned at runtime and cached by `GraphExecutor` for the observed
 input shapes.
 
 ```rust
-use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::typed_tensor::einsum;
+use tenferro::{CpuBackend, TypedTensor};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
-let c = TracedTensor::from_vec_col_major(vec![2, 2], vec![9.0_f64, 10.0, 11.0, 12.0]);
+let mut backend = CpuBackend::new();
+let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+let c = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-let mut compiler = GraphCompiler::new();
-let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
-let program = compiler.compile(&out).unwrap();
+let out = einsum(&mut backend, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run(&program).unwrap();
-
-assert_eq!(result.shape(), &[2, 2]);
+assert_eq!(out.shape.as_slice(), &[2, 2]);
 ```
 
 ## Concrete vs symbolic shapes
@@ -146,23 +198,20 @@ batch axes line up naturally with column-major storage, so this example keeps
 the batch dimension on the right.
 
 ```rust
-use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::tensor::einsum;
+use tenferro::{CpuBackend, Tensor};
 
-let a = TracedTensor::from_vec_col_major(
+let mut backend = CpuBackend::new();
+let a = Tensor::from_vec_col_major(
     vec![2, 2, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 9.0, 10.0, 11.0, 12.0],
 );
-let b = TracedTensor::from_vec_col_major(
+let b = Tensor::from_vec_col_major(
     vec![2, 2, 2],
     vec![5.0_f64, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
 );
 
-let mut compiler = GraphCompiler::new();
-let c = einsum(&mut compiler, &[&a, &b], "ijk,jlk->ilk").unwrap();
-let program = compiler.compile(&c).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run(&program).unwrap();
+let result = einsum(&mut backend, &[&a, &b], "ijk,jlk->ilk").unwrap();
 
 assert_eq!(result.shape(), &[2, 2, 2]);
 ```

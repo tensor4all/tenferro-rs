@@ -42,6 +42,7 @@ impl GraphProgram {
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.input_count(), 1);
     /// ```
+    #[inline(never)]
     pub fn input_count(&self) -> usize {
         self.inputs.len()
     }
@@ -58,6 +59,7 @@ impl GraphProgram {
     /// let program = compiler.compile(&x.neg()).unwrap();
     /// assert_eq!(program.output_count(), 1);
     /// ```
+    #[inline(never)]
     pub fn output_count(&self) -> usize {
         self.exec.output_slots.len()
     }
@@ -76,6 +78,7 @@ impl GraphProgram {
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[4]);
     /// ```
+    #[inline(never)]
     pub fn input_specs(&self) -> &[GraphProgramInput] {
         &self.inputs
     }
@@ -135,6 +138,7 @@ impl GraphProgramInput {
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].dtype(), DType::F64);
     /// ```
+    #[inline(never)]
     pub fn dtype(&self) -> DType {
         self.dtype
     }
@@ -151,6 +155,7 @@ impl GraphProgramInput {
     /// let program = compiler.compile(&x).unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[2]);
     /// ```
+    #[inline(never)]
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
