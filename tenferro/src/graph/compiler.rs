@@ -7,17 +7,19 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::GlobalValKey;
 use lru::LruCache;
+use tenferro_einsum::ContractionTree;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{DType, Tensor};
 
 use super::cache::{
     compile_cache_stats, compute_cache_key, einsum_parse_cache_stats, nary_einsum_cache_stats,
-    CacheKey, EinsumParseCache, GraphCompilerCacheStats, NaryEinsumCache,
-    DEFAULT_COMPILE_CACHE_CAPACITY, DEFAULT_EINSUM_CACHE_CAPACITY,
+    CacheKey, EinsumCacheKey, EinsumParseCache, GraphCompilerCacheStats, NaryEinsumCache,
+    ParsedEinsum, DEFAULT_COMPILE_CACHE_CAPACITY, DEFAULT_EINSUM_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
 use crate::compiler::compile_std_to_exec;
+use crate::einsum_subscripts::parse_einsum_subscripts;
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::traced::{try_concrete_shape, TracedTensor};
@@ -396,6 +398,32 @@ impl GraphCompiler {
             static_einsum_plans: nary_einsum_cache_stats(&self.static_einsum_cache),
             einsum_parse: einsum_parse_cache_stats(&self.einsum_parse_cache),
         }
+    }
+
+    pub(crate) fn cached_subscripts(&mut self, subscripts: &str) -> Result<Arc<ParsedEinsum>> {
+        if let Some(cached) = self.einsum_parse_cache.get(subscripts) {
+            return Ok(Arc::clone(cached));
+        }
+
+        let parsed = parse_einsum_subscripts(subscripts)?;
+        let cached = Arc::new(ParsedEinsum { subscripts: parsed });
+        self.einsum_parse_cache
+            .put(subscripts.to_owned(), Arc::clone(&cached));
+        Ok(cached)
+    }
+
+    pub(crate) fn cached_static_einsum_tree(
+        &mut self,
+        key: EinsumCacheKey,
+        build: impl FnOnce() -> Result<ContractionTree>,
+    ) -> Result<Arc<ContractionTree>> {
+        if let Some(cached) = self.static_einsum_cache.get(&key) {
+            return Ok(Arc::clone(cached));
+        }
+
+        let tree = Arc::new(build()?);
+        self.static_einsum_cache.put(key, Arc::clone(&tree));
+        Ok(tree)
     }
 
     fn compile_many_with_descriptors(
