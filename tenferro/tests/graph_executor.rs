@@ -36,6 +36,20 @@ fn graph_executor_runs_compiled_multi_output_program() {
 }
 
 #[test]
+fn checkpoint_uses_explicit_compiler_and_executor() {
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    let mut y = &x * &x;
+
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
+
+    let program = compiler.compile(&y).unwrap();
+    let out = executor.run(&program).unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[9.0]);
+}
+
+#[test]
 fn graph_executor_validates_runtime_bindings() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let y = &x + &x;

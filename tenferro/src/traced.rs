@@ -19,6 +19,7 @@ use tidu::{try_differentiate, try_transpose};
 use super::compiler::compile_std_to_exec;
 use super::engine::Engine;
 use super::error::{Error, Result};
+use super::graph::{GraphCompiler, GraphExecutor};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::exec::ExecProgram;
@@ -799,20 +800,24 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec(vec![], vec![3.0_f64]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let mut y = &x * &x;
-    /// y.checkpoint(&mut engine).unwrap();
-    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// y.checkpoint(&mut compiler, &mut executor).unwrap();
+    ///
+    /// let program = compiler.compile(&y).unwrap();
+    /// assert_eq!(executor.run(&program).unwrap().shape(), &[] as &[usize]);
     /// ```
-    pub fn checkpoint<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<()> {
-        self.eval(engine)?;
-        let data = self
-            .data
-            .clone()
-            .ok_or_else(|| Error::Internal("checkpoint eval did not populate data".to_string()))?;
+    pub fn checkpoint<B: TensorBackend>(
+        &mut self,
+        compiler: &mut GraphCompiler,
+        executor: &mut GraphExecutor<B>,
+    ) -> Result<()> {
+        let program = compiler.compile(self)?;
+        let data = Arc::new(executor.run(&program)?);
         let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
 
         let old_fragment = self.fragment.clone();
@@ -846,6 +851,7 @@ impl TracedTensor {
         self.fragment = new_fragment;
         self.val = leaf_val;
         self.extra_roots.clear();
+        self.data = Some(data.clone());
         self.shape_hint = concrete_shape_hint;
         self.checkpoint_chain = Some(Arc::new(node));
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(new_metadata_scope));

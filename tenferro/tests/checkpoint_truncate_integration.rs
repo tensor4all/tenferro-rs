@@ -1,4 +1,6 @@
-use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, Engine, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
 
 const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;
@@ -24,6 +26,8 @@ fn checkpoint_truncate_loop_grad() {
     let a_value = 0.5_f64;
     let x0_data = vec![1.0, 2.0, 3.0];
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value));
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
@@ -32,7 +36,7 @@ fn checkpoint_truncate_loop_grad() {
     for _ in 0..steps {
         x = &a * &x;
         x = x.dynamic_truncate(&size, 0);
-        x.checkpoint(&mut engine).unwrap();
+        x.checkpoint(&mut compiler, &mut executor).unwrap();
     }
 
     let loss = x.reduce_sum(&[0]);

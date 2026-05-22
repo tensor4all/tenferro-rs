@@ -1,5 +1,7 @@
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, Engine, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
 
 const TOL: f64 = 1.0e-6;
 const FD_H: f64 = 1.0e-6;
@@ -23,11 +25,12 @@ fn eval_tensor(traced: TracedTensor) -> Tensor {
 
 #[test]
 fn checkpoint_preserves_eval_value() {
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
     let mut y = &x * &x;
 
-    y.checkpoint(&mut engine).unwrap();
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let value = get_f64_scalar(y.data.as_ref().expect("checkpoint should retain data"));
     assert!((value - 9.0).abs() < 1.0e-12);
@@ -36,10 +39,12 @@ fn checkpoint_preserves_eval_value() {
 #[test]
 fn checkpoint_downstream_eval_uses_leaf() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
     let mut y = &x * &x;
 
-    y.checkpoint(&mut engine).unwrap();
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let one = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0));
     let mut z = &y + &one;
@@ -51,10 +56,12 @@ fn checkpoint_downstream_eval_uses_leaf() {
 fn checkpoint_grad_correct() {
     let x_value = 2.0_f64;
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value));
     let mut y = &x * &x;
-    y.checkpoint(&mut engine).unwrap();
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = &y * &y;
     let grad = z.grad(&x).unwrap();
@@ -68,11 +75,12 @@ fn checkpoint_grad_correct() {
 #[test]
 fn checkpoint_hvp_correct() {
     let x_value = 2.0_f64;
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value));
     let mut y = &x * &x;
-    y.checkpoint(&mut engine).unwrap();
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
     let z = &y * &y;
 
     let grad = z.grad(&x).unwrap();
@@ -88,7 +96,9 @@ fn checkpoint_hvp_correct() {
     let fd_grad = |value: f64| {
         let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(value));
         let mut y = &x * &x;
-        y.checkpoint(&mut Engine::new(CpuBackend::new())).unwrap();
+        let mut compiler = GraphCompiler::new();
+        let mut executor = GraphExecutor::new(CpuBackend::new());
+        y.checkpoint(&mut compiler, &mut executor).unwrap();
         let z = &y * &y;
         let grad = z.grad(&x).unwrap();
         get_f64_scalar(&eval_tensor(grad))
@@ -106,13 +116,15 @@ fn checkpoint_loop_grad_correct() {
     let x0_value = 0.5_f64;
     let steps = 3;
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value));
     let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0_value));
 
     for _ in 0..steps {
         x = &a * &x.cos();
-        x.checkpoint(&mut engine).unwrap();
+        x.checkpoint(&mut compiler, &mut executor).unwrap();
     }
 
     let grad = x.grad(&a).unwrap();
@@ -136,6 +148,8 @@ fn checkpoint_loop_grad_correct() {
 #[test]
 fn grad_both_independently_checkpointed_add_wrt_rhs() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
@@ -143,8 +157,8 @@ fn grad_both_independently_checkpointed_add_wrt_rhs() {
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
 
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = &x2 + &y2;
 
@@ -160,6 +174,8 @@ fn grad_both_independently_checkpointed_add_wrt_rhs() {
 #[test]
 fn grad_both_independently_checkpointed_add_wrt_lhs() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
@@ -167,8 +183,8 @@ fn grad_both_independently_checkpointed_add_wrt_lhs() {
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
 
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = &x2 + &y2;
 
@@ -184,6 +200,8 @@ fn grad_both_independently_checkpointed_add_wrt_lhs() {
 #[test]
 fn grad_both_independently_checkpointed_mul_wrt_rhs() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
@@ -191,8 +209,8 @@ fn grad_both_independently_checkpointed_mul_wrt_rhs() {
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
 
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = &x2 * &y2;
 
@@ -215,12 +233,14 @@ fn grad_both_independently_checkpointed_matches_fd() {
     let fd = (f_concrete(y_val + FD_H) - f_concrete(y_val - FD_H)) / (2.0 * FD_H);
 
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val));
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
     let z = &x2 + &y2;
     let mut grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(grad_y.eval(&mut engine).unwrap());
@@ -233,6 +253,8 @@ fn grad_both_independently_checkpointed_matches_fd() {
 #[test]
 fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
@@ -240,8 +262,8 @@ fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
 
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
 
@@ -257,6 +279,8 @@ fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
 #[test]
 fn grad_einsum_both_independently_checkpointed_wrt_lhs() {
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0));
@@ -264,8 +288,8 @@ fn grad_einsum_both_independently_checkpointed_wrt_lhs() {
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
 
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
 
@@ -287,12 +311,14 @@ fn grad_einsum_both_independently_checkpointed_matches_fd() {
     let fd = (f_concrete(y_val + FD_H) - f_concrete(y_val - FD_H)) / (2.0 * FD_H);
 
     let mut engine = Engine::new(CpuBackend::new());
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val));
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val));
     let mut x2 = &x * &x;
     let mut y2 = &y * &y;
-    x2.checkpoint(&mut engine).unwrap();
-    y2.checkpoint(&mut engine).unwrap();
+    x2.checkpoint(&mut compiler, &mut executor).unwrap();
+    y2.checkpoint(&mut compiler, &mut executor).unwrap();
     let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
     let mut grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(grad_y.eval(&mut engine).unwrap());
