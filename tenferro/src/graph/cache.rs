@@ -1,8 +1,11 @@
+use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use lru::LruCache;
 use tenferro_einsum::ContractionTree;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::EinsumSubscripts;
 use tenferro_tensor::CacheStats;
 
@@ -78,20 +81,131 @@ pub(crate) struct CpuGraphExecutorCacheStats {
     pub buffer_pool: CacheStats,
 }
 
-/// Cache key derived from compiled graph topology.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Cache key derived from compiled graph topology and execution metadata.
+#[derive(Clone, Debug)]
 pub(crate) struct CacheKey {
     fingerprint: String,
+    extensions: Vec<Arc<dyn ExtensionOp>>,
+}
+
+impl PartialEq for CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint
+            && self.extensions.len() == other.extensions.len()
+            && self
+                .extensions
+                .iter()
+                .zip(&other.extensions)
+                .all(|(lhs, rhs)| {
+                    lhs.family_id() == rhs.family_id() && lhs.payload_eq(rhs.as_ref())
+                })
+    }
+}
+
+impl Eq for CacheKey {}
+
+impl Hash for CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fingerprint.hash(state);
+    }
 }
 
 pub(crate) fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
+    let mut fingerprint = String::new();
+    let mut extensions = Vec::new();
+    write_exec_program_fingerprint(exec, &mut fingerprint, &mut extensions);
     CacheKey {
-        fingerprint: format!("{exec:?}"),
+        fingerprint,
+        extensions,
     }
 }
 
 fn cache_key_retained_bytes(key: &CacheKey) -> usize {
-    size_of::<CacheKey>() + key.fingerprint.capacity()
+    size_of::<CacheKey>()
+        + key.fingerprint.capacity()
+        + key.extensions.capacity() * size_of::<Arc<dyn ExtensionOp>>()
+}
+
+fn write_exec_program_fingerprint(
+    exec: &ExecProgram,
+    out: &mut String,
+    extensions: &mut Vec<Arc<dyn ExtensionOp>>,
+) {
+    let _ = write!(
+        out,
+        "program inputs={:?}; outputs={:?}; n_slots={}; instructions=[",
+        exec.input_slots, exec.output_slots, exec.n_slots
+    );
+    for inst in &exec.instructions {
+        write_exec_instruction_fingerprint(inst, out, extensions);
+    }
+    out.push(']');
+}
+
+fn write_exec_instruction_fingerprint(
+    inst: &ExecInstruction,
+    out: &mut String,
+    extensions: &mut Vec<Arc<dyn ExtensionOp>>,
+) {
+    let _ = write!(
+        out,
+        "inst inputs={:?}; outputs={:?}; dtype={:?}; shapes={:?}; extents={:?}; last_use={:?}; op=",
+        inst.input_slots,
+        inst.output_slots,
+        inst.dtype,
+        inst.output_shapes,
+        inst.output_extents,
+        inst.last_use
+    );
+    write_exec_op_fingerprint(&inst.op, out, extensions);
+    out.push(';');
+}
+
+fn write_exec_op_fingerprint(
+    op: &ExecOp,
+    out: &mut String,
+    extensions: &mut Vec<Arc<dyn ExtensionOp>>,
+) {
+    match op {
+        ExecOp::Extension(extension) => {
+            let payload_hash = extension_payload_hash(extension.as_ref());
+            let _ = write!(
+                out,
+                "Extension(family_id={:?}, payload_hash={payload_hash})",
+                extension.family_id()
+            );
+            extensions.push(Arc::clone(extension));
+        }
+        other => {
+            let _ = write!(out, "{other:?}");
+        }
+    }
+}
+
+fn extension_payload_hash(extension: &dyn ExtensionOp) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    extension.payload_hash(&mut DynHasherProxy::new(&mut hasher));
+    hasher.finish()
+}
+
+struct DynHasherProxy<'a, H: Hasher + ?Sized> {
+    inner: &'a mut H,
+}
+
+impl<'a, H: Hasher + ?Sized> DynHasherProxy<'a, H> {
+    fn new(inner: &'a mut H) -> Self {
+        Self { inner }
+    }
+}
+
+impl<H: Hasher + ?Sized> Hasher for DynHasherProxy<'_, H> {
+    fn finish(&self) -> u64 {
+        self.inner.finish()
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.inner.write(bytes);
+    }
 }
 
 fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {

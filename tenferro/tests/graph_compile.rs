@@ -1,6 +1,65 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
+use tenferro::extension::{apply, ExtensionOpTrait};
 use tenferro::{DType, GraphCompiler, TracedTensor};
+use tenferro::{SymDim, Tensor};
+
+#[derive(Clone)]
+struct ConstantDebugExtension {
+    payload: usize,
+}
+
+impl std::fmt::Debug for ConstantDebugExtension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConstantDebugExtension")
+    }
+}
+
+impl ExtensionOpTrait for ConstantDebugExtension {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.graph_compile_constant_debug.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
+        hasher.write_u64(0);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOpTrait) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<ConstantDebugExtension>()
+            .is_some_and(|other| self.payload == other.payload)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOpTrait> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        1
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
 
 #[test]
 fn graph_compiler_compiles_without_backend() {
@@ -85,6 +144,21 @@ fn graph_compiler_cache_distinguishes_dtypes() {
 
     let _ = compiler.compile(&y_f64).unwrap();
     let _ = compiler.compile(&y_f32).unwrap();
+
+    assert_eq!(compiler.compile_cache_len(), 2);
+}
+
+#[test]
+fn graph_compiler_cache_distinguishes_extension_payload_eq_despite_hash_collision() {
+    let mut compiler = GraphCompiler::new();
+    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
+
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let y1 = apply(Arc::new(ConstantDebugExtension { payload: 1 }), &[&x]).remove(0);
+    let y2 = apply(Arc::new(ConstantDebugExtension { payload: 2 }), &[&x]).remove(0);
+
+    let _ = compiler.compile(&y1).unwrap();
+    let _ = compiler.compile(&y2).unwrap();
 
     assert_eq!(compiler.compile_cache_len(), 2);
 }
