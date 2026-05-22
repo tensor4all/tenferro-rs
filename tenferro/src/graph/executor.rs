@@ -221,6 +221,7 @@ impl<B: TensorBackend> GraphExecutor<B> {
         program: &ExecProgram,
         inputs: Vec<Tensor>,
     ) -> Result<Vec<Tensor>> {
+        validate_exec_input_count(program, inputs.len())?;
         crate::segment::eval_exec_segmented_with_cache_and_workspace(
             &mut self.backend,
             program,
@@ -513,6 +514,16 @@ impl GraphExecutor<CpuBackend> {
         self.backend
             .set_buffer_pool_limit_bytes(max_retained_capacity_bytes);
     }
+}
+
+fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()> {
+    let expected = program.input_slots.len();
+    if actual != expected {
+        return Err(Error::Internal(format!(
+            "expected {expected} inputs for execution program, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 fn expect_single_output(outputs: &mut Vec<Tensor>) -> Result<Tensor> {

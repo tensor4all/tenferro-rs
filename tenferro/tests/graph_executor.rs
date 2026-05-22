@@ -1,5 +1,7 @@
 use std::num::NonZeroUsize;
 
+use tenferro::error::Error;
+use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]
@@ -53,6 +55,94 @@ fn graph_executor_validates_runtime_bindings() {
         .run_with_inputs(&program, &[(&x, &wrong_shape)])
         .unwrap_err();
     assert!(format!("{err}").contains("shape"));
+}
+
+#[test]
+fn graph_executor_rejects_invalid_runtime_bindings() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = &x + &x;
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let err = executor
+        .run_with_inputs(&program, &[(&x, &bound), (&x, &bound)])
+        .unwrap_err();
+    assert!(matches!(err, Error::DuplicateBinding { .. }), "got {err:?}");
+
+    let data_leaf = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let err = executor
+        .run_with_inputs(&program, &[(&data_leaf, &bound)])
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::UnexpectedBinding { binding_index: 0 }),
+        "got {err:?}"
+    );
+
+    let other = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let err = executor
+        .run_with_inputs(&program, &[(&other, &bound)])
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::UnexpectedBinding { binding_index: 0 }),
+        "got {err:?}"
+    );
+
+    let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
+    let err = executor
+        .run_with_inputs(&program, &[(&x, &wrong_dtype)])
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            Error::PlaceholderDtypeMismatch {
+                expected: DType::F64,
+                actual: DType::F32
+            }
+        ),
+        "got {err:?}"
+    );
+
+    let err = executor.run_with_inputs(&program, &[]).unwrap_err();
+    assert!(
+        matches!(err, Error::UnboundPlaceholder { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn graph_executor_eval_exec_ir_rejects_wrong_input_count() {
+    let program = ExecProgram {
+        instructions: vec![ExecInstruction {
+            op: ExecOp::Add,
+            input_slots: vec![0, 1],
+            output_slots: vec![2],
+            dtype: DType::F64,
+            output_shapes: vec![vec![]],
+            output_extents: vec![vec![]],
+            last_use: vec![true, true],
+        }],
+        input_slots: vec![0, 1],
+        output_slots: vec![2],
+        n_slots: 3,
+    };
+    let inputs = vec![
+        Tensor::from_vec_col_major(vec![], vec![2.0_f64]),
+        Tensor::from_vec_col_major(vec![], vec![3.0_f64]),
+        Tensor::from_vec_col_major(vec![], vec![5.0_f64]),
+    ];
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let err = executor.eval_exec_ir(&program, inputs).unwrap_err();
+
+    assert!(
+        format!("{err}").contains("expected 2 inputs"),
+        "got {err:?}"
+    );
 }
 
 #[test]
