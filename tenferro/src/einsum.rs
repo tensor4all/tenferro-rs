@@ -257,6 +257,8 @@ pub fn einsum_subscripts(
 /// N-ary einsum with explicit contraction strategy.
 ///
 /// See [`EinsumOptimize`] for all available strategies and examples.
+/// Inputs with symbolic or otherwise non-concrete shapes currently support
+/// only the default automatic optimization strategy.
 ///
 /// # Examples
 ///
@@ -292,6 +294,9 @@ pub fn einsum_with(
 }
 
 /// N-ary einsum with integer labels and explicit contraction strategy.
+///
+/// Inputs with symbolic or otherwise non-concrete shapes currently support
+/// only the default automatic optimization strategy.
 ///
 /// # Examples
 ///
@@ -336,6 +341,7 @@ pub fn einsum_subscripts_with(
         )));
     }
     if inputs.iter().any(|tensor| !has_concrete_shape(tensor)) {
+        validate_symbolic_einsum_optimize(&optimize)?;
         return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
     }
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| concrete_shape(t)).collect();
@@ -343,7 +349,7 @@ pub fn einsum_subscripts_with(
 
     match optimize {
         // Reuse TreeSA results for repeated calls with the same equation and input shapes.
-        EinsumOptimize::Auto(opts) => {
+        EinsumOptimize::Auto(opts) if is_default_auto_options(&opts) => {
             let cache_key = (subscripts.clone(), shapes.clone());
             let tree = compiler.cached_static_einsum_tree(cache_key, || {
                 resolve_strategy(EinsumOptimize::Auto(opts), &subs, &shape_refs)
@@ -355,6 +361,45 @@ pub fn einsum_subscripts_with(
             build_traced_from_tree(inputs, &subs, &tree, &shapes)
         }
     }
+}
+
+fn validate_symbolic_einsum_optimize(optimize: &EinsumOptimize) -> Result<()> {
+    match optimize {
+        EinsumOptimize::Auto(opts) if is_default_auto_options(opts) => Ok(()),
+        _ => Err(Error::ContractionError(
+            "symbolic einsum supports only default automatic optimization".into(),
+        )),
+    }
+}
+
+fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
+    let default = default_auto_options();
+    options.ntrials == default.ntrials
+        && options.niters == default.niters
+        && f64_slices_equal_by_bits(&options.betas, &default.betas)
+        && score_functions_equal_by_bits(&options.score, &default.score)
+}
+
+fn default_auto_options() -> ContractionOptimizerOptions {
+    match EinsumOptimize::default() {
+        EinsumOptimize::Auto(options) => options,
+        _ => unreachable!("EinsumOptimize::default must be automatic optimization"),
+    }
+}
+
+fn f64_slices_equal_by_bits(lhs: &[f64], rhs: &[f64]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs)
+            .all(|(lhs, rhs)| lhs.to_bits() == rhs.to_bits())
+}
+
+fn score_functions_equal_by_bits(lhs: &ScoreFunction, rhs: &ScoreFunction) -> bool {
+    lhs.tc_weight.to_bits() == rhs.tc_weight.to_bits()
+        && lhs.sc_weight.to_bits() == rhs.sc_weight.to_bits()
+        && lhs.rw_weight.to_bits() == rhs.rw_weight.to_bits()
+        && lhs.sc_target.to_bits() == rhs.sc_target.to_bits()
 }
 
 fn has_concrete_shape(tensor: &TracedTensor) -> bool {
