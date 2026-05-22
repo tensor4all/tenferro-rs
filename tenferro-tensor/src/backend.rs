@@ -60,8 +60,8 @@ pub enum ElementwiseFusionOp {
 /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 ///
 /// let mut backend = CpuBackend::new();
-/// let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-/// let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+/// let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+/// let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
 /// let sum = backend
 ///     .with_exec_session(|exec| exec.add(&a, &b))
 ///     .unwrap();
@@ -642,7 +642,7 @@ pub trait TensorBackend {
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     /// let host = backend.download_to_host(&tensor).unwrap();
     /// assert_eq!(host.shape(), &[2]);
     /// ```
@@ -661,7 +661,7 @@ pub trait TensorBackend {
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     /// let uploaded = backend.upload_host_tensor(&tensor).unwrap();
     /// assert_eq!(uploaded.shape(), &[2]);
     /// ```
@@ -679,7 +679,7 @@ pub trait TensorBackend {
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let tensor = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     /// backend.reclaim_buffer(tensor);
     /// ```
     fn reclaim_buffer(&mut self, _tensor: Tensor) {}

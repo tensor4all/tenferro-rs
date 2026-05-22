@@ -165,15 +165,15 @@ fn finite_diff_complex_rhs(
 }
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
@@ -3588,7 +3588,7 @@ fn dropped_traced_graph_releases_registered_metadata() {
     let y;
 
     {
-        let x = TracedTensor::from_vec(vec![1], vec![2.0_f64]);
+        let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
         leaf_key = GlobalValKey::Input(x.input_key().expect("leaf input key"));
 
         y = &x + &x;

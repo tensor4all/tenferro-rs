@@ -127,8 +127,14 @@ fn provider_inject_dot_general_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 3.0, 2.0, 4.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![5.0, 7.0, 6.0, 8.0],
+    ));
 
     let mut backend = CpuBackend::new();
     let c = backend.dot_general(
@@ -157,8 +163,8 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![1, 2], vec![1.0, 2.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![1, 2], vec![3.0, 4.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0, 2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]));
 
     let mut backend = CpuBackend::new();
     let c = backend.dot_general(
@@ -187,8 +193,8 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
     register_test_ptrs_once();
     DGEMM_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![1], vec![2.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 1, 2],
         vec![3.0, 4.0, 5.0, 6.0],
     ));
@@ -221,8 +227,11 @@ fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
     DGETC2_CALLS.store(0, Ordering::SeqCst);
     DGESC2_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![4.0, 8.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 0.0, 0.0, 1.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]));
 
     let mut backend = CpuBackend::new();
     let x = backend.full_piv_lu_solve(&a, &b, false);

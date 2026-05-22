@@ -18,7 +18,7 @@ use tenferro_tensor::{Tensor, TypedTensor};
 // ============================================================================
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
@@ -1243,7 +1243,7 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
 // ============================================================================
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_c64(t: &Tensor, idx: &[usize]) -> Complex64 {

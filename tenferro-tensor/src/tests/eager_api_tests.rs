@@ -9,8 +9,8 @@ fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {
 
 #[test]
 fn tensor_new_and_typed_tensor_as_slice_work() {
-    let tensor = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let typed = TypedTensor::<f64>::from_vec(vec![2], vec![7.0, 8.0]);
+    let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let typed = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![7.0, 8.0]);
 
     assert_eq!(tensor.shape(), &[2, 3]);
     assert_eq!(
@@ -26,8 +26,8 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
     fn needs_backend(_ctx: &mut impl TensorBackend) {}
     needs_backend(&mut ctx);
 
-    let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
     let sum = a.add(&b, &mut ctx).unwrap();
     let product = a.mul(&b, &mut ctx).unwrap();
     let negated = a.neg(&mut ctx).unwrap();
@@ -42,11 +42,11 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
         Some([-1.0, -2.0, -3.0].as_slice())
     );
 
-    let matrix = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let matrix = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let transposed = matrix.transpose(&[1, 0], &mut ctx).unwrap();
     let reshaped = matrix.reshape(&[3, 2], &mut ctx).unwrap();
     let reduced = matrix.reduce_sum(&[1], &mut ctx).unwrap();
-    let rhs = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let matmul = matrix.matmul(&rhs, &mut ctx).unwrap();
 
     assert_eq!(transposed.shape(), &[3, 2]);
@@ -72,7 +72,7 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
 fn eager_tensor_linalg_methods_return_expected_shapes_and_values() {
     let mut ctx = CpuBackend::new();
 
-    let tall = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let tall = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let (u, s, vt) = tall.svd(&mut ctx).unwrap();
     let (q, r) = tall.qr(&mut ctx).unwrap();
     assert_eq!(u.shape(), &[3, 2]);
@@ -81,14 +81,14 @@ fn eager_tensor_linalg_methods_return_expected_shapes_and_values() {
     assert_eq!(q.shape(), &[3, 2]);
     assert_eq!(r.shape(), &[2, 2]);
 
-    let permutation = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
+    let permutation = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
     let (p, l, u, parity) = permutation.lu(&mut ctx).unwrap();
     assert_eq!(p.shape(), &[2, 2]);
     assert_eq!(l.shape(), &[2, 2]);
     assert_eq!(u.shape(), &[2, 2]);
     assert_eq!(parity.shape(), &[] as &[usize]);
 
-    let spd = Tensor::from_vec(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 5.0]);
+    let spd = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 5.0]);
     let chol = spd.cholesky(&mut ctx).unwrap();
     assert_eq!(chol.shape(), &[2, 2]);
     assert_eq!(
@@ -100,13 +100,13 @@ fn eager_tensor_linalg_methods_return_expected_shapes_and_values() {
     assert_eq!(eigh_values.shape(), &[2]);
     assert_eq!(eigh_vectors.shape(), &[2, 2]);
 
-    let diagonal = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
+    let diagonal = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
     let (eig_values, eig_vectors) = diagonal.eig(&mut ctx).unwrap();
     assert_eq!(eig_values.shape(), &[2]);
     assert_eq!(eig_vectors.shape(), &[2, 2]);
 
-    let a = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-    let b = Tensor::from_vec(vec![2, 1], vec![1.0_f64, 0.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    let b = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]);
     let x = a.solve(&b, &mut ctx).unwrap();
     assert_eq!(x.shape(), &[2, 1]);
     assert_close(
@@ -115,8 +115,8 @@ fn eager_tensor_linalg_methods_return_expected_shapes_and_values() {
         1.0e-10,
     );
 
-    let triangular = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
-    let rhs = Tensor::from_vec(vec![2, 1], vec![2.0_f64, 7.0]);
+    let triangular = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    let rhs = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]);
     let triangular_x = triangular
         .triangular_solve(&rhs, true, true, false, false, &mut ctx)
         .unwrap();

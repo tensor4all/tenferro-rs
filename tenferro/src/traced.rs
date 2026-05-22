@@ -254,7 +254,7 @@ impl TracedTensor {
     /// use tenferro::{Tensor, TracedTensor};
     ///
     /// let a = TracedTensor::from_tensor_concrete_shape(
-    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
     /// );
     /// assert_eq!(a.rank, 2);
     /// assert!(a.is_concrete_shape());
@@ -311,7 +311,7 @@ impl TracedTensor {
     /// use tenferro::{Tensor, TracedTensor};
     ///
     /// let t = TracedTensor::from_tensor_symbolic_shape(
-    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
     /// );
     /// assert_eq!(t.rank, 2);
     /// assert!(!t.is_concrete_shape());
@@ -487,26 +487,6 @@ impl TracedTensor {
         Self::from_tensor_concrete_shape(Tensor::from_vec_row_major(shape, data))
     }
 
-    /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
-    /// `Vec<T>` data.
-    ///
-    /// Prefer [`TracedTensor::from_vec_col_major`] or
-    /// [`TracedTensor::from_vec_row_major`] so the input memory order is
-    /// explicit.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::TracedTensor;
-    ///
-    /// let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    /// assert_eq!(a.rank, 1);
-    /// ```
-    #[deprecated(note = "use from_vec_col_major or from_vec_row_major")]
-    pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_vec_col_major(shape, data)
-    }
-
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
     /// constant `SymDim` (i.e. the shape is fully known at graph-build time).
     ///
@@ -516,7 +496,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     /// assert!(a.is_concrete_shape());
     /// assert!(!b.is_concrete_shape());
@@ -539,7 +519,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
     ///
     /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
@@ -1447,7 +1427,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// // Concrete axis: reports the constant size.
     /// assert_eq!(a.axis_sym_dim(0).constant_value(), Some(2));
     ///
@@ -1481,7 +1461,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// assert!(a.sym_shape().is_some());
     /// assert_eq!(a.sym_shape().unwrap().len(), 2);
     ///
@@ -1563,8 +1543,8 @@ impl TracedTensor {
     /// ```
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
-    /// let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    /// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
     /// let m = a.axis_sym_dim(0);
     /// let k = a.axis_sym_dim(1);
     /// let n = b.axis_sym_dim(1);
@@ -1732,7 +1712,7 @@ impl TracedTensor {
     /// ```
     /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let cols = x.shape_of(1);
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&cols).unwrap();
@@ -1765,8 +1745,8 @@ impl TracedTensor {
     /// ```
     /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let size = TracedTensor::from_vec(vec![], vec![2.0_f64]);
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
     /// let y = x.dynamic_truncate(&size, 0);
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
@@ -1802,8 +1782,8 @@ impl TracedTensor {
     /// ```
     /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    /// let reference = TracedTensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
     /// let y = x.pad_to_match(&reference, 0);
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();

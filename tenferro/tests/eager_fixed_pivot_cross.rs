@@ -62,7 +62,7 @@ fn finite_diff_grad(data: &[f64]) -> Vec<f64> {
 #[test]
 fn take_axis_rows_cols_and_block_select_static_indices() {
     let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec(
+        Tensor::from_vec_col_major(
             vec![3, 4],
             vec![
                 1.0_f64, 2.0, 3.0, //
@@ -103,7 +103,7 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
 fn take_block_backward_accumulates_to_source() {
     let ctx = test_ctx();
     let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec(
+        Tensor::from_vec_col_major(
             vec![3, 4],
             vec![
                 1.0_f64, 2.0, 3.0, //
@@ -115,7 +115,7 @@ fn take_block_backward_accumulates_to_source() {
         ctx.clone(),
     );
     let weights = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx,
     );
 
@@ -141,7 +141,8 @@ fn fixed_pivot_cross_matches_solve_formula_and_gradients() {
         0.0, 5.0, 3.0,
     ];
     let ctx = test_ctx();
-    let a = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3, 3], a_data.clone()), ctx);
+    let a =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3, 3], a_data.clone()), ctx);
 
     let c = a.take_cols(&[0, 2]).unwrap();
     let r = a.take_rows(&[0, 2]).unwrap();

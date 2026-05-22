@@ -64,9 +64,12 @@ fn expect_duplicate_axis(result: crate::Result<Tensor>, op: &'static str) {
 
 #[test]
 fn cpu_indexing_dispatch_covers_supported_dtypes() {
-    let indices = Tensor::from_vec(vec![2], vec![0_i64, 2]);
+    let indices = Tensor::from_vec_col_major(vec![2], vec![0_i64, 2]);
 
-    let f32_operand = Tensor::F32(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let f32_operand = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
     assert_eq!(
         gather(&f32_operand, &indices, &simple_gather_config())
             .unwrap()
@@ -74,7 +77,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let c32_operand = Tensor::C32(TypedTensor::from_vec(
+    let c32_operand = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![3],
         vec![
             Complex32::new(1.0, 0.0),
@@ -89,7 +92,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let c64_operand = Tensor::C64(TypedTensor::from_vec(
+    let c64_operand = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![3],
         vec![
             Complex64::new(1.0, 0.0),
@@ -104,15 +107,15 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let i64_operand = Tensor::from_vec(vec![3], vec![1_i64, 2, 3]);
+    let i64_operand = Tensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
     assert!(matches!(
         gather(&i64_operand, &indices, &simple_gather_config()),
         Err(crate::Error::BackendFailure { op: "gather", .. })
     ));
 
-    let scatter_indices = Tensor::from_vec(vec![2, 2], vec![0_i64, 1, 0, 1]);
+    let scatter_indices = Tensor::from_vec_col_major(vec![2, 2], vec![0_i64, 1, 0, 1]);
 
-    let f32_updates = Tensor::F32(TypedTensor::from_vec(vec![2], vec![5.0, 6.0]));
+    let f32_updates = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![5.0, 6.0]));
     assert_eq!(
         scatter(
             &Tensor::F32(TypedTensor::zeros(vec![2, 2])),
@@ -125,7 +128,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2, 2]
     );
 
-    let c32_updates = Tensor::C32(TypedTensor::from_vec(
+    let c32_updates = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(5.0, 1.0), Complex32::new(6.0, 2.0)],
     ));
@@ -141,7 +144,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2, 2]
     );
 
-    let c64_updates = Tensor::C64(TypedTensor::from_vec(
+    let c64_updates = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(5.0, 1.0), Complex64::new(6.0, 2.0)],
     ));
@@ -159,9 +162,9 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
 
     assert!(matches!(
         scatter(
-            &Tensor::from_vec(vec![2, 2], vec![0_i64; 4]),
+            &Tensor::from_vec_col_major(vec![2, 2], vec![0_i64; 4]),
             &scatter_indices,
-            &Tensor::from_vec(vec![2], vec![1_i64, 2]),
+            &Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]),
             &diagonal_scatter_config(),
         ),
         Err(crate::Error::BackendFailure { op: "scatter", .. })
@@ -206,7 +209,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
-    let starts = Tensor::from_vec(vec![1], vec![1_i64]);
+    let starts = Tensor::from_vec_col_major(vec![1], vec![1_i64]);
     assert_eq!(
         dynamic_slice(&f32_operand, &starts, &[2]).unwrap().shape(),
         &[2]
@@ -275,7 +278,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
 #[test]
 fn cpu_indexing_validation_covers_error_branches() {
     let mut backend = CpuBackend::new();
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
 
     expect_rank_mismatch(
         backend.slice(
@@ -333,17 +336,32 @@ fn cpu_indexing_validation_covers_error_branches() {
         "slice",
     );
 
-    let matrix = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let matrix = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
     expect_rank_mismatch(
-        backend.dynamic_slice(&matrix, &Tensor::from_vec(vec![2], vec![0_i64, 0]), &[1]),
+        backend.dynamic_slice(
+            &matrix,
+            &Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]),
+            &[1],
+        ),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.dynamic_slice(&matrix, &Tensor::from_vec(vec![1, 1], vec![0_i64]), &[1, 1]),
+        backend.dynamic_slice(
+            &matrix,
+            &Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]),
+            &[1, 1],
+        ),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.dynamic_slice(&matrix, &Tensor::from_vec(vec![1], vec![0_i64]), &[1, 1]),
+        backend.dynamic_slice(
+            &matrix,
+            &Tensor::from_vec_col_major(vec![1], vec![0_i64]),
+            &[1, 1],
+        ),
         "dynamic_slice",
     );
 
@@ -392,14 +410,17 @@ fn cpu_indexing_validation_covers_error_branches() {
         "pad",
     );
 
-    let operand_2d = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let idx = Tensor::from_vec(vec![1, 1], vec![0_i64]);
-    let idx2 = Tensor::from_vec(vec![1, 2], vec![0_i64, 0]);
+    let operand_2d = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
+    let idx = Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]);
+    let idx2 = Tensor::from_vec_col_major(vec![1, 2], vec![0_i64, 0]);
 
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F32(TypedTensor::from_vec(vec![1, 1], vec![0.5])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![1, 1], vec![0.5])),
             &valid_gather_2d_config(),
         ),
         "index_tensor",
@@ -407,7 +428,10 @@ fn cpu_indexing_validation_covers_error_branches() {
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F32(TypedTensor::from_vec(vec![1, 1], vec![16_777_218.0])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(
+                vec![1, 1],
+                vec![16_777_218.0],
+            )),
             &valid_gather_2d_config(),
         ),
         "index_tensor",
@@ -415,7 +439,7 @@ fn cpu_indexing_validation_covers_error_branches() {
     expect_invalid_config(
         gather(
             &operand_2d,
-            &Tensor::F64(TypedTensor::from_vec(
+            &Tensor::F64(TypedTensor::from_vec_col_major(
                 vec![1, 1],
                 vec![9_007_199_254_740_994.0],
             )),
@@ -465,7 +489,7 @@ fn cpu_indexing_validation_covers_error_branches() {
     };
     expect_duplicate_axis(gather(&operand_2d, &idx, &gather_cfg), "gather");
 
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![1], vec![5.0]));
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![5.0]));
     let mut scatter_cfg = diagonal_scatter_config();
     scatter_cfg.inserted_window_dims = vec![2];
     expect_axis_oob(
@@ -524,7 +548,7 @@ fn cpu_indexing_validation_covers_error_branches() {
     );
 
     let scatter_cfg = diagonal_scatter_config();
-    let bad_batch_updates = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![5.0]));
+    let bad_batch_updates = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]));
     expect_invalid_config(
         scatter(&operand_2d, &idx2, &bad_batch_updates, &scatter_cfg),
         "scatter",
@@ -536,7 +560,7 @@ fn cpu_indexing_validation_covers_error_branches() {
         scatter_dims_to_operand_dims: vec![0, 1],
         index_vector_dim: 1,
     };
-    let updates_2d = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![5.0]));
+    let updates_2d = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![5.0]));
     expect_axis_oob(
         scatter(&operand_2d, &idx2, &updates_2d, &scatter_cfg),
         "scatter",
@@ -548,14 +572,17 @@ fn cpu_indexing_validation_covers_error_branches() {
         scatter_dims_to_operand_dims: vec![0, 1],
         index_vector_dim: 1,
     };
-    let updates_3d = Tensor::F64(TypedTensor::from_vec(vec![1, 1, 1], vec![5.0]));
+    let updates_3d = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1, 1], vec![5.0]));
     expect_duplicate_axis(
         scatter(&operand_2d, &idx2, &updates_3d, &scatter_cfg),
         "scatter",
     );
 
     let scatter_cfg = diagonal_scatter_config();
-    let mismatched_updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let mismatched_updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
     expect_invalid_config(
         scatter(&operand_2d, &idx2, &mismatched_updates, &scatter_cfg),
         "scatter",
@@ -566,7 +593,7 @@ fn cpu_indexing_validation_covers_error_branches() {
 fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
     let mut backend = CpuBackend::new();
     backend.with_exec_session(|exec| {
-        let eye = Tensor::C64(TypedTensor::from_vec(
+        let eye = Tensor::C64(TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![
                 Complex64::new(1.0, 0.0),
@@ -575,7 +602,7 @@ fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
                 Complex64::new(1.0, 0.0),
             ],
         ));
-        let rhs = Tensor::C64(TypedTensor::from_vec(
+        let rhs = Tensor::C64(TypedTensor::from_vec_col_major(
             vec![2, 1],
             vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
         ));
@@ -598,8 +625,8 @@ fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
         assert_eq!(exec.eigh(&eye).unwrap().len(), 2);
         assert_eq!(exec.eig(&eye).unwrap().len(), 2);
 
-        let f32_vec = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-        let i64_vec = Tensor::I64(TypedTensor::from_vec(vec![2], vec![1_i64, 2]));
+        let f32_vec = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+        let i64_vec = Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]));
         assert!(matches!(
             exec.eig(&i64_vec),
             Err(crate::Error::BackendFailure { op: "eig", .. })
@@ -619,7 +646,7 @@ fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
             })
         ));
 
-        let f64_vec = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+        let f64_vec = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
         assert!(matches!(
             exec.triangular_solve(&f64_vec, &f32_vec, true, true, false, false),
             Err(crate::Error::DTypeMismatch {

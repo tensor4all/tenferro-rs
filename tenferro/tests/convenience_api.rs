@@ -8,8 +8,8 @@ use tenferro_tensor::DType;
 
 #[test]
 fn traced_tensor_new_and_tensor_as_slice_cover_common_f64_flow() {
-    let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TracedTensor::from_vec(vec![2, 3], vec![6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = TracedTensor::from_vec_col_major(vec![2, 3], vec![6.0_f64, 5.0, 4.0, 3.0, 2.0, 1.0]);
 
     let mut sum = &a + &b;
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -31,8 +31,8 @@ fn tensor_scalar_is_reexported_from_tenferro() {
 
 #[test]
 fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
-    let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
 
     assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
     assert!(a.input_key().is_some());
@@ -59,15 +59,17 @@ fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
 
 #[test]
 fn traced_tensor_scaling_covers_dtype_specific_constants() {
-    let f32_tensor =
-        TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![1], vec![1.0_f32]));
+    let f32_tensor = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![1],
+        vec![1.0_f32],
+    ));
     assert_eq!(f32_tensor.scale_real(2.5).dtype, DType::F32);
 
     let i64_tensor =
-        TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![1], vec![2_i64]));
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![1], vec![2_i64]));
     assert_eq!(i64_tensor.scale_real(2.5).dtype, DType::I64);
 
-    let c64_tensor = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+    let c64_tensor = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![1],
         vec![Complex64::new(1.0, 2.0)],
     ));
@@ -77,7 +79,7 @@ fn traced_tensor_scaling_covers_dtype_specific_constants() {
         DType::C64
     );
 
-    let c32_tensor = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+    let c32_tensor = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![1],
         vec![Complex32::new(1.0, 2.0)],
     ));

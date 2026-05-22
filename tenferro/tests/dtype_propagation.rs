@@ -66,7 +66,10 @@ fn test_eig_i64_produces_c64() {
 
 #[test]
 fn test_traced_eig_i64_outputs_c64_metadata() {
-    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1, 0, 0, 2]));
+    let input = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1, 0, 0, 2],
+    ));
     let x = TracedTensor::from_tensor_concrete_shape(input);
     let (values, vectors) = eig(&x);
     assert_eq!(values.dtype, DType::C64);

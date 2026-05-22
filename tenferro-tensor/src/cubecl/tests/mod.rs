@@ -32,23 +32,23 @@ fn download(backend: &CubeclBackend, tensor: &Tensor) -> Tensor {
 }
 
 fn tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn tensor_f64(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn tensor_c32(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
-    Tensor::C32(TypedTensor::from_vec(shape, data))
+    Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn tensor_c64(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {

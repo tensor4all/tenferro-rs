@@ -74,7 +74,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.as_physical_slice(), &[1.0, 2.0]);
     /// ```
     pub fn as_physical_slice(&self) -> &[T] {
@@ -88,7 +88,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// let sum: f64 = t.iter().copied().sum();
     /// assert_eq!(sum, 3.0);
     /// ```
@@ -103,7 +103,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// t.as_physical_slice_mut()[1] = 5.0;
     /// assert_eq!(t.as_physical_slice(), &[1.0, 5.0]);
     /// ```
@@ -118,7 +118,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// for value in t.iter_mut() {
     ///     *value *= 2.0;
     /// }
@@ -135,7 +135,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
@@ -149,7 +149,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3, 2], vec![0.0; 12]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
@@ -165,7 +165,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.try_get(&[1]), Some(&2.0));
     /// assert_eq!(t.try_get(&[2]), None);
     /// ```
@@ -181,7 +181,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.get2(1, 0), &2.0);
     /// ```
     pub fn get2(&self, i: usize, j: usize) -> &T {
@@ -196,7 +196,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![1, 1, 2], vec![3.0, 4.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![1, 1, 2], vec![3.0, 4.0]);
     /// assert_eq!(t.get3(0, 0, 1), &4.0);
     /// ```
     pub fn get3(&self, i: usize, j: usize, k: usize) -> &T {
@@ -219,7 +219,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(unsafe { *t.get_unchecked(&[1]) }, 2.0);
     /// ```
     pub unsafe fn get_unchecked(&self, indices: &[usize]) -> &T {
@@ -236,7 +236,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![1], vec![1.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
     /// *t.try_get_mut(&[0]).unwrap() = 2.0;
     /// assert_eq!(t.as_slice(), &[2.0]);
     /// ```
@@ -252,7 +252,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// *t.get_mut2(1, 0) = 5.0;
     /// assert_eq!(t.as_slice(), &[1.0, 5.0, 3.0, 4.0]);
     /// ```
@@ -268,7 +268,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![1, 1, 2], vec![3.0, 4.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1, 1, 2], vec![3.0, 4.0]);
     /// *t.get_mut3(0, 0, 1) = 5.0;
     /// assert_eq!(t.as_slice(), &[3.0, 5.0]);
     /// ```
@@ -292,7 +292,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let mut t = TypedTensor::<f64>::from_vec(vec![1], vec![1.0]);
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
     /// unsafe {
     ///     *t.get_unchecked_mut(&[0]) = 2.0;
     /// }
@@ -312,7 +312,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    /// let t = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
     /// assert_eq!(t.linear_offset(&[1, 2]), 5);
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> usize {
@@ -326,7 +326,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    /// let t = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
@@ -340,7 +340,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2, 3, 2], vec![0.0_f64; 12]);
+    /// let t = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]);
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
@@ -356,7 +356,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// assert_eq!(t.as_physical_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
     pub fn as_physical_slice<T: TensorScalar>(&self) -> Option<&[T]> {
@@ -373,7 +373,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let mut t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let mut t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// t.as_physical_slice_mut::<f64>().unwrap()[1] = 5.0;
     /// assert_eq!(t.as_physical_slice::<f64>().unwrap(), &[1.0, 5.0]);
     /// ```
@@ -391,7 +391,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// assert_eq!(t.try_get::<f64>(&[1]), Some(&2.0));
     /// assert_eq!(t.try_get::<f32>(&[1]), None);
     /// ```
@@ -410,7 +410,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let mut t = Tensor::from_vec(vec![1], vec![1.0_f64]);
+    /// let mut t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
     /// *t.try_get_mut::<f64>(&[0]).unwrap() = 2.0;
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
@@ -435,7 +435,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// assert_eq!(unsafe { *t.get_unchecked::<f64>(&[1]).unwrap() }, 2.0);
     /// ```
     pub unsafe fn get_unchecked<T: TensorScalar>(&self, indices: &[usize]) -> Option<&T> {
@@ -460,7 +460,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let mut t = Tensor::from_vec(vec![1], vec![1.0_f64]);
+    /// let mut t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]);
     /// unsafe {
     ///     *t.get_unchecked_mut::<f64>(&[0]).unwrap() = 2.0;
     /// }
@@ -484,7 +484,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let mut t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let mut t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// t.as_slice_mut::<f64>().unwrap()[0] = 3.0;
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[3.0, 2.0]);
     /// assert_eq!(t.as_slice_mut::<f32>(), None);
@@ -503,7 +503,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let sum: f64 = t.iter::<f64>().unwrap().copied().sum();
     /// assert_eq!(sum, 3.0);
     /// assert!(t.iter::<f32>().is_none());
@@ -522,7 +522,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let mut t = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let mut t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// for value in t.iter_mut::<f64>().unwrap() {
     ///     *value += 1.0;
     /// }

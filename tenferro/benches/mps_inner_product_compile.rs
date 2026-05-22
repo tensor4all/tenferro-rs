@@ -29,7 +29,7 @@ fn build_inner_product_graph(
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
-    let mut env = TracedTensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
+    let mut env = TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
         env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")

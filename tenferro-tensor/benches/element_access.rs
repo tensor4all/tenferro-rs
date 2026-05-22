@@ -6,13 +6,13 @@ const INDEX_COUNT: usize = 4096;
 fn typed_tensor<const R: usize>(shape: [usize; R]) -> TypedTensor<f64> {
     let len = shape.iter().product();
     let data = (0..len).map(|value| value as f64).collect();
-    TypedTensor::from_vec(shape.to_vec(), data)
+    TypedTensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 fn dynamic_tensor<const R: usize>(shape: [usize; R]) -> Tensor {
     let len = shape.iter().product();
     let data = (0..len).map(|value| value as f64).collect();
-    Tensor::from_vec(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 fn index_workload<const R: usize>(shape: [usize; R]) -> Vec<[usize; R]> {

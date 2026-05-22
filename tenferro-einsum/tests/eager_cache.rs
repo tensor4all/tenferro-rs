@@ -7,9 +7,9 @@ use tenferro_einsum::{
 use tenferro_tensor::{cpu::CpuBackend, Tensor};
 
 fn run_three_input_einsum(ctx: &mut CpuBackend, mid: usize) {
-    let a = Tensor::from_vec(vec![2, mid], vec![1.0_f64; 2 * mid]);
-    let b = Tensor::from_vec(vec![mid, 3], vec![1.0_f64; mid * 3]);
-    let c = Tensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
+    let a = Tensor::from_vec_col_major(vec![2, mid], vec![1.0_f64; 2 * mid]);
+    let b = Tensor::from_vec_col_major(vec![mid, 3], vec![1.0_f64; mid * 3]);
+    let c = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
     let out = eager_einsum(ctx, &[&a, &b, &c], "ij,jk,kl->il").expect("eager einsum");
     assert_eq!(out.shape(), &[2, 2]);
 }

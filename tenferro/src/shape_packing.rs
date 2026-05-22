@@ -80,7 +80,10 @@ fn index_select_config(
             })
         })
         .collect::<tenferro_tensor::Result<Vec<_>>>()?;
-    let indices = Tensor::I64(TypedTensor::from_vec(vec![positions.len(), 1], index_data));
+    let indices = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![positions.len(), 1],
+        index_data,
+    ));
 
     let config = GatherConfig {
         offset_dims,
@@ -127,7 +130,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
+    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]),
     ///     ctx,
     /// );
     /// let y = x.take_axis(0, &[2, 0]).unwrap();
@@ -153,7 +156,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
     /// );
     /// let y = x.take_rows(&[1]).unwrap();
@@ -174,7 +177,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
     /// );
     /// let y = x.take_cols(&[1]).unwrap();
@@ -199,7 +202,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
     ///     ctx,
     /// );
     /// let y = x.take_block(&[1], &[0]).unwrap();
@@ -220,7 +223,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
+    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]),
     ///     ctx,
     /// );
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
@@ -244,8 +247,8 @@ impl EagerTensor {
     /// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![], vec![1.0_f64]), ctx.clone());
-    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![], vec![2.0_f64]), ctx);
+    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![1.0_f64]), ctx.clone());
+    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![2.0_f64]), ctx);
     /// let out = EagerTensor::stack(&[&a, &b], -1).unwrap();
     ///
     /// assert_eq!(out.data().shape(), &[2]);
@@ -286,7 +289,7 @@ impl TracedTensor {
     /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::from_tensor_concrete_shape(
-    ///     Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]),
+    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]),
     /// );
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
@@ -321,8 +324,8 @@ impl TracedTensor {
     /// ```
     /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
-    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![], vec![1.0_f64]));
-    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![], vec![2.0_f64]));
+    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]));
+    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]));
     /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&stacked).unwrap();

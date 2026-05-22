@@ -215,7 +215,7 @@ fn oracle_replay_norm_case_048() {
     let maybe_grad = scalar.try_grad(input).expect("try_grad");
     assert!(maybe_grad.is_some(), "try_grad returned None");
     let manual_input =
-        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![5, 5],
             vec![
                 -4.826984902407649,
@@ -246,7 +246,7 @@ fn oracle_replay_norm_case_048() {
             ],
         )));
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
-        TypedTensor::from_vec(vec![], vec![1.0]),
+        TypedTensor::from_vec_col_major(vec![], vec![1.0]),
     ));
     let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),
@@ -339,7 +339,7 @@ fn oracle_manual_norm_case_048() {
         .expect("first order tolerance");
 
     let manual_input =
-        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![5, 5],
             vec![
                 -4.826984902407649,
@@ -370,7 +370,7 @@ fn oracle_manual_norm_case_048() {
             ],
         )));
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
-        TypedTensor::from_vec(vec![], vec![1.0]),
+        TypedTensor::from_vec_col_major(vec![], vec![1.0]),
     ));
     let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),

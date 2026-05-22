@@ -1010,11 +1010,14 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     //                       RHS = sequential 0..20, reshaped as [4, 5].
     let lhs_data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let rhs_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec(
+    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
         vec![2, 3, 4],
         lhs_data.clone(),
     ));
-    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec(vec![4, 5], rhs_data.clone()));
+    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 5],
+        rhs_data.clone(),
+    ));
 
     let mut backend = CpuBackend::default();
     let mut outputs = tenferro::exec::eval_exec_ir(&mut backend, &exec, vec![lhs, rhs])

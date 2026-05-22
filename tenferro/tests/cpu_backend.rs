@@ -11,11 +11,11 @@ use tenferro::GraphExecutor;
 use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {

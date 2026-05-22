@@ -210,9 +210,9 @@ pub(crate) fn dynamic_slice_with_pool(
 /// ```
 /// use tenferro_tensor::{cpu, Tensor, TypedTensor};
 ///
-/// let operand = Tensor::F64(TypedTensor::from_vec(vec![5], vec![0.0; 5]));
-/// let update = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
-/// let starts = Tensor::I64(TypedTensor::from_vec(vec![1], vec![4]));
+/// let operand = Tensor::F64(TypedTensor::from_vec_col_major(vec![5], vec![0.0; 5]));
+/// let update = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
+/// let starts = Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![4]));
 ///
 /// let out = cpu::dynamic_update_slice(&operand, &update, &starts).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 0.0, 0.0, 3.0, 4.0]);

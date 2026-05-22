@@ -19,11 +19,11 @@ fn test_ctx() -> Arc<EagerRuntime> {
 fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
 
@@ -37,11 +37,11 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
 fn eager_tensor_einsum_integer_subscripts_match_string_path() {
     let ctx = test_ctx();
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
@@ -56,11 +56,11 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
 fn eager_tensor_einsum_backward_populates_input_grads() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
 
@@ -81,11 +81,11 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
 fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let ctx = test_ctx();
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
 
@@ -118,11 +118,11 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
 fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
     let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
         ctx.clone(),
     );
 

@@ -1066,8 +1066,8 @@ fn try_eager_einsum_binary_read_fast(
 /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
 ///
 /// let mut ctx = CpuBackend::new();
-/// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 /// let c = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// assert_eq!(c.shape(), &[2, 2]);
@@ -1183,8 +1183,8 @@ pub fn eager_einsum_read_subscripts(
 /// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend};
 ///
 /// let mut ctx = CpuBackend::new();
-/// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ///
 /// let c = eager_einsum_owned(&mut ctx, vec![a, b], "ij,jk->ik").unwrap();
 ///

@@ -11,7 +11,7 @@ use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TypedTensor};
 const TOL: f64 = 1.0e-9;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(tensor: &Tensor) -> &[f64] {
@@ -22,7 +22,7 @@ fn get_f64_data(tensor: &Tensor) -> &[f64] {
 }
 
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
-    Tensor::C64(TypedTensor::from_vec(shape, data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_c64_data(tensor: &Tensor) -> &[Complex64] {

@@ -107,7 +107,7 @@ impl ExtensionOp for TestScaleBy2 {
             Tensor::F64(inner) => {
                 let data = inner.host_data();
                 let sum: Vec<f64> = data.iter().map(|&v| v + v).collect();
-                Ok(vec![Tensor::F64(TypedTensor::from_vec(
+                Ok(vec![Tensor::F64(TypedTensor::from_vec_col_major(
                     input.shape().to_vec(),
                     sum,
                 ))])
@@ -393,7 +393,7 @@ fn f64_slice(tensor: &Tensor) -> &[f64] {
 fn scale_by_2_forward_roundtrip() {
     ensure_scale_by_2_registered();
 
-    let x = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let outputs = apply(Arc::new(TestScaleBy2), &[&x]);
     assert_eq!(outputs.len(), 1);
     let mut y = outputs.into_iter().next().unwrap();
@@ -410,7 +410,7 @@ fn scale_by_2_grad_against_reduce_sum() {
     ensure_scale_by_2_registered();
 
     // loss = sum(scale_by_2(x))    =>   dloss/dx = [2, 2, 2, 2]
-    let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
         .into_iter()
         .next()
@@ -430,8 +430,10 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
     ensure_scale_by_2_registered();
 
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x =
-        EagerTensor::requires_grad_in(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]), ctx);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        ctx,
+    );
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -449,7 +451,7 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
 
 #[test]
 fn missing_extension_rule_errors_in_traced_grad() {
-    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let y = apply(Arc::new(TestNoAd), &[&x])
         .into_iter()
         .next()
@@ -467,7 +469,8 @@ fn missing_extension_rule_errors_in_traced_grad() {
 #[test]
 fn missing_extension_rule_errors_in_eager_backward() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
         .expect("forward-only eager extension apply")
         .into_iter()
@@ -493,7 +496,7 @@ fn apply_rejects_wrong_input_count() {
 
 #[test]
 fn apply_rejects_mismatched_output_metadata_count() {
-    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ = apply(Arc::new(TestBadOutputCount), &[&x]);
     }));
@@ -514,7 +517,7 @@ fn apply_eager_rejects_empty_input_list() {
 #[test]
 fn apply_eager_rejects_wrong_input_count() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
         Ok(_) => panic!("wrong eager extension input count unexpectedly succeeded"),
@@ -528,8 +531,10 @@ fn apply_eager_rejects_wrong_input_count() {
 fn apply_eager_rejects_cross_context_inputs() {
     let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let lhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), lhs_ctx);
-    let rhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![2.0_f64]), rhs_ctx);
+    let lhs =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
+    let rhs =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
 
     let err = match apply_eager(Arc::new(TestSwap), &[&lhs, &rhs]) {
         Ok(_) => panic!("cross-context eager extension inputs unexpectedly succeeded"),
@@ -545,7 +550,7 @@ fn apply_eager_rejects_cross_context_inputs() {
 #[test]
 fn apply_eager_rejects_mismatched_output_count() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {
         Ok(_) => panic!("bad eager extension output count unexpectedly succeeded"),
@@ -570,7 +575,7 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
     let loss = scaled.reduce_sum(&[0]);
 
     let mut g = loss.grad(&x).expect("grad build");
-    let bound = Tensor::from_vec(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
+    let bound = Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g
@@ -585,8 +590,8 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
 fn swap_forward_roundtrip() {
     ensure_swap_registered();
 
-    let a = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let b = TracedTensor::from_vec(vec![2], vec![100.0_f64, 200.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]);
     let outputs = apply(Arc::new(TestSwap), &[&a, &b]);
     assert_eq!(outputs.len(), 2);
     let mut iter = outputs.into_iter();
@@ -609,8 +614,8 @@ fn swap_grad_routes_cotangents_across_inputs() {
     // loss = sum(out0 + out1)   where (out0, out1) = swap(a, b)
     //       = sum(b + a)
     // => dloss/da = ones_like(a),  dloss/db = ones_like(b)
-    let a = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
     let mut iter = swapped.into_iter();
     let out0 = iter.next().unwrap();
@@ -635,8 +640,8 @@ fn swap_grad_routes_only_through_active_output() {
 
     // loss = sum(out1)  where (out0, out1) = swap(a, b)  (so out1 = a)
     // => dloss/da = ones_like(a)
-    let a = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
     let mut iter = swapped.into_iter();
     let _out0 = iter.next().unwrap();

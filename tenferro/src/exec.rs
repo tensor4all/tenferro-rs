@@ -565,7 +565,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
                     input.shape().len()
                 )));
             }
-            let host = Tensor::F64(TypedTensor::from_vec(
+            let host = Tensor::F64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![input.shape()[*axis] as f64],
             ));
@@ -1053,15 +1053,15 @@ fn execute_nary_einsum<B: TensorBackend>(
 
 pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
     match dtype {
-        DType::F64 => Tensor::F64(TypedTensor::from_vec(
+        DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
             vec![],
             vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
         )),
-        DType::F32 => Tensor::F32(TypedTensor::from_vec(
+        DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
         )),
-        DType::I64 => Tensor::I64(TypedTensor::from_vec(
+        DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
         )),
@@ -1073,7 +1073,10 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             im_bytes.copy_from_slice(&data[8..]);
             let re = f64::from_le_bytes(re_bytes);
             let im = f64::from_le_bytes(im_bytes);
-            Tensor::C64(TypedTensor::from_vec(vec![], vec![Complex64::new(re, im)]))
+            Tensor::C64(TypedTensor::from_vec_col_major(
+                vec![],
+                vec![Complex64::new(re, im)],
+            ))
         }
         DType::C32 => {
             let data = exact_bytes::<8>(dtype, bytes);
@@ -1083,7 +1086,10 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             im_bytes.copy_from_slice(&data[4..]);
             let re = f32::from_le_bytes(re_bytes);
             let im = f32::from_le_bytes(im_bytes);
-            Tensor::C32(TypedTensor::from_vec(vec![], vec![Complex32::new(re, im)]))
+            Tensor::C32(TypedTensor::from_vec_col_major(
+                vec![],
+                vec![Complex32::new(re, im)],
+            ))
         }
     }
 }

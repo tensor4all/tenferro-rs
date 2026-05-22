@@ -25,7 +25,7 @@ const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
 
 fn f64_scalar(val: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(vec![], vec![val]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]))
 }
 
 fn get_f64_scalar(t: &Tensor) -> f64 {

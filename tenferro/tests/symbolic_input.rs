@@ -28,7 +28,7 @@ fn identity_on_symbolic_input_rank_1() {
     let mut y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let bound = Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let out = y
         .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("run_with_inputs");
@@ -44,8 +44,8 @@ fn addition_of_two_symbolic_inputs() {
     let mut y = &a + &b;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let tb = Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let tb = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     let out = y
         .run_with_inputs_auto(&mut engine, &[(&a, &ta), (&b, &tb)])
         .expect("run_with_inputs");
@@ -60,7 +60,7 @@ fn matrix_symbolic_input_uses_column_major_values() {
     let mut y = &x + &x;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let bound = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    let bound = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
     let out = y
         .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("run_with_inputs");
@@ -79,7 +79,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
 
     // First eval: shape [2].
     let mut g1 = graph.clone();
-    let bound_small = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let bound_small = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let out_small = g1
         .run_with_inputs_auto(&mut engine, &[(&x, &bound_small)])
         .expect("small eval");
@@ -88,7 +88,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
 
     // Second eval: shape [5].
     let mut g2 = graph.clone();
-    let bound_big = Tensor::from_vec(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
+    let bound_big = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]);
     let out_big = g2
         .run_with_inputs_auto(&mut engine, &[(&x, &bound_big)])
         .expect("big eval");
@@ -103,7 +103,7 @@ fn concrete_shape_placeholder_accepts_exact_shape() {
     let mut y = x.clone();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let bound = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let bound = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let out = y
         .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("run_with_inputs");
@@ -117,12 +117,12 @@ fn mixed_graph_static_and_placeholder_inputs() {
     // Binary ops that broadcast (like `+`) require both operands' shape_hint
     // to match or be concrete, so we use `input_concrete_shape` for the
     // placeholder here.
-    let static_leaf = TracedTensor::from_vec(vec![2], vec![100.0_f64, 200.0]);
+    let static_leaf = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]);
     let placeholder = TracedTensor::input_concrete_shape(DType::F64, &[2]);
     let mut sum = &static_leaf + &placeholder;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
-    let bound = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let out = sum
         .run_with_inputs_auto(&mut engine, &[(&placeholder, &bound)])
         .expect("run_with_inputs");
@@ -133,8 +133,8 @@ fn mixed_graph_static_and_placeholder_inputs() {
 
 #[test]
 fn eval_with_empty_bindings_behaves_like_eval_for_all_static_graph() {
-    let a = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let b = TracedTensor::from_vec(vec![2], vec![10.0_f64, 20.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]);
     let mut y = &a + &b;
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -163,7 +163,7 @@ fn symbolic_placeholder_is_concrete_shape_false() {
 
 #[test]
 fn from_tensor_symbolic_shape_drops_shape_but_keeps_data() {
-    let tensor = Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let tensor = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let x = TracedTensor::from_tensor_symbolic_shape(tensor);
     assert!(!x.is_concrete_shape());
 

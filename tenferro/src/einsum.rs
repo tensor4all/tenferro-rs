@@ -237,8 +237,8 @@ pub fn einsum(
 /// use tenferro::{CpuBackend, EinsumSubscripts, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
 /// let mut compiler = GraphCompiler::new();
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]));
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
 /// let dot = einsum_subscripts(&mut compiler, &[&a, &b], &subscripts).unwrap();
 /// let program = compiler.compile(&dot).unwrap();
@@ -305,8 +305,8 @@ pub fn einsum_with(
 /// use tenferro::{CpuBackend, EinsumSubscripts, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
 /// let mut compiler = GraphCompiler::new();
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]));
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
 /// let dot = einsum_subscripts_with(
 ///     &mut compiler,

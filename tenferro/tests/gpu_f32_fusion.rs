@@ -7,7 +7,7 @@ use tenferro::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {

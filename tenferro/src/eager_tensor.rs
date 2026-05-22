@@ -17,11 +17,11 @@ pub use crate::eager::{EagerRuntime, EagerTensor};
 /// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-/// let a = EagerTensor::from_tensor_in(Tensor::from_vec(
+/// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(
 ///     vec![2, 3],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ), ctx.clone());
-/// let b = EagerTensor::from_tensor_in(Tensor::from_vec(
+/// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(
 ///     vec![3, 2],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 /// ), ctx);
@@ -44,8 +44,8 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// use tenferro::{CpuBackend, EinsumSubscripts, Tensor};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-/// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
-/// let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
+/// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
+/// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
 /// let dot = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
 ///

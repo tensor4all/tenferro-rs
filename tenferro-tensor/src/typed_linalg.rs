@@ -27,7 +27,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
     /// let (u, s, vt) = a.svd(&mut ctx).unwrap();
     ///
     /// assert_eq!(u.shape, vec![2, 2]);
@@ -54,7 +54,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// let (q, r) = a.qr(&mut ctx).unwrap();
     ///
     /// assert_eq!(q.shape, vec![2, 2]);
@@ -79,7 +79,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
     /// let l = a.cholesky(&mut ctx).unwrap();
     ///
     /// assert_eq!(l.shape, vec![2, 2]);
@@ -104,7 +104,7 @@ impl<T: TensorScalar> TypedTensor<T> {
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend, TypedTensor};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = TypedTensor::<f64>::from_vec(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
     /// let (w, v) = a.eigh(&mut ctx).unwrap();
     ///
     /// assert_eq!(w.shape, vec![2]);

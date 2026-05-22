@@ -11,7 +11,7 @@ use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn scalar(v: f64) -> Tensor {
@@ -19,7 +19,7 @@ fn scalar(v: f64) -> Tensor {
 }
 
 fn i64_scalar(v: i64) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec(vec![], vec![v]))
+    Tensor::I64(TypedTensor::from_vec_col_major(vec![], vec![v]))
 }
 
 fn data(t: &Tensor) -> Vec<f64> {

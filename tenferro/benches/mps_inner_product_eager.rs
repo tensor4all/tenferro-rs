@@ -56,7 +56,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::C64(TypedTensor::from_vec(shape.to_vec(), data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data))
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -93,7 +93,7 @@ fn eager_inner_product_local_path(
     configs: &LocalPathConfigs,
 ) -> EagerTensor {
     let mut env = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]),
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]),
         ctx.clone(),
     );
 

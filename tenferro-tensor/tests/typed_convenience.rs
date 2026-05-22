@@ -3,7 +3,7 @@ use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
 #[test]
 fn typed_svd_f64() {
     let mut ctx = CpuBackend::new();
-    let input = TypedTensor::<f64>::from_vec(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0]);
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0]);
 
     let (u, s, vt) = input.svd(&mut ctx).unwrap();
 
@@ -16,7 +16,7 @@ fn typed_svd_f64() {
 #[test]
 fn typed_qr_f64() {
     let mut ctx = CpuBackend::new();
-    let input = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 
     let (q, r) = input.qr(&mut ctx).unwrap();
 
@@ -27,7 +27,7 @@ fn typed_qr_f64() {
 #[test]
 fn typed_cholesky_f64() {
     let mut ctx = CpuBackend::new();
-    let input = TypedTensor::<f64>::from_vec(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]);
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]);
 
     let factor = input.cholesky(&mut ctx).unwrap();
 
@@ -38,7 +38,7 @@ fn typed_cholesky_f64() {
 #[test]
 fn typed_eigh_f64() {
     let mut ctx = CpuBackend::new();
-    let input = TypedTensor::<f64>::from_vec(vec![2, 2], vec![2.0, 0.0, 0.0, 5.0]);
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 5.0]);
 
     let (w, v) = input.eigh(&mut ctx).unwrap();
 

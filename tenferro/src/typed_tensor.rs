@@ -18,8 +18,8 @@ use crate::EinsumSubscripts;
 /// use tenferro::CpuBackend;
 ///
 /// let mut backend = CpuBackend::new();
-/// let a = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-/// let b = TypedTensor::from_vec(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+/// let a = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// let b = TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
 /// let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// assert_eq!(c.shape.as_slice(), &[2, 2]);
@@ -42,8 +42,8 @@ pub fn einsum<T: TensorScalar>(
 /// use tenferro::{CpuBackend, EinsumSubscripts};
 ///
 /// let mut backend = CpuBackend::new();
-/// let a = TypedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-/// let b = TypedTensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
+/// let a = TypedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+/// let b = TypedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
 /// let dot = einsum_subscripts(&mut backend, &[&a, &b], &subscripts).unwrap();
 ///

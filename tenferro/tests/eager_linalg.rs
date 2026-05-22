@@ -19,7 +19,7 @@ fn c64_data(tensor: &Tensor) -> &[Complex64] {
 #[test]
 fn svd_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
         test_ctx(),
     );
     let (u, s, vt) = a.svd().unwrap();
@@ -32,7 +32,7 @@ fn svd_returns_correct_shapes() {
 #[test]
 fn qr_returns_correct_shapes() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
         test_ctx(),
     );
     let (q, r) = a.qr().unwrap();
@@ -44,7 +44,7 @@ fn qr_returns_correct_shapes() {
 #[test]
 fn qr_second_output_backward_records_selected_output_slot() {
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
         test_ctx(),
     );
     let (_q, r) = a.qr().unwrap();
@@ -59,7 +59,7 @@ fn qr_second_output_backward_records_selected_output_slot() {
 #[test]
 fn cholesky_of_identity() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
         test_ctx(),
     );
     let l = a.cholesky().unwrap();
@@ -71,7 +71,7 @@ fn cholesky_of_identity() {
 #[test]
 fn svd_gradient_smoke() {
     let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0]),
         test_ctx(),
     );
     let (_, s, _) = a.svd().unwrap();
@@ -87,7 +87,7 @@ fn svd_gradient_smoke() {
 #[test]
 fn lu_returns_expected_factors_for_swap_matrix() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]),
         test_ctx(),
     );
     let (p, l, u, parity) = a.lu().unwrap();
@@ -106,7 +106,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
 #[test]
 fn full_piv_lu_returns_expected_shapes() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
         test_ctx(),
     );
     let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
@@ -121,11 +121,11 @@ fn full_piv_lu_returns_expected_shapes() {
 #[test]
 fn full_piv_lu_solve_returns_expected_solution() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]),
         test_ctx(),
     );
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]),
+        Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]),
         test_ctx(),
     );
     let x = a.full_piv_lu_solve(&b).unwrap();
@@ -137,23 +137,29 @@ fn full_piv_lu_solve_returns_expected_solution() {
 #[test]
 fn solve_alias_and_right_solve_cover_success_and_validation_errors() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
         test_ctx(),
     );
-    let b =
-        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]), test_ctx());
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]),
+        test_ctx(),
+    );
     let x = a.solve(&b).unwrap();
     assert_eq!(x.data().shape(), &[2, 1]);
     assert_eq!(f64_data(x.data()), &[2.0, 2.0]);
 
-    let rhs =
-        EagerTensor::from_tensor_in(Tensor::from_vec(vec![1, 2], vec![4.0_f64, 8.0]), test_ctx());
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1, 2], vec![4.0_f64, 8.0]),
+        test_ctx(),
+    );
     let right = a.right_solve(&rhs).unwrap();
     assert_eq!(right.data().shape(), &[1, 2]);
     assert_eq!(f64_data(right.data()), &[2.0, 2.0]);
 
-    let vector =
-        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), test_ctx());
+    let vector = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        test_ctx(),
+    );
     let lhs_rank_err = match vector.right_solve(&rhs) {
         Ok(_) => panic!("expected lhs rank mismatch"),
         Err(err) => err,
@@ -167,7 +173,7 @@ fn solve_alias_and_right_solve_cover_success_and_validation_errors() {
     assert!(rhs_rank_err.to_string().contains("rank mismatch"));
 
     let bad_rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![1, 3], vec![1.0_f64, 2.0, 3.0]),
+        Tensor::from_vec_col_major(vec![1, 3], vec![1.0_f64, 2.0, 3.0]),
         test_ctx(),
     );
     let shape_err = match a.right_solve(&bad_rhs) {
@@ -180,7 +186,7 @@ fn solve_alias_and_right_solve_cover_success_and_validation_errors() {
 #[test]
 fn eigh_returns_expected_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
         test_ctx(),
     );
     let (values, vectors) = a.eigh().unwrap();
@@ -196,7 +202,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
 #[test]
 fn eig_returns_expected_complex_values_for_diagonal_matrix() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
         test_ctx(),
     );
     let (values, vectors) = a.eig().unwrap();
@@ -219,11 +225,13 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
 #[test]
 fn triangular_solve_returns_expected_solution() {
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
+        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]),
         test_ctx(),
     );
-    let b =
-        EagerTensor::from_tensor_in(Tensor::from_vec(vec![2, 1], vec![4.0_f64, 8.0]), test_ctx());
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]),
+        test_ctx(),
+    );
     let x = a.triangular_solve(&b, true, true, false, false).unwrap();
 
     assert_eq!(x.data().shape(), &[2, 1]);

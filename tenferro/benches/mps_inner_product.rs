@@ -33,7 +33,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::C64(TypedTensor::from_vec(shape.to_vec(), data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data))
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -60,7 +60,7 @@ fn build_inner_product_graph(
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
-    let mut env = TracedTensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
+    let mut env = TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
         env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")

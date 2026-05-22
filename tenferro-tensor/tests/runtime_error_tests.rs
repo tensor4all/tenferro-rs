@@ -6,11 +6,11 @@ use tenferro_tensor::{
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 #[test]

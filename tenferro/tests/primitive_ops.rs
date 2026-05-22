@@ -10,11 +10,11 @@ use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn i64_tensor(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
-    Tensor::I64(TypedTensor::from_vec(shape, data))
+    Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
@@ -198,7 +198,7 @@ fn test_reshape() {
 fn traced_index_select_keeps_indices_integer_for_complex_operand() {
     use num_complex::Complex64;
 
-    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+    let x = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![3],
         vec![
             Complex64::new(1.0, 1.0),
@@ -310,7 +310,10 @@ fn traced_stack_rejects_empty_mismatched_invalid_axis_and_symbolic_shapes() {
 
 #[test]
 fn traced_stack_positive_axis_promotes_mixed_input_dtypes() {
-    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![2], vec![1.0_f32, 2.0]));
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![2],
+        vec![1.0_f32, 2.0],
+    ));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![3.0, 4.0]));
 
     let mut out = TracedTensor::stack(&[&a, &b], 0).unwrap();

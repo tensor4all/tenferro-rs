@@ -101,14 +101,14 @@ pub fn try_decode_tensor(td: &TensorData) -> Result<Option<Tensor>, String> {
     match td.dtype.as_str() {
         "float64" => {
             let data = tensor_data_as_col_major(td)?;
-            Ok(Some(Tensor::F64(TypedTensor::from_vec(
+            Ok(Some(Tensor::F64(TypedTensor::from_vec_col_major(
                 td.shape.clone(),
                 data,
             ))))
         }
         "complex128" => {
             let data = complex_tensor_data_as_col_major(td)?;
-            Ok(Some(Tensor::C64(TypedTensor::from_vec(
+            Ok(Some(Tensor::C64(TypedTensor::from_vec_col_major(
                 td.shape.clone(),
                 data,
             ))))

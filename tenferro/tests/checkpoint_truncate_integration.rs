@@ -8,11 +8,11 @@ const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn f64_scalar(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]))
 }
 
 fn get_f64_scalar(tensor: &Tensor) -> f64 {

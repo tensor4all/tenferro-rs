@@ -30,8 +30,8 @@ fn fragment_has_dot_general(tensor: &TracedTensor) -> bool {
 
 #[test]
 fn all_concrete_inputs_decompose_to_dot_general() {
-    let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum concrete");
@@ -50,7 +50,7 @@ fn all_concrete_inputs_decompose_to_dot_general() {
 #[test]
 fn any_symbolic_input_keeps_nary_einsum() {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum symbolic");
@@ -64,8 +64,8 @@ fn any_symbolic_input_keeps_nary_einsum() {
 #[test]
 fn three_way_einsum_with_one_symbolic_input_is_nary() {
     let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
-    let c = TracedTensor::from_vec(vec![4, 5], vec![1.0_f64; 20]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let out = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").expect("einsum 3-way");
@@ -78,11 +78,11 @@ fn three_way_einsum_with_one_symbolic_input_is_nary() {
 
 #[test]
 fn from_tensor_symbolic_shape_triggers_nary_path() {
-    let a = TracedTensor::from_tensor_symbolic_shape(Tensor::from_vec(
+    let a = TracedTensor::from_tensor_symbolic_shape(Tensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum mixed");
@@ -105,8 +105,8 @@ fn symbolic_einsum_evaluates_correctly_via_run_with_inputs() {
 
     let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum sym");
 
-    let ta = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let tb = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let ta = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let tb = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let out = c
         .run_with_inputs_auto(&mut engine, &[(&a, &ta), (&b, &tb)])
         .expect("run_with_inputs");

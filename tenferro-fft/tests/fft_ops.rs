@@ -27,7 +27,7 @@ fn assert_f64_close(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn fft_c64_matches_numpy_convention() {
-    let x = TracedTensor::from_vec(
+    let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(1.0, 0.0),
@@ -53,7 +53,7 @@ fn fft_c64_matches_numpy_convention() {
 
 #[test]
 fn ifft_c64_applies_backward_normalization() {
-    let spectrum = TracedTensor::from_vec(
+    let spectrum = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(10.0, 0.0),
@@ -78,7 +78,7 @@ fn ifft_c64_applies_backward_normalization() {
 
 #[test]
 fn rfft_f64_returns_onesided_spectrum() {
-    let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let y = rfft(&x, None, -1, FftNorm::Backward);
     let out = run(&y);
 
@@ -95,7 +95,7 @@ fn rfft_f64_returns_onesided_spectrum() {
 
 #[test]
 fn irfft_c64_reconstructs_real_signal() {
-    let spectrum = TracedTensor::from_vec(
+    let spectrum = TracedTensor::from_vec_col_major(
         vec![3],
         vec![
             Complex64::new(10.0, 0.0),
@@ -112,7 +112,7 @@ fn irfft_c64_reconstructs_real_signal() {
 
 #[test]
 fn fft_c64_jvp_applies_fft_to_tangent() {
-    let x = TracedTensor::from_vec(
+    let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(1.0, 0.0),
@@ -121,7 +121,7 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
             Complex64::new(4.0, 0.0),
         ],
     );
-    let dx = TracedTensor::from_vec(
+    let dx = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(0.0, 0.0),

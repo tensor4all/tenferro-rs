@@ -204,8 +204,14 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
 
     DGEMM_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 3.0, 2.0, 4.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![5.0, 7.0, 6.0, 8.0],
+    ));
 
     let mut backend = CpuBackend::new();
     let c = backend.dot_general(
@@ -250,8 +256,11 @@ fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
     DGETC2_ILP64_CALLS.store(0, Ordering::SeqCst);
     DGESC2_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![4.0, 8.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 0.0, 0.0, 1.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]));
 
     let mut backend = CpuBackend::new();
     let x = backend.full_piv_lu_solve(&a, &b, false);
@@ -288,7 +297,7 @@ fn ilp64_lapack_qr_workspace_query() {
     DGEQRF_ILP64_CALLS.store(0, Ordering::SeqCst);
     DORGQR_ILP64_CALLS.store(0, Ordering::SeqCst);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]));
 
     let mut backend = CpuBackend::new();
     let result = backend.qr(&a);

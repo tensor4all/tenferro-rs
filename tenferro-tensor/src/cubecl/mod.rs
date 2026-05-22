@@ -46,8 +46,8 @@
 //! let mut backend = CubeclBackend::new(0)?;
 //!
 //! // 2. Create tensors on the CPU
-//! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-//! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
 //!
 //! // 3. Upload to GPU
 //! let gpu_a = upload_tensor(backend.runtime(), &a)?;

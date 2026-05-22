@@ -225,7 +225,7 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
 /// use tenferro::traced_tensor::full_piv_lu;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![0.0_f64, 2.0, 1.0, 3.0],
 /// ));
@@ -368,11 +368,11 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 /// use tenferro::traced_tensor::full_piv_lu_solve;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![0.0_f64, 2.0, 1.0, 3.0],
 /// ));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 1],
 ///     vec![-1.0_f64, 5.0],
 /// ));
