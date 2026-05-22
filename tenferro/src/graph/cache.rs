@@ -61,10 +61,23 @@ pub struct GraphCompilerCacheStats {
     pub einsum_parse: CacheStats,
 }
 
-/// Stats for runtime caches owned by a future graph executor.
+/// Stats for runtime caches owned by a graph executor.
+///
+/// `retained_bytes` fields are logical payload estimates, not process RSS.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{CacheStats, GraphExecutorCacheStats};
+///
+/// let stats = GraphExecutorCacheStats {
+///     runtime_einsum_plans: CacheStats::empty(),
+///     backend: CacheStats::empty(),
+/// };
+/// assert_eq!(stats.runtime_einsum_plans.entries, 0);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) struct GraphExecutorCacheStats {
+pub struct GraphExecutorCacheStats {
     /// Runtime N-ary einsum contraction-plan cache.
     pub runtime_einsum_plans: CacheStats,
     /// Backend-specific runtime analysis cache.
@@ -72,9 +85,23 @@ pub(crate) struct GraphExecutorCacheStats {
 }
 
 /// Stats for CPU graph-executor runtime caches and resource pools.
+///
+/// The CPU buffer pool is reported with cache-style accounting: entries are
+/// retained buffers, and retained bytes are retained vector capacity.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro::{CacheStats, CpuGraphExecutorCacheStats, GraphExecutorCacheStats};
+///
+/// let stats = CpuGraphExecutorCacheStats {
+///     executor: GraphExecutorCacheStats::default(),
+///     buffer_pool: CacheStats::empty(),
+/// };
+/// assert_eq!(stats.buffer_pool.retained_bytes, 0);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) struct CpuGraphExecutorCacheStats {
+pub struct CpuGraphExecutorCacheStats {
     /// Executor-owned runtime caches.
     pub executor: GraphExecutorCacheStats,
     /// CPU backend buffer pool.

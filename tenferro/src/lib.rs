@@ -51,7 +51,10 @@ pub use eager::{EagerRuntime, EagerTensor};
 pub use einsum_subscripts::parse_einsum_subscripts;
 pub use engine::Engine;
 pub use error::ContextId;
-pub use graph::{GraphCompiler, GraphCompilerCacheStats, GraphProgram, GraphProgramInput};
+pub use graph::{
+    CpuGraphExecutorCacheStats, GraphCompiler, GraphCompilerCacheStats, GraphExecutor,
+    GraphExecutorCacheStats, GraphProgram, GraphProgramInput,
+};
 pub use sym_dim::SymDim;
 pub use tenferro_ops::std_tensor_op::EinsumSubscripts;
 pub use tenferro_tensor::cpu::CpuBackend;
