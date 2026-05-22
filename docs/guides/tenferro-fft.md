@@ -1,4 +1,4 @@
-# tenferro-fft
+# FFT (extension)
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
 crate, not part of the core `tenferro` facade: users add the package, import

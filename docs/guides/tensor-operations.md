@@ -3,7 +3,8 @@
 This guide covers everyday tensor operations: elementwise math, shape changes,
 broadcasting, reductions, and concrete backend execution. These operations are
 available through different tensor layers depending on whether you need no-AD
-computation, eager scalar-loss AD, or traced graph execution.
+computation, eager forward execution with optional scalar-loss `backward()`, or
+traced graph execution.
 
 ## Layer Coverage
 
@@ -11,9 +12,11 @@ computation, eager scalar-loss AD, or traced graph execution.
 | --- | --- |
 | `TypedTensor<T>` | Typed storage and selected typed operation wrappers; convert to `Tensor` for the broad dynamic operation surface |
 | `Tensor` | Concrete no-AD operations through an explicit backend |
-| `EagerTensor` | Immediate operations that also record state for `backward()` |
+| `EagerTensor` | Immediate forward operations; tracked variables also record state for `backward()` |
 | `TracedTensor` | Lazy operations that build a graph for compile/run reuse |
-| CUDA | Supported operation/dtype combinations run on CUDA tensors with explicit upload/download |
+
+CUDA is a backend/device choice for supported operations on `Tensor`,
+`EagerTensor`, and `TracedTensor`; it is not a separate tensor layer.
 
 ## Concrete Tensor Example
 
@@ -33,10 +36,11 @@ assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
 
-## Eager AD Example
+## Eager Forward And Backward Example
 
-Use `EagerTensor` when the same immediate computation should accumulate
-gradients for a scalar loss.
+Use `EagerTensor` when the same immediate computation should stay in an
+`EagerRuntime`. Create tracked variables when a scalar loss should accumulate
+gradients.
 
 ```rust
 use tenferro::{EagerRuntime, Tensor};

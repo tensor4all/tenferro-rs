@@ -2,16 +2,16 @@
 
 tenferro separates tensor data, execution timing, automatic differentiation,
 and device placement. That separation is the main design point: users can stay
-in no-AD typed tensor code for ordinary numeric work, move to eager AD for
-PyTorch-like training loops, or move to traced graphs for JAX-like transforms
-and compile/run reuse.
+in no-AD typed tensor code for ordinary numeric work, move to eager execution
+for PyTorch-like forward-and-backward training loops, or move to traced graphs
+for JAX-like transforms and compile/run reuse.
 
 ## The Three Axes
 
 | Axis | What it controls | User-facing choices |
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
-| Execution model | When operations run | Direct, eager AD, traced compile/run |
+| Execution model | When operations run | Direct, eager, traced compile/run |
 | Backend/device | Where operations run | `CpuBackend` or `tenferro::cuda::CudaBackend` |
 
 CUDA is not a separate tensor layer. The same concrete, eager, and traced
@@ -24,7 +24,7 @@ uploaded to a CUDA backend.
 | --- | --- | --- |
 | `TypedTensor<T>` | Concrete no-AD tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
 | `Tensor` | Concrete no-AD tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
-| `EagerTensor` | Concrete tensor plus eager gradient state | Scalar-loss reverse-mode AD with `backward()` |
+| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; scalar-loss reverse-mode AD when tracked |
 | `TracedTensor` | Symbolic graph-building tensor | Transform AD, graph optimization, repeated execution |
 
 Use the smallest layer that matches the job. AD is optional, and many projects
@@ -89,11 +89,17 @@ let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
 assert_eq!(c.shape.as_slice(), &[2, 2]);
 ```
 
-## Eager AD
+## Eager Execution And Backward
 
-`EagerTensor` wraps concrete values in an `EagerRuntime` that owns gradient
-state. It matches the PyTorch scalar-loss pattern: compute now, inspect now,
-call `backward()`, and clear gradients when you want a fresh accumulation.
+`EagerTensor` wraps concrete values in an `EagerRuntime`. Each operation
+computes or submits immediately and returns a concrete tensor handle. CPU
+values are host-readable; CUDA-resident values require explicit download before
+host inspection. If a tensor is a tracked variable, eager operations also
+record reverse-mode state so a scalar loss can call `backward()` and accumulate
+gradients.
+
+This is not the forward-mode AD/JVP surface. Use `TracedTensor` for transform
+AD such as `grad`, `vjp`, `jvp`, and HVP via composition.
 
 ```rust
 use tenferro::{EagerRuntime, Tensor};
@@ -127,5 +133,5 @@ let result = executor.run(&program).unwrap();
 assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 ```
 
-Traced mode is the right layer for transform AD (`grad`, `vjp`, `jvp`, HVP),
-symbolic inputs, graph optimization, and repeated execution.
+Traced mode is the right layer for transform AD (`grad`, `vjp`, `jvp`, HVP via
+composition), symbolic inputs, graph optimization, and repeated execution.

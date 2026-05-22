@@ -1,7 +1,9 @@
 # Linear Algebra
 
-tenferro exposes linear algebra across the concrete and traced tensor layers.
-Use `Tensor` or `TypedTensor<T>` for no-AD direct execution. Use
+tenferro exposes linear algebra across the concrete, eager, and traced tensor
+layers. Use `Tensor` or `TypedTensor<T>` for no-AD direct execution. Use
+`EagerTensor` for immediate forward execution under an `EagerRuntime`, with
+optional scalar-loss `backward()` where AD rules support the operation. Use
 `TracedTensor` when the linear algebra operation should be part of a graph,
 transform AD pass, or repeated compile/run workflow.
 
@@ -11,9 +13,12 @@ transform AD pass, or repeated compile/run workflow.
 | --- | --- |
 | `TypedTensor<T>` | Selected typed methods such as `svd`, `qr`, `cholesky`, and `eigh` |
 | `Tensor` | Dynamic dtype methods such as `svd`, `qr`, `cholesky`, `eigh`, and `solve` |
-| `EagerTensor` | Immediate execution with scalar-loss gradient recording where AD rules support the operation |
+| `EagerTensor` | Immediate forward execution; tracked variables record scalar-loss gradients where AD rules support the operation |
 | `TracedTensor` | `tenferro::traced_tensor` helpers for graph execution and transform AD |
-| CUDA | Supported subset through cuSOLVER/cuBLAS; see [Devices and GPU](devices-and-gpu.md) |
+
+CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
+`TracedTensor` paths. It is not a separate linear algebra layer. See
+[Devices and GPU](devices-and-gpu.md) for the CUDA support table.
 
 ## Concrete Solve
 
@@ -48,8 +53,9 @@ assert_eq!(factor.host_data(), &[2.0, 0.0, 0.0, 3.0]);
 
 The same operation families are available outside traced graphs. Use concrete
 or typed tensors for direct no-AD execution, eager tensors when the result
-should remain connected to a scalar-loss AD tape, and traced helpers when the
-operation belongs in a reusable graph.
+should be produced immediately under an `EagerRuntime`, and traced helpers when
+the operation belongs in a reusable graph. Use tracked eager tensors only when
+the result should remain connected to a scalar-loss `backward()` pass.
 
 ## Singular value decomposition
 

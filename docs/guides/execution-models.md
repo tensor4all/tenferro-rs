@@ -1,20 +1,22 @@
 # Execution Models
 
-tenferro supports direct execution, PyTorch-like eager AD, and JAX-like traced
-execution on the same dense tensor stack. The key distinction is when work is
-submitted and when the host waits for results.
+tenferro supports direct execution, PyTorch-like eager execution with optional
+reverse AD, and JAX-like traced execution on the same dense tensor stack. The
+key distinction is when work is submitted and when the host waits for results.
 
 ![Eager CPU, Eager GPU, and Traced execution timelines](../assets/execution-models.svg)
 
 ## Eager CPU
 
-Direct CPU tensor operations and eager CPU AD run immediately. A call enters
-the CPU backend, the CPU work completes, and the returned `Tensor` is
+Direct CPU tensor operations and eager CPU operations run immediately. A call
+enters the CPU backend, the CPU work completes, and the returned value is
 host-readable.
 
 This is the easiest model for debugging and for ordinary no-AD numeric code.
 Use `TypedTensor<T>` or `Tensor` when no gradient state is needed. Use
-`EagerTensor` when you want PyTorch-style scalar-loss `backward()`.
+`EagerTensor` when you want immediate forward execution through an
+`EagerRuntime`, and make tensors tracked when you want PyTorch-style
+scalar-loss `backward()`.
 
 ## Eager GPU
 
@@ -33,8 +35,8 @@ Traced mode records operations into a graph first. It is similar to JAX's
 tracing and `jit` workflow: build the expression, compile it, then run the
 compiled program through a `GraphExecutor<B>`.
 
-Use traced mode for transform AD (`grad`, `vjp`, `jvp`, HVP), symbolic inputs,
-graph optimization, and repeated execution. The executor backend decides
+Use traced mode for transform AD (`grad`, `vjp`, `jvp`, and HVP via
+composition), symbolic inputs, graph optimization, and repeated execution. The executor backend decides
 whether the compiled program runs on CPU or CUDA for supported operations.
 
 ## Why Support Both?
@@ -44,7 +46,8 @@ Eager and traced serve different workflows on the same tensor stack.
 | Need | Better fit |
 | --- | --- |
 | Inspect intermediate values while developing | Eager CPU or eager GPU with explicit download |
-| Scalar-loss reverse-mode AD with gradient accumulation | `EagerTensor` |
+| Immediate forward execution through one runtime | `EagerTensor` |
+| Scalar-loss reverse-mode AD with gradient accumulation | tracked `EagerTensor` variables |
 | Transform AD and higher-order AD | `TracedTensor` |
 | Reuse the same computation many times | `GraphCompiler` + `GraphExecutor<B>` |
 | Keep no-AD code simple | `TypedTensor<T>` or `Tensor` |

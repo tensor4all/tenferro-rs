@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 560" role="img" aria-labelledby="exec-models-title exec-models-desc">
   <title id="exec-models-title">Eager CPU, Eager GPU, and Traced execution timelines</title>
-  <desc id="exec-models-desc">Three horizontal timelines compare CPU eager execution, GPU eager execution, and traced graph execution from left to right.</desc>
+  <desc id="exec-models-desc">Three horizontal timelines compare eager CPU forward execution, eager GPU forward execution, and traced graph execution from left to right.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 10 4 L 0 8 z" fill="#334155"/>
@@ -24,6 +24,7 @@
   <line x1="165" y1="36" x2="1005" y2="36" class="axis"/>
 
   <text x="36" y="108" class="label">Eager CPU</text>
+  <text x="36" y="130" class="tiny">forward now; optional tape</text>
   <line x1="165" y1="104" x2="1005" y2="104" class="lane"/>
   <rect x="190" y="72" width="105" height="54" rx="4" class="host"/>
   <text x="212" y="102" class="small">call op</text>
@@ -31,12 +32,13 @@
   <text x="357" y="94" class="small">CPU compute</text>
   <text x="354" y="114" class="tiny">host waits here</text>
   <rect x="545" y="72" width="185" height="54" rx="4" class="host"/>
-  <text x="577" y="94" class="small">return Tensor</text>
+  <text x="577" y="94" class="small">return value</text>
   <text x="580" y="114" class="tiny">host-readable</text>
   <rect x="760" y="72" width="120" height="54" rx="4" class="host"/>
   <text x="786" y="102" class="small">next op</text>
 
   <text x="36" y="246" class="label">Eager GPU</text>
+  <text x="36" y="268" class="tiny">forward submit; optional tape</text>
   <line x1="165" y1="242" x2="1005" y2="242" class="lane"/>
   <rect x="190" y="210" width="105" height="54" rx="4" class="host"/>
   <text x="212" y="240" class="small">call op</text>
@@ -44,7 +46,7 @@
   <text x="356" y="232" class="small">enqueue</text>
   <text x="344" y="252" class="tiny">host submits</text>
   <rect x="505" y="210" width="205" height="54" rx="4" class="host"/>
-  <text x="532" y="232" class="small">return GPU Tensor</text>
+  <text x="532" y="232" class="small">return GPU value</text>
   <text x="552" y="252" class="tiny">handle, no ready flag</text>
   <rect x="740" y="210" width="150" height="54" rx="4" class="host"/>
   <text x="771" y="232" class="small">enqueue</text>
@@ -62,6 +64,7 @@
   <text x="900" y="398" class="syncText">sync point</text>
 
   <text x="36" y="450" class="label">Traced</text>
+  <text x="36" y="472" class="tiny">graph first; AD transforms</text>
   <line x1="165" y1="446" x2="1005" y2="446" class="lane"/>
   <rect x="190" y="414" width="185" height="54" rx="4" class="trace"/>
   <text x="220" y="436" class="small">build graph</text>

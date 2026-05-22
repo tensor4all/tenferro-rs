@@ -80,9 +80,9 @@ The example downloads the result back to CPU and asserts the expected values.
 
 ## CUDA Across Tensor Layers
 
-| Tensor layer | CUDA model |
+| Tensor model | How CUDA fits |
 | --- | --- |
-| `TypedTensor<T>` | Concrete CUDA storage is possible after upload; typed operation coverage depends on the operation family |
+| `TypedTensor<T>` | Fixed-dtype host layer. For CUDA backend execution, wrap or upload through `Tensor`, and download before typed host access. |
 | `Tensor` | Main concrete CUDA value for backend execution |
 | `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
 | `TracedTensor` | Graphs can be executed by `GraphExecutor<CudaBackend>` for supported ops |

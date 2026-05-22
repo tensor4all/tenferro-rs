@@ -1,10 +1,10 @@
 # Getting Started
 
-tenferro supports no-AD tensor computation, eager scalar-loss AD, traced
-execution, transform AD, einsum, linear algebra, and CUDA execution through the
-feature-gated CUDA backend.
+tenferro supports no-AD tensor computation, eager forward execution with
+optional scalar-loss `backward()`, traced execution, transform AD, einsum,
+linear algebra, and CUDA execution through the feature-gated CUDA backend.
 
-## Installation
+## Setup
 
 The `tenferro` crate re-exports everything you need. Use a local checkout
 while the crates are still evolving:

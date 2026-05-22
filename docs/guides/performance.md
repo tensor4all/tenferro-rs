@@ -123,7 +123,7 @@ For multi-input traced contractions, `GraphCompiler` plans concrete-shape
 einsums and `GraphExecutor` caches runtime plans for symbolic-shape einsums.
 Reuse both objects for repeated shapes and subscripts.
 
-Standalone eager einsum in the `tenferro-einsum` crate has its own per-thread
-bounded plan cache. Use `eager_einsum_cache_stats()`,
-`set_eager_einsum_cache_capacity(...)`, and `clear_eager_einsum_cache()` when
-calling that crate directly outside the traced `GraphCompiler` path.
+Direct, typed, and eager einsum routes execute immediately and use bounded
+planning internally. If you need explicit long-lived planning and runtime cache
+ownership, use the traced route and reuse `GraphCompiler` and
+`GraphExecutor<B>`.

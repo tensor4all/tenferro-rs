@@ -8,7 +8,7 @@ typed, concrete, eager, and traced routes.
 - JAX: `jnp.einsum("ij,jk->ik", a, b)`
 - tenferro typed: `tenferro::typed_tensor::einsum(&mut backend, &[&a, &b], "ij,jk->ik")`
 - tenferro concrete: `tenferro::tensor::einsum(&mut backend, &[&a, &b], "ij,jk->ik")`
-- tenferro eager AD: `tenferro::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")`
+- tenferro eager: `tenferro::eager_tensor::einsum(&[&a, &b], "ij,jk->ik")`
 - tenferro traced: `tenferro::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")`
 
 ## Layer Coverage
@@ -19,7 +19,9 @@ typed, concrete, eager, and traced routes.
 | `Tensor` | `tenferro::tensor::einsum` |
 | `EagerTensor` | `tenferro::eager_tensor::einsum` |
 | `TracedTensor` | `tenferro::traced_tensor::einsum` |
-| CUDA | Supported through the backend for CUDA-resident tensors |
+
+CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
+`TracedTensor` execution paths. It is not a separate einsum entry point.
 
 ## Concrete Matrix Multiply
 
@@ -141,8 +143,9 @@ assert_eq!(diag.data().shape(), &[3, 3]);
 ## N-ary contraction
 
 tenferro accepts more than two inputs and chooses a contraction order
-automatically. Concrete-shape einsums are planned by `GraphCompiler`; symbolic
-einsums are planned at runtime and cached by `GraphExecutor` for the observed
+automatically. Direct, typed, and eager routes execute immediately through
+their backend or runtime. In traced mode, `GraphCompiler` plans
+concrete-shape einsums and `GraphExecutor` caches runtime plans for symbolic
 input shapes.
 
 ```rust
