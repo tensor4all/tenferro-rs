@@ -454,20 +454,68 @@ impl TracedTensor {
         }
     }
 
-    /// Build a concrete-shape [`TracedTensor`] leaf from typed `Vec<T>`
-    /// data. Equivalent to
-    /// [`TracedTensor::from_tensor_concrete_shape`]`(Tensor::from_vec(shape, data))`.
+    /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
+    /// `Vec<T>` data.
+    ///
+    /// The data must already be in tenferro's physical column-major order.
+    /// For row-major data, use [`TracedTensor::from_vec_row_major`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = TracedTensor::from_vec_col_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    /// );
     /// assert_eq!(a.rank, 2);
     /// ```
+    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data))
+    }
+
+    /// Build a concrete-shape [`TracedTensor`] leaf from row-major typed
+    /// `Vec<T>` data.
+    ///
+    /// The data is converted into tenferro's physical column-major storage
+    /// order before it is attached to the traced leaf. For data that is
+    /// already in physical column-major order, use
+    /// [`TracedTensor::from_vec_col_major`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec_row_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// );
+    /// assert_eq!(a.rank, 2);
+    /// ```
+    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor_concrete_shape(Tensor::from_vec_row_major(shape, data))
+    }
+
+    /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
+    /// `Vec<T>` data.
+    ///
+    /// Prefer [`TracedTensor::from_vec_col_major`] or
+    /// [`TracedTensor::from_vec_row_major`] so the input memory order is
+    /// explicit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// assert_eq!(a.rank, 1);
+    /// ```
+    #[deprecated(note = "use from_vec_col_major or from_vec_row_major")]
     pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_tensor_concrete_shape(T::into_tensor(shape, data))
+        Self::from_vec_col_major(shape, data)
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
