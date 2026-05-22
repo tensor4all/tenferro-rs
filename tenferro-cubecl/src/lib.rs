@@ -23,6 +23,8 @@ mod helpers;
 #[doc(hidden)]
 pub mod indexing;
 #[doc(hidden)]
+pub mod linalg;
+#[doc(hidden)]
 pub mod structural;
 
 pub use error::{CubeclKernelError, Result};

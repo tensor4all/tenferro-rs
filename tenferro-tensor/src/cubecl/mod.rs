@@ -80,6 +80,7 @@ use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
 use cubecl::prelude::{
     ArrayArg, Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat,
+    Numeric as CubeNumeric,
 };
 use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
@@ -91,7 +92,7 @@ use crate::backend::TensorBackend;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Buffer, Tensor, TypedTensor};
+use crate::{Tensor, TypedTensor};
 
 mod dispatch;
 mod ffi;
@@ -212,39 +213,6 @@ impl CubeclBackend {
     /// ```
     pub fn runtime(&self) -> &CubeclRuntime {
         &self.rt
-    }
-
-    fn i64_indices_as_f64(&self, indices: &TypedTensor<i64>) -> crate::Result<TypedTensor<f64>> {
-        let host_values = match &indices.buffer {
-            Buffer::Host(data) => data.clone(),
-            Buffer::Cubecl(_) => {
-                let downloaded = download_tensor(self.runtime(), &Tensor::I64(indices.clone()))?;
-                downloaded
-                    .as_slice::<i64>()
-                    .expect("downloaded I64 tensor")
-                    .to_vec()
-            }
-            Buffer::Backend(_) => {
-                return Err(crate::Error::BackendFailure {
-                    op: "index_tensor",
-                    message: "backend buffers are not supported for CubeCL index conversion".into(),
-                })
-            }
-        };
-        let converted = Tensor::F64(TypedTensor::from_vec_col_major(
-            indices.shape.clone(),
-            host_values.into_iter().map(|value| value as f64).collect(),
-        ));
-        match &indices.buffer {
-            Buffer::Cubecl(_) => match upload_tensor(self.runtime(), &converted)? {
-                Tensor::F64(tensor) => Ok(tensor),
-                _ => unreachable!("upload preserves dtype"),
-            },
-            _ => match converted {
-                Tensor::F64(tensor) => Ok(tensor),
-                _ => unreachable!("constructed F64 tensor"),
-            },
-        }
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
@@ -1002,7 +970,7 @@ impl CubeclBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubeFloat + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         ensure_rank("dynamic_slice", input.shape.len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape.len())?;
@@ -1114,7 +1082,7 @@ impl CubeclBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
-        I: CubeElement + CubeFloat + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         let meta = gather_launch_meta(&operand.shape, &start_indices.shape, config)?;
         launch_binary_tensor(
@@ -1131,7 +1099,6 @@ impl CubeclBackend {
                     out.into_tensor_arg(),
                     operand_arg.into_tensor_arg(),
                     indices_arg.into_tensor_arg(),
-                    comptime_sequence(&meta.batch_shape),
                     comptime_sequence(&meta.window_dims),
                     comptime_sequence(&config.offset_dims),
                     comptime_sequence(&config.start_index_map),
@@ -1154,7 +1121,7 @@ impl CubeclBackend {
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubeFloat + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         let meta = scatter_launch_meta(
             &operand.shape,
@@ -1209,12 +1176,10 @@ impl CubeclBackend {
                 operand_arg.into_tensor_arg(),
                 scatter_arg.into_tensor_arg(),
                 updates_arg.into_tensor_arg(),
-                comptime_sequence(&meta.batch_shape),
                 comptime_sequence(&meta.window_dims),
                 comptime_sequence(&config.update_window_dims),
                 comptime_sequence(&config.scatter_dims_to_operand_dims),
                 config.index_vector_dim,
-                comptime_sequence(&meta.window_shape_updates),
                 operand.shape.len(),
                 updates.shape.len(),
                 scatter_indices.shape.len(),
@@ -1233,7 +1198,7 @@ impl CubeclBackend {
     where
         T: CubeElement + CubeComplex + Clone,
         F: CubeElement + CubeFloat + Clone,
-        I: CubeElement + CubeFloat + Clone,
+        I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         let meta = scatter_launch_meta(
             &operand.shape,
@@ -1310,12 +1275,10 @@ impl CubeclBackend {
                 scatter_arg.into_tensor_arg(),
                 updates_arg.into_tensor_arg(),
                 update_parts,
-                comptime_sequence(&meta.batch_shape),
                 comptime_sequence(&meta.window_dims),
                 comptime_sequence(&config.update_window_dims),
                 comptime_sequence(&config.scatter_dims_to_operand_dims),
                 config.index_vector_dim,
-                comptime_sequence(&meta.window_shape_updates),
                 operand.shape.len(),
                 updates.shape.len(),
                 scatter_indices.shape.len(),
@@ -2460,24 +2423,16 @@ impl TensorBackend for CubeclBackend {
                 self.gather_typed(operand, indices, config).map(Tensor::C64)
             }
             (Tensor::F32(operand), Tensor::I64(indices)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.gather_typed(operand, &indices, config)
-                    .map(Tensor::F32)
+                self.gather_typed(operand, indices, config).map(Tensor::F32)
             }
             (Tensor::F64(operand), Tensor::I64(indices)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.gather_typed(operand, &indices, config)
-                    .map(Tensor::F64)
+                self.gather_typed(operand, indices, config).map(Tensor::F64)
             }
             (Tensor::C32(operand), Tensor::I64(indices)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.gather_typed(operand, &indices, config)
-                    .map(Tensor::C32)
+                self.gather_typed(operand, indices, config).map(Tensor::C32)
             }
             (Tensor::C64(operand), Tensor::I64(indices)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.gather_typed(operand, &indices, config)
-                    .map(Tensor::C64)
+                self.gather_typed(operand, indices, config).map(Tensor::C64)
             }
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
                 op: "gather",
@@ -2519,26 +2474,18 @@ impl TensorBackend for CubeclBackend {
             (Tensor::C64(operand), Tensor::F64(indices), Tensor::C64(updates)) => self
                 .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
-            (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_float_typed(operand, &indices, updates, config)
-                    .map(Tensor::F32)
-            }
-            (Tensor::F64(operand), Tensor::I64(indices), Tensor::F64(updates)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_float_typed(operand, &indices, updates, config)
-                    .map(Tensor::F64)
-            }
-            (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed::<_, f32, _>(operand, &indices, updates, config)
-                    .map(Tensor::C32)
-            }
-            (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => {
-                let indices = self.i64_indices_as_f64(indices)?;
-                self.scatter_complex_typed::<_, f64, _>(operand, &indices, updates, config)
-                    .map(Tensor::C64)
-            }
+            (Tensor::F32(operand), Tensor::I64(indices), Tensor::F32(updates)) => self
+                .scatter_float_typed(operand, indices, updates, config)
+                .map(Tensor::F32),
+            (Tensor::F64(operand), Tensor::I64(indices), Tensor::F64(updates)) => self
+                .scatter_float_typed(operand, indices, updates, config)
+                .map(Tensor::F64),
+            (Tensor::C32(operand), Tensor::I64(indices), Tensor::C32(updates)) => self
+                .scatter_complex_typed::<_, f32, _>(operand, indices, updates, config)
+                .map(Tensor::C32),
+            (Tensor::C64(operand), Tensor::I64(indices), Tensor::C64(updates)) => self
+                .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
+                .map(Tensor::C64),
             (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::BackendFailure {
                 op: "scatter",
                 message: "complex index tensors are not supported".into(),
@@ -2593,26 +2540,18 @@ impl TensorBackend for CubeclBackend {
             (Tensor::C64(input), Tensor::F64(starts)) => self
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::C64),
-            (Tensor::F32(input), Tensor::I64(starts)) => {
-                let starts = self.i64_indices_as_f64(starts)?;
-                self.dynamic_slice_typed(input, &starts, slice_sizes)
-                    .map(Tensor::F32)
-            }
-            (Tensor::F64(input), Tensor::I64(starts)) => {
-                let starts = self.i64_indices_as_f64(starts)?;
-                self.dynamic_slice_typed(input, &starts, slice_sizes)
-                    .map(Tensor::F64)
-            }
-            (Tensor::C32(input), Tensor::I64(starts)) => {
-                let starts = self.i64_indices_as_f64(starts)?;
-                self.dynamic_slice_typed(input, &starts, slice_sizes)
-                    .map(Tensor::C32)
-            }
-            (Tensor::C64(input), Tensor::I64(starts)) => {
-                let starts = self.i64_indices_as_f64(starts)?;
-                self.dynamic_slice_typed(input, &starts, slice_sizes)
-                    .map(Tensor::C64)
-            }
+            (Tensor::F32(input), Tensor::I64(starts)) => self
+                .dynamic_slice_typed(input, starts, slice_sizes)
+                .map(Tensor::F32),
+            (Tensor::F64(input), Tensor::I64(starts)) => self
+                .dynamic_slice_typed(input, starts, slice_sizes)
+                .map(Tensor::F64),
+            (Tensor::C32(input), Tensor::I64(starts)) => self
+                .dynamic_slice_typed(input, starts, slice_sizes)
+                .map(Tensor::C32),
+            (Tensor::C64(input), Tensor::I64(starts)) => self
+                .dynamic_slice_typed(input, starts, slice_sizes)
+                .map(Tensor::C64),
             (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
                 op: "dynamic_slice",
                 message: "complex index tensors are not supported".into(),
@@ -3000,7 +2939,6 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
 
 struct GatherLaunchMeta {
     output_shape: Vec<usize>,
-    batch_shape: Vec<usize>,
     window_dims: Vec<usize>,
 }
 
@@ -3067,7 +3005,6 @@ fn gather_launch_meta(
     }
     Ok(GatherLaunchMeta {
         output_shape,
-        batch_shape,
         window_dims,
     })
 }

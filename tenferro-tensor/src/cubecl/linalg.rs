@@ -3,11 +3,16 @@ use std::ops::Neg;
 use std::os::raw::c_char;
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
+use cubecl_cuda::CudaRuntime;
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
+use tenferro_cubecl::linalg as cubecl_linalg;
 
-use super::dispatch::{alloc_output, cubecl_buffer, typed_from_cubecl};
+use super::dispatch::{
+    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, typed_from_cubecl,
+    typed_tensor_array_arg, typed_tensor_binding,
+};
 use super::ffi::cusolver::{
     CublasDiagType, CublasFillMode, CublasOperation, CublasSideMode, CudaDataType, CudaStream,
     CusolverEigMode,
@@ -457,13 +462,18 @@ where
         .cusolver()
         .getrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, a_ptr, lda, OP)?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
-    let pivots = alloc_workspace_bytes(backend.runtime(), k * std::mem::size_of::<i32>(), OP)?;
-    let info = alloc_workspace_bytes(backend.runtime(), std::mem::size_of::<i32>(), OP)?;
+    let mut pivot_shape = vec![k];
+    pivot_shape.extend_from_slice(&input.shape[2..]);
+    let pivots = alloc_output::<u32>(backend.runtime(), &pivot_shape);
+    let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
+    let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
+    let info_ptr = typed_device_ptr(backend.runtime(), &info, OP)?;
     let matrix_stride = m * n;
-    let mut all_pivots = vec![0_i32; k * batch_total];
 
     for batch in 0..batch_total {
         let batch_a = unsafe { batch_ptr::<T>(a_ptr, batch * matrix_stride) };
+        let batch_pivots = unsafe { batch_ptr::<u32>(pivots_ptr, batch * k) };
+        let batch_info = unsafe { batch_ptr::<i32>(info_ptr, batch) };
         unsafe {
             handles.cusolver().getrf(
                 T::DATA_TYPE,
@@ -472,36 +482,27 @@ where
                 batch_a,
                 lda,
                 workspace.ptr,
-                pivots.ptr.cast::<i32>(),
-                info.ptr.cast::<i32>(),
+                batch_pivots.cast::<i32>(),
+                batch_info.cast::<i32>(),
                 OP,
             )?;
         }
+    }
 
-        let batch_pivots = &mut all_pivots[batch * k..(batch + 1) * k];
-        copy_device_to_host(backend.runtime(), batch_pivots, pivots.ptr.cast_const(), OP)?;
-        let mut host_info = [0_i32; 1];
-        copy_device_to_host(backend.runtime(), &mut host_info, info.ptr.cast_const(), OP)?;
-        if host_info[0] < 0 {
+    let host_info = download_device_tensor(backend.runtime(), &info, OP)?;
+    for &info_value in host_info.host_data() {
+        if info_value < 0 {
             return Err(crate::Error::BackendFailure {
                 op: OP,
                 message: format!(
                     "cusolverDn*getrf reported invalid parameter {}",
-                    -host_info[0]
+                    -info_value
                 ),
             });
         }
     }
 
-    sync_stream(backend.runtime(), OP)?;
-    let host_lu = download_device_tensor(backend.runtime(), &work, OP)?;
-    let (p, l, u, parity) = build_lu_outputs_host(&host_lu, &all_pivots)?;
-    Ok((
-        upload_host_tensor(backend.runtime(), p)?,
-        upload_host_tensor(backend.runtime(), l)?,
-        upload_host_tensor(backend.runtime(), u)?,
-        upload_host_tensor(backend.runtime(), parity)?,
-    ))
+    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, &input.shape[2..])
 }
 
 fn svd_typed<T>(
@@ -782,9 +783,13 @@ where
     Ok((values, work))
 }
 
-fn build_lu_outputs_host<T>(
+fn build_lu_outputs_device<T>(
+    rt: &CubeclRuntime,
     lu: &TypedTensor<T>,
-    pivots: &[i32],
+    pivots: &TypedTensor<u32>,
+    m: usize,
+    n: usize,
+    batch_shape: &[usize],
 ) -> crate::Result<(
     TypedTensor<T>,
     TypedTensor<T>,
@@ -794,11 +799,7 @@ fn build_lu_outputs_host<T>(
 where
     T: LinalgScalar,
 {
-    let (m, n) = matrix_dims("lu", &lu.shape)?;
     let k = m.min(n);
-    let batch_shape = &lu.shape[2..];
-    let batch_total = batch_count(batch_shape);
-    let matrix_stride = m * n;
     let mut p_shape = vec![m, m];
     p_shape.extend_from_slice(batch_shape);
     let mut l_shape = vec![m, k];
@@ -806,72 +807,44 @@ where
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_shape);
     let parity_shape = batch_shape.to_vec();
-    let mut p_data = vec![T::zero(); m * m * batch_total];
-    let mut l_data = vec![T::zero(); m * k * batch_total];
-    let mut u_data = vec![T::zero(); k * n * batch_total];
-    let mut parity_data = vec![T::one(); batch_total.max(1)];
 
-    for batch in 0..batch_total {
-        let batch_lu = &lu.host_data()[batch * matrix_stride..(batch + 1) * matrix_stride];
-        let batch_pivots = &pivots[batch * k..(batch + 1) * k];
-        let mut perm = (0..m).collect::<Vec<_>>();
-        let mut parity = T::one();
-        for (step, &pivot_1indexed) in batch_pivots.iter().enumerate() {
-            let pivot =
-                usize::try_from(pivot_1indexed - 1).map_err(|_| crate::Error::BackendFailure {
-                    op: "lu",
-                    message: format!("cuSOLVER returned invalid pivot {pivot_1indexed}"),
-                })?;
-            if pivot >= m {
-                return Err(crate::Error::BackendFailure {
-                    op: "lu",
-                    message: format!(
-                        "cuSOLVER pivot {pivot_1indexed} is out of bounds for {m} rows"
-                    ),
-                });
-            }
-            if pivot != step {
-                perm.swap(step, pivot);
-                parity = -parity;
-            }
-        }
-
-        for row in 0..m {
-            let col = perm[row];
-            let idx = batch * m * m + col_major_index(m, row, col);
-            p_data[idx] = T::one();
-        }
-        for col in 0..k {
-            for row in 0..m {
-                let idx = batch * m * k + col_major_index(m, row, col);
-                l_data[idx] = if row < col {
-                    T::zero()
-                } else if row == col {
-                    T::one()
-                } else {
-                    batch_lu[col_major_index(m, row, col)]
-                };
-            }
-        }
-        for col in 0..n {
-            for row in 0..k {
-                let idx = batch * k * n + col_major_index(k, row, col);
-                u_data[idx] = if row <= col {
-                    batch_lu[col_major_index(m, row, col)]
-                } else {
-                    T::zero()
-                };
-            }
-        }
-        parity_data[if batch_shape.is_empty() { 0 } else { batch }] = parity;
+    let p = alloc_output::<T>(rt, &p_shape);
+    let l = alloc_output::<T>(rt, &l_shape);
+    let u = alloc_output::<T>(rt, &u_shape);
+    let parity = alloc_output::<T>(rt, &parity_shape);
+    let client = rt.client();
+    let launch_len = p
+        .n_elements()
+        .max(l.n_elements())
+        .max(u.n_elements())
+        .max(parity.n_elements());
+    let p_arg = typed_tensor_binding(&p, "lu")?;
+    let l_arg = typed_tensor_binding(&l, "lu")?;
+    let u_arg = typed_tensor_binding(&u, "lu")?;
+    let parity_arg = typed_tensor_binding(&parity, "lu")?;
+    let work_arg = typed_tensor_binding(lu, "lu")?;
+    let pivots_arg = typed_tensor_array_arg(pivots, "lu")?;
+    unsafe {
+        cubecl_linalg::lu_extract_outputs::launch_unchecked::<T, CudaRuntime>(
+            client,
+            cube_count_for_len(launch_len),
+            cube_dim_1d(),
+            p_arg.into_tensor_arg(),
+            l_arg.into_tensor_arg(),
+            u_arg.into_tensor_arg(),
+            parity_arg.into_tensor_arg(),
+            work_arg.into_tensor_arg(),
+            pivots_arg,
+            k,
+            lu.shape.len(),
+        );
     }
+    client.flush().map_err(|err| crate::Error::BackendFailure {
+        op: "lu",
+        message: format!("LU output extraction launch failed: {err:?}"),
+    })?;
 
-    Ok((
-        TypedTensor::from_vec_col_major(p_shape, p_data),
-        TypedTensor::from_vec_col_major(l_shape, l_data),
-        TypedTensor::from_vec_col_major(u_shape, u_data),
-        TypedTensor::from_vec_col_major(parity_shape, parity_data),
-    ))
+    Ok((p, l, u, parity))
 }
 
 fn zero_sized_lu_outputs<T>(
@@ -1178,10 +1151,6 @@ fn has_zero_dim(shape: &[usize]) -> bool {
 
 fn batch_count(batch_shape: &[usize]) -> usize {
     batch_shape.iter().product::<usize>().max(1)
-}
-
-fn col_major_index(rows: usize, row: usize, col: usize) -> usize {
-    row + col * rows
 }
 
 fn as_i32(value: usize, op: &'static str, label: &'static str) -> crate::Result<i32> {
