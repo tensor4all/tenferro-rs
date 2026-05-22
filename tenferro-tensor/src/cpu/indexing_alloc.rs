@@ -9,5 +9,5 @@ where
     // SAFETY: callers use this helper only for outputs that are fully written
     // before any read.
     let data = unsafe { T::pool_acquire(buffers, len) };
-    TypedTensor::from_vec(shape, data)
+    TypedTensor::from_vec_col_major(shape, data)
 }

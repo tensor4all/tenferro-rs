@@ -481,7 +481,7 @@ fn test_full_pipeline_matmul() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let program = CompiledProgram {
+    let mut program = CompiledProgram {
         instructions: vec![make_std_instr(
             StdTensorOp::DotGeneral {
                 config: config.clone(),
@@ -495,7 +495,7 @@ fn test_full_pipeline_matmul() {
     };
 
     let exec = compile_std_to_exec(
-        &program,
+        &mut program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[2, 3]), dim_shape(&[3, 4])],
     );
@@ -531,7 +531,7 @@ fn test_full_pipeline_transpose_matmul() {
         vec![2, 1],
         vec![3],
     );
-    let program = CompiledProgram {
+    let mut program = CompiledProgram {
         instructions: vec![transpose, dot],
         input_slots: vec![0, 1],
         output_slots: vec![3],
@@ -539,7 +539,7 @@ fn test_full_pipeline_transpose_matmul() {
     };
 
     let exec = compile_std_to_exec(
-        &program,
+        &mut program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[3, 2]), dim_shape(&[3, 4])],
     );
@@ -583,7 +583,7 @@ fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
         rhs_batch_dims: vec![],
     };
     let dot = make_std_instr(StdTensorOp::DotGeneral { config }, vec![0, 2], vec![3]);
-    let program = CompiledProgram {
+    let mut program = CompiledProgram {
         instructions: vec![conj, dot],
         input_slots: vec![0, 1],
         output_slots: vec![3],
@@ -591,7 +591,7 @@ fn test_full_pipeline_dot_absorbs_conj_without_layout_materialization() {
     };
 
     let exec = compile_std_to_exec(
-        &program,
+        &mut program,
         &[DType::C64, DType::C64],
         &[dim_shape(&[2, 3]), dim_shape(&[3, 4, 5])],
     );
@@ -1010,11 +1010,14 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     //                       RHS = sequential 0..20, reshaped as [4, 5].
     let lhs_data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let rhs_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec(
+    let lhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
         vec![2, 3, 4],
         lhs_data.clone(),
     ));
-    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec(vec![4, 5], rhs_data.clone()));
+    let rhs = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
+        vec![4, 5],
+        rhs_data.clone(),
+    ));
 
     let mut backend = CpuBackend::default();
     let mut outputs = tenferro::exec::eval_exec_ir(&mut backend, &exec, vec![lhs, rhs])

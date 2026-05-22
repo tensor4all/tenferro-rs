@@ -2,12 +2,12 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 //!
 //! let mut backend = CpuBackend::new();
-//! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-//! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
 //! let c = tenferro_tensor::cpu::add(&a, &b).unwrap();
 //! assert_eq!(c.shape(), &[2]);
 //! ```

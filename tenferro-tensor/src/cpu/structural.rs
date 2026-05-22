@@ -101,7 +101,7 @@ where
     // SAFETY: every element is initialized with zero before returning.
     let mut data = unsafe { T::pool_acquire(buffers, len) };
     data.fill(T::zero());
-    TypedTensor::from_vec(shape, data)
+    TypedTensor::from_vec_col_major(shape, data)
 }
 
 fn clone_host_tensor_from_pool<T>(

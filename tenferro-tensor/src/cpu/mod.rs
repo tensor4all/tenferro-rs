@@ -76,5 +76,5 @@ where
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {
-    TypedTensor::from_vec(array.dims().to_vec(), array.into_data())
+    TypedTensor::from_vec_col_major(array.dims().to_vec(), array.into_data())
 }

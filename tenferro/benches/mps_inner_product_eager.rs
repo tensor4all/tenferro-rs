@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro::{CpuBackend, DotGeneralConfig, EagerContext, EagerTensor, Tensor, TypedTensor};
+use tenferro::{CpuBackend, DotGeneralConfig, EagerRuntime, EagerTensor, Tensor, TypedTensor};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -56,7 +56,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::C64(TypedTensor::from_vec(shape.to_vec(), data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data))
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -78,7 +78,7 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
     }
 }
 
-fn eager_mps_tensors(ctx: &Arc<EagerContext>, tensors: &[Tensor]) -> Vec<EagerTensor> {
+fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: &[Tensor]) -> Vec<EagerTensor> {
     tensors
         .iter()
         .cloned()
@@ -87,13 +87,13 @@ fn eager_mps_tensors(ctx: &Arc<EagerContext>, tensors: &[Tensor]) -> Vec<EagerTe
 }
 
 fn eager_inner_product_local_path(
-    ctx: &Arc<EagerContext>,
+    ctx: &Arc<EagerRuntime>,
     bra: &[EagerTensor],
     ket: &[EagerTensor],
     configs: &LocalPathConfigs,
 ) -> EagerTensor {
     let mut env = EagerTensor::from_tensor_in(
-        Tensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]),
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]),
         ctx.clone(),
     );
 
@@ -114,7 +114,7 @@ fn bench_mps_inner_product_eager(c: &mut Criterion) {
     let mut group = c.benchmark_group("mps_inner_product_eager/c64/one_thread");
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
-        let ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
         let bra = eager_mps_tensors(&ctx, &fixture.bra_tensors);
         let ket = eager_mps_tensors(&ctx, &fixture.ket_tensors);
         let configs = LocalPathConfigs::new();

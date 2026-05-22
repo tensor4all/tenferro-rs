@@ -19,11 +19,11 @@ fn empty_extents(n_outputs: usize) -> Vec<Vec<ShapeExtent<DimExpr>>> {
 }
 
 fn scalar_tensor(value: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(vec![], vec![value]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]))
 }
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn scalar_value(tensor: &Tensor) -> f64 {
@@ -361,11 +361,11 @@ impl TensorBackend for FakeTensorBackend {
     fn eig(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.push("eig");
         Ok(vec![
-            Tensor::C64(TypedTensor::from_vec(
+            Tensor::C64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(45.0, 0.5)],
             )),
-            Tensor::C64(TypedTensor::from_vec(
+            Tensor::C64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![Complex64::new(45.5, -0.5)],
             )),

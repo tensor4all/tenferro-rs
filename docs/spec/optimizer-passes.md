@@ -295,7 +295,7 @@ deleted.
 
 ---
 
-## V. Comparison to the Previous Execution Engine
+## V. Comparison to the Previous Execution Runtime
 
 | Previous behavior | Current status |
 |---|---|

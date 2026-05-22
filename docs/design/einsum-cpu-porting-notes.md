@@ -60,7 +60,7 @@ layers are absorbed.
 
 ---
 
-## Layer 1: tenferro-prims — Binary Contraction Engine
+## Layer 1: tenferro-prims — Binary Contraction Core
 
 ### Function Mapping
 

@@ -108,7 +108,7 @@ impl Generator {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::Generator;
     ///
     /// let _generator = Generator::cuda(0, 1234).unwrap();

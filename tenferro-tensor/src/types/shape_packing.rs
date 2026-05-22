@@ -61,7 +61,10 @@ fn index_select_parts(
             })
         })
         .collect::<crate::Result<Vec<_>>>()?;
-    let indices = Tensor::I64(TypedTensor::from_vec(vec![positions.len(), 1], index_data));
+    let indices = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![positions.len(), 1],
+        index_data,
+    ));
 
     let config = GatherConfig {
         offset_dims,
@@ -83,7 +86,7 @@ impl Tensor {
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let x = Tensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     /// let y = x.index_select(-1, &[2, 0], &mut backend).unwrap();
     ///
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[30.0, 10.0]);
@@ -106,8 +109,8 @@ impl Tensor {
     /// use tenferro_tensor::{cpu::CpuBackend, Tensor};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![], vec![1.0_f64]);
-    /// let b = Tensor::from_vec(vec![], vec![2.0_f64]);
+    /// let a = Tensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let b = Tensor::from_vec_col_major(vec![], vec![2.0_f64]);
     /// let out = Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
     ///
     /// assert_eq!(out.shape(), &[2]);

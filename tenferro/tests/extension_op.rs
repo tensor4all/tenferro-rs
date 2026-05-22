@@ -13,17 +13,19 @@
 //! The tests verify forward results and backward (`grad`) results against
 //! hand-computed expected values.
 
+mod support;
 use std::any::Any;
 use std::hash::Hasher;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
+use support::RunTraced;
 
 use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro::extension::{apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait};
-use tenferro::{CpuBackend, EagerContext, EagerTensor, Engine, Tensor, TracedTensor};
+use tenferro::{CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
@@ -103,7 +105,7 @@ impl ExtensionOp for TestScaleBy2 {
             Tensor::F64(inner) => {
                 let data = inner.host_data();
                 let sum: Vec<f64> = data.iter().map(|&v| v + v).collect();
-                Ok(vec![Tensor::F64(TypedTensor::from_vec(
+                Ok(vec![Tensor::F64(TypedTensor::from_vec_col_major(
                     input.shape().to_vec(),
                     sum,
                 ))])
@@ -389,16 +391,16 @@ fn f64_slice(tensor: &Tensor) -> &[f64] {
 fn scale_by_2_forward_roundtrip() {
     ensure_scale_by_2_registered();
 
-    let x = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let outputs = apply(Arc::new(TestScaleBy2), &[&x]);
     assert_eq!(outputs.len(), 1);
-    let mut y = outputs.into_iter().next().unwrap();
+    let y = outputs.into_iter().next().unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = y.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = y.run_with(&mut engine).unwrap();
 
     assert_eq!(result.shape(), &[3]);
-    assert_eq!(f64_slice(result), &[2.0, 4.0, 6.0]);
+    assert_eq!(f64_slice(&result), &[2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -406,28 +408,30 @@ fn scale_by_2_grad_against_reduce_sum() {
     ensure_scale_by_2_registered();
 
     // loss = sum(scale_by_2(x))    =>   dloss/dx = [2, 2, 2, 2]
-    let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let scaled = apply(Arc::new(TestScaleBy2), &[&x])
         .into_iter()
         .next()
         .unwrap();
     let loss = scaled.reduce_sum(&[0]);
 
-    let mut g = loss.grad(&x).expect("grad build");
-    let mut engine = Engine::new(CpuBackend::new());
-    let grad_out = g.eval(&mut engine).unwrap();
+    let g = loss.grad(&x).expect("grad build");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let grad_out = g.run_with(&mut engine).unwrap();
 
     assert_eq!(grad_out.shape(), &[4]);
-    assert_eq!(f64_slice(grad_out), &[2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(f64_slice(&grad_out), &[2.0, 2.0, 2.0, 2.0]);
 }
 
 #[test]
 fn scale_by_2_eager_backward_uses_registered_rule() {
     ensure_scale_by_2_registered();
 
-    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let x =
-        EagerTensor::requires_grad_in(Tensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]), ctx);
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        ctx,
+    );
     let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
         .expect("eager extension apply")
         .into_iter()
@@ -445,7 +449,7 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
 
 #[test]
 fn missing_extension_rule_errors_in_traced_grad() {
-    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let y = apply(Arc::new(TestNoAd), &[&x])
         .into_iter()
         .next()
@@ -462,8 +466,9 @@ fn missing_extension_rule_errors_in_traced_grad() {
 
 #[test]
 fn missing_extension_rule_errors_in_eager_backward() {
-    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
     let y = apply_eager(Arc::new(TestNoAd), &[&x])
         .expect("forward-only eager extension apply")
         .into_iter()
@@ -489,7 +494,7 @@ fn apply_rejects_wrong_input_count() {
 
 #[test]
 fn apply_rejects_mismatched_output_metadata_count() {
-    let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let panic = catch_unwind(AssertUnwindSafe(|| {
         let _ = apply(Arc::new(TestBadOutputCount), &[&x]);
     }));
@@ -509,8 +514,8 @@ fn apply_eager_rejects_empty_input_list() {
 
 #[test]
 fn apply_eager_rejects_wrong_input_count() {
-    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestSwap), &[&x]) {
         Ok(_) => panic!("wrong eager extension input count unexpectedly succeeded"),
@@ -522,10 +527,12 @@ fn apply_eager_rejects_wrong_input_count() {
 
 #[test]
 fn apply_eager_rejects_cross_context_inputs() {
-    let lhs_ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let rhs_ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let lhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), lhs_ctx);
-    let rhs = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![2.0_f64]), rhs_ctx);
+    let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let lhs =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), lhs_ctx);
+    let rhs =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]), rhs_ctx);
 
     let err = match apply_eager(Arc::new(TestSwap), &[&lhs, &rhs]) {
         Ok(_) => panic!("cross-context eager extension inputs unexpectedly succeeded"),
@@ -540,8 +547,8 @@ fn apply_eager_rejects_cross_context_inputs() {
 
 #[test]
 fn apply_eager_rejects_mismatched_output_count() {
-    let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
-    let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![1], vec![1.0_f64]), ctx);
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]), ctx);
 
     let err = match apply_eager(Arc::new(TestBadOutputCount), &[&x]) {
         Ok(_) => panic!("bad eager extension output count unexpectedly succeeded"),
@@ -565,33 +572,33 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
         .unwrap();
     let loss = scaled.reduce_sum(&[0]);
 
-    let mut g = loss.grad(&x).expect("grad build");
-    let bound = Tensor::from_vec(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
+    let g = loss.grad(&x).expect("grad build");
+    let bound = Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]);
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let grad_out = g
-        .eval_with_inputs(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
         .expect("grad eval");
 
     assert_eq!(grad_out.shape(), &[5]);
-    assert_eq!(f64_slice(grad_out), &[2.0, 2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(f64_slice(&grad_out), &[2.0, 2.0, 2.0, 2.0, 2.0]);
 }
 
 #[test]
 fn swap_forward_roundtrip() {
     ensure_swap_registered();
 
-    let a = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let b = TracedTensor::from_vec(vec![2], vec![100.0_f64, 200.0]);
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![100.0_f64, 200.0]);
     let outputs = apply(Arc::new(TestSwap), &[&a, &b]);
     assert_eq!(outputs.len(), 2);
     let mut iter = outputs.into_iter();
-    let mut out_first = iter.next().unwrap();
-    let mut out_second = iter.next().unwrap();
+    let out_first = iter.next().unwrap();
+    let out_second = iter.next().unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let t0 = out_first.eval(&mut engine).unwrap().clone();
-    let t1 = out_second.eval(&mut engine).unwrap().clone();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let t0 = out_first.run_with(&mut engine).unwrap().clone();
+    let t1 = out_second.run_with(&mut engine).unwrap().clone();
 
     // (a, b) -> (b, a)
     assert_eq!(f64_slice(&t0), &[100.0, 200.0]);
@@ -605,8 +612,8 @@ fn swap_grad_routes_cotangents_across_inputs() {
     // loss = sum(out0 + out1)   where (out0, out1) = swap(a, b)
     //       = sum(b + a)
     // => dloss/da = ones_like(a),  dloss/db = ones_like(b)
-    let a = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
     let mut iter = swapped.into_iter();
     let out0 = iter.next().unwrap();
@@ -614,12 +621,12 @@ fn swap_grad_routes_cotangents_across_inputs() {
     let combined = &out0 + &out1;
     let loss = combined.reduce_sum(&[0]);
 
-    let mut grad_a = loss.grad(&a).expect("grad a");
-    let mut grad_b = loss.grad(&b).expect("grad b");
+    let grad_a = loss.grad(&a).expect("grad a");
+    let grad_b = loss.grad(&b).expect("grad b");
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let ga = grad_a.eval(&mut engine).unwrap().clone();
-    let gb = grad_b.eval(&mut engine).unwrap().clone();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let ga = grad_a.run_with(&mut engine).unwrap().clone();
+    let gb = grad_b.run_with(&mut engine).unwrap().clone();
 
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);
     assert_eq!(f64_slice(&gb), &[1.0, 1.0, 1.0]);
@@ -631,17 +638,17 @@ fn swap_grad_routes_only_through_active_output() {
 
     // loss = sum(out1)  where (out0, out1) = swap(a, b)  (so out1 = a)
     // => dloss/da = ones_like(a)
-    let a = TracedTensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = TracedTensor::from_vec(vec![3], vec![10.0_f64, 20.0, 30.0]);
+    let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
     let swapped = apply(Arc::new(TestSwap), &[&a, &b]);
     let mut iter = swapped.into_iter();
     let _out0 = iter.next().unwrap();
     let out1 = iter.next().unwrap();
     let loss = out1.reduce_sum(&[0]);
 
-    let mut grad_a = loss.grad(&a).expect("grad a");
-    let mut engine = Engine::new(CpuBackend::new());
-    let ga = grad_a.eval(&mut engine).unwrap().clone();
+    let grad_a = loss.grad(&a).expect("grad a");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let ga = grad_a.run_with(&mut engine).unwrap().clone();
     assert_eq!(f64_slice(&ga), &[1.0, 1.0, 1.0]);
 
     // grad wrt b: sum(out1) does not depend on b; try_grad returns None.

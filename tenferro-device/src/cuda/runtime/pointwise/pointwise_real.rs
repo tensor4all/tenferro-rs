@@ -429,7 +429,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealUnaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -485,7 +485,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealUnaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -541,7 +541,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealBinaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -605,7 +605,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealBinaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -671,7 +671,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealTernaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -747,7 +747,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealTernaryOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -823,7 +823,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealReductionOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -888,7 +888,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, RealReductionOp};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();

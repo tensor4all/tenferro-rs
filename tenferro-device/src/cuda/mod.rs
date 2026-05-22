@@ -6,7 +6,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_device::cuda::runtime;
 //!
 //! let runtime = runtime::get_or_init(0).unwrap();

@@ -3,17 +3,18 @@
 //! Primary approach: Forward-over-Reverse (FoR) = jvp(grad(f), x, v),
 //! matching JAX's standard HVP pattern.
 
-use tenferro::engine::Engine;
+mod support;
+use support::{einsum, RunTraced};
 use tenferro::traced::TracedTensor;
-use tenferro::traced_tensor::einsum;
 use tenferro::traced_tensor::{qr, svd};
+use tenferro::GraphExecutor;
 use tenferro::{CpuBackend, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 const FD_H: f64 = 1e-5;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn f64_scalar(val: f64) -> Tensor {
@@ -28,9 +29,9 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
-    let mut engine = Engine::new(CpuBackend::new());
-    let mut t = traced;
-    t.eval(&mut engine).unwrap().clone()
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let t = traced;
+    t.run_with(&mut engine).unwrap().clone()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {
@@ -146,7 +147,7 @@ fn hvp_for_quadratic_form() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
 
     let g = y.grad(&x).unwrap();
@@ -178,7 +179,7 @@ fn hvp_ror_quadratic_form() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data));
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data));
 
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let y = einsum(&mut engine, &[&x, &a, &x], "i,ij,j->").unwrap();
 
     let g = y.grad(&x).unwrap();

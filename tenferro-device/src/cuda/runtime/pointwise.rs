@@ -17,7 +17,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -33,7 +33,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -50,7 +50,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime;
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -76,7 +76,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -100,7 +100,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec, StridedCopyTransform};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -136,7 +136,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -248,7 +248,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, ZeroTrailingByCountsSpec};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -293,7 +293,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, TriangularHalf, TriangularPartSpec};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();
@@ -317,7 +317,7 @@ impl CudaRuntime {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::cuda::runtime::{self, TriangularMergeSpec};
     ///
     /// let runtime = runtime::get_or_init(0).unwrap();

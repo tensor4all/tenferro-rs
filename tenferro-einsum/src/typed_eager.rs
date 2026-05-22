@@ -11,8 +11,8 @@ use crate::eager_einsum;
 /// use tenferro_tensor::{cpu::CpuBackend, TypedTensor};
 ///
 /// let mut ctx = CpuBackend::new();
-/// let a = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = TypedTensor::<f64>::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ///
 /// let c = typed_eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 ///

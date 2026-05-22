@@ -54,7 +54,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::from_vec(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -77,7 +77,7 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
 }
 
 fn scalar_one() -> Tensor {
-    Tensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)])
+    Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)])
 }
 
 fn inner_fresh_backend_cache(

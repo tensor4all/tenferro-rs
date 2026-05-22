@@ -460,7 +460,7 @@ materialize_merge  = flatten fragments into one concrete graph
 let view = resolve(vec![fragment_a, fragment_b, fragment_c]);
 let graph = materialize_merge(&view, &requested_outputs);
 let prog = compile(&graph);
-let values = prog.eval(&runtime_inputs);
+let values = prog.run(&runtime_inputs);
 ```
 
 This separation is deliberate:

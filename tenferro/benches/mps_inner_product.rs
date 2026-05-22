@@ -1,14 +1,15 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, DType, Engine, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
+};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
 const CHIS: &[usize] = &[4, 8, 16, 32, 64];
 
 struct MpsFixture {
-    shapes: Vec<Vec<usize>>,
     bra_tensors: Vec<Tensor>,
     ket_tensors: Vec<Tensor>,
 }
@@ -32,7 +33,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::C64(TypedTensor::from_vec(shape.to_vec(), data))
+    Tensor::C64(TypedTensor::from_vec_col_major(shape.to_vec(), data))
 }
 
 fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixture {
@@ -49,49 +50,41 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
         .collect();
 
     MpsFixture {
-        shapes,
         bra_tensors,
         ket_tensors,
     }
 }
 
 fn build_inner_product_graph(
-    engine: &mut Engine<CpuBackend>,
+    compiler: &mut GraphCompiler,
     bra: &[TracedTensor],
     ket: &[TracedTensor],
 ) -> TracedTensor {
-    let mut env = TracedTensor::from_vec(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
+    let mut env = TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]);
     for (bra_core, ket_core) in bra.iter().zip(ket) {
         let bra_core = bra_core.conj();
-        env = einsum(engine, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
+        env = einsum(compiler, &[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");
     }
     env.reshape(&[])
 }
 
-fn compile_mps_inner_product(fixture: &MpsFixture) -> tenferro::traced::CompiledTracedTensor {
+fn compile_mps_inner_product(fixture: &MpsFixture) -> GraphProgram {
     let bra_placeholders: Vec<_> = fixture
-        .shapes
+        .bra_tensors
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()))
         .collect();
     let ket_placeholders: Vec<_> = fixture
-        .shapes
+        .ket_tensors
         .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape))
+        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()))
         .collect();
 
-    let mut build_engine = Engine::new(CpuBackend::with_threads(1));
-    let output = build_inner_product_graph(&mut build_engine, &bra_placeholders, &ket_placeholders);
-
-    let mut bindings = Vec::with_capacity(fixture.shapes.len() * 2);
-    for site in 0..fixture.shapes.len() {
-        bindings.push((&bra_placeholders[site], &fixture.bra_tensors[site]));
-        bindings.push((&ket_placeholders[site], &fixture.ket_tensors[site]));
-    }
-
-    output
-        .compile_with_inputs(&bindings)
+    let mut compiler = GraphCompiler::new();
+    let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);
+    compiler
+        .compile(&output)
         .expect("MPS inner-product graph should compile")
 }
 
@@ -100,20 +93,20 @@ fn bench_mps_inner_product(c: &mut Criterion) {
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
         let compiled = compile_mps_inner_product(&fixture);
-        let mut engine = Engine::new(CpuBackend::with_threads(1));
+        let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
         let params = format!("L_{L}_chi_{chi}_d_{PHYS_DIM}");
 
         let warmup_outputs = engine
-            .eval_exec_ir(&compiled.program, compiled.inputs.clone())
+            .run_many(&compiled)
             .expect("warmup evaluation should succeed");
         black_box(warmup_outputs);
 
         group.bench_function(BenchmarkId::new("eval_only", &params), move |b| {
             b.iter_batched(
-                || compiled.inputs.clone(),
-                |inputs| {
+                || compiled.clone(),
+                |program| {
                     let outputs = engine
-                        .eval_exec_ir(black_box(&compiled.program), black_box(inputs))
+                        .run_many(black_box(&program))
                         .expect("MPS inner-product evaluation should succeed");
                     black_box(outputs);
                 },
@@ -126,9 +119,9 @@ fn bench_mps_inner_product(c: &mut Criterion) {
             move |b| {
                 b.iter(|| {
                     let compiled = compile_mps_inner_product(black_box(&fixture));
-                    let mut engine = Engine::new(CpuBackend::with_threads(1));
+                    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1));
                     let outputs = engine
-                        .eval_exec_ir(black_box(&compiled.program), black_box(compiled.inputs))
+                        .run_many(black_box(&compiled))
                         .expect("MPS inner-product compile+eval should succeed");
                     black_box(outputs);
                 });

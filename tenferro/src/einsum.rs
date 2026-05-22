@@ -1,23 +1,24 @@
 //! N-ary einsum with configurable contraction strategy.
 //!
 //! This module provides free functions [`einsum`] and [`einsum_with`]. They
-//! build a lazy computation graph; call `.eval(&mut engine)` on the result to
-//! trigger execution.
+//! build a lazy computation graph; compile it with [`GraphCompiler`] and run
+//! the compiled program with [`crate::GraphExecutor`].
 //!
 //! # Quick start
 //!
-//! ```ignore
+//! ```
 //! use tenferro::traced_tensor::einsum;
-//! use tenferro::engine::Engine;
-//! use tenferro::traced::TracedTensor;
+//! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 //!
-//! let mut engine = Engine::new(CpuBackend::new());
-//! let a = TracedTensor::from_tensor_concrete_shape(tensor_a);
-//! let b = TracedTensor::from_tensor_concrete_shape(tensor_b);
+//! let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+//! let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+//! let mut compiler = GraphCompiler::new();
 //!
 //! // Matrix multiply
-//! let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik");
-//! let result = c.eval(&mut engine);
+//! let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+//! let program = compiler.compile(&c).unwrap();
+//! let result = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+//! assert_eq!(result.shape(), &[2, 2]);
 //! ```
 
 use std::collections::HashMap;
@@ -29,12 +30,11 @@ use omeco::ScoreFunction;
 use tenferro_einsum::builder::build_einsum_fragment;
 use tenferro_einsum::{ContractionOptimizerOptions, ContractionTree, NestedEinsum, Subscripts};
 use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
-use tenferro_tensor::TensorBackend;
 
 use super::checkpoint::CheckpointNode;
-use super::einsum_subscripts::{parse_einsum_subscripts, to_einsum_subscripts};
-use super::engine::{Engine, ParsedEinsum};
+use super::einsum_subscripts::to_einsum_subscripts;
 use super::error::{Error, Result};
+use super::graph::GraphCompiler;
 use super::metadata::{metadata_scopes_with_new, register_scoped_fragment_metadata};
 use super::sym_dim::SymDim;
 use super::traced::{concrete_shape, next_traced_id, TracedTensor};
@@ -48,31 +48,37 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 /// Uses omeco's TreeSA optimizer. The default scoring prioritizes
 /// time complexity (FLOPS). Customize via `ContractionOptimizerOptions`.
 ///
-/// ```ignore
+/// ```rust
 /// use omeco::ScoreFunction;
 /// use tenferro_einsum::ContractionOptimizerOptions;
+/// use tenferro::{GraphCompiler, TracedTensor};
 /// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
 ///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+/// let mut compiler = GraphCompiler::new();
+///
 /// // Default: FLOPS-first (minimize computation time)
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::default());
+/// einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
+///     EinsumOptimize::default()).unwrap();
 ///
 /// // Space-optimized (minimize peak intermediate tensor size)
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
+/// einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Auto(ContractionOptimizerOptions {
 ///         score: ScoreFunction::space_optimized(20.0),
 ///         ..Default::default()
-///     }));
+///     })).unwrap();
 ///
 /// // Balanced (FLOPS + space, omeco default)
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
+/// einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Auto(ContractionOptimizerOptions {
 ///         score: ScoreFunction::default(),
 ///         ..Default::default()
-///     }));
+///     })).unwrap();
 ///
 /// // Custom: space-heavy with FLOPS tiebreaker
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
+/// einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Auto(ContractionOptimizerOptions {
 ///         score: ScoreFunction::new(
 ///             0.1,   // tc_weight (FLOPS, low priority)
@@ -81,17 +87,17 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 ///             15.0,  // sc_target (no penalty below 2^15 elements)
 ///         ),
 ///         ..Default::default()
-///     }));
+///     })).unwrap();
 ///
 /// // Full TreeSA: multiple trials with annealing
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
+/// einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
 ///     EinsumOptimize::Auto(ContractionOptimizerOptions {
 ///         score: ScoreFunction::time_optimized(),
 ///         ntrials: 10,
 ///         niters: 50,
 ///         betas: vec![0.01, 0.1, 1.0, 10.0],
 ///         ..Default::default()
-///     }));
+///     })).unwrap();
 /// ```
 ///
 /// ## `False` -- No optimization
@@ -99,9 +105,23 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 /// Contracts operands left-to-right in the order given.
 /// Useful for debugging or when the input order is already optimal.
 ///
-/// ```ignore
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::False);
+/// ```rust
+/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+/// let mut compiler = GraphCompiler::new();
+///
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::False,
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 /// ```
 ///
 /// ## `Nested` -- Parenthesized notation
@@ -109,16 +129,35 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 /// Specifies contraction order using a pre-parsed [`NestedEinsum`] tree.
 /// Most human-readable way to control order.
 ///
-/// ```ignore
+/// ```rust
+/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
 /// use tenferro_einsum::NestedEinsum;
 ///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+/// let mut compiler = GraphCompiler::new();
+///
 /// // "Contract A*B first, then result with C"
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Nested(NestedEinsum::parse("(ij,jk),kl->il").unwrap()));
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::Nested(NestedEinsum::parse("(ij,jk),kl->il").unwrap()),
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 ///
 /// // "Contract B*C first, then A with result"
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Nested(NestedEinsum::parse("ij,(jk,kl)->il").unwrap()));
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::Nested(NestedEinsum::parse("ij,(jk,kl)->il").unwrap()),
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 /// ```
 ///
 /// ## `Path` -- JAX-compatible explicit path
@@ -130,17 +169,37 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 /// Compatible with `jax.numpy.einsum(optimize=path)` and
 /// `opt_einsum.contract_path` output.
 ///
-/// ```ignore
+/// ```rust
+/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+/// let mut compiler = GraphCompiler::new();
+///
 /// // 3 operands: A(0), B(1), C(2)
 /// // Step 1: contract positions 1,2 (B,C) -> T. List: [A, T]
 /// // Step 2: contract positions 0,1 (A,T) -> result
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Path(vec![(1, 2), (0, 1)]));
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::Path(vec![(1, 2), (0, 1)]),
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 ///
 /// // Step 1: contract positions 0,1 (A,B) -> T. List: [C, T]
 /// // Step 2: contract positions 0,1 (C,T) -> result
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Path(vec![(0, 1), (0, 1)]));
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 /// ```
 ///
 /// ## `Tree` -- Pre-computed ContractionTree
@@ -148,14 +207,27 @@ use super::traced::{concrete_shape, next_traced_id, TracedTensor};
 /// Pass a tree obtained from `ContractionTree::optimize` or other
 /// optimization tools. Skips all path computation.
 ///
-/// ```ignore
+/// ```rust
+/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
 /// use tenferro_einsum::{ContractionTree, Subscripts};
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]);
+/// let mut compiler = GraphCompiler::new();
 ///
 /// let subs = Subscripts::parse("ij,jk,kl->il").unwrap();
 /// let shapes = [&[2, 3][..], &[3, 4], &[4, 5]];
 /// let tree = ContractionTree::optimize(&subs, &shapes).unwrap();
-/// einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Tree(tree));
+/// let out = einsum_with(
+///     &mut compiler,
+///     &[&a, &b, &c],
+///     "ij,jk,kl->il",
+///     EinsumOptimize::Tree(tree),
+/// )
+/// .unwrap();
+/// assert_eq!(out.rank, 2);
 /// ```
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
@@ -186,40 +258,46 @@ impl Default for EinsumOptimize {
 
 /// N-ary einsum with default FLOPS-first optimization.
 ///
-/// Builds a lazy computation graph. Call `.eval(&mut engine)` on the
-/// result to trigger execution.
+/// Builds a lazy computation graph. Compile the returned tensor with
+/// [`GraphCompiler`] and execute the program with a graph executor.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro::traced_tensor::einsum;
-/// use tenferro::engine::Engine;
-/// use tenferro::traced::TracedTensor;
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+/// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
+/// let y = TracedTensor::from_vec_col_major(vec![3], vec![2.0_f64; 3]);
+/// let mut compiler = GraphCompiler::new();
 ///
 /// // Matrix multiply
-/// let c = einsum(&mut engine, &[&a, &b], "ij,jk->ik");
-///
-/// // 3-tensor chain multiply
-/// let d = einsum(&mut engine, &[&a, &b, &c], "ij,jk,kl->il");
+/// let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 ///
 /// // Inner product
-/// let s = einsum(&mut engine, &[&x, &y], "i,i->");
+/// let s = einsum(&mut compiler, &[&x, &y], "i,i->").unwrap();
 ///
 /// // Row sum (unary)
-/// let r = einsum(&mut engine, &[&a], "ij->i");
+/// let r = einsum(&mut compiler, &[&a], "ij->i").unwrap();
 ///
 /// // Hadamard product
-/// let h = einsum(&mut engine, &[&a, &b], "ij,ij->ij");
+/// let h = einsum(&mut compiler, &[&a, &a], "ij,ij->ij").unwrap();
 ///
 /// // Outer product
-/// let o = einsum(&mut engine, &[&x, &y], "i,j->ij");
+/// let o = einsum(&mut compiler, &[&x, &y], "i,j->ij").unwrap();
+///
+/// let program = compiler.compile(&c).unwrap();
+/// let result = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// assert_eq!(result.shape(), &[2, 2]);
 /// ```
-pub fn einsum<B: TensorBackend>(
-    engine: &mut Engine<B>,
+pub fn einsum(
+    compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &str,
 ) -> Result<TracedTensor> {
-    einsum_with(engine, inputs, subscripts, EinsumOptimize::default())
+    einsum_with(compiler, inputs, subscripts, EinsumOptimize::default())
 }
 
 /// N-ary einsum using integer labels and the default contraction strategy.
@@ -228,79 +306,94 @@ pub fn einsum<B: TensorBackend>(
 ///
 /// ```
 /// use tenferro::traced_tensor::einsum_subscripts;
-/// use tenferro::{CpuBackend, Engine, EinsumSubscripts, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, EinsumSubscripts, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let mut compiler = GraphCompiler::new();
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]));
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-/// let mut dot = einsum_subscripts(&mut engine, &[&a, &b], &subscripts).unwrap();
-/// let result = dot.eval(&mut engine).unwrap();
+/// let dot = einsum_subscripts(&mut compiler, &[&a, &b], &subscripts).unwrap();
+/// let program = compiler.compile(&dot).unwrap();
+/// let result = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 ///
 /// assert_eq!(result.as_slice::<f64>().unwrap(), &[32.0]);
 /// ```
-pub fn einsum_subscripts<B: TensorBackend>(
-    engine: &mut Engine<B>,
+pub fn einsum_subscripts(
+    compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<TracedTensor> {
-    einsum_subscripts_with(engine, inputs, subscripts, EinsumOptimize::default())
+    einsum_subscripts_with(compiler, inputs, subscripts, EinsumOptimize::default())
 }
 
 /// N-ary einsum with explicit contraction strategy.
 ///
 /// See [`EinsumOptimize`] for all available strategies and examples.
+/// Inputs with symbolic or otherwise non-concrete shapes currently support
+/// only the default automatic optimization strategy.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro::traced_tensor::{einsum_with, EinsumOptimize};
-/// use tenferro::engine::Engine;
-/// use tenferro::traced::TracedTensor;
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+/// let c = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]);
+/// let mut compiler = GraphCompiler::new();
 ///
 /// // Left-to-right, no optimizer
-/// let c = einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::False);
+/// let out = einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
+///     EinsumOptimize::False).unwrap();
 ///
 /// // JAX-compatible explicit path
-/// let c = einsum_with(&mut engine, &[&a, &b, &c], "ij,jk,kl->il",
-///     EinsumOptimize::Path(vec![(1, 2), (0, 1)]));
+/// let out_path = einsum_with(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il",
+///     EinsumOptimize::Path(vec![(1, 2), (0, 1)])).unwrap();
+///
+/// let program = compiler.compile(&out).unwrap();
+/// let result = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// assert_eq!(result.shape(), &[2, 2]);
 /// ```
-pub fn einsum_with<B: TensorBackend>(
-    engine: &mut Engine<B>,
+pub fn einsum_with(
+    compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &str,
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
-    let parsed = cached_subscripts(engine, subscripts)?;
-    einsum_subscripts_with(engine, inputs, &parsed.subscripts, optimize)
+    let parsed = compiler.cached_subscripts(subscripts)?;
+    einsum_subscripts_with(compiler, inputs, &parsed.subscripts, optimize)
 }
 
 /// N-ary einsum with integer labels and explicit contraction strategy.
+///
+/// Inputs with symbolic or otherwise non-concrete shapes currently support
+/// only the default automatic optimization strategy.
 ///
 /// # Examples
 ///
 /// ```
 /// use tenferro::traced_tensor::{einsum_subscripts_with, EinsumOptimize};
-/// use tenferro::{CpuBackend, Engine, EinsumSubscripts, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, EinsumSubscripts, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]));
+/// let mut compiler = GraphCompiler::new();
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]));
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-/// let mut dot = einsum_subscripts_with(
-///     &mut engine,
+/// let dot = einsum_subscripts_with(
+///     &mut compiler,
 ///     &[&a, &b],
 ///     &subscripts,
 ///     EinsumOptimize::False,
 /// )
 /// .unwrap();
-/// let result = dot.eval(&mut engine).unwrap();
+/// let program = compiler.compile(&dot).unwrap();
+/// let result = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 ///
 /// assert_eq!(result.as_slice::<f64>().unwrap(), &[32.0]);
 /// ```
-pub fn einsum_subscripts_with<B: TensorBackend>(
-    engine: &mut Engine<B>,
+pub fn einsum_subscripts_with(
+    compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &EinsumSubscripts,
     optimize: EinsumOptimize,
@@ -320,6 +413,7 @@ pub fn einsum_subscripts_with<B: TensorBackend>(
         )));
     }
     if inputs.iter().any(|tensor| !has_concrete_shape(tensor)) {
+        validate_symbolic_einsum_optimize(&optimize)?;
         return Ok(build_symbolic_nary_einsum(inputs, subscripts, &subs));
     }
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|t| concrete_shape(t)).collect();
@@ -327,19 +421,11 @@ pub fn einsum_subscripts_with<B: TensorBackend>(
 
     match optimize {
         // Reuse TreeSA results for repeated calls with the same equation and input shapes.
-        EinsumOptimize::Auto(opts) => {
+        EinsumOptimize::Auto(opts) if is_default_auto_options(&opts) => {
             let cache_key = (subscripts.clone(), shapes.clone());
-            let tree = if let Some(cached) = engine.einsum_cache.get(&cache_key) {
-                cached.clone()
-            } else {
-                let tree = Arc::new(resolve_strategy(
-                    EinsumOptimize::Auto(opts),
-                    &subs,
-                    &shape_refs,
-                )?);
-                engine.einsum_cache.put(cache_key, tree.clone());
-                tree
-            };
+            let tree = compiler.cached_static_einsum_tree(cache_key, || {
+                resolve_strategy(EinsumOptimize::Auto(opts), &subs, &shape_refs)
+            })?;
             build_traced_from_tree(inputs, &subs, tree.as_ref(), &shapes)
         }
         optimize => {
@@ -349,26 +435,49 @@ pub fn einsum_subscripts_with<B: TensorBackend>(
     }
 }
 
+fn validate_symbolic_einsum_optimize(optimize: &EinsumOptimize) -> Result<()> {
+    match optimize {
+        EinsumOptimize::Auto(opts) if is_default_auto_options(opts) => Ok(()),
+        _ => Err(Error::ContractionError(
+            "symbolic einsum supports only default automatic optimization".into(),
+        )),
+    }
+}
+
+fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
+    let default = default_auto_options();
+    options.ntrials == default.ntrials
+        && options.niters == default.niters
+        && f64_slices_equal_by_bits(&options.betas, &default.betas)
+        && score_functions_equal_by_bits(&options.score, &default.score)
+}
+
+pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
+    match EinsumOptimize::default() {
+        EinsumOptimize::Auto(options) => options,
+        _ => unreachable!("EinsumOptimize::default must be automatic optimization"),
+    }
+}
+
+fn f64_slices_equal_by_bits(lhs: &[f64], rhs: &[f64]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs)
+            .all(|(lhs, rhs)| lhs.to_bits() == rhs.to_bits())
+}
+
+fn score_functions_equal_by_bits(lhs: &ScoreFunction, rhs: &ScoreFunction) -> bool {
+    lhs.tc_weight.to_bits() == rhs.tc_weight.to_bits()
+        && lhs.sc_weight.to_bits() == rhs.sc_weight.to_bits()
+        && lhs.rw_weight.to_bits() == rhs.rw_weight.to_bits()
+        && lhs.sc_target.to_bits() == rhs.sc_target.to_bits()
+}
+
 fn has_concrete_shape(tensor: &TracedTensor) -> bool {
     tensor
         .sym_shape()
         .is_some_and(|shape| shape.iter().all(|dim| dim.constant_value().is_some()))
-}
-
-fn cached_subscripts<B: TensorBackend>(
-    engine: &mut Engine<B>,
-    subscripts: &str,
-) -> Result<Arc<ParsedEinsum>> {
-    if let Some(cached) = engine.einsum_parse_cache.get(subscripts) {
-        return Ok(Arc::clone(cached));
-    }
-
-    let parsed = parse_einsum_subscripts(subscripts)?;
-    let cached = Arc::new(ParsedEinsum { subscripts: parsed });
-    engine
-        .einsum_parse_cache
-        .put(subscripts.to_owned(), Arc::clone(&cached));
-    Ok(cached)
 }
 
 fn build_symbolic_nary_einsum(

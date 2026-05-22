@@ -4,7 +4,7 @@ use crate::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::BroadcastBatchIndexer;
 ///
 /// let indexer = BroadcastBatchIndexer::new(&[1, 3], &[2, 3], "solve", "b").unwrap();
@@ -24,7 +24,7 @@ impl BroadcastBatchIndexer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::BroadcastBatchIndexer;
     ///
     /// let indexer = BroadcastBatchIndexer::new(&[2, 3], &[2, 3], "solve", "a").unwrap();
@@ -74,7 +74,7 @@ impl BroadcastBatchIndexer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::BroadcastBatchIndexer;
     ///
     /// let indexer = BroadcastBatchIndexer::new(&[2, 3], &[2, 3], "solve", "a").unwrap();
@@ -88,7 +88,7 @@ impl BroadcastBatchIndexer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::BroadcastBatchIndexer;
     ///
     /// let indexer = BroadcastBatchIndexer::new(&[2, 3], &[2, 3], "solve", "a").unwrap();
@@ -102,7 +102,7 @@ impl BroadcastBatchIndexer {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_device::BroadcastBatchIndexer;
     ///
     /// let indexer = BroadcastBatchIndexer::new(&[1, 3], &[2, 3], "solve", "b").unwrap();
@@ -131,7 +131,7 @@ impl BroadcastBatchIndexer {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::broadcast_batch_dims;
 ///
 /// let dims = broadcast_batch_dims(&[2, 1], &[1, 3], "solve", "a", "b").unwrap();
@@ -177,7 +177,7 @@ pub fn broadcast_batch_dims(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::checked_batch_count;
 ///
 /// assert_eq!(checked_batch_count(&[]).unwrap(), 1);
@@ -194,7 +194,7 @@ pub fn checked_batch_count(batch_dims: &[usize]) -> Result<usize> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::flatten_col_major_index;
 ///
 /// assert_eq!(flatten_col_major_index(&[2, 3, 4], &[1, 0, 2]).unwrap(), 13);
@@ -232,7 +232,7 @@ pub fn flatten_col_major_index(dims: &[usize], index: &[usize]) -> Result<usize>
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_device::unflatten_col_major_index_into;
 ///
 /// let mut out = [0usize; 3];

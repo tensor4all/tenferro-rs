@@ -502,7 +502,7 @@ Rules registered in `tools/autograd/derivatives.yaml`:
 Build-time code generation produces C++ `Node` subclasses (`MulBackward0`, etc.)
 in `torch/csrc/autograd/generated/Functions.cpp`.
 
-**Engine execution**: `GraphTask` + `NodeTask` + per-thread `ReadyQueue`. Reverse
+**Graph execution**: `GraphTask` + `NodeTask` + per-thread `ReadyQueue`. Reverse
 topological order. Cotangents flow via chain rule. Concurrent backward since v1.6.
 
 ### 4.4 Forward Mode (JVP)

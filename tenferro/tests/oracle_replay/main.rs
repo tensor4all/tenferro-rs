@@ -9,9 +9,9 @@ use std::ops::Range;
 use std::{env, num::ParseIntError};
 
 use num_complex::{Complex32, Complex64};
-use tenferro::engine::Engine;
-use tenferro::traced::eval_all;
-use tenferro::{CpuBackend, DType, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
 
 use crate::compare::compare_tensor;
 use crate::db::{oracle_cases_dir, try_discover_case_files, try_load_cases};
@@ -162,8 +162,9 @@ fn run_oracle_replay(registered_shard_index: usize, forced_shard_count: Option<u
         let case =
             &manifest.loaded_files[manifest_entry.file_index].cases[manifest_entry.case_index];
         stats.cases += 1;
-        let mut engine = Engine::new(CpuBackend::with_threads(backend_threads));
-        match replay_case(case, &mut engine) {
+        let mut compiler = GraphCompiler::new();
+        let mut executor = GraphExecutor::new(CpuBackend::with_threads(backend_threads));
+        match replay_case(case, &mut compiler, &mut executor) {
             Ok(CaseOutcome::Passed) => stats.passed += 1,
             Ok(CaseOutcome::SkippedDType) => stats.skipped_dtype += 1,
             Ok(CaseOutcome::ExpectedError) => stats.expected_error += 1,
@@ -202,8 +203,9 @@ fn oracle_replay_norm_case_048() {
         DispatchResult::Executed(execution) => execution,
         DispatchResult::SkippedUnimplemented(op) => panic!("unexpected skip for {op}"),
     };
-    let mut engine = Engine::new(CpuBackend::new());
-    let outputs = apply_observable(&case.observable.kind, execution.outputs, &mut engine)
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let outputs = apply_observable(&case.observable.kind, execution.outputs, &mut compiler)
         .expect("apply observable");
     let probe = &case.probes[0];
     let cotangent_tensors = decode_named_tensors(&probe.cotangent).expect("decode cotangent");
@@ -213,7 +215,7 @@ fn oracle_replay_norm_case_048() {
     let maybe_grad = scalar.try_grad(input).expect("try_grad");
     assert!(maybe_grad.is_some(), "try_grad returned None");
     let manual_input =
-        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![5, 5],
             vec![
                 -4.826984902407649,
@@ -244,7 +246,7 @@ fn oracle_replay_norm_case_048() {
             ],
         )));
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
-        TypedTensor::from_vec(vec![], vec![1.0]),
+        TypedTensor::from_vec_col_major(vec![], vec![1.0]),
     ));
     let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),
@@ -256,7 +258,7 @@ fn oracle_replay_norm_case_048() {
     let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
     let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
     let manual_actual = eval_named_tensors(
-        &mut Engine::new(CpuBackend::new()),
+        &mut GraphExecutor::new(CpuBackend::new()),
         &mut [NamedTensor {
             name: "a".to_string(),
             tensor: manual_grad,
@@ -280,7 +282,7 @@ fn oracle_replay_norm_case_048() {
     .expect("compare manual grad");
     let direct_grad = scalar.grad(input).expect("direct grad");
     let direct_actual = eval_named_tensors(
-        &mut Engine::new(CpuBackend::new()),
+        &mut GraphExecutor::new(CpuBackend::new()),
         &mut [NamedTensor {
             name: "a".to_string(),
             tensor: direct_grad,
@@ -304,7 +306,7 @@ fn oracle_replay_norm_case_048() {
     .expect("compare direct grad");
 
     let mut gradients = build_grad_outputs(&scalar, &execution.inputs).expect("build gradients");
-    let actual = eval_named_tensors(&mut engine, &mut gradients).expect("eval gradients");
+    let actual = eval_named_tensors(&mut executor, &mut gradients).expect("eval gradients");
     compare_named_results(
         case,
         DerivativeKind::Vjp,
@@ -337,7 +339,7 @@ fn oracle_manual_norm_case_048() {
         .expect("first order tolerance");
 
     let manual_input =
-        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec(
+        TracedTensor::from_tensor_concrete_shape(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![5, 5],
             vec![
                 -4.826984902407649,
@@ -368,7 +370,7 @@ fn oracle_manual_norm_case_048() {
             ],
         )));
     let manual_cotangent = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
-        TypedTensor::from_vec(vec![], vec![1.0]),
+        TypedTensor::from_vec_col_major(vec![], vec![1.0]),
     ));
     let manual_output = tenferro::traced_tensor::norm(
         &manual_input.clone(),
@@ -380,7 +382,7 @@ fn oracle_manual_norm_case_048() {
     let manual_scalar = (&manual_output * &manual_cotangent).reduce_sum(&manual_axes);
     let manual_grad = manual_scalar.grad(&manual_input).expect("manual grad");
     let actual = eval_named_tensors(
-        &mut Engine::new(CpuBackend::new()),
+        &mut GraphExecutor::new(CpuBackend::new()),
         &mut [NamedTensor {
             name: "a".to_string(),
             tensor: manual_grad,
@@ -691,7 +693,11 @@ fn oracle_replay_backend_threads(shard_count: usize) -> usize {
     std::cmp::max(1, available / shard_count)
 }
 
-fn replay_case(case: &CaseRecord, engine: &mut Engine<CpuBackend>) -> Result<CaseOutcome, String> {
+fn replay_case(
+    case: &CaseRecord,
+    compiler: &mut GraphCompiler,
+    executor: &mut GraphExecutor<CpuBackend>,
+) -> Result<CaseOutcome, String> {
     if case.expected_behavior == "error" {
         return Ok(CaseOutcome::ExpectedError);
     }
@@ -710,10 +716,10 @@ fn replay_case(case: &CaseRecord, engine: &mut Engine<CpuBackend>) -> Result<Cas
             return Ok(CaseOutcome::SkippedUnimplemented(op));
         }
     };
-    let outputs = apply_observable(&case.observable.kind, execution.outputs, engine)?;
+    let outputs = apply_observable(&case.observable.kind, execution.outputs, compiler)?;
 
     for probe in &case.probes {
-        replay_probe(case, probe, &execution.inputs, &outputs, engine)?;
+        replay_probe(case, probe, &execution.inputs, &outputs, executor)?;
     }
 
     Ok(CaseOutcome::Passed)
@@ -724,7 +730,7 @@ fn replay_probe(
     probe: &Probe,
     inputs: &BTreeMap<String, TracedTensor>,
     outputs: &[NamedTensor],
-    engine: &mut Engine<CpuBackend>,
+    executor: &mut GraphExecutor<CpuBackend>,
 ) -> Result<(), String> {
     let first_order = required_tolerance(
         case.comparison.first_order.as_ref(),
@@ -741,7 +747,7 @@ fn replay_probe(
         &direction_tensors,
         &probe.pytorch_ref.jvp,
     )?;
-    let jvp_results = eval_named_tensors(engine, &mut jvp_outputs)?;
+    let jvp_results = eval_named_tensors(executor, &mut jvp_outputs)?;
     compare_named_results(
         case,
         DerivativeKind::Jvp,
@@ -754,7 +760,7 @@ fn replay_probe(
 
     let scalar = cotangent_scalar(case, outputs, &cotangent_tensors, &probe.probe_id)?;
     let mut vjp_outputs = build_grad_outputs(&scalar, inputs)?;
-    let vjp_results = eval_named_tensors(engine, &mut vjp_outputs)?;
+    let vjp_results = eval_named_tensors(executor, &mut vjp_outputs)?;
     compare_named_results(
         case,
         DerivativeKind::Vjp,
@@ -772,7 +778,7 @@ fn replay_probe(
             &case.case_id,
         )?;
         let mut hvp_outputs = build_hvp_outputs(&vjp_outputs, inputs, &direction_tensors)?;
-        let hvp_results = eval_named_tensors(engine, &mut hvp_outputs)?;
+        let hvp_results = eval_named_tensors(executor, &mut hvp_outputs)?;
         compare_named_results(
             case,
             DerivativeKind::Hvp,
@@ -960,14 +966,15 @@ fn cotangent_scalar(
 }
 
 fn eval_named_tensors(
-    engine: &mut Engine<CpuBackend>,
+    executor: &mut GraphExecutor<CpuBackend>,
     outputs: &mut [NamedTensor],
 ) -> Result<Vec<Tensor>, String> {
-    let mut traced: Vec<&mut TracedTensor> = outputs
-        .iter_mut()
-        .map(|output| &mut output.tensor)
-        .collect();
-    eval_all(engine, traced.as_mut_slice()).map_err(|err| err.to_string())
+    let traced: Vec<&TracedTensor> = outputs.iter().map(|output| &output.tensor).collect();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_many(&traced)
+        .map_err(|err| err.to_string())?;
+    executor.run_many(&program).map_err(|err| err.to_string())
 }
 
 fn compare_named_results(

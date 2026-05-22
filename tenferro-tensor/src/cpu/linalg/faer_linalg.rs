@@ -2313,12 +2313,12 @@ pub(crate) fn eig(
         let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
         return match input {
             Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
-                Tensor::C32(TypedTensor::from_vec(value_shape, Vec::new())),
-                Tensor::C32(TypedTensor::from_vec(vector_shape, Vec::new())),
+                Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
+                Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
             ]),
             Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
-                Tensor::C64(TypedTensor::from_vec(value_shape, Vec::new())),
-                Tensor::C64(TypedTensor::from_vec(vector_shape, Vec::new())),
+                Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
+                Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
             ]),
             _ => Err(crate::Error::BackendFailure {
                 op: "eig",

@@ -12,8 +12,10 @@ use crate::traced::{
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
 /// use tenferro::DType;
+/// # use tenferro::TracedTensor;
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 ///
 /// let y = tenferro::traced_tensor::convert(&x, DType::C64);
 /// ```
@@ -33,7 +35,9 @@ fn sym_shape(shape: &[usize]) -> Vec<SymDim> {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (u, s, vt) = tenferro::traced_tensor::svd(&a);
 /// ```
 pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
@@ -49,7 +53,9 @@ pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (u, s, vt) = tenferro::traced_tensor::svd_with_eps(&a, 1e-10);
 /// ```
 pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, TracedTensor) {
@@ -90,7 +96,9 @@ pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, 
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (q, r) = tenferro::traced_tensor::qr(&a);
 /// ```
 pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
@@ -122,7 +130,9 @@ pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (values, vectors) = tenferro::traced_tensor::eigh(&a);
 /// ```
 pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
@@ -138,7 +148,9 @@ pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (values, vectors) = tenferro::traced_tensor::eigh_with_eps(&a, 1e-10);
 /// ```
 pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor) {
@@ -162,7 +174,9 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let l = tenferro::traced_tensor::cholesky(&a);
 /// ```
 pub fn cholesky(a: &TracedTensor) -> TracedTensor {
@@ -176,7 +190,9 @@ pub fn cholesky(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (p, l, u, parity) = tenferro::traced_tensor::lu(&a);
 /// ```
 pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, TracedTensor) {
@@ -223,20 +239,17 @@ pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, Traced
 ///
 /// ```
 /// use tenferro::traced_tensor::full_piv_lu;
-/// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![0.0_f64, 2.0, 1.0, 3.0],
 /// ));
-/// let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
+/// let (p, l, u, q, parity) = full_piv_lu(&a);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let outputs = tenferro::traced::eval_all(
-///     &mut engine,
-///     &mut [&mut p, &mut l, &mut u, &mut q, &mut parity],
-/// )
-/// .unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
+/// let outputs = GraphExecutor::new(CpuBackend::new()).run_many(&program).unwrap();
 ///
 /// assert_eq!(outputs[0].shape(), &[2, 2]);
 /// assert_eq!(outputs[4].shape(), &[] as &[usize]);
@@ -293,7 +306,9 @@ pub fn full_piv_lu(
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (values, vectors) = tenferro::traced_tensor::eig(&a);
 /// ```
 pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
@@ -336,7 +351,10 @@ fn validate_nonsingular(u: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+/// # let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]);
 /// let x = tenferro::traced_tensor::solve(&a, &b);
 /// ```
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
@@ -369,20 +387,21 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 ///
 /// ```
 /// use tenferro::traced_tensor::full_piv_lu_solve;
-/// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 ///
-/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![0.0_f64, 2.0, 1.0, 3.0],
 /// ));
-/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec(
+/// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
 ///     vec![2, 1],
 ///     vec![-1.0_f64, 5.0],
 /// ));
-/// let mut x = full_piv_lu_solve(&a, &b);
+/// let x = full_piv_lu_solve(&a, &b);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = x.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&x).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 ///
 /// assert_eq!(out.shape(), &[2, 1]);
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, -1.0]);
@@ -419,7 +438,10 @@ pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+/// # let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]);
 /// let x = tenferro::traced_tensor::triangular_solve(&a, &b, true, true, false, false);
 /// ```
 pub fn triangular_solve(
@@ -465,7 +487,9 @@ pub fn triangular_solve(
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let (sign, logabsdet) = tenferro::traced_tensor::slogdet(&a);
 /// ```
 pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
@@ -489,7 +513,9 @@ pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let value = tenferro::traced_tensor::det(&a);
 /// ```
 pub fn det(a: &TracedTensor) -> TracedTensor {
@@ -501,7 +527,9 @@ pub fn det(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let value = tenferro::traced_tensor::inv(&a);
 /// ```
 pub fn inv(a: &TracedTensor) -> TracedTensor {
@@ -514,7 +542,9 @@ pub fn inv(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let values = tenferro::traced_tensor::eigvalsh(&a);
 /// ```
 pub fn eigvalsh(a: &TracedTensor) -> TracedTensor {
@@ -525,7 +555,9 @@ pub fn eigvalsh(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let values = tenferro::traced_tensor::eigvals(&a);
 /// ```
 pub fn eigvals(a: &TracedTensor) -> TracedTensor {
@@ -536,7 +568,9 @@ pub fn eigvals(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let value = tenferro::traced_tensor::pinv(&a);
 /// ```
 pub fn pinv(a: &TracedTensor) -> TracedTensor {
@@ -555,7 +589,9 @@ pub fn pinv(a: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let value = tenferro::traced_tensor::pinv_with_rtol(&a, 1.0e-8);
 /// ```
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
@@ -591,7 +627,9 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
 /// let value = tenferro::traced_tensor::norm(&a, None, None, false);
 /// ```
 pub fn norm(

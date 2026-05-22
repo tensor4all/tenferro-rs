@@ -10,7 +10,7 @@ mod shape_packing;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::MemoryKind;
 ///
 /// let kind = MemoryKind::UnpinnedHost;
@@ -27,7 +27,7 @@ pub enum MemoryKind {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::ComputeDevice;
 ///
 /// let device = ComputeDevice { kind: "cuda".into(), ordinal: 0 };
@@ -42,7 +42,7 @@ pub struct ComputeDevice {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{ComputeDevice, MemoryKind, Placement};
 ///
 /// let placement = Placement {
@@ -60,7 +60,7 @@ pub struct Placement {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::BufferHandle;
 ///
 /// let handle = BufferHandle::<f64>::new(7);
@@ -76,7 +76,7 @@ impl<T> BufferHandle<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::BufferHandle;
     ///
     /// let handle = BufferHandle::<f64>::new(1);
@@ -94,7 +94,7 @@ impl<T> BufferHandle<T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::Buffer;
 ///
 /// let host = Buffer::Host(vec![1.0_f64, 2.0]);
@@ -153,7 +153,7 @@ impl<T> CubeclBuffer<T> {
 /// ```
 /// use tenferro_tensor::TypedTensor;
 ///
-/// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+/// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 /// assert_eq!(t.shape, vec![2, 2]);
 /// ```
 #[derive(Clone, Debug)]
@@ -200,7 +200,7 @@ impl<'a, T> TypedTensorView<'a, T> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::DType;
 ///
 /// assert_eq!(DType::F64 as u8, DType::F64 as u8);
@@ -256,7 +256,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
-    /// let mut tensor = Tensor::from_vec(vec![1], vec![2.0_f64]);
+    /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// <f64 as TensorScalar>::try_as_slice_mut(&mut tensor).unwrap()[0] = 3.0;
     ///
     /// assert_eq!(tensor.as_slice::<f64>().unwrap(), &[3.0]);
@@ -272,7 +272,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
-    /// let tensor = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let typed = <f64 as TensorScalar>::try_into_typed(tensor).unwrap();
     ///
     /// assert_eq!(typed.as_slice(), &[1.0, 2.0]);
@@ -298,7 +298,7 @@ impl TensorScalar for f64 {
     }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F64(TypedTensor::from_vec(shape, data))
+        Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -331,7 +331,7 @@ impl TensorScalar for f32 {
     }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::F32(TypedTensor::from_vec(shape, data))
+        Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -364,7 +364,7 @@ impl TensorScalar for i64 {
     }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::I64(TypedTensor::from_vec(shape, data))
+        Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -397,7 +397,7 @@ impl TensorScalar for Complex64 {
     }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C64(TypedTensor::from_vec(shape, data))
+        Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -430,7 +430,7 @@ impl TensorScalar for Complex32 {
     }
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
-        Tensor::C32(TypedTensor::from_vec(shape, data))
+        Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -459,10 +459,10 @@ impl TensorScalar for Complex32 {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
 /// assert_eq!(t.shape(), &[2]);
 /// ```
 #[derive(Clone, Debug)]
@@ -498,7 +498,7 @@ pub enum TensorRead<'a> {
 /// ```
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[2]);
 /// ```
@@ -515,7 +515,7 @@ impl From<TypedTensor<f64>> for Tensor {
 /// ```
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec(vec![2], vec![1.0_f32, 2.0]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.shape(), &[2]);
 /// ```
@@ -532,7 +532,7 @@ impl From<TypedTensor<f32>> for Tensor {
 /// ```
 /// use tenferro_tensor::{DType, Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec(vec![2], vec![1_i64, 2]);
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]);
 /// let tensor: Tensor = typed.into();
 /// assert_eq!(tensor.dtype(), DType::I64);
 /// assert_eq!(tensor.shape(), &[2]);
@@ -552,7 +552,7 @@ impl From<TypedTensor<i64>> for Tensor {
 /// use num_complex::Complex64;
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec(
+/// let typed = TypedTensor::from_vec_col_major(
 ///     vec![1],
 ///     vec![Complex64::new(1.0, 2.0)],
 /// );
@@ -574,7 +574,7 @@ impl From<TypedTensor<Complex<f64>>> for Tensor {
 /// use num_complex::Complex32;
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let typed = TypedTensor::from_vec(
+/// let typed = TypedTensor::from_vec_col_major(
 ///     vec![1],
 ///     vec![Complex32::new(1.0, 2.0)],
 /// );
@@ -630,11 +630,11 @@ impl<'a> TensorView<'a> {
 
     pub fn to_tensor(&self) -> Tensor {
         match self {
-            Self::F32(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
-            Self::F64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
-            Self::I64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
-            Self::C32(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
-            Self::C64(t) => Tensor::from_vec(t.shape.to_vec(), t.data.to_vec()),
+            Self::F32(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::F64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::I64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::C32(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::C64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
         }
     }
 }
@@ -681,7 +681,7 @@ impl<'a> TensorRead<'a> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::col_major_strides;
 ///
 /// assert_eq!(col_major_strides(&[2, 3]), vec![1, 2]);
@@ -709,6 +709,101 @@ fn linear_offset(shape: &[usize], indices: &[usize]) -> usize {
     offset
 }
 
+fn checked_shape_len(shape: &[usize], data_len: usize, op: &str) {
+    let n: usize = shape.iter().product();
+    assert_eq!(
+        data_len, n,
+        "{op}: data length {} does not match shape product {}",
+        data_len, n
+    );
+}
+
+fn row_major_offset(shape: &[usize], indices: &[usize]) -> usize {
+    let mut stride = 1;
+    let mut offset = 0;
+    for (&dim, &index) in shape.iter().rev().zip(indices.iter().rev()) {
+        offset += index * stride;
+        stride *= dim;
+    }
+    offset
+}
+
+fn for_each_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
+    if shape.is_empty() {
+        f(&[]);
+        return;
+    }
+    if shape.iter().any(|&dim| dim == 0) {
+        return;
+    }
+
+    let mut index = vec![0; shape.len()];
+    loop {
+        f(&index);
+        let mut axis = 0;
+        loop {
+            index[axis] += 1;
+            if index[axis] < shape[axis] {
+                break;
+            }
+            index[axis] = 0;
+            axis += 1;
+            if axis == shape.len() {
+                return;
+            }
+        }
+    }
+}
+
+fn for_each_row_major_index(shape: &[usize], mut f: impl FnMut(&[usize])) {
+    if shape.is_empty() {
+        f(&[]);
+        return;
+    }
+    if shape.iter().any(|&dim| dim == 0) {
+        return;
+    }
+
+    let mut index = vec![0; shape.len()];
+    loop {
+        f(&index);
+        let mut axis = shape.len();
+        loop {
+            axis -= 1;
+            index[axis] += 1;
+            if index[axis] < shape[axis] {
+                break;
+            }
+            index[axis] = 0;
+            if axis == 0 {
+                return;
+            }
+        }
+    }
+}
+
+fn row_major_to_col_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
+    checked_shape_len(shape, data.len(), "from_vec_row_major");
+    let mut out = Vec::with_capacity(data.len());
+    for_each_index(shape, |index| {
+        out.push(data[row_major_offset(shape, index)].clone());
+    });
+    out
+}
+
+fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
+    checked_shape_len(shape, data.len(), "try_into_vec_row_major");
+    if shape.is_empty() {
+        return data;
+    }
+
+    let mut out = Vec::with_capacity(data.len());
+    for_each_row_major_index(shape, |index| {
+        out.push(data[linear_offset(shape, index)].clone());
+    });
+    out
+}
+
 pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
@@ -721,7 +816,7 @@ impl<T: Clone + Zero> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
@@ -742,7 +837,7 @@ impl<T: Clone + One + Zero> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::ones(vec![2]);
@@ -763,26 +858,36 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.get(&[1, 0]), &2.0);
     /// ```
-    pub fn from_vec(shape: Vec<usize>, data: Vec<T>) -> Self {
-        let n: usize = shape.iter().product();
-        assert_eq!(
-            data.len(),
-            n,
-            "data length {} does not match shape product {}",
-            data.len(),
-            n
-        );
+    pub fn from_vec_col_major(shape: Vec<usize>, data: Vec<T>) -> Self {
+        checked_shape_len(&shape, data.len(), "from_vec_col_major");
         Self {
             buffer: Buffer::Host(data),
             shape,
             placement: default_placement(),
         }
+    }
+
+    /// Create a tensor from a row-major buffer.
+    ///
+    /// The data is converted into tenferro's column-major physical storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(t.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    pub fn from_vec_row_major(shape: Vec<usize>, data: Vec<T>) -> Self {
+        let data = row_major_to_col_major(&shape, data);
+        Self::from_vec_col_major(shape, data)
     }
 
     /// Consume this tensor and return its owned column-major host buffer.
@@ -792,21 +897,51 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
-    /// let (shape, data) = t.try_into_vec().unwrap();
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let (shape, data) = t.try_into_vec_col_major().unwrap();
     /// assert_eq!(shape, vec![2]);
     /// assert_eq!(data, vec![1.0, 2.0]);
     /// ```
-    pub fn try_into_vec(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         match self.buffer {
             Buffer::Host(data) => Ok((self.shape, data)),
             Buffer::Backend(_) => Err(crate::Error::BackendFailure {
-                op: "try_into_vec",
+                op: "try_into_vec_col_major",
                 message: "backend buffers cannot be exported as host Vec".into(),
             }),
             #[cfg(feature = "cubecl")]
             Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
-                op: "try_into_vec",
+                op: "try_into_vec_col_major",
+                message: "GPU buffers cannot be exported as host Vec".into(),
+            }),
+        }
+    }
+
+    /// Consume this tensor and return an owned row-major host buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
+    /// let (_, data) = t.try_into_vec_row_major().unwrap();
+    /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        match self.buffer {
+            Buffer::Host(data) => {
+                let shape = self.shape;
+                let data = col_major_to_row_major(&shape, data);
+                Ok((shape, data))
+            }
+            Buffer::Backend(_) => Err(crate::Error::BackendFailure {
+                op: "try_into_vec_row_major",
+                message: "backend buffers cannot be exported as host Vec".into(),
+            }),
+            #[cfg(feature = "cubecl")]
+            Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
+                op: "try_into_vec_row_major",
                 message: "GPU buffers cannot be exported as host Vec".into(),
             }),
         }
@@ -816,10 +951,10 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
     /// assert_eq!(t.n_elements(), 6);
     /// ```
     pub fn n_elements(&self) -> usize {
@@ -830,10 +965,10 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.host_data(), &[1.0, 2.0]);
     /// ```
     pub fn host_data(&self) -> &[T] {
@@ -860,7 +995,7 @@ impl<T: Clone> TypedTensor<T> {
     /// ```
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.as_slice(), &[1.0, 2.0]);
     /// ```
     pub fn as_slice(&self) -> &[T] {
@@ -871,7 +1006,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let mut t = TypedTensor::<f64>::zeros(vec![2]);
@@ -896,7 +1031,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
@@ -910,10 +1045,10 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
-    /// let t = TypedTensor::<f64>::from_vec(vec![2], vec![1.0, 2.0]);
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
     /// assert_eq!(t.get(&[1]), &2.0);
     /// ```
     pub fn get(&self, indices: &[usize]) -> &T {
@@ -925,7 +1060,7 @@ impl<T: Clone> TypedTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::TypedTensor;
     ///
     /// let mut t = TypedTensor::<f64>::zeros(vec![1]);
@@ -968,31 +1103,48 @@ impl ConjElem for Complex<f64> {
 }
 
 impl Tensor {
-    /// Create a tensor from a shape and flat data.
+    /// Create a tensor from a shape and column-major flat data.
     ///
-    /// This is the `Tensor`-level equivalent of `TypedTensor::<T>::from_vec`.
+    /// This is the `Tensor`-level equivalent of
+    /// `TypedTensor::<T>::from_vec_col_major`.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    /// assert_eq!(t.shape(), &[2, 3]);
-    /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    /// assert_eq!(t.shape(), &[2, 2]);
+    /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
-    pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
         T::into_tensor(shape, data)
+    }
+
+    /// Create a tensor from a shape and row-major flat data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// assert_eq!(t.shape(), &[2, 2]);
+    /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        let data = row_major_to_col_major(&shape, data);
+        Self::from_vec_col_major(shape, data)
     }
 
     /// Tensor shape.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     /// assert_eq!(t.shape(), &[2]);
     /// ```
     pub fn shape(&self) -> &[usize] {
@@ -1009,10 +1161,10 @@ impl Tensor {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::{DType, Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec(vec![], vec![1.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![1.0]));
     /// assert_eq!(t.dtype(), DType::F64);
     /// ```
     pub fn dtype(&self) -> DType {
@@ -1034,7 +1186,7 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
-    /// let t = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]));
     /// assert_eq!(t.as_slice::<f64>(), Some([1.0, 2.0, 3.0].as_slice()));
     /// assert_eq!(t.as_slice::<f32>(), None);
     /// ```
@@ -1050,17 +1202,37 @@ impl Tensor {
     /// ```
     /// use tenferro_tensor::Tensor;
     ///
-    /// let t = Tensor::from_vec(vec![1], vec![2.0_f64]);
-    /// assert_eq!(t.try_into_vec::<f64>().unwrap().1, vec![2.0]);
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    /// assert_eq!(t.try_into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
     /// ```
-    pub fn try_into_vec<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+    pub fn try_into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let actual = self.dtype();
         let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
-            op: "try_into_vec",
+            op: "try_into_vec_col_major",
             lhs: T::dtype(),
             rhs: actual,
         })?;
-        typed.try_into_vec()
+        typed.try_into_vec_col_major()
+    }
+
+    /// Consume this tensor and return a row-major buffer when the dtype matches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    /// assert_eq!(t.try_into_vec_row_major::<f64>().unwrap().1, vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    pub fn try_into_vec_row_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let actual = self.dtype();
+        let typed = T::try_into_typed(self).ok_or(crate::Error::DTypeMismatch {
+            op: "try_into_vec_row_major",
+            lhs: T::dtype(),
+            rhs: actual,
+        })?;
+        typed.try_into_vec_row_major()
     }
 
     /// Singular value decomposition: `A = U diag(S) Vt`.
@@ -1073,7 +1245,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let (u, s, vt) = a.svd(&mut ctx).unwrap();
     ///
     /// assert_eq!(u.shape(), &[3, 2]);
@@ -1094,7 +1266,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let (q, r) = a.qr(&mut ctx).unwrap();
     ///
     /// assert_eq!(q.shape(), &[3, 2]);
@@ -1114,7 +1286,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]);
     /// let (p, l, u, parity) = a.lu(&mut ctx).unwrap();
     ///
     /// assert_eq!(p.shape(), &[2, 2]);
@@ -1136,7 +1308,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
     /// let (p, l, u, q, parity) = a.full_piv_lu(&mut ctx).unwrap();
     ///
     /// assert_eq!(p.shape(), &[2, 2]);
@@ -1162,7 +1334,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
     /// let l = a.cholesky(&mut ctx).unwrap();
     ///
     /// assert_eq!(l.shape(), &[2, 2]);
@@ -1181,7 +1353,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
     /// let (w, v) = a.eigh(&mut ctx).unwrap();
     ///
     /// assert_eq!(w.shape(), &[2]);
@@ -1201,7 +1373,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]);
     /// let (w, v) = a.eig(&mut ctx).unwrap();
     ///
     /// assert_eq!(w.shape(), &[2]);
@@ -1219,8 +1391,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-    /// let b = Tensor::from_vec(vec![2, 1], vec![1.0_f64, 0.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]);
     /// let x = a.solve(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(x.shape(), &[2, 1]);
@@ -1237,8 +1409,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
-    /// let b = Tensor::from_vec(vec![2, 1], vec![-1.0_f64, 5.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]);
     /// let x = a.full_piv_lu_solve(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(x.shape(), &[2, 1]);
@@ -1256,8 +1428,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
-    /// let b = Tensor::from_vec(vec![2, 1], vec![2.0_f64, 7.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 0.0, 3.0]);
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 7.0]);
     /// let x = a
     ///     .triangular_solve(&b, true, true, false, false, &mut ctx)
     ///     .unwrap();
@@ -1286,8 +1458,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    /// let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
     /// let c = a.add(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
@@ -1304,8 +1476,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    /// let b = Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    /// let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
     /// let c = a.mul(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -1322,7 +1494,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![3], vec![1.0_f64, -2.0, 3.0]);
+    /// let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, -2.0, 3.0]);
     /// let b = a.neg(&mut ctx).unwrap();
     ///
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[-1.0, 2.0, -3.0]);
@@ -1339,7 +1511,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     /// let b = a.transpose(&[1, 0], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[2, 2]);
@@ -1357,7 +1529,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let b = a.reshape(&[3, 2], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[3, 2]);
@@ -1375,7 +1547,7 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let b = a.reduce_sum(&[1], &mut ctx).unwrap();
     ///
     /// assert_eq!(b.shape(), &[2]);
@@ -1395,8 +1567,8 @@ impl Tensor {
     /// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
     ///
     /// let mut ctx = CpuBackend::new();
-    /// let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    /// let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let c = a.matmul(&b, &mut ctx).unwrap();
     ///
     /// assert_eq!(c.shape(), &[2, 2]);

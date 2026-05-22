@@ -75,7 +75,7 @@ fn complex_tensor(shape: &[usize], seed: usize) -> Tensor {
             Complex64::new(real, imag)
         })
         .collect();
-    Tensor::from_vec(shape.to_vec(), data)
+    Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
 fn build_fixtures(phys_dim: usize, chi: usize) -> Fixtures {

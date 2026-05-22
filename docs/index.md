@@ -8,7 +8,8 @@ It supports:
 
 - eager tensor operations with `Tensor`, `TypedTensor`, and a backend,
 - eager scalar-loss reverse-mode AD with `EagerTensor`,
-- lazy traced execution with `TracedTensor` and `Engine`,
+- lazy traced execution with `TracedTensor`, `GraphCompiler`, and
+  `GraphExecutor`,
 - transform AD with `grad`, `vjp`, `jvp`, and HVP composition,
 - einsum and linear algebra,
 - CUDA execution through the feature-gated CubeCL backend.
@@ -30,8 +31,8 @@ use tenferro::{CpuBackend, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-    let b = Tensor::from_vec(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+    let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
 
     let c = a.matmul(&b, &mut backend)?;
 
@@ -48,6 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Workflow | Use |
 | --- | --- |
 | Direct CPU computation | `Tensor` or `TypedTensor` with `CpuBackend` |
-| Scalar-loss eager AD | `EagerTensor` with `EagerContext` |
-| Transform AD and graph optimization | `TracedTensor` with `Engine` |
+| Scalar-loss eager AD | `EagerTensor` with `EagerRuntime` |
+| Transform AD and graph optimization | `TracedTensor` with `GraphCompiler` and `GraphExecutor` |
 | CUDA execution | `tenferro::cuda::CudaBackend` with the `cuda` feature and explicit upload/download |

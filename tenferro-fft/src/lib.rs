@@ -8,10 +8,10 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro::{CpuBackend, Engine, TracedTensor};
+//! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 //! use tenferro_fft::{fft, FftNorm};
 //!
-//! let x = TracedTensor::from_vec(
+//! let x = TracedTensor::from_vec_col_major(
 //!     vec![4],
 //!     vec![
 //!         Complex64::new(1.0, 0.0),
@@ -20,10 +20,11 @@
 //!         Complex64::new(4.0, 0.0),
 //!     ],
 //! );
-//! let mut y = fft(&x, None, -1, FftNorm::Backward);
+//! let y = fft(&x, None, -1, FftNorm::Backward);
 //!
-//! let mut engine = Engine::new(CpuBackend::new());
-//! let out = y.eval(&mut engine).unwrap();
+//! let mut compiler = GraphCompiler::new();
+//! let program = compiler.compile(&y).unwrap();
+//! let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -231,27 +232,27 @@ impl ExtensionOpTrait for FftOp {
         }
 
         let output = match (self.kind, inputs[0]) {
-            (FftKind::C2C { forward }, Tensor::C64(input)) => Tensor::C64(TypedTensor::from_vec(
+            (FftKind::C2C { forward }, Tensor::C64(input)) => Tensor::C64(TypedTensor::from_vec_col_major(
                 output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
                 execute_c2c(input, self.axis, self.n, forward, self.norm)?,
             )),
-            (FftKind::C2C { forward }, Tensor::C32(input)) => Tensor::C32(TypedTensor::from_vec(
+            (FftKind::C2C { forward }, Tensor::C32(input)) => Tensor::C32(TypedTensor::from_vec_col_major(
                 output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
                 execute_c2c(input, self.axis, self.n, forward, self.norm)?,
             )),
-            (FftKind::R2C { onesided }, Tensor::F64(input)) => Tensor::C64(TypedTensor::from_vec(
+            (FftKind::R2C { onesided }, Tensor::F64(input)) => Tensor::C64(TypedTensor::from_vec_col_major(
                 output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
                 execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
             )),
-            (FftKind::R2C { onesided }, Tensor::F32(input)) => Tensor::C32(TypedTensor::from_vec(
+            (FftKind::R2C { onesided }, Tensor::F32(input)) => Tensor::C32(TypedTensor::from_vec_col_major(
                 output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
                 execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
             )),
-            (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec(
+            (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
                 output_shape_c2r(input.shape.as_slice(), self.axis, self.n)?,
                 execute_c2r(input, self.axis, self.n, self.norm)?,
             )),
-            (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec(
+            (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
                 output_shape_c2r(input.shape.as_slice(), self.axis, self.n)?,
                 execute_c2r(input, self.axis, self.n, self.norm)?,
             )),
@@ -372,14 +373,15 @@ pub fn register_fft() -> Result<(), ExtensionRegistryError> {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{fft, FftNorm};
 ///
-/// let x = TracedTensor::from_vec(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
-/// let mut y = fft(&x, None, -1, FftNorm::Backward);
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
+/// let y = fft(&x, None, -1, FftNorm::Backward);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = y.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&y).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
@@ -397,14 +399,15 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{ifft, FftNorm};
 ///
-/// let spectrum = TracedTensor::from_vec(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
-/// let mut y = ifft(&spectrum, None, -1, FftNorm::Backward);
+/// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
+/// let y = ifft(&spectrum, None, -1, FftNorm::Backward);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = y.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&y).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
 pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
@@ -425,14 +428,15 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{rfft, FftNorm};
 ///
-/// let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-/// let mut y = rfft(&x, None, -1, FftNorm::Backward);
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let y = rfft(&x, None, -1, FftNorm::Backward);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = y.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&y).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
@@ -454,17 +458,18 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, Engine, TracedTensor};
+/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{irfft, FftNorm};
 ///
-/// let spectrum = TracedTensor::from_vec(
+/// let spectrum = TracedTensor::from_vec_col_major(
 ///     vec![2],
 ///     vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
 /// );
-/// let mut y = irfft(&spectrum, Some(2), -1, FftNorm::Backward);
+/// let y = irfft(&spectrum, Some(2), -1, FftNorm::Backward);
 ///
-/// let mut engine = Engine::new(CpuBackend::new());
-/// let out = y.eval(&mut engine).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let program = compiler.compile(&y).unwrap();
+/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 pub fn irfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {

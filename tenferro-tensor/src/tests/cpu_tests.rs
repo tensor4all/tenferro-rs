@@ -325,8 +325,8 @@ fn test_with_exec_session_runs_compiled_ops() {
     let result = backend.with_exec_session(|session| {
         session
             .add(
-                &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
-                &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
+                &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
             )
             .unwrap()
     });
@@ -467,7 +467,7 @@ fn test_zeros_ones() {
 
 #[test]
 fn test_from_vec_uses_column_major_indices() {
-    let t = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     assert_eq!(*t.get(&[0, 0]), 1.0);
     assert_eq!(*t.get(&[1, 0]), 2.0);
     assert_eq!(*t.get(&[0, 1]), 3.0);
@@ -478,14 +478,14 @@ fn test_from_vec_uses_column_major_indices() {
 
 #[test]
 fn test_tensor_metadata() {
-    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]));
     assert_eq!(t.shape(), &[2, 1]);
     assert_eq!(t.dtype(), DType::F64);
 }
 
 #[test]
 fn test_reshape() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -501,8 +501,11 @@ fn test_reshape() {
 
 #[test]
 fn test_add_mul() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![10.0, 20.0, 30.0, 40.0],
     ));
@@ -522,8 +525,14 @@ fn test_add_mul() {
 
 #[test]
 fn test_add_mul_i64() {
-    let a = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1, 2, 3, 4]));
-    let b = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![10, 20, 30, 40]));
+    let a = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1, 2, 3, 4],
+    ));
+    let b = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![10, 20, 30, 40],
+    ));
     let sum = add(&a, &b).unwrap();
     let prod = mul(&a, &b).unwrap();
 
@@ -540,8 +549,11 @@ fn test_add_mul_i64() {
 
 #[test]
 fn test_add_mul_rank0_broadcast() {
-    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
-    let tensor = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]));
+    let tensor = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
 
     let scalar_plus_tensor = add(&scalar, &tensor).unwrap();
     let tensor_plus_scalar = add(&tensor, &scalar).unwrap();
@@ -567,8 +579,8 @@ fn test_add_mul_rank0_broadcast() {
 
 #[test]
 fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
-    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0]));
-    let tensor = Tensor::C64(TypedTensor::from_vec(
+    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]));
+    let tensor = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
@@ -585,11 +597,11 @@ fn test_mul_rank0_real_scalar_broadcasts_over_complex_tensor() {
 
 #[test]
 fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
-    let scalar = Tensor::C64(TypedTensor::from_vec(
+    let scalar = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![],
         vec![Complex64::new(2.0, -1.0)],
     ));
-    let tensor = Tensor::C64(TypedTensor::from_vec(
+    let tensor = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
@@ -615,7 +627,7 @@ fn test_rank0_typed_tensor_behaves_like_scalar() {
     assert_eq!(ones.n_elements(), 1);
     assert_eq!(ones.get(&[]), &1.0);
 
-    let scalar = TypedTensor::<f64>::from_vec(vec![], vec![7.0]);
+    let scalar = TypedTensor::<f64>::from_vec_col_major(vec![], vec![7.0]);
     assert_eq!(scalar.shape, Vec::<usize>::new());
     assert_eq!(scalar.n_elements(), 1);
     assert_eq!(scalar.linear_offset(&[]), 0);
@@ -624,7 +636,7 @@ fn test_rank0_typed_tensor_behaves_like_scalar() {
 
 #[test]
 fn test_reduce_sum() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -641,7 +653,7 @@ fn test_reduce_sum() {
 
 #[test]
 fn test_reduce_prod() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -659,7 +671,7 @@ fn test_reduce_prod() {
 
 #[test]
 fn test_reduce_max_and_min() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -686,7 +698,7 @@ fn test_reduce_max_and_min() {
 
 #[test]
 fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -710,7 +722,7 @@ fn test_backend_reduce_prod_max_and_min_delegate_to_cpu_reduction_impls() {
 
 #[test]
 fn test_slice() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 4],
         (1..=16).map(|value| value as f64).collect(),
     ));
@@ -735,7 +747,7 @@ fn test_slice() {
 
 #[test]
 fn test_reverse_axis_zero() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -753,7 +765,7 @@ fn test_reverse_axis_zero() {
 
 #[test]
 fn test_reverse_accepts_i64_data_tensor() {
-    let input = Tensor::from_vec(vec![3], vec![1_i64, 2, 3]);
+    let input = Tensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
     let mut backend = CpuBackend::new();
 
     let out = backend.reverse(&input, &[0]).unwrap();
@@ -766,7 +778,7 @@ fn test_reverse_accepts_i64_data_tensor() {
 #[test]
 fn tensor_index_select_trailing_axis_returns_expected_values() {
     let mut backend = CpuBackend::new();
-    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let input = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let out = input.index_select(-1, &[2, 0, 2], &mut backend).unwrap();
 
@@ -782,7 +794,7 @@ fn tensor_index_select_trailing_axis_returns_expected_values() {
 #[test]
 fn tensor_index_select_rejects_invalid_axis_and_position() {
     let mut backend = CpuBackend::new();
-    let input = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 
     let axis_err = input.index_select(-2, &[0], &mut backend).unwrap_err();
     assert!(axis_err.to_string().contains("index_select"));
@@ -797,14 +809,14 @@ fn tensor_index_select_rejects_invalid_axis_and_position() {
 fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
     let mut backend = CpuBackend::new();
 
-    let a = Tensor::from_vec(vec![], vec![1.0_f64]);
-    let b = Tensor::from_vec(vec![], vec![2.0_f64]);
+    let a = Tensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    let b = Tensor::from_vec_col_major(vec![], vec![2.0_f64]);
     let scalars = Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
     assert_eq!(scalars.shape(), &[2]);
     assert_eq!(scalars.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 
-    let v0 = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let v1 = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let v0 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let v1 = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     let vectors = Tensor::stack(&[&v0, &v1], -1, &mut backend).unwrap();
     assert_eq!(vectors.shape(), &[2, 2]);
     assert_f64_close(get_f64(&vectors, &[0, 0]), 1.0);
@@ -812,8 +824,8 @@ fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
     assert_f64_close(get_f64(&vectors, &[0, 1]), 3.0);
     assert_f64_close(get_f64(&vectors, &[1, 1]), 4.0);
 
-    let m0 = Tensor::from_vec(vec![2, 1], vec![1.0_f64, 2.0]);
-    let m1 = Tensor::from_vec(vec![2, 1], vec![3.0_f64, 4.0]);
+    let m0 = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]);
+    let m1 = Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]);
     let matrices = Tensor::stack(&[&m0, &m1], -1, &mut backend).unwrap();
     assert_eq!(matrices.shape(), &[2, 1, 2]);
     assert_f64_close(get_f64(&matrices, &[0, 0, 0]), 1.0);
@@ -825,11 +837,11 @@ fn tensor_stack_trailing_axis_packs_scalars_vectors_and_matrices() {
 #[test]
 fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
     let mut backend = CpuBackend::new();
-    let reusable = Tensor::from_vec(vec![2, 3], vec![0.0_f64; 6]);
+    let reusable = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]);
     let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
     backend.reclaim_buffer(reusable);
 
-    let input = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let input = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let out = input.index_select(-1, &[2, 0, 1], &mut backend).unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
@@ -838,12 +850,12 @@ fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
 #[test]
 fn tensor_stack_reuses_reclaimed_cpu_buffer() {
     let mut backend = CpuBackend::new();
-    let reusable = Tensor::from_vec(vec![2, 2], vec![0.0_f64; 4]);
+    let reusable = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]);
     let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
     backend.reclaim_buffer(reusable);
 
-    let x0 = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    let x1 = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+    let x0 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let x1 = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     let out = Tensor::stack(&[&x0, &x1], -1, &mut backend).unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap().as_ptr(), expected_ptr);
@@ -851,7 +863,10 @@ fn tensor_stack_reuses_reclaimed_cpu_buffer() {
 
 #[test]
 fn test_reverse_axis_out_of_bounds_returns_error() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
     let mut backend = CpuBackend::new();
 
     let err = backend.reverse(&input, &[1]).unwrap_err();
@@ -868,11 +883,11 @@ fn test_reverse_axis_out_of_bounds_returns_error() {
 
 #[test]
 fn test_gather_rejects_fractional_float_indices() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![1.5]));
+    let start_indices = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.5]));
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -890,11 +905,11 @@ fn test_gather_rejects_fractional_float_indices() {
 
 #[test]
 fn test_gather_rejects_complex_indices() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::C64(TypedTensor::from_vec(
+    let start_indices = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![1, 1],
         vec![Complex64::new(1.0, 0.0)],
     ));
@@ -915,8 +930,8 @@ fn test_gather_rejects_complex_indices() {
 
 #[test]
 fn test_dynamic_slice_rejects_oversized_window() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-    let starts = Tensor::from_vec(vec![1], vec![0_i64]);
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+    let starts = Tensor::from_vec_col_major(vec![1], vec![0_i64]);
     let mut backend = CpuBackend::new();
 
     let err = backend.dynamic_slice(&input, &starts, &[3]).unwrap_err();
@@ -932,11 +947,11 @@ fn test_dynamic_slice_rejects_oversized_window() {
 
 #[test]
 fn test_large_float_index_outside_exact_integer_range_returns_error() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::F64(TypedTensor::from_vec(
+    let start_indices = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![1, 1],
         vec![9_007_199_254_740_995.0f64],
     ));
@@ -957,7 +972,10 @@ fn test_large_float_index_outside_exact_integer_range_returns_error() {
 
 #[test]
 fn test_invalid_slice_config_returns_error() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -978,7 +996,7 @@ fn test_invalid_slice_config_returns_error() {
 
 #[test]
 fn test_invalid_pad_config_returns_error() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     let mut backend = CpuBackend::new();
 
     let err = backend
@@ -996,11 +1014,11 @@ fn test_invalid_pad_config_returns_error() {
 
 #[test]
 fn test_gather_rejects_malformed_offset_dims() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 2],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 1, 2]);
+    let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 1, 2]);
     let mut backend = CpuBackend::new();
     let config = GatherConfig {
         offset_dims: vec![2],
@@ -1022,8 +1040,11 @@ fn test_gather_rejects_malformed_offset_dims() {
 #[test]
 fn test_scatter_rejects_update_window_dim_out_of_bounds() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
-    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3, 3, 3], vec![0.0; 27]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3, 3, 3],
+        vec![0.0; 27],
+    ));
     let mut backend = CpuBackend::new();
     let config = ScatterConfig {
         update_window_dims: vec![0, 3],
@@ -1048,8 +1069,8 @@ fn test_scatter_rejects_update_window_dim_out_of_bounds() {
 #[test]
 fn test_scatter_rejects_too_many_update_window_dims() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3, 3]));
-    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![0.0; 3]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 0, 1, 1, 2, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(vec![3], vec![0.0; 3]));
     let mut backend = CpuBackend::new();
     let config = ScatterConfig {
         update_window_dims: vec![0, 1],
@@ -1070,11 +1091,11 @@ fn test_scatter_rejects_too_many_update_window_dims() {
 
 #[test]
 fn test_concatenate_axis_zero() {
-    let lhs = Tensor::F64(TypedTensor::from_vec(
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
-    let rhs = Tensor::F64(TypedTensor::from_vec(
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
     ));
@@ -1098,11 +1119,11 @@ fn test_concatenate_axis_zero() {
 
 #[test]
 fn test_dot_general_matmul() {
-    let a = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
     ));
-    let b = Tensor::F64(TypedTensor::from_vec(
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 4],
         vec![
             1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
@@ -1144,8 +1165,14 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
         Complex64::new(0.5, 3.0),
         Complex64::new(-1.0, -2.0),
     ];
-    let lhs = Tensor::C64(TypedTensor::from_vec(vec![2, 2], lhs_data.clone()));
-    let rhs = Tensor::C64(TypedTensor::from_vec(vec![2, 2], rhs_data.clone()));
+    let lhs = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        lhs_data.clone(),
+    ));
+    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        rhs_data.clone(),
+    ));
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],
@@ -1173,7 +1200,7 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
 
 #[test]
 fn test_dot_general_read_accepts_tensor_and_view_inputs() {
-    let lhs = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let rhs_shape = [3usize, 2];
     let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let rhs_view = TensorView::f64(&rhs_shape, &rhs_data).unwrap();
@@ -1211,8 +1238,14 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
 
 #[test]
 fn test_dot_general_inner_product_returns_rank0_scalar() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![3], vec![4.0, 5.0, 6.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![4.0, 5.0, 6.0],
+    ));
     let mut backend = CpuBackend::new();
     let c = backend
         .dot_general(
@@ -1232,8 +1265,8 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
 
 #[test]
 fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 0], Vec::new()));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()));
     let mut backend = CpuBackend::new();
     let c = backend
         .dot_general(
@@ -1257,8 +1290,8 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
 
 #[test]
 fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 0], Vec::new()));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 3], Vec::new()));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 0], Vec::new()));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 3], Vec::new()));
     let mut backend = CpuBackend::new();
     let c = backend
         .dot_general(
@@ -1282,13 +1315,13 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
 
 #[test]
 fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
-    let a = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2, 2, 2],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let b = Tensor::F64(TypedTensor::from_vec(
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2, 2, 2],
         vec![
             1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0,
@@ -1329,7 +1362,7 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
 
 #[test]
 fn test_transpose() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -1345,14 +1378,17 @@ fn test_transpose() {
 
 #[test]
 fn test_broadcast_in_dim() {
-    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
+    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![5.0]));
     let broadcast = broadcast_in_dim(&scalar, &[3], &[]).unwrap();
     assert_eq!(broadcast.shape(), &[3]);
     assert_eq!(get_f64(&broadcast, &[0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1]), 5.0);
     assert_eq!(get_f64(&broadcast, &[2]), 5.0);
 
-    let v = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let v = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
     let m = broadcast_in_dim(&v, &[3, 2], &[0]).unwrap();
     assert_eq!(m.shape(), &[3, 2]);
     for j in 0..2 {
@@ -1364,7 +1400,7 @@ fn test_broadcast_in_dim() {
 
 #[test]
 fn test_tril_3x3() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
@@ -1381,7 +1417,7 @@ fn test_tril_3x3() {
 
 #[test]
 fn test_triu_3x3() {
-    let t = Tensor::F64(TypedTensor::from_vec(
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
@@ -1398,7 +1434,7 @@ fn test_triu_3x3() {
 
 #[test]
 fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
-    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2, 0], Vec::new()));
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()));
 
     let lower = tril(&t, 0).unwrap();
     assert_eq!(lower.shape(), &[2, 2, 0]);
@@ -1417,7 +1453,10 @@ fn test_tril_triu_zero_sized_batch_return_empty_tensor() {
 
 #[test]
 fn test_tril_triu_extreme_offsets_do_not_overflow() {
-    let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
 
     let lower_min = tril(&t, i64::MIN).unwrap();
     assert_eq!(
@@ -1458,7 +1497,7 @@ fn test_tril_triu_extreme_offsets_do_not_overflow() {
 
 #[test]
 fn test_neg_and_conj() {
-    let t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, -7.0]));
+    let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, -7.0]));
     let n = neg(&t).unwrap();
     assert_eq!(get_f64(&n, &[0]), -3.0);
     assert_eq!(get_f64(&n, &[1]), 7.0);
@@ -1472,17 +1511,17 @@ fn test_neg_and_conj() {
 fn test_cpu_backend_analytic_ops_real() {
     let mut backend = CpuBackend::new();
 
-    let exp_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
+    let exp_input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]));
     let exp_out = backend.exp(&exp_input).unwrap();
     assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
     assert_f64_close(get_f64(&exp_out, &[1]), std::f64::consts::E);
 
-    let log_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
+    let log_input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 4.0]));
     let log_out = backend.log(&log_input).unwrap();
     assert_f64_close(get_f64(&log_out, &[0]), 0.0);
     assert_f64_close(get_f64(&log_out, &[1]), 4.0_f64.ln());
 
-    let trig_input = Tensor::F64(TypedTensor::from_vec(
+    let trig_input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![0.0, std::f64::consts::FRAC_PI_2],
     ));
@@ -1493,12 +1532,12 @@ fn test_cpu_backend_analytic_ops_real() {
     assert_f64_close(get_f64(&cos_out, &[0]), 1.0);
     assert_f64_close(get_f64(&cos_out, &[1]), 0.0);
 
-    let tanh_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0, 1.0]));
+    let tanh_input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]));
     let tanh_out = backend.tanh(&tanh_input).unwrap();
     assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
     assert_f64_close(get_f64(&tanh_out, &[1]), 1.0_f64.tanh());
 
-    let sqrt_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 4.0]));
+    let sqrt_input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 4.0]));
     let sqrt_out = backend.sqrt(&sqrt_input).unwrap();
     let rsqrt_out = backend.rsqrt(&sqrt_input).unwrap();
     assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
@@ -1513,8 +1552,8 @@ fn test_cpu_backend_analytic_ops_real() {
     assert_f64_close(get_f64(&log1p_out, &[0]), 2.0_f64.ln());
     assert_f64_close(get_f64(&log1p_out, &[1]), 5.0_f64.ln());
 
-    let pow_base = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 9.0]));
-    let pow_exp = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 0.5]));
+    let pow_base = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0, 9.0]));
+    let pow_exp = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 0.5]));
     let pow_out = backend.pow(&pow_base, &pow_exp).unwrap();
     assert_f64_close(get_f64(&pow_out, &[0]), 8.0);
     assert_f64_close(get_f64(&pow_out, &[1]), 3.0);
@@ -1524,7 +1563,7 @@ fn test_cpu_backend_analytic_ops_real() {
 fn test_cpu_backend_analytic_ops_complex() {
     let mut backend = CpuBackend::new();
 
-    let exp_input = Tensor::C64(TypedTensor::from_vec(
+    let exp_input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 1.0)],
     ));
@@ -1532,7 +1571,7 @@ fn test_cpu_backend_analytic_ops_complex() {
     assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&exp_out, &[1]), Complex64::new(1.0, 1.0).exp());
 
-    let log_input = Tensor::C64(TypedTensor::from_vec(
+    let log_input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, -0.5)],
     ));
@@ -1540,7 +1579,7 @@ fn test_cpu_backend_analytic_ops_complex() {
     assert_c64_close(get_c64(&log_out, &[0]), Complex64::new(1.0, 0.0).ln());
     assert_c64_close(get_c64(&log_out, &[1]), Complex64::new(2.0, -0.5).ln());
 
-    let trig_input = Tensor::C64(TypedTensor::from_vec(
+    let trig_input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(0.0, 0.0), Complex64::new(0.5, -0.25)],
     ));
@@ -1554,7 +1593,7 @@ fn test_cpu_backend_analytic_ops_complex() {
     assert_c64_close(get_c64(&tanh_out, &[0]), Complex64::new(0.0, 0.0).tanh());
     assert_c64_close(get_c64(&tanh_out, &[1]), Complex64::new(0.5, -0.25).tanh());
 
-    let sqrt_input = Tensor::C64(TypedTensor::from_vec(
+    let sqrt_input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(4.0, 3.0)],
     ));
@@ -1592,11 +1631,11 @@ fn test_cpu_backend_analytic_ops_complex() {
         (Complex64::new(2.0, -0.5) + Complex64::new(1.0, 0.0)).ln(),
     );
 
-    let pow_base = Tensor::C64(TypedTensor::from_vec(
+    let pow_base = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
     ));
-    let pow_exp = Tensor::C64(TypedTensor::from_vec(
+    let pow_exp = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(2.0, 0.0), Complex64::new(0.5, 0.25)],
     ));
@@ -1613,7 +1652,7 @@ fn test_cpu_backend_analytic_ops_complex() {
 
 #[test]
 fn test_extract_diagonal() {
-    let square = Tensor::F64(TypedTensor::from_vec(
+    let square = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
     ));
@@ -1623,7 +1662,7 @@ fn test_extract_diagonal() {
     assert_eq!(get_f64(&d, &[1]), 5.0);
     assert_eq!(get_f64(&d, &[2]), 9.0);
 
-    let cube = Tensor::F64(TypedTensor::from_vec(
+    let cube = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3, 3],
         (1..=18).map(|x| x as f64).collect(),
     ));
@@ -1636,7 +1675,10 @@ fn test_extract_diagonal() {
 
 #[test]
 fn test_embed_diagonal() {
-    let v = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
+    let v = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
     let m = embed_diagonal(&v, 0, 1).unwrap();
     assert_eq!(m.shape(), &[3, 3]);
     assert_eq!(get_f64(&m, &[0, 0]), 1.0);
@@ -1648,8 +1690,8 @@ fn test_embed_diagonal() {
 
 #[test]
 fn test_cpu_backend_dispatches_tensor_backend_ops() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
     let mut backend = CpuBackend::new();
     let out = TensorBackend::add(&mut backend, &a, &b).unwrap();
     assert_eq!(get_f64(&out, &[0]), 4.0);
@@ -1658,13 +1700,34 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
 
 #[test]
 fn test_tier2_elementwise_ops_real() {
-    let lhs = Tensor::F64(TypedTensor::from_vec(vec![3], vec![8.0, -2.0, 9.0]));
-    let rhs = Tensor::F64(TypedTensor::from_vec(vec![3], vec![2.0, 5.0, 3.0]));
-    let pred = Tensor::F64(TypedTensor::from_vec(vec![3], vec![0.0, -1.0, 2.0]));
-    let on_true = Tensor::F64(TypedTensor::from_vec(vec![3], vec![10.0, 20.0, 30.0]));
-    let on_false = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let lower = Tensor::F64(TypedTensor::from_vec(vec![3], vec![-1.0, -1.0, 0.0]));
-    let upper = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 0.25, 4.0]));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![8.0, -2.0, 9.0],
+    ));
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![2.0, 5.0, 3.0],
+    ));
+    let pred = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![0.0, -1.0, 2.0],
+    ));
+    let on_true = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![10.0, 20.0, 30.0],
+    ));
+    let on_false = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
+    let lower = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![-1.0, -1.0, 0.0],
+    ));
+    let upper = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 0.25, 4.0],
+    ));
     let mut backend = CpuBackend::new();
 
     let div = backend.div(&lhs, &rhs).unwrap();
@@ -1730,15 +1793,15 @@ fn test_tier2_elementwise_ops_real() {
 
 #[test]
 fn test_tier2_elementwise_ops_complex() {
-    let input = Tensor::C64(TypedTensor::from_vec(
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)],
     ));
-    let lhs = Tensor::C64(TypedTensor::from_vec(
+    let lhs = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, 0.0)],
     ));
-    let rhs = Tensor::C64(TypedTensor::from_vec(
+    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 2.0)],
     ));
@@ -1763,11 +1826,14 @@ fn test_tier2_elementwise_ops_complex() {
 
 #[test]
 fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
-    let lhs_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![8.0f32, -2.0]));
-    let rhs_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![2.0f32, 5.0]));
-    let pred_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![0.0f32, 1.0]));
-    let lower_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![-1.0f32, -1.0]));
-    let upper_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 4.0]));
+    let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![8.0f32, -2.0]));
+    let rhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![2.0f32, 5.0]));
+    let pred_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![0.0f32, 1.0]));
+    let lower_f32 = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![-1.0f32, -1.0],
+    ));
+    let upper_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 4.0]));
 
     let div_out = div(&lhs_f32, &rhs_f32).unwrap();
     assert_eq!(get_f32(&div_out, &[0]), 4.0);
@@ -1801,27 +1867,27 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     assert_eq!(get_f32(&clamp_out, &[0]), 1.0);
     assert_eq!(get_f32(&clamp_out, &[1]), -1.0);
 
-    let input_c32 = Tensor::C32(TypedTensor::from_vec(
+    let input_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(3.0, 4.0), Complex32::new(0.0, 0.0)],
     ));
-    let lhs_c32 = Tensor::C32(TypedTensor::from_vec(
+    let lhs_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(3.0, 4.0), Complex32::new(1.0, 0.0)],
     ));
-    let rhs_c32 = Tensor::C32(TypedTensor::from_vec(
+    let rhs_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 0.0), Complex32::new(0.0, 2.0)],
     ));
-    let pred_c32 = Tensor::C32(TypedTensor::from_vec(
+    let pred_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(0.0, 0.0), Complex32::new(1.0, 0.0)],
     ));
-    let lower_c32 = Tensor::C32(TypedTensor::from_vec(
+    let lower_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(0.5, 0.0), Complex32::new(0.5, 0.0)],
     ));
-    let upper_c32 = Tensor::C32(TypedTensor::from_vec(
+    let upper_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(4.0, 0.0), Complex32::new(2.0, 2.0)],
     ));
@@ -1849,7 +1915,7 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let clamp_c32 = clamp(&lhs_c32, &lower_c32, &upper_c32).unwrap();
     assert_eq!(get_c32(&clamp_c32, &[0]), Complex32::new(4.0, 0.0));
 
-    let scalar_f32 = Tensor::F32(TypedTensor::from_vec(vec![], vec![2.0f32]));
+    let scalar_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![], vec![2.0f32]));
     let add_c32 = add(&scalar_f32, &rhs_c32).unwrap();
     assert_eq!(get_c32(&add_c32, &[0]), Complex32::new(3.0, 0.0));
 
@@ -1867,14 +1933,14 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     assert!(matches!(
         div(
             &lhs_f32,
-            &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]))
+            &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]))
         ),
         Err(crate::Error::DTypeMismatch { op: "div", .. })
     ));
     assert!(matches!(
         clamp(
             &lhs_f32,
-            &Tensor::F32(TypedTensor::from_vec(vec![1], vec![0.0f32])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![0.0f32])),
             &upper_f32
         ),
         Err(crate::Error::ShapeMismatch { op: "clamp", .. })
@@ -1883,13 +1949,13 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
 
 #[test]
 fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
-    let lhs_f64 = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.5f64, -3.0]));
-    let rhs_f64 = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0f64, 4.0]));
-    let scalar_f64 = Tensor::F64(TypedTensor::from_vec(vec![], vec![2.0f64]));
-    let pred_f64 = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0f64, 1.0]));
-    let lower_f64 = Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0f64, -2.0]));
-    let upper_f64 = Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0f64, 3.0]));
-    let short_f64 = Tensor::F64(TypedTensor::from_vec(vec![1], vec![1.0f64]));
+    let lhs_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.5f64, -3.0]));
+    let rhs_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0f64, 4.0]));
+    let scalar_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0f64]));
+    let pred_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0f64, 1.0]));
+    let lower_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0f64, -2.0]));
+    let upper_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0f64, 3.0]));
+    let short_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0f64]));
 
     let add_out = add(&lhs_f64, &rhs_f64).unwrap();
     assert_eq!(get_f64(&add_out, &[0]), 3.5);
@@ -1901,7 +1967,7 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
 
     let div_out = div(
         &rhs_f64,
-        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![2.0, 2.0])),
+        &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0, 2.0])),
     )
     .unwrap();
     assert_eq!(get_f64(&div_out, &[0]), 1.0);
@@ -1927,23 +1993,23 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     assert_eq!(get_f64(&clamp_out, &[0]), 1.5);
     assert_eq!(get_f64(&clamp_out, &[1]), -2.0);
 
-    let lhs_c64 = Tensor::C64(TypedTensor::from_vec(
+    let lhs_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, 0.0)],
     ));
-    let rhs_c64 = Tensor::C64(TypedTensor::from_vec(
+    let rhs_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 2.0)],
     ));
-    let pred_c64 = Tensor::C64(TypedTensor::from_vec(
+    let pred_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
     ));
-    let lower_c64 = Tensor::C64(TypedTensor::from_vec(
+    let lower_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(0.5, 0.0), Complex64::new(0.5, 0.0)],
     ));
-    let upper_c64 = Tensor::C64(TypedTensor::from_vec(
+    let upper_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(4.0, 0.0), Complex64::new(2.0, 2.0)],
     ));
@@ -1968,7 +2034,7 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
 
     let div_c64 = div(
         &lhs_c64,
-        &Tensor::C64(TypedTensor::from_vec(
+        &Tensor::C64(TypedTensor::from_vec_col_major(
             vec![2],
             vec![Complex64::new(1.0, 1.0), Complex64::new(1.0, 0.0)],
         )),
@@ -1999,7 +2065,7 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     assert_c64_close(get_c64(&clamp_c64, &[0]), Complex64::new(4.0, 0.0));
     assert_c64_close(get_c64(&clamp_c64, &[1]), Complex64::new(1.0, 0.0));
 
-    let lhs_f32 = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]));
 
     assert!(matches!(
         add(&lhs_f32, &rhs_f64),
@@ -2076,7 +2142,7 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
 
 #[test]
 fn test_reduction_helpers_cover_complex_and_error_paths() {
-    let complex = Tensor::C32(TypedTensor::from_vec(
+    let complex = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![
             Complex32::new(1.0, 1.0),
@@ -2094,7 +2160,7 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
 
     assert!(matches!(
         reduce_sum(
-            &Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0])),
             &[2]
         ),
         Err(crate::Error::AxisOutOfBounds {
@@ -2104,7 +2170,7 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
     ));
     assert!(matches!(
         reduce_prod(
-            &Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0])),
             &[0, 0]
         ),
         Err(crate::Error::DuplicateAxis {
@@ -2130,7 +2196,7 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
 
 #[test]
 fn test_structural_helpers_cover_f32_success_and_error_paths() {
-    let matrix = Tensor::F32(TypedTensor::from_vec(
+    let matrix = Tensor::F32(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![1.0f32, 2.0, 3.0, 4.0],
     ));
@@ -2138,7 +2204,7 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
     assert_eq!(transposed.shape(), &[2, 2]);
     assert_eq!(get_f32(&transposed, &[1, 0]), 3.0);
 
-    let scalar = Tensor::F32(TypedTensor::from_vec(vec![], vec![5.0f32]));
+    let scalar = Tensor::F32(TypedTensor::from_vec_col_major(vec![], vec![5.0f32]));
     let broadcast = broadcast_in_dim(&scalar, &[2], &[]).unwrap();
     assert_eq!(get_f32(&broadcast, &[1]), 5.0);
 
@@ -2147,7 +2213,7 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
     assert_eq!(get_f32(&diag, &[1]), 4.0);
 
     let embedded = embed_diagonal(
-        &Tensor::F32(TypedTensor::from_vec(vec![2], vec![7.0f32, 8.0])),
+        &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![7.0f32, 8.0])),
         0,
         1,
     )
@@ -2176,7 +2242,7 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
     ));
     assert!(matches!(
         broadcast_in_dim(
-            &Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0])),
             &[3, 2],
             &[0]
         ),
@@ -2194,7 +2260,7 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
     ));
     assert!(matches!(
         embed_diagonal(
-            &Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0])),
+            &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0])),
             0,
             2
         ),
@@ -2203,7 +2269,7 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
             ..
         })
     ));
-    let vector = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    let vector = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]));
     assert!(matches!(
         tril(&vector, 0),
         Err(crate::Error::RankMismatch { op: "tril", .. })
@@ -2221,7 +2287,7 @@ fn test_batched_cholesky() {
     let a0 = matmul_f64(&l0, &transpose_f64(&l0, 3, 3), 3, 3, 3);
     let a1 = matmul_f64(&l1, &transpose_f64(&l1, 3, 3), 3, 3, 3);
 
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 3, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
@@ -2245,7 +2311,7 @@ fn test_batched_svd() {
     let a1 = vec![
         2.0, -1.0, 0.5, 3.0, -0.25, 1.5, -2.0, 0.75, 1.0, 2.5, -1.0, 4.0,
     ];
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 3, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
@@ -2273,7 +2339,7 @@ fn test_batched_svd() {
 fn test_batched_qr() {
     let a0 = vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0];
     let a1 = vec![2.0, -1.0, 0.5, 3.0, -0.25, 1.5];
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 2, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
@@ -2301,11 +2367,11 @@ fn test_batched_solve() {
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
     let a0 = matmul_f64(&l0, &transpose_f64(&l0, 3, 3), 3, 3, 3);
     let a1 = matmul_f64(&l1, &transpose_f64(&l1, 3, 3), 3, 3, 3);
-    let a = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 3, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
-    let b = Tensor::F64(TypedTensor::from_vec(
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3, 1, 2],
         vec![1.0, 2.0, 3.0, -1.0, 4.0, 0.5],
     ));
@@ -2329,8 +2395,8 @@ fn test_batched_solve() {
 fn test_triangular_solve_lower() {
     let l_data = vec![2.0, 1.0, -0.5, 0.0, 3.0, 1.25, 0.0, 0.0, 1.5];
     let b_data = vec![1.0, -2.0, 0.5];
-    let l = Tensor::F64(TypedTensor::from_vec(vec![3, 3], l_data.clone()));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![3, 1], b_data.clone()));
+    let l = Tensor::F64(TypedTensor::from_vec_col_major(vec![3, 3], l_data.clone()));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![3, 1], b_data.clone()));
 
     let mut backend = CpuBackend::new();
     let x = backend
@@ -2352,8 +2418,8 @@ fn test_triangular_solve_lower() {
 fn test_triangular_solve_right_side_unit_transpose() {
     let a_data = vec![1.0, 2.0, 0.0, 1.0];
     let b_data = vec![7.0, 5.0];
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data.clone()));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![1, 2], b_data.clone()));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], a_data.clone()));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
     let x = backend
@@ -2400,8 +2466,8 @@ fn test_triangular_solve_covers_all_real_branch_combinations() {
                         matmul_f64(&expected_x, &op_a, 2, 2, 2)
                     };
 
-                    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data));
-                    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], b_data));
+                    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], a_data));
+                    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], b_data));
                     let mut backend = CpuBackend::new();
                     let x = backend
                         .triangular_solve(&a, &b, left_side, lower, transpose_a, unit_diagonal)
@@ -2436,11 +2502,11 @@ fn test_batched_complex_solve() {
     ];
     let a0 = matmul_c64(&l0, &conjugate_transpose_c64(&l0, 2, 2), 2, 2, 2);
     let a1 = matmul_c64(&l1, &conjugate_transpose_c64(&l1, 2, 2), 2, 2, 2);
-    let a = Tensor::C64(TypedTensor::from_vec(
+    let a = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 2, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
-    let b = Tensor::C64(TypedTensor::from_vec(
+    let b = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 1, 2],
         vec![
             Complex64::new(1.0, -1.0),
@@ -2469,8 +2535,8 @@ fn test_batched_complex_solve() {
 fn test_real_solve_non_batched() {
     let a_data = vec![3.0, 1.0, 1.0, 2.0];
     let b_data = vec![5.0, 1.0, -2.0, 4.0];
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data.clone()));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], b_data.clone()));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], a_data.clone()));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
     let x = backend.solve(&a, &b).unwrap();
@@ -2487,7 +2553,10 @@ fn test_real_solve_non_batched() {
 
 #[test]
 fn test_real_lu_returns_permutation_factors_and_parity() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![0.0, 1.0, 1.0, 0.0],
+    ));
     let mut backend = CpuBackend::new();
     let outputs = backend.lu(&input).unwrap();
 
@@ -2507,7 +2576,10 @@ fn test_real_lu_returns_permutation_factors_and_parity() {
 
 #[test]
 fn test_real_eig_returns_complex_outputs() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 0.0, 0.0, 3.0],
+    ));
     let mut backend = CpuBackend::new();
     let outputs = backend.eig(&input).unwrap();
 
@@ -2541,7 +2613,7 @@ fn test_batched_complex_eigh() {
     ];
     let a0 = matmul_c64(&l0, &conjugate_transpose_c64(&l0, 2, 2), 2, 2, 2);
     let a1 = matmul_c64(&l1, &conjugate_transpose_c64(&l1, 2, 2), 2, 2, 2);
-    let input = Tensor::C64(TypedTensor::from_vec(
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 2, 2],
         a0.iter().chain(a1.iter()).copied().collect(),
     ));
@@ -2576,7 +2648,7 @@ fn test_batched_complex_eigh() {
 #[test]
 fn test_real_eigh() {
     let a_data = vec![4.0, 1.0, 1.0, 3.0];
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], a_data.clone()));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], a_data.clone()));
 
     let mut backend = CpuBackend::new();
     let out = backend.eigh(&input).unwrap();
@@ -2604,7 +2676,10 @@ fn test_real_eigh() {
 
 #[test]
 fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 2.0, 1.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 2.0, 1.0],
+    ));
     let mut backend = CpuBackend::new();
     let err = backend.cholesky(&input).unwrap_err();
     assert!(matches!(
@@ -2615,8 +2690,11 @@ fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
 
 #[test]
 fn test_real_solve_returns_error_for_singular_matrix() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 1.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 2.0, 4.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 1.0]));
     let mut backend = CpuBackend::new();
     let err = backend.solve(&a, &b).unwrap_err();
     assert!(matches!(
@@ -2634,7 +2712,7 @@ fn test_complex_cholesky() {
         Complex64::new(1.5, 0.0),
     ];
     let a = matmul_c64(&l, &conjugate_transpose_c64(&l, 2, 2), 2, 2, 2);
-    let input = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a.clone()));
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], a.clone()));
 
     let mut backend = CpuBackend::new();
     let out = backend.cholesky(&input).unwrap();
@@ -2649,7 +2727,7 @@ fn test_complex_cholesky() {
 
 #[test]
 fn test_complex_cholesky_returns_error_for_non_positive_definite_input() {
-    let input = Tensor::C64(TypedTensor::from_vec(
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![
             Complex64::new(1.0, 0.0),
@@ -2676,7 +2754,10 @@ fn test_complex_qr() {
         Complex64::new(-0.25, 1.5),
         Complex64::new(3.0, 0.75),
     ];
-    let input = Tensor::C64(TypedTensor::from_vec(vec![3, 2], input_data.clone()));
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![3, 2],
+        input_data.clone(),
+    ));
 
     let mut backend = CpuBackend::new();
     let out = backend.qr(&input).unwrap();
@@ -2703,7 +2784,10 @@ fn test_complex_svd() {
         Complex64::new(-0.25, 1.5),
         Complex64::new(3.0, 0.75),
     ];
-    let input = Tensor::C64(TypedTensor::from_vec(vec![3, 2], input_data.clone()));
+    let input = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![3, 2],
+        input_data.clone(),
+    ));
     let mut backend = CpuBackend::new();
     let out = backend.svd(&input).unwrap();
 
@@ -2730,8 +2814,8 @@ fn test_complex_triangular_solve_right_side_unit_transpose() {
         Complex64::new(1.0, 0.0),
     ];
     let b_data = vec![Complex64::new(2.0, 1.0), Complex64::new(-1.0, 0.5)];
-    let a = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a_data.clone()));
-    let b = Tensor::C64(TypedTensor::from_vec(vec![1, 2], b_data.clone()));
+    let a = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], a_data.clone()));
+    let b = Tensor::C64(TypedTensor::from_vec_col_major(vec![1, 2], b_data.clone()));
 
     let mut backend = CpuBackend::new();
     let x = backend
@@ -2793,8 +2877,8 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
                         matmul_c64(&expected_x, &op_a, 2, 2, 2)
                     };
 
-                    let a = Tensor::C64(TypedTensor::from_vec(vec![2, 2], a_data));
-                    let b = Tensor::C64(TypedTensor::from_vec(vec![2, 2], b_data));
+                    let a = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], a_data));
+                    let b = Tensor::C64(TypedTensor::from_vec_col_major(vec![2, 2], b_data));
                     let mut backend = CpuBackend::new();
                     let x = backend
                         .triangular_solve(&a, &b, left_side, lower, transpose_a, unit_diagonal)
@@ -2815,7 +2899,7 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
 
 #[test]
 fn test_complex_solve_returns_error_for_singular_matrix() {
-    let a = Tensor::C64(TypedTensor::from_vec(
+    let a = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![
             Complex64::new(1.0, 0.0),
@@ -2824,7 +2908,7 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
             Complex64::new(4.0, 0.0),
         ],
     ));
-    let b = Tensor::C64(TypedTensor::from_vec(
+    let b = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2, 1],
         vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
     ));
@@ -2838,11 +2922,11 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
 
 #[test]
 fn test_gather_1d_indices() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
+    let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]);
 
     let out = gather(&operand, &start_indices, &simple_gather_config()).unwrap();
 
@@ -2854,11 +2938,11 @@ fn test_gather_1d_indices() {
 
 #[test]
 fn test_gather_accepts_i64_indices() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
+    let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]);
 
     let out = gather(&operand, &start_indices, &simple_gather_config()).unwrap();
 
@@ -2872,11 +2956,11 @@ fn test_gather_accepts_i64_indices() {
 
 #[test]
 fn test_gather_with_implicit_index_vector_dim() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::from_vec(vec![3], vec![4_i64, 1, 0]);
+    let start_indices = Tensor::from_vec_col_major(vec![3], vec![4_i64, 1, 0]);
     let config = GatherConfig {
         offset_dims: vec![],
         collapsed_slice_dims: vec![0],
@@ -2895,8 +2979,11 @@ fn test_gather_with_implicit_index_vector_dim() {
 #[test]
 fn test_scatter_accepts_i64_indices() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
-    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![5.0, 6.0, 7.0],
+    ));
 
     let out = scatter(
         &operand,
@@ -2916,8 +3003,11 @@ fn test_scatter_accepts_i64_indices() {
 #[test]
 fn test_scatter_to_diagonal() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
-    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![5.0, 6.0, 7.0],
+    ));
 
     let out = scatter(
         &operand,
@@ -2938,8 +3028,11 @@ fn test_scatter_to_diagonal() {
 #[test]
 fn test_scatter_skips_negative_and_out_of_bounds_windows() {
     let operand = Tensor::F64(TypedTensor::zeros(vec![4]));
-    let scatter_indices = Tensor::from_vec(vec![3, 1], vec![-1_i64, 2, 4]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 1], vec![-1_i64, 2, 4]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![5.0, 6.0, 7.0],
+    ));
     let config = ScatterConfig {
         update_window_dims: vec![],
         inserted_window_dims: vec![0],
@@ -2957,7 +3050,7 @@ fn test_scatter_skips_negative_and_out_of_bounds_windows() {
 
 #[test]
 fn test_pad_adds_zero_edges() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
     ));
@@ -2980,7 +3073,7 @@ fn test_pad_adds_zero_edges() {
 
 #[test]
 fn test_pad_with_interior_spacing() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     let config = PadConfig {
         edge_padding_low: vec![1],
         edge_padding_high: vec![1],
@@ -2998,13 +3091,13 @@ fn test_pad_with_interior_spacing() {
 
 #[test]
 fn test_dynamic_slice_clamps_starts() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 4],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
+    let starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]);
 
     let out = dynamic_slice(&input, &starts, &[2, 2]).unwrap();
 
@@ -3017,13 +3110,13 @@ fn test_dynamic_slice_clamps_starts() {
 
 #[test]
 fn test_dynamic_slice_accepts_i64_starts() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 4],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
+    let starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]);
 
     let out = dynamic_slice(&input, &starts, &[2, 2]).unwrap();
 
@@ -3037,12 +3130,15 @@ fn test_dynamic_slice_accepts_i64_starts() {
 
 #[test]
 fn test_dynamic_update_slice_clamps_starts() {
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 11.0, 12.0, 13.0, 14.0],
     ));
-    let update = Tensor::F64(TypedTensor::from_vec(vec![3], vec![1.0, 2.0, 3.0]));
-    let starts = Tensor::from_vec(vec![1], vec![4_i64]);
+    let update = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![1.0, 2.0, 3.0],
+    ));
+    let starts = Tensor::from_vec_col_major(vec![1], vec![4_i64]);
 
     let out = dynamic_update_slice(&operand, &update, &starts).unwrap();
 
@@ -3052,7 +3148,7 @@ fn test_dynamic_update_slice_clamps_starts() {
 
 #[test]
 fn test_slice_concatenate_and_reverse_edge_cases() {
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 3],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
@@ -3071,9 +3167,9 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     assert_eq!(get_f64(&sliced, &[0, 1]), 9.0);
     assert_eq!(get_f64(&sliced, &[1, 1]), 11.0);
 
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![3.0, 4.0]));
-    let c = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![5.0, 6.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0, 4.0]));
+    let c = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 6.0]));
     let concatenated = backend.concatenate(&[&a, &b, &c], 1).unwrap();
     assert_eq!(concatenated.shape(), &[2, 3]);
     assert_eq!(get_f64(&concatenated, &[0, 0]), 1.0);
@@ -3088,7 +3184,10 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
 
 #[test]
 fn test_structural_convert_helper_returns_result() {
-    let input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
+    let input = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1.25_f32, -2.5_f32],
+    ));
 
     let output = crate::cpu::structural::convert(&input, DType::F64).unwrap();
 
@@ -3101,14 +3200,23 @@ fn test_structural_convert_helper_returns_result() {
 #[test]
 fn test_backend_convert_supports_real_complex_and_precision_changes() {
     let mut backend = CpuBackend::new();
-    let f32_input = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.25_f32, -2.5_f32]));
-    let f64_input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.25_f64, -2.5_f64]));
-    let i64_input = Tensor::I64(TypedTensor::from_vec(vec![2], vec![1_i64, -2_i64]));
-    let c32_input = Tensor::C32(TypedTensor::from_vec(
+    let f32_input = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1.25_f32, -2.5_f32],
+    ));
+    let f64_input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1.25_f64, -2.5_f64],
+    ));
+    let i64_input = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![1_i64, -2_i64],
+    ));
+    let c32_input = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.25, -0.5), Complex32::new(-2.5, 4.0)],
     ));
-    let c64_input = Tensor::C64(TypedTensor::from_vec(
+    let c64_input = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)],
     ));
@@ -3209,8 +3317,11 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
 #[test]
 fn test_backend_linalg_returns_errors_for_unsupported_dtypes() {
     let mut backend = CpuBackend::new();
-    let i64_matrix = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
-    let i64_rhs = Tensor::I64(TypedTensor::from_vec(vec![2, 1], vec![1_i64, 2]));
+    let i64_matrix = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1_i64, 0, 0, 1],
+    ));
+    let i64_rhs = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]));
 
     assert!(backend.cholesky(&i64_matrix).is_err());
     assert!(backend.svd(&i64_matrix).is_err());
@@ -3232,9 +3343,9 @@ fn test_backend_default_and_buffer_pool_len() {
 
 #[test]
 fn test_backend_mul_neg_conj_dispatch() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, -2.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
-    let c = Tensor::C64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, -2.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
+    let c = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ));
@@ -3256,9 +3367,12 @@ fn test_backend_mul_neg_conj_dispatch() {
 #[test]
 fn test_backend_structural_ops_dispatch() {
     let mut backend = CpuBackend::new();
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
 
-    let scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![5.0]));
+    let scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![5.0]));
     let broadcast = backend.broadcast_in_dim(&scalar, &[2, 2], &[]).unwrap();
     assert_eq!(broadcast.shape(), &[2, 2]);
     assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
@@ -3269,7 +3383,7 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(get_f64(&diag, &[0]), 1.0);
     assert_eq!(get_f64(&diag, &[1]), 4.0);
 
-    let d = Tensor::F64(TypedTensor::from_vec(vec![2], vec![10.0, 20.0]));
+    let d = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![10.0, 20.0]));
     let embedded = backend.embed_diagonal(&d, 0, 1).unwrap();
     assert_eq!(embedded.shape(), &[2, 2]);
     assert_eq!(get_f64(&embedded, &[0, 0]), 10.0);
@@ -3299,24 +3413,30 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
         rhs_batch_dims: vec![],
     };
 
-    let a_f32 = Tensor::F32(TypedTensor::from_vec(vec![1, 2], vec![1.0f32, 2.0]));
-    let b_f32 = Tensor::F32(TypedTensor::from_vec(vec![2, 1], vec![3.0f32, 4.0]));
+    let a_f32 = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![1, 2],
+        vec![1.0f32, 2.0],
+    ));
+    let b_f32 = Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![2, 1],
+        vec![3.0f32, 4.0],
+    ));
     let out_f32 = backend.dot_general(&a_f32, &b_f32, &config).unwrap();
     assert_eq!(out_f32.shape(), &[1, 1]);
 
-    let a_c32 = Tensor::C32(TypedTensor::from_vec(
+    let a_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![1, 2],
         vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
     ));
-    let b_c32 = Tensor::C32(TypedTensor::from_vec(
+    let b_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2, 1],
         vec![Complex32::new(3.0, 0.0), Complex32::new(4.0, 0.0)],
     ));
     let out_c32 = backend.dot_general(&a_c32, &b_c32, &config).unwrap();
     assert_eq!(out_c32.shape(), &[1, 1]);
 
-    let f64_t = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-    let f32_t = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    let f64_t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+    let f32_t = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]));
     let err = backend.dot_general(&f64_t, &f32_t, &config).unwrap_err();
     assert!(matches!(
         err,
@@ -3331,11 +3451,11 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
 fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     let mut backend = CpuBackend::new();
 
-    let operand = Tensor::F64(TypedTensor::from_vec(
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![5],
         vec![10.0, 20.0, 30.0, 40.0, 50.0],
     ));
-    let start_indices = Tensor::from_vec(vec![3, 1], vec![0_i64, 2, 4]);
+    let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]);
     let gathered = backend
         .gather(&operand, &start_indices, &simple_gather_config())
         .unwrap();
@@ -3344,8 +3464,11 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&gathered, &[2]), 50.0);
 
     let operand = Tensor::F64(TypedTensor::zeros(vec![3, 3]));
-    let scatter_indices = Tensor::from_vec(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
-    let updates = Tensor::F64(TypedTensor::from_vec(vec![3], vec![5.0, 6.0, 7.0]));
+    let scatter_indices = Tensor::from_vec_col_major(vec![3, 2], vec![0_i64, 1, 2, 0, 1, 2]);
+    let updates = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![3],
+        vec![5.0, 6.0, 7.0],
+    ));
     let scattered = backend
         .scatter(
             &operand,
@@ -3358,13 +3481,13 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     assert_eq!(get_f64(&scattered, &[1, 1]), 6.0);
     assert_eq!(get_f64(&scattered, &[2, 2]), 7.0);
 
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![4, 4],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
     ));
-    let starts = Tensor::from_vec(vec![2], vec![2_i64, 3]);
+    let starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]);
     let ds = backend.dynamic_slice(&input, &starts, &[2, 2]).unwrap();
     assert_eq!(ds.shape(), &[2, 2]);
     assert_eq!(get_f64(&ds, &[0, 0]), 11.0);
@@ -3374,16 +3497,19 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
 #[test]
 fn test_solve_zero_dim_returns_zeros() {
     let mut backend = CpuBackend::new();
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 0], vec![]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![0, 1], vec![]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 0], vec![]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0, 1], vec![]));
     let x = backend.solve(&a, &b).unwrap();
     assert_eq!(x.shape(), &[0, 1]);
 }
 
 #[test]
 fn test_solve_with_1d_vector_rhs() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![5.0, 7.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![2.0, 1.0, 0.0, 3.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![5.0, 7.0]));
     let mut backend = CpuBackend::new();
     let x = backend.solve(&a, &b).unwrap();
     assert_eq!(x.shape(), &[2]);
@@ -3400,11 +3526,14 @@ fn test_solve_with_1d_vector_rhs() {
 
 #[test]
 fn test_solve_with_batched_vector_rhs() {
-    let a = Tensor::F64(TypedTensor::from_vec(
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![2.0, 1.0, 0.0, 3.0, 1.0, 0.0, 1.0, 2.0],
     ));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![5.0, 7.0, 3.0, 4.0],
+    ));
     let mut backend = CpuBackend::new();
     let x = backend.solve(&a, &b).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
@@ -3413,11 +3542,11 @@ fn test_solve_with_batched_vector_rhs() {
 #[test]
 fn test_triangular_solve_dtype_mismatch_and_unsupported() {
     let mut backend = CpuBackend::new();
-    let a_f32 = Tensor::F32(TypedTensor::from_vec(
+    let a_f32 = Tensor::F32(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![1.0f32, 0.0, 0.0, 1.0],
     ));
-    let b_f64 = Tensor::F64(TypedTensor::from_vec(vec![2, 1], vec![1.0, 2.0]));
+    let b_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]));
     let err = backend
         .triangular_solve(&a_f32, &b_f64, true, true, false, false)
         .unwrap_err();
@@ -3429,8 +3558,11 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
         }
     ));
 
-    let a_i64 = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
-    let b_i64 = Tensor::I64(TypedTensor::from_vec(vec![2, 1], vec![1_i64, 2]));
+    let a_i64 = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1_i64, 0, 0, 1],
+    ));
+    let b_i64 = Tensor::I64(TypedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 2]));
     let err = backend
         .triangular_solve(&a_i64, &b_i64, true, true, false, false)
         .unwrap_err();
@@ -3449,8 +3581,8 @@ fn test_reclaim_buffer_returns_host_buffer_to_pool() {
     assert_eq!(backend.buffer_pool_len(), 0);
     let t = TensorBackend::add(
         &mut backend,
-        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
-        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+        &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
+        &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
     )
     .unwrap();
     backend.reclaim_buffer(t);
@@ -3460,11 +3592,20 @@ fn test_reclaim_buffer_returns_host_buffer_to_pool() {
 #[test]
 fn test_elementwise_add_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec(vec![4], vec![0.0; 4])));
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![0.0; 4],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let lhs = Tensor::F64(TypedTensor::from_vec(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
-    let rhs = Tensor::F64(TypedTensor::from_vec(vec![4], vec![4.0, 3.0, 2.0, 1.0]));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![4.0, 3.0, 2.0, 1.0],
+    ));
     let out = backend.add(&lhs, &rhs).unwrap();
 
     assert_eq!(backend.buffer_pool_len(), 0);
@@ -3477,10 +3618,16 @@ fn test_elementwise_add_acquires_output_from_pool() {
 #[test]
 fn test_structural_transpose_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec(vec![4], vec![0.0; 4])));
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![0.0; 4],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
     let out = backend.transpose(&input, &[1, 0]).unwrap();
 
     assert_eq!(backend.buffer_pool_len(), 0);
@@ -3495,10 +3642,16 @@ fn test_structural_transpose_acquires_output_from_pool() {
 #[test]
 fn test_convert_acquires_output_from_dtype_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F32(TypedTensor::from_vec(vec![4], vec![0.0; 4])));
+    backend.reclaim_buffer(Tensor::F32(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![0.0; 4],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let input = Tensor::F64(TypedTensor::from_vec(vec![4], vec![1.25, 2.5, 3.75, 4.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![1.25, 2.5, 3.75, 4.0],
+    ));
     let out = backend.convert(&input, DType::F32).unwrap();
 
     assert_eq!(backend.buffer_pool_len(), 0);
@@ -3511,10 +3664,16 @@ fn test_convert_acquires_output_from_dtype_pool() {
 #[test]
 fn test_slice_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec(vec![2], vec![0.0; 2])));
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![0.0; 2],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let input = Tensor::F64(TypedTensor::from_vec(vec![4], vec![1.0, 2.0, 3.0, 4.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![1.0, 2.0, 3.0, 4.0],
+    ));
     let config = SliceConfig {
         starts: vec![1],
         limits: vec![3],
@@ -3532,10 +3691,13 @@ fn test_slice_acquires_output_from_pool() {
 #[test]
 fn test_pad_acquires_and_zeroes_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec(vec![4], vec![9.0; 4])));
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![9.0; 4],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     let config = PadConfig {
         edge_padding_low: vec![1],
         edge_padding_high: vec![1],
@@ -3555,12 +3717,18 @@ fn test_pad_acquires_and_zeroes_output_from_pool() {
 #[test]
 fn test_dynamic_update_slice_acquires_clone_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec(vec![4], vec![9.0; 4])));
+    backend.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![9.0; 4],
+    )));
     assert_eq!(backend.buffer_pool_len(), 1);
 
-    let operand = Tensor::F64(TypedTensor::from_vec(vec![4], vec![0.0, 1.0, 2.0, 3.0]));
-    let update = Tensor::F64(TypedTensor::from_vec(vec![2], vec![7.0, 8.0]));
-    let starts = Tensor::I64(TypedTensor::from_vec(vec![1], vec![1]));
+    let operand = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![4],
+        vec![0.0, 1.0, 2.0, 3.0],
+    ));
+    let update = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]));
+    let starts = Tensor::I64(TypedTensor::from_vec_col_major(vec![1], vec![1]));
     let out = backend
         .dynamic_update_slice(&operand, &update, &starts)
         .unwrap();
@@ -3577,14 +3745,14 @@ fn test_dynamic_update_slice_acquires_clone_from_pool() {
 #[test]
 fn test_reclaim_buffer_covers_all_dtypes() {
     let mut backend = CpuBackend::new();
-    let f32_t = Tensor::F32(TypedTensor::from_vec(vec![2], vec![1.0f32, 2.0]));
+    let f32_t = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]));
     backend.reclaim_buffer(f32_t);
-    let c32_t = Tensor::C32(TypedTensor::from_vec(
+    let c32_t = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![1],
         vec![Complex32::new(1.0, 0.0)],
     ));
     backend.reclaim_buffer(c32_t);
-    let c64_t = Tensor::C64(TypedTensor::from_vec(
+    let c64_t = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![1],
         vec![Complex64::new(1.0, 0.0)],
     ));
@@ -3595,8 +3763,11 @@ fn test_reclaim_buffer_covers_all_dtypes() {
 #[test]
 fn test_solve_zero_dim_rhs_returns_zeros() {
     let mut backend = CpuBackend::new();
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![0], vec![]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 0.0, 0.0, 1.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![0], vec![]));
     let x = backend.solve(&a, &b).unwrap();
     assert_eq!(x.shape(), &[0]);
 }
@@ -3606,8 +3777,8 @@ fn test_install_with_pool_preserves_buffers() {
     let mut backend = CpuBackend::with_threads(1);
     let t = TensorBackend::add(
         &mut backend,
-        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0])),
-        &Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0])),
+        &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
+        &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
     )
     .unwrap();
     assert_eq!(get_f64(&t, &[0]), 4.0);
@@ -3617,8 +3788,14 @@ fn test_install_with_pool_preserves_buffers() {
 
 #[test]
 fn test_solve_with_regular_matrix_rhs() {
-    let a = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![2.0, 1.0, 0.0, 3.0]));
-    let b = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![5.0, 7.0, 3.0, 4.0]));
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![2.0, 1.0, 0.0, 3.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![5.0, 7.0, 3.0, 4.0],
+    ));
     let mut backend = CpuBackend::new();
     let x = backend.solve(&a, &b).unwrap();
     assert_eq!(x.shape(), &[2, 2]);
@@ -3635,14 +3812,17 @@ fn test_solve_with_regular_matrix_rhs() {
 
 #[test]
 fn test_lu_unsupported_dtype_returns_error() {
-    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
+    let input = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1_i64, 0, 0, 1],
+    ));
     let mut backend = CpuBackend::new();
     assert!(backend.lu(&input).is_err());
 }
 
 #[test]
 fn test_lu_zero_sized_batch_outputs_empty_parity() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2, 0], Vec::new()));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2, 0], Vec::new()));
     let mut backend = CpuBackend::new();
     let outputs = backend.lu(&input).unwrap();
 
@@ -3661,7 +3841,10 @@ fn test_lu_zero_sized_batch_outputs_empty_parity() {
 
 #[test]
 fn test_svd_unsupported_dtype_returns_error() {
-    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
+    let input = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1_i64, 0, 0, 1],
+    ));
     let mut backend = CpuBackend::new();
     assert!(backend.svd(&input).is_err());
 }
@@ -3671,7 +3854,7 @@ fn test_svd_unsupported_dtype_returns_error() {
 fn test_faer_svd_decomposition_failure_returns_error() {
     let ctx = CpuContext::with_threads(1);
     let mut buffers = BufferPool::new();
-    let input = TypedTensor::from_vec(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]);
+    let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]);
 
     let err = faer_linalg::svd(&ctx, &mut buffers, &input).unwrap_err();
 
@@ -3683,7 +3866,7 @@ fn test_faer_svd_decomposition_failure_returns_error() {
 fn test_faer_eig_decomposition_failure_returns_error() {
     let ctx = CpuContext::with_threads(1);
     let mut buffers = BufferPool::new();
-    let input = Tensor::F64(TypedTensor::from_vec(
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![f64::NAN, 0.0, 0.0, 1.0],
     ));
@@ -3695,14 +3878,20 @@ fn test_faer_eig_decomposition_failure_returns_error() {
 
 #[test]
 fn test_qr_unsupported_dtype_returns_error() {
-    let input = Tensor::I64(TypedTensor::from_vec(vec![2, 2], vec![1_i64, 0, 0, 1]));
+    let input = Tensor::I64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1_i64, 0, 0, 1],
+    ));
     let mut backend = CpuBackend::new();
     assert!(backend.qr(&input).is_err());
 }
 
 #[test]
 fn test_eig_returns_complex_outputs_for_real_input() {
-    let input = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![0.0, -1.0, 1.0, 0.0]));
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![0.0, -1.0, 1.0, 0.0],
+    ));
     let mut backend = CpuBackend::new();
     let outputs = backend.eig(&input).unwrap();
     assert_eq!(outputs.len(), 2);
@@ -3882,8 +4071,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         fn reclaim_buffer(&mut self, _tensor: Tensor) {}
     }
 
-    let lhs = Tensor::from_vec(vec![1, 1], vec![2.0_f64]);
-    let rhs = Tensor::from_vec(vec![1, 1], vec![3.0_f64]);
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]);
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]);
     let one_shape = [1usize, 1];
     let lhs_data = [2.0_f64];
     let rhs_data = [3.0_f64];
@@ -4002,8 +4191,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
 #[test]
 fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
-    let f32_scalar = Tensor::F32(TypedTensor::from_vec(vec![], vec![2.0]));
-    let c32_vec = Tensor::C32(TypedTensor::from_vec(
+    let f32_scalar = Tensor::F32(TypedTensor::from_vec_col_major(vec![], vec![2.0]));
+    let c32_vec = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 1.0), Complex32::new(-3.0, 0.5)],
     ));
@@ -4036,8 +4225,8 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         Complex32::new(2.0, 2.0)
     );
 
-    let f64_scalar = Tensor::F64(TypedTensor::from_vec(vec![], vec![4.0]));
-    let c64_vec = Tensor::C64(TypedTensor::from_vec(
+    let f64_scalar = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![4.0]));
+    let c64_vec = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, -1.0), Complex64::new(0.0, 2.0)],
     ));
@@ -4049,19 +4238,19 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         Complex64::new(0.0, 0.5),
     );
 
-    assert!(neg(&Tensor::from_vec(vec![1], vec![1_i64]))
+    assert!(neg(&Tensor::from_vec_col_major(vec![1], vec![1_i64]))
         .unwrap_err()
         .to_string()
         .contains("I64"));
-    assert!(conj(&Tensor::from_vec(vec![1], vec![1_i64])).is_err());
-    assert!(abs(&Tensor::from_vec(vec![1], vec![1_i64])).is_err());
-    assert!(sign(&Tensor::from_vec(vec![1], vec![1_i64])).is_err());
+    assert!(conj(&Tensor::from_vec_col_major(vec![1], vec![1_i64])).is_err());
+    assert!(abs(&Tensor::from_vec_col_major(vec![1], vec![1_i64])).is_err());
+    assert!(sign(&Tensor::from_vec_col_major(vec![1], vec![1_i64])).is_err());
 
-    let a = Tensor::C64(TypedTensor::from_vec(
+    let a = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, 0.0)],
     ));
-    let b = Tensor::C64(TypedTensor::from_vec(
+    let b = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(0.0, 2.0), Complex64::new(5.0, 0.0)],
     ));
@@ -4089,7 +4278,7 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
 
 #[test]
 fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
-    let real = Tensor::from_vec(vec![2], vec![0.0_f64, 4.0]);
+    let real = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 4.0]);
     assert_f64_close(
         crate::cpu::analytic::exp(&real)
             .unwrap()
@@ -4126,7 +4315,7 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
         0.0,
     );
 
-    let complex = Tensor::C64(TypedTensor::from_vec(
+    let complex = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![1],
         vec![Complex64::new(1.0, 0.0)],
     ));
@@ -4141,8 +4330,8 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
     assert!(crate::cpu::analytic::cos(&complex).is_ok());
     assert!(crate::cpu::analytic::tanh(&complex).is_ok());
 
-    let base = Tensor::from_vec(vec![2], vec![2.0_f32, 3.0]);
-    let exponent = Tensor::from_vec(vec![2], vec![3.0_f32, 2.0]);
+    let base = Tensor::from_vec_col_major(vec![2], vec![2.0_f32, 3.0]);
+    let exponent = Tensor::from_vec_col_major(vec![2], vec![3.0_f32, 2.0]);
     assert_eq!(
         crate::cpu::analytic::pow(&base, &exponent)
             .unwrap()
@@ -4150,33 +4339,33 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             .unwrap(),
         &[8.0, 9.0]
     );
-    assert!(crate::cpu::analytic::exp(&Tensor::from_vec(vec![1], vec![1_i64])).is_err());
+    assert!(crate::cpu::analytic::exp(&Tensor::from_vec_col_major(vec![1], vec![1_i64])).is_err());
     assert!(crate::cpu::analytic::pow(&real, &base).is_err());
 }
 
 #[test]
 fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
-    let matrix = Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let transposed = transpose(&matrix, &[1, 0]).unwrap();
     assert_eq!(transposed.shape(), &[2, 2]);
     assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
 
-    let typed = TypedTensor::from_vec(vec![2, 2], vec![1_i64, 2, 3, 4]);
+    let typed = TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]);
     let typed_t = crate::cpu::structural::typed_transpose(&typed, &[1, 0]).unwrap();
     assert_eq!(typed_t.host_data(), &[1, 3, 2, 4]);
 
-    let row = TypedTensor::from_vec(vec![1, 2], vec![5.0_f32, 6.0]);
+    let row = TypedTensor::from_vec_col_major(vec![1, 2], vec![5.0_f32, 6.0]);
     let typed_b = crate::cpu::structural::typed_broadcast_in_dim(&row, &[2, 2], &[0, 1]).unwrap();
     assert_eq!(typed_b.host_data(), &[5.0, 5.0, 6.0, 6.0]);
 
-    let scalar = Tensor::from_vec(vec![], vec![7.0_f64]);
+    let scalar = Tensor::from_vec_col_major(vec![], vec![7.0_f64]);
     let broadcasted = broadcast_in_dim(&scalar, &[2, 2], &[]).unwrap();
     assert_eq!(
         broadcasted.as_slice::<f64>().unwrap(),
         &[7.0, 7.0, 7.0, 7.0]
     );
 
-    let i64_matrix = Tensor::from_vec(vec![2, 2], vec![1_i64, 2, 3, 4]);
+    let i64_matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]);
     let as_c64 = crate::cpu::structural::convert(&i64_matrix, DType::C64).unwrap();
     assert_eq!(as_c64.dtype(), DType::C64);
     let as_f32 = crate::cpu::structural::convert(&as_c64, DType::F32).unwrap();
@@ -4193,7 +4382,7 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
     assert_eq!(embedded.as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 4.0]);
 
     let typed_diag = crate::cpu::structural::typed_extract_diagonal(
-        &TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
+        &TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]),
         0,
         1,
     )
@@ -4207,24 +4396,24 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
     let upper = triu(&matrix, 0).unwrap();
     assert_eq!(upper.as_slice::<f64>().unwrap(), &[1.0, 0.0, 3.0, 4.0]);
     let typed_lower = crate::cpu::structural::typed_tril(
-        &TypedTensor::from_vec(vec![2, 2], vec![1_i64, 2, 3, 4]),
+        &TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]),
         0,
     )
     .unwrap();
     assert_eq!(typed_lower.host_data(), &[1, 2, 0, 4]);
     let typed_upper = crate::cpu::structural::typed_triu(
-        &TypedTensor::from_vec(vec![2, 2], vec![1_i64, 2, 3, 4]),
+        &TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]),
         0,
     )
     .unwrap();
     assert_eq!(typed_upper.host_data(), &[1, 0, 3, 4]);
     assert!(crate::cpu::structural::typed_tril(
-        &TypedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]),
+        &TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
         0
     )
     .is_err());
 
-    let c32_matrix = Tensor::C32(TypedTensor::from_vec(
+    let c32_matrix = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2, 2],
         vec![
             Complex32::new(1.0, 0.0),

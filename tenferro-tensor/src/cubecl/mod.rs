@@ -37,7 +37,7 @@
 //! back to the host afterwards (no implicit CPU↔GPU transfer, following the PyTorch
 //! convention).
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::cubecl::{CubeclBackend, upload_tensor, download_tensor};
 //! use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 //!
@@ -46,8 +46,8 @@
 //! let mut backend = CubeclBackend::new(0)?;
 //!
 //! // 2. Create tensors on the CPU
-//! let a = Tensor::F64(TypedTensor::from_vec(vec![2], vec![1.0, 2.0]));
-//! let b = Tensor::F64(TypedTensor::from_vec(vec![2], vec![3.0, 4.0]));
+//! let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
+//! let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
 //!
 //! // 3. Upload to GPU
 //! let gpu_a = upload_tensor(backend.runtime(), &a)?;
@@ -231,7 +231,7 @@ impl CubeclBackend {
                 })
             }
         };
-        let converted = Tensor::F64(TypedTensor::from_vec(
+        let converted = Tensor::F64(TypedTensor::from_vec_col_major(
             indices.shape.clone(),
             host_values.into_iter().map(|value| value as f64).collect(),
         ));

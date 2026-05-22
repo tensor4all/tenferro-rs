@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::compiler::compile_std_to_exec;
-use crate::engine::NaryEinsumCache;
 use crate::error::{Error, Result};
+use crate::graph::cache::NaryEinsumCache;
 use computegraph::compile::compile;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::materialize::materialize_merge;
@@ -327,7 +327,7 @@ pub fn eval_exec_ir_unsegmented<B: TensorBackend>(
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
     let mut cache = NaryEinsumCache::new(
-        std::num::NonZeroUsize::new(crate::engine::DEFAULT_EINSUM_CACHE_CAPACITY)
+        std::num::NonZeroUsize::new(crate::graph::cache::DEFAULT_EINSUM_CACHE_CAPACITY)
             .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
     );
     eval_exec_ir_unsegmented_with_cache(backend, program, inputs, &mut cache)
@@ -565,7 +565,7 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
                     input.shape().len()
                 )));
             }
-            let host = Tensor::F64(TypedTensor::from_vec(
+            let host = Tensor::F64(TypedTensor::from_vec_col_major(
                 vec![],
                 vec![input.shape()[*axis] as f64],
             ));
@@ -948,7 +948,7 @@ fn execute_nary_einsum<B: TensorBackend>(
     mode: DispatchMode,
     cache: &mut NaryEinsumCache,
 ) -> Result<Tensor> {
-    use tenferro_einsum::{build_einsum_fragment, ContractionOptimizerOptions, ContractionTree};
+    use tenferro_einsum::{build_einsum_fragment, ContractionTree};
 
     if inputs.is_empty() {
         return Err(Error::ContractionError(
@@ -970,7 +970,7 @@ fn execute_nary_einsum<B: TensorBackend>(
             ContractionTree::optimize_with_options(
                 &subs,
                 &shape_refs,
-                &ContractionOptimizerOptions::default(),
+                &crate::einsum::default_auto_options(),
             )
             .map_err(|e| Error::ContractionError(format!("{e}")))?,
         );
@@ -1053,15 +1053,15 @@ fn execute_nary_einsum<B: TensorBackend>(
 
 pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
     match dtype {
-        DType::F64 => Tensor::F64(TypedTensor::from_vec(
+        DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
             vec![],
             vec![f64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
         )),
-        DType::F32 => Tensor::F32(TypedTensor::from_vec(
+        DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
         )),
-        DType::I64 => Tensor::I64(TypedTensor::from_vec(
+        DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
         )),
@@ -1073,7 +1073,10 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             im_bytes.copy_from_slice(&data[8..]);
             let re = f64::from_le_bytes(re_bytes);
             let im = f64::from_le_bytes(im_bytes);
-            Tensor::C64(TypedTensor::from_vec(vec![], vec![Complex64::new(re, im)]))
+            Tensor::C64(TypedTensor::from_vec_col_major(
+                vec![],
+                vec![Complex64::new(re, im)],
+            ))
         }
         DType::C32 => {
             let data = exact_bytes::<8>(dtype, bytes);
@@ -1083,7 +1086,10 @@ pub(crate) fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             im_bytes.copy_from_slice(&data[4..]);
             let re = f32::from_le_bytes(re_bytes);
             let im = f32::from_le_bytes(im_bytes);
-            Tensor::C32(TypedTensor::from_vec(vec![], vec![Complex32::new(re, im)]))
+            Tensor::C32(TypedTensor::from_vec_col_major(
+                vec![],
+                vec![Complex32::new(re, im)],
+            ))
         }
     }
 }

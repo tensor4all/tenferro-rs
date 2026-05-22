@@ -1,14 +1,16 @@
+mod support;
 use num_complex::Complex64;
-use tenferro::engine::Engine;
-use tenferro::traced::{eval_all, TracedTensor};
+use support::{run_many_traced_with, RunTraced};
+use tenferro::traced::TracedTensor;
 use tenferro::traced_tensor::{
     cholesky, det, eig, eigh, full_piv_lu, full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol,
     qr, slogdet, solve, svd, triangular_solve,
 };
+use tenferro::GraphExecutor;
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn get_f64_data(t: &Tensor) -> &[f64] {
@@ -29,9 +31,9 @@ fn get_c64_data(t: &Tensor) -> &[Complex64] {
 fn svd_traced_tensor_returns_three_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
-    let (mut u, mut s, mut vt) = svd(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut u, &mut s, &mut vt]).unwrap();
+    let (u, s, vt) = svd(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&u, &s, &vt]).unwrap();
 
     assert_eq!(results[0].shape(), &[2, 2]);
     assert_eq!(results[1].shape(), &[2]);
@@ -46,9 +48,9 @@ fn svd_traced_tensor_returns_three_outputs() {
 fn qr_traced_tensor_returns_q_and_r() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
-    let (mut q, mut r) = qr(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut q, &mut r]).unwrap();
+    let (q, r) = qr(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&q, &r]).unwrap();
 
     assert_eq!(results[0].shape(), &[2, 2]);
     assert_eq!(results[1].shape(), &[2, 2]);
@@ -60,9 +62,9 @@ fn qr_traced_tensor_returns_q_and_r() {
 fn eigh_traced_tensor_returns_values_and_vectors() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
-    let (mut values, mut vectors) = eigh(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut values, &mut vectors]).unwrap();
+    let (values, vectors) = eigh(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&values, &vectors]).unwrap();
 
     assert_eq!(results[0].shape(), &[2]);
     assert_eq!(results[1].shape(), &[2, 2]);
@@ -78,12 +80,12 @@ fn linalg_single_output_traced_tensor_functions_eval() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
 
-    let mut chol = cholesky(&a);
-    let mut solved = solve(&a, &b);
-    let mut triangular = triangular_solve(&a, &b, true, true, false, false);
+    let chol = cholesky(&a);
+    let solved = solve(&a, &b);
+    let triangular = triangular_solve(&a, &b, true, true, false, false);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut chol, &mut solved, &mut triangular]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&chol, &solved, &triangular]).unwrap();
 
     assert_eq!(get_f64_data(&results[0]), &[2.0, 0.0, 0.0, 3.0]);
     assert_eq!(get_f64_data(&results[1]), &[2.0, 3.0]);
@@ -94,9 +96,9 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 fn lu_traced_tensor_returns_four_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]));
-    let (mut p, mut l, mut u, mut parity) = lu(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut p, &mut l, &mut u, &mut parity]).unwrap();
+    let (p, l, u, parity) = lu(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&p, &l, &u, &parity]).unwrap();
 
     assert_eq!(results[0].shape(), &[2, 2]);
     assert_eq!(results[1].shape(), &[2, 2]);
@@ -109,13 +111,9 @@ fn lu_traced_tensor_returns_four_outputs() {
 fn full_piv_lu_traced_tensor_returns_five_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
-    let (mut p, mut l, mut u, mut q, mut parity) = full_piv_lu(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(
-        &mut engine,
-        &mut [&mut p, &mut l, &mut u, &mut q, &mut parity],
-    )
-    .unwrap();
+    let (p, l, u, q, parity) = full_piv_lu(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&p, &l, &u, &q, &parity]).unwrap();
 
     assert_eq!(results[0].shape(), &[2, 2]);
     assert_eq!(results[1].shape(), &[2, 2]);
@@ -129,22 +127,22 @@ fn full_piv_lu_solve_traced_tensor_eval() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]));
-    let mut x = full_piv_lu_solve(&a, &b);
+    let x = full_piv_lu_solve(&a, &b);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let out = x.eval(&mut engine).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let out = x.run_with(&mut engine).unwrap();
 
     assert_eq!(out.shape(), &[2, 1]);
-    assert_eq!(get_f64_data(out), &[4.0, -1.0]);
+    assert_eq!(get_f64_data(&out), &[4.0, -1.0]);
 }
 
 #[test]
 fn eig_traced_tensor_returns_complex_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]));
-    let (mut values, mut vectors) = eig(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut values, &mut vectors]).unwrap();
+    let (values, vectors) = eig(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&values, &vectors]).unwrap();
 
     assert_eq!(results[0].shape(), &[2]);
     assert_eq!(results[1].shape(), &[2, 2]);
@@ -164,22 +162,22 @@ fn determinant_inverse_pseudoinverse_and_norm_eval() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
 
-    let (mut sign, mut logabsdet) = slogdet(&a);
-    let mut determinant = det(&a);
-    let mut inverse = inv(&a);
-    let mut pseudo_inverse = pinv(&a);
-    let mut frob = norm(&a, None, Some(&[0, 1]), false);
+    let (sign, logabsdet) = slogdet(&a);
+    let determinant = det(&a);
+    let inverse = inv(&a);
+    let pseudo_inverse = pinv(&a);
+    let frob = norm(&a, None, Some(&[0, 1]), false);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(
         &mut engine,
-        &mut [
-            &mut sign,
-            &mut logabsdet,
-            &mut determinant,
-            &mut inverse,
-            &mut pseudo_inverse,
-            &mut frob,
+        &[
+            &sign,
+            &logabsdet,
+            &determinant,
+            &inverse,
+            &pseudo_inverse,
+            &frob,
         ],
     )
     .unwrap();
@@ -196,10 +194,10 @@ fn determinant_inverse_pseudoinverse_and_norm_eval() {
 fn pinv_with_large_rtol_discards_all_singular_values() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
-    let mut pseudo_inverse = pinv_with_rtol(&a, 1.0);
+    let pseudo_inverse = pinv_with_rtol(&a, 1.0);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut pseudo_inverse]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&pseudo_inverse]).unwrap();
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.0, 0.0, 0.0, 0.0]);
 }
@@ -211,21 +209,21 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
     let matrix =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]));
 
-    let mut zero_norm = norm(&vector, Some(0.0), Some(&[0]), false);
-    let mut matrix_one = norm(&matrix, Some(1.0), Some(&[0, 1]), false);
-    let mut matrix_neg_one = norm(&matrix, Some(-1.0), Some(&[0, 1]), false);
-    let mut matrix_inf = norm(&matrix, Some(f64::INFINITY), Some(&[0, 1]), false);
-    let mut matrix_neg_inf = norm(&matrix, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
+    let zero_norm = norm(&vector, Some(0.0), Some(&[0]), false);
+    let matrix_one = norm(&matrix, Some(1.0), Some(&[0, 1]), false);
+    let matrix_neg_one = norm(&matrix, Some(-1.0), Some(&[0, 1]), false);
+    let matrix_inf = norm(&matrix, Some(f64::INFINITY), Some(&[0, 1]), false);
+    let matrix_neg_inf = norm(&matrix, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(
         &mut engine,
-        &mut [
-            &mut zero_norm,
-            &mut matrix_one,
-            &mut matrix_neg_one,
-            &mut matrix_inf,
-            &mut matrix_neg_inf,
+        &[
+            &zero_norm,
+            &matrix_one,
+            &matrix_neg_one,
+            &matrix_inf,
+            &matrix_neg_inf,
         ],
     )
     .unwrap();
@@ -243,11 +241,11 @@ fn matrix_neg_inf_norm_grad_flows_to_unique_min_row() {
         vec![3, 3],
         vec![1.0, 4.0, 2.0, -2.0, 1.0, 3.0, 1.0, -1.0, -4.0],
     ));
-    let mut y = norm(&a, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
-    let mut grad = y.grad(&a).unwrap();
+    let y = norm(&a, Some(f64::NEG_INFINITY), Some(&[0, 1]), false);
+    let grad = y.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&y, &grad]).unwrap();
 
     assert_f64_eq(get_f64_data(&results[0])[0], 4.0);
     assert_tensor_f64_eq(
@@ -259,14 +257,14 @@ fn matrix_neg_inf_norm_grad_flows_to_unique_min_row() {
 #[test]
 fn norm_neg_inf_grad_matches_oracle_identity_case_without_keepdim() {
     let a = norm_neg_inf_oracle_input();
-    let mut y = norm(&a, Some(f64::NEG_INFINITY), None, false);
+    let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let axes: Vec<usize> = (0..y.rank).collect();
     let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
-    let mut grad = scalar.grad(&a).unwrap();
+    let grad = scalar.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&y, &grad]).unwrap();
 
     assert_f64_eq(get_f64_data(&results[0])[0], 16.527183497626066);
     assert_tensor_f64_eq(
@@ -314,13 +312,13 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_after_jvp_eval() {
     let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![], vec![1.0]));
 
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
-    let mut jvp = y.jvp(&a, &direction);
+    let jvp = y.jvp(&a, &direction);
     let axes: Vec<usize> = (0..y.rank).collect();
     let scalar = (&y * &cotangent).reduce_sum(&axes);
-    let mut grad = scalar.grad(&a).unwrap();
+    let grad = scalar.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut jvp, &mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&jvp, &grad]).unwrap();
 
     assert_f64_eq(get_f64_data(&results[0])[0], -0.5591327894020484);
     assert_tensor_f64_eq(
@@ -339,10 +337,10 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() 
     let y = norm(&a, Some(f64::NEG_INFINITY), None, false);
     let axes: Vec<usize> = (0..y.rank).collect();
     let scalar = (&y * &cotangent).reduce_sum(&axes);
-    let mut grad = scalar.grad(&a).unwrap();
+    let grad = scalar.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&grad]).unwrap();
 
     assert_tensor_f64_eq(
         get_f64_data(&results[0]),
@@ -356,14 +354,14 @@ fn norm_neg_inf_grad_matches_oracle_identity_case_when_only_grad_is_evaluated() 
 #[test]
 fn norm_neg_inf_grad_matches_oracle_identity_case_with_keepdim() {
     let a = norm_neg_inf_oracle_input();
-    let mut y = norm(&a, Some(f64::NEG_INFINITY), None, true);
+    let y = norm(&a, Some(f64::NEG_INFINITY), None, true);
     let axes: Vec<usize> = (0..y.rank).collect();
     let cotangent = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![1, 1], vec![-1.0]));
     let scalar = (&y * &cotangent).reduce_sum(&axes);
-    let mut grad = scalar.grad(&a).unwrap();
+    let grad = scalar.grad(&a).unwrap();
 
-    let mut engine = Engine::new(CpuBackend::new());
-    let results = eval_all(&mut engine, &mut [&mut y, &mut grad]).unwrap();
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let results = run_many_traced_with(&mut engine, &[&y, &grad]).unwrap();
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[16.527183497626066]);
     assert_tensor_f64_eq(
@@ -427,9 +425,9 @@ fn traced_solve_rejects_singular_matrix() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
-    let mut x = solve(&a, &b);
-    let mut engine = Engine::new(CpuBackend::new());
-    let err = x.eval(&mut engine).unwrap_err();
+    let x = solve(&a, &b);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let err = x.run_with(&mut engine).unwrap_err();
     assert!(
         err.to_string().contains("singular"),
         "expected singular matrix error, got: {err}"
@@ -441,9 +439,9 @@ fn traced_solve_rejects_singular_matrix_with_vector_rhs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 2.0]));
-    let mut x = solve(&a, &b);
-    let mut engine = Engine::new(CpuBackend::new());
-    let err = x.eval(&mut engine).unwrap_err();
+    let x = solve(&a, &b);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let err = x.run_with(&mut engine).unwrap_err();
     assert!(
         err.to_string().contains("singular"),
         "expected singular matrix error, got: {err}"
@@ -454,9 +452,9 @@ fn traced_solve_rejects_singular_matrix_with_vector_rhs() {
 fn traced_inv_rejects_singular_matrix() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]));
-    let mut result = inv(&a);
-    let mut engine = Engine::new(CpuBackend::new());
-    let err = result.eval(&mut engine).unwrap_err();
+    let result = inv(&a);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let err = result.run_with(&mut engine).unwrap_err();
     assert!(
         err.to_string().contains("singular"),
         "expected singular matrix error, got: {err}"
@@ -468,8 +466,8 @@ fn traced_solve_accepts_nonsingular_matrix() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]));
-    let mut x = solve(&a, &b);
-    let mut engine = Engine::new(CpuBackend::new());
-    let result = x.eval(&mut engine).unwrap();
+    let x = solve(&a, &b);
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let result = x.run_with(&mut engine).unwrap();
     assert_tensor_f64_eq(get_f64_data(&result), &[4.0, 6.75]);
 }

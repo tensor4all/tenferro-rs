@@ -549,12 +549,12 @@ pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> crate::Result<Vec<Tensor>>
     let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
     match input {
         Tensor::F32(_) | Tensor::C32(_) => Ok(vec![
-            Tensor::C32(TypedTensor::from_vec(value_shape, Vec::new())),
-            Tensor::C32(TypedTensor::from_vec(vector_shape, Vec::new())),
+            Tensor::C32(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
+            Tensor::C32(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
         ]),
         Tensor::F64(_) | Tensor::C64(_) => Ok(vec![
-            Tensor::C64(TypedTensor::from_vec(value_shape, Vec::new())),
-            Tensor::C64(TypedTensor::from_vec(vector_shape, Vec::new())),
+            Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())),
+            Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())),
         ]),
         _ => Err(crate::Error::BackendFailure {
             op: "eig",

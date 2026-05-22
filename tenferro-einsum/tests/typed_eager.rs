@@ -84,7 +84,7 @@ impl TensorBackend for WrongDTypeBackend {
         _rhs: &Tensor,
         _config: &DotGeneralConfig,
     ) -> tenferro_tensor::Result<Tensor> {
-        Ok(Tensor::F64(TypedTensor::from_vec(
+        Ok(Tensor::F64(TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![1.0, 2.0, 3.0, 4.0],
         )))
@@ -102,8 +102,10 @@ fn typed_einsum_f64() {
         std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_PRINT_EVERY", "1");
     }
     let mut ctx = CpuBackend::new();
-    let lhs = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TypedTensor::<f64>::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let result = typed_eager_einsum(&mut ctx, &[&lhs, &rhs], "ij,jk->ik").unwrap();
 
@@ -118,10 +120,10 @@ fn eager_einsum_subscripts_and_read_views_use_integer_api() {
         std::env::set_var("TENFERRO_PROFILE_EAGER_EINSUM_PRINT_EVERY", "1");
     }
     let mut ctx = CpuBackend::new();
-    let lhs = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let rhs_shape = [3usize, 2];
     let rhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let rhs = Tensor::from_vec(rhs_shape.to_vec(), rhs_data.to_vec());
+    let rhs = Tensor::from_vec_col_major(rhs_shape.to_vec(), rhs_data.to_vec());
     let subscripts = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 
     let borrowed = eager_einsum_subscripts(&mut ctx, &[&lhs, &rhs], &subscripts).unwrap();
@@ -145,9 +147,9 @@ fn eager_einsum_subscripts_and_read_views_use_integer_api() {
 #[test]
 fn eager_einsum_owned_subscripts_handles_three_operands() {
     let mut ctx = CpuBackend::new();
-    let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = Tensor::from_vec(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
-    let c = Tensor::from_vec(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let c = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]);
     let subscripts = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
 
     let result = eager_einsum_owned_subscripts(&mut ctx, vec![a, b, c], &subscripts).unwrap();
@@ -162,9 +164,10 @@ fn eager_einsum_owned_subscripts_handles_three_operands() {
 #[test]
 fn typed_einsum_f64_three_operands() {
     let mut ctx = CpuBackend::new();
-    let a = TypedTensor::<f64>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = TypedTensor::<f64>::from_vec(vec![3, 2], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
-    let c = TypedTensor::<f64>::from_vec(vec![2, 2], vec![2.0, 0.0, 1.0, 3.0]);
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let c = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 1.0, 3.0]);
 
     let result = typed_eager_einsum(&mut ctx, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
 
@@ -175,8 +178,10 @@ fn typed_einsum_f64_three_operands() {
 #[test]
 fn typed_einsum_reports_dtype_mismatch_from_backend_result() {
     let mut ctx = WrongDTypeBackend;
-    let lhs = TypedTensor::<f32>::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TypedTensor::<f32>::from_vec(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs =
+        TypedTensor::<f32>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs =
+        TypedTensor::<f32>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let err = typed_eager_einsum(&mut ctx, &[&lhs, &rhs], "ij,jk->ik").unwrap_err();
 
@@ -192,8 +197,8 @@ fn typed_einsum_reports_dtype_mismatch_from_backend_result() {
 
 #[test]
 fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
-    let lhs = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![1.0]));
-    let rhs = Tensor::F64(TypedTensor::from_vec(vec![1, 1], vec![3.0]));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.0]));
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0]));
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![0],

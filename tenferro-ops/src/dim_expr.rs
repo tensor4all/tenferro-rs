@@ -6,7 +6,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_ops::dim_expr::DimExpr;
 ///
 /// let expr = DimExpr::mul(
@@ -52,7 +52,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::add(
@@ -88,7 +88,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::add(
@@ -124,7 +124,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::InputDim {
@@ -153,7 +153,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// assert_eq!(DimExpr::constant(4), DimExpr::Const(4));
@@ -166,7 +166,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::add(DimExpr::Const(2), DimExpr::Const(3));
@@ -180,7 +180,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::sub(DimExpr::Const(7), DimExpr::Const(2));
@@ -194,7 +194,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::mul(DimExpr::Const(3), DimExpr::Const(4));
@@ -208,7 +208,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::floor_div(DimExpr::Const(9), DimExpr::Const(2));
@@ -222,7 +222,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::min(DimExpr::Const(3), DimExpr::Const(5));
@@ -236,7 +236,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let expr = DimExpr::max(DimExpr::Const(3), DimExpr::Const(5));
@@ -250,7 +250,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// assert!(DimExpr::Const(3).is_const());
@@ -263,7 +263,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// assert_eq!(DimExpr::from_concrete(&[2, 3]), vec![DimExpr::Const(2), DimExpr::Const(3)]);
@@ -276,7 +276,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let shape = DimExpr::input_shape(1, 2);
@@ -298,7 +298,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let exprs = vec![
@@ -315,7 +315,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let exprs = vec![DimExpr::InputDim { input_idx: 0, axis: 0 }];
@@ -332,7 +332,7 @@ impl DimExpr {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::dim_expr::DimExpr;
     ///
     /// let exprs = vec![

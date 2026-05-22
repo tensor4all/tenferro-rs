@@ -14,7 +14,7 @@ pub use crate::linalg_api::{
     full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,
     triangular_solve,
 };
-pub use crate::traced::{eval_all, CompiledTracedTensor, TracedTensor, TracedTensorId};
+pub use crate::traced::{TracedTensor, TracedTensorId};
 
 /// Matrix multiplication helper for rank-2 traced tensors.
 ///
@@ -22,7 +22,10 @@ pub use crate::traced::{eval_all, CompiledTracedTensor, TracedTensor, TracedTens
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// # let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
 /// let c = tenferro::traced_tensor::matmul(&a, &b);
 /// ```
 pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
@@ -39,7 +42,10 @@ pub fn matmul(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let base = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+/// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]);
 /// let y = tenferro::traced_tensor::pow(&base, &exp);
 /// ```
 pub fn pow(base: &TracedTensor, exp: &TracedTensor) -> TracedTensor {

@@ -2,11 +2,11 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro_tensor::validate::validate_nonsingular_u;
 //! use tenferro_tensor::{Tensor, TypedTensor};
 //!
-//! let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+//! let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
 //! assert!(validate_nonsingular_u(&t).is_ok());
 //! ```
 
@@ -62,11 +62,11 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::validate::check_singular_diagonal;
 /// use tenferro_tensor::TypedTensor;
 ///
-/// let t = TypedTensor::from_vec(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]);
+/// let t = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]);
 /// assert!(check_singular_diagonal(&t).is_ok());
 /// ```
 pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
@@ -118,11 +118,11 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::validate::validate_nonsingular_u;
 /// use tenferro_tensor::{Tensor, TypedTensor};
 ///
-/// let t = Tensor::F64(TypedTensor::from_vec(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
+/// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]));
 /// assert!(validate_nonsingular_u(&t).is_ok());
 /// ```
 pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {

@@ -5,15 +5,17 @@
 //!    as input to subsequent operations after evaluation.
 //! 2. `grad()` produces correct gradients through multiple unrolled iterations,
 //!    validated against central finite differences.
-//! 3. `eval_all()` successfully evaluates both primal and gradient in a single
+//! 3. `run_many_traced_with()` successfully evaluates both primal and gradient in a single
 //!    merged execution (graph deduplication via `materialize_merge`).
 //! 4. Graph size grows linearly with iteration count.
 
+mod support;
 use std::collections::HashSet;
+use support::{run_many_traced_with, RunTraced};
 
 use computegraph::fragment::Fragment;
-use tenferro::engine::Engine;
-use tenferro::traced::{eval_all, TracedTensor};
+use tenferro::traced::TracedTensor;
+use tenferro::GraphExecutor;
 use tenferro::{CpuBackend, Tensor, TypedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
@@ -21,7 +23,7 @@ const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
 
 fn f64_scalar(val: f64) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(vec![], vec![val]))
+    Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![val]))
 }
 
 fn get_f64_scalar(t: &Tensor) -> f64 {
@@ -80,7 +82,7 @@ fn fixed_point_traced(
     x0: f64,
     max_iter: usize,
     conv_tol: f64,
-    engine: &mut Engine<CpuBackend>,
+    engine: &mut GraphExecutor<CpuBackend>,
 ) -> (TracedTensor, usize) {
     let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0));
     let mut prev_val = x0;
@@ -90,8 +92,8 @@ fn fixed_point_traced(
         let x_new = a * &x.cos();
 
         // Convergence check — eval() must NOT break the graph
-        let mut x_check = x_new.clone();
-        let val = get_f64_scalar(x_check.eval(engine).unwrap());
+        let x_check = x_new.clone();
+        let val = get_f64_scalar(&x_check.run_with(engine).unwrap());
 
         if (val - prev_val).abs() < conv_tol {
             return (x_new, iter);
@@ -110,7 +112,7 @@ fn fixed_point_traced(
 #[test]
 fn eval_mid_loop_preserves_graph_connectivity() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
     assert!(iters < 100, "iteration did not converge");
@@ -118,8 +120,8 @@ fn eval_mid_loop_preserves_graph_connectivity() {
     // x_final is still a TracedTensor connected to `a`.
     // Verify by computing grad — if the graph were broken, this would give 0.
     let grad = x_final.grad(&a).unwrap();
-    let mut grad_clone = grad.clone();
-    let grad_val = get_f64_scalar(grad_clone.eval(&mut engine).unwrap());
+    let grad_clone = grad.clone();
+    let grad_val = get_f64_scalar(&grad_clone.run_with(&mut engine).unwrap());
     assert!(
         grad_val.abs() > 1e-10,
         "gradient is near zero — graph connectivity likely broken; grad={grad_val}"
@@ -139,12 +141,12 @@ fn iterative_ad_gradient_matches_finite_diff() {
 
     // --- AD gradient ---
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
     let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &mut engine);
 
-    let mut loss = x_final;
-    let mut grad = loss.grad(&a).unwrap();
-    let results = eval_all(&mut engine, &mut [&mut loss, &mut grad]).unwrap();
+    let loss = x_final;
+    let grad = loss.grad(&a).unwrap();
+    let results = run_many_traced_with(&mut engine, &[&loss, &grad]).unwrap();
     let ad_grad = get_f64_scalar(&results[1]);
 
     // --- Finite difference gradient ---
@@ -160,23 +162,23 @@ fn iterative_ad_gradient_matches_finite_diff() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Test 3: eval_all evaluates primal + gradient together
+// Test 3: run_many_traced_with evaluates primal + gradient together
 // ─────────────────────────────────────────────────────────────
 
 #[test]
 fn eval_all_evaluates_primal_and_gradient() {
     let a_val = 0.8_f64;
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val));
-    let mut engine = Engine::new(CpuBackend::new());
+    let mut engine = GraphExecutor::new(CpuBackend::new());
 
     let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
 
-    let mut primal = x_final.clone();
-    let mut grad = x_final.grad(&a).unwrap();
+    let primal = x_final.clone();
+    let grad = x_final.grad(&a).unwrap();
 
-    // eval_all merges fragments and deduplicates shared subexpressions.
+    // run_many_traced_with merges fragments and deduplicates shared subexpressions.
     // If this panics or returns wrong values, deduplication is broken.
-    let results = eval_all(&mut engine, &mut [&mut primal, &mut grad]).unwrap();
+    let results = run_many_traced_with(&mut engine, &[&primal, &grad]).unwrap();
     assert_eq!(results.len(), 2);
 
     let primal_val = get_f64_scalar(&results[0]);

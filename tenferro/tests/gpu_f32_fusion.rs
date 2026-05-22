@@ -1,11 +1,13 @@
 // Run with: cargo test --features cubecl -- --ignored
 #![cfg(feature = "cubecl")]
 
-use tenferro::{Engine, Tensor, TracedTensor, TypedTensor};
+mod support;
+use support::RunTraced;
+use tenferro::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::cubecl::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
-    Tensor::F32(TypedTensor::from_vec(shape, data))
+    Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
@@ -27,12 +29,12 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let a = upload_traced(&gpu_backend, &a_host);
     let b = upload_traced(&gpu_backend, &b_host);
     let c = upload_traced(&gpu_backend, &c_host);
-    let mut engine = Engine::new(gpu_backend);
+    let mut engine = GraphExecutor::new(gpu_backend);
 
     let sum = a.add(&b);
     let mut result_traced = sum.mul(&c);
 
-    let result = result_traced.eval(&mut engine).unwrap();
+    let result = result_traced.run_with(&mut engine).unwrap();
     let result = download_tensor(engine.backend().runtime(), result).unwrap();
     let values = result
         .as_slice::<f32>()

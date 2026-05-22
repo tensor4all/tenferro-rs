@@ -227,7 +227,8 @@ Decomposed into Fragment:
 ```
 
 The contraction path optimizer decides the pairwise decomposition order.
-This optimization result is cached in `Engine`'s `EinsumCache`.
+Concrete-shape results are cached by `GraphCompiler`; symbolic-shape runtime
+results are cached by `GraphExecutor`.
 
 For StableHLO lowering: the Fragment's binary ops map directly to
 `stablehlo.dot_general`, `stablehlo.multiply`, etc.

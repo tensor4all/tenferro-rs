@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use crate::error::Result;
 use crate::exec::{
     can_run_in_single_exec_session, collect_outputs_from,
@@ -11,6 +10,7 @@ use crate::exec::{
     initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
+use crate::graph::cache::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
 };
@@ -161,7 +161,7 @@ pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    cache: &mut crate::engine::NaryEinsumCache,
+    cache: &mut NaryEinsumCache,
 ) -> Result<Vec<Tensor>> {
     let mut slots = Vec::new();
     let mut backend_cache = B::RuntimeCache::default();
@@ -179,7 +179,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    cache: &mut crate::engine::NaryEinsumCache,
+    cache: &mut NaryEinsumCache,
     slots: &mut Vec<Option<Tensor>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {

@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use computegraph::compile::compile;
 use computegraph::fragment::{Fragment, FragmentBuilder};
-use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
@@ -16,12 +14,10 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
 use tidu::{try_differentiate, try_transpose};
 
-use super::compiler::compile_std_to_exec;
-use super::engine::Engine;
 use super::error::{Error, Result};
+use super::graph::{GraphCompiler, GraphExecutor};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
-use crate::exec::ExecProgram;
 use crate::metadata::{
     concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new,
     metadata_scopes_with_scope, push_metadata_scope, register_scoped_fragment_metadata,
@@ -63,13 +59,6 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Fragment<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
-}
-
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-pub struct CompiledTracedTensor {
-    pub program: ExecProgram,
-    pub inputs: Vec<Tensor>,
 }
 
 /// Compute a broadcast output shape following NumPy rules.
@@ -265,7 +254,7 @@ impl TracedTensor {
     /// use tenferro::{Tensor, TracedTensor};
     ///
     /// let a = TracedTensor::from_tensor_concrete_shape(
-    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
     /// );
     /// assert_eq!(a.rank, 2);
     /// assert!(a.is_concrete_shape());
@@ -322,7 +311,7 @@ impl TracedTensor {
     /// use tenferro::{Tensor, TracedTensor};
     ///
     /// let t = TracedTensor::from_tensor_symbolic_shape(
-    ///     Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
     /// );
     /// assert_eq!(t.rank, 2);
     /// assert!(!t.is_concrete_shape());
@@ -363,9 +352,9 @@ impl TracedTensor {
 
     /// Build a data-less placeholder leaf with a fixed (concrete) shape.
     ///
-    /// Must be bound via [`TracedTensor::eval_with_inputs`] before evaluation.
+    /// Must be bound via [`GraphExecutor::run_with_inputs`] before evaluation.
     /// Use this when you know the exact shape of the input but want to build
-    /// the graph once and feed different concrete tensors at eval time.
+    /// the graph once and feed different concrete tensors at execution time.
     ///
     /// # Examples
     ///
@@ -410,11 +399,11 @@ impl TracedTensor {
     /// Build a data-less placeholder leaf with the given rank but fully
     /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
     ///
-    /// Must be bound via [`TracedTensor::eval_with_inputs`] before
+    /// Must be bound via [`GraphExecutor::run_with_inputs`] before
     /// evaluation. Use this to build shape-agnostic graphs — in particular,
     /// einsum calls containing at least one `input_symbolic_shape` input are
     /// kept as a single `NaryEinsum` op so the contraction path can be
-    /// optimized at eval time against the actual bound shapes.
+    /// optimized at execution time against the actual bound shapes.
     ///
     /// # Examples
     ///
@@ -454,20 +443,48 @@ impl TracedTensor {
         }
     }
 
-    /// Build a concrete-shape [`TracedTensor`] leaf from typed `Vec<T>`
-    /// data. Equivalent to
-    /// [`TracedTensor::from_tensor_concrete_shape`]`(Tensor::from_vec(shape, data))`.
+    /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
+    /// `Vec<T>` data.
+    ///
+    /// The data must already be in tenferro's physical column-major order.
+    /// For row-major data, use [`TracedTensor::from_vec_row_major`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let a = TracedTensor::from_vec_col_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    /// );
     /// assert_eq!(a.rank, 2);
     /// ```
-    pub fn from_vec<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
-        Self::from_tensor_concrete_shape(T::into_tensor(shape, data))
+    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data))
+    }
+
+    /// Build a concrete-shape [`TracedTensor`] leaf from row-major typed
+    /// `Vec<T>` data.
+    ///
+    /// The data is converted into tenferro's physical column-major storage
+    /// order before it is attached to the traced leaf. For data that is
+    /// already in physical column-major order, use
+    /// [`TracedTensor::from_vec_col_major`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec_row_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// );
+    /// assert_eq!(a.rank, 2);
+    /// ```
+    pub fn from_vec_row_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Self {
+        Self::from_tensor_concrete_shape(Tensor::from_vec_row_major(shape, data))
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
@@ -479,7 +496,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
     /// assert!(a.is_concrete_shape());
     /// assert!(!b.is_concrete_shape());
@@ -502,7 +519,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
     ///
     /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
@@ -519,353 +536,6 @@ impl TracedTensor {
             GlobalValKey::Input(key) => Some(key.clone()),
             _ => None,
         }
-    }
-
-    pub fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor> {
-        self.eval_with_inputs(engine, &[])
-    }
-
-    #[doc(hidden)]
-    pub fn compile_with_inputs(
-        &self,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<CompiledTracedTensor> {
-        let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
-        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
-            if placeholder.data.is_some() {
-                return Err(Error::UnexpectedBinding {
-                    binding_index: index,
-                });
-            }
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-
-            if placeholder.dtype != tensor.dtype() {
-                return Err(Error::PlaceholderDtypeMismatch {
-                    expected: placeholder.dtype,
-                    actual: tensor.dtype(),
-                });
-            }
-
-            match try_concrete_shape(placeholder) {
-                Some(expected_shape) => {
-                    if expected_shape.as_slice() != tensor.shape() {
-                        return Err(Error::PlaceholderShapeMismatch {
-                            expected: expected_shape,
-                            actual: tensor.shape().to_vec(),
-                        });
-                    }
-                }
-                None => {
-                    if placeholder.rank != tensor.shape().len() {
-                        return Err(Error::PlaceholderRankMismatch {
-                            expected: placeholder.rank,
-                            actual: tensor.shape().len(),
-                        });
-                    }
-                }
-            }
-
-            if binding_map.insert(key.clone(), *tensor).is_some() {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
-        let graph = materialize_merge(&view, &[output_key]);
-        let compiled = compile(&graph);
-
-        let mut input_tensors = Vec::with_capacity(graph.inputs.len());
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            match key {
-                GlobalValKey::Input(k) => {
-                    if let Some(tensor) = self.inputs_map.get(k) {
-                        input_tensors.push(tensor.as_ref().clone());
-                        input_dtypes.push(tensor.dtype());
-                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some(bound) = binding_map.get(k) {
-                        input_tensors.push((*bound).clone());
-                        input_dtypes.push(bound.dtype());
-                        input_shapes.push(DimExpr::from_concrete(bound.shape()));
-                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
-                        input_dtypes.push(zero.dtype());
-                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
-                        input_tensors.push(zero);
-                    } else {
-                        return Err(Error::UnboundPlaceholder {
-                            input_key: format!("{:?}", k),
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(
-                        "expected Input key in graph inputs".to_string(),
-                    ));
-                }
-            }
-        }
-
-        let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-        Ok(CompiledTracedTensor {
-            program,
-            inputs: input_tensors,
-        })
-    }
-
-    #[doc(hidden)]
-    pub fn compile_with_input_specs(
-        &self,
-        bindings: &[(&TracedTensor, DType, &[usize])],
-    ) -> Result<ExecProgram> {
-        let mut binding_map: HashMap<TensorInputKey, (DType, &[usize])> = HashMap::new();
-        for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
-            if placeholder.data.is_some() {
-                return Err(Error::UnexpectedBinding {
-                    binding_index: index,
-                });
-            }
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-
-            if placeholder.dtype != *dtype {
-                return Err(Error::PlaceholderDtypeMismatch {
-                    expected: placeholder.dtype,
-                    actual: *dtype,
-                });
-            }
-
-            match try_concrete_shape(placeholder) {
-                Some(expected_shape) => {
-                    if expected_shape.as_slice() != *shape {
-                        return Err(Error::PlaceholderShapeMismatch {
-                            expected: expected_shape,
-                            actual: (*shape).to_vec(),
-                        });
-                    }
-                }
-                None => {
-                    if placeholder.rank != shape.len() {
-                        return Err(Error::PlaceholderRankMismatch {
-                            expected: placeholder.rank,
-                            actual: shape.len(),
-                        });
-                    }
-                }
-            }
-
-            if binding_map.insert(key.clone(), (*dtype, *shape)).is_some() {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
-        let graph = materialize_merge(&view, &[output_key]);
-        let compiled = compile(&graph);
-
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            match key {
-                GlobalValKey::Input(k) => {
-                    if let Some(tensor) = self.inputs_map.get(k) {
-                        input_dtypes.push(tensor.dtype());
-                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some((dtype, shape)) = binding_map.get(k) {
-                        input_dtypes.push(*dtype);
-                        input_shapes.push(DimExpr::from_concrete(*shape));
-                    } else if !matches!(k, TensorInputKey::User { .. }) {
-                        let root = tangent_primal_root(k);
-                        if let Some((dtype, shape)) = binding_map.get(root) {
-                            input_dtypes.push(*dtype);
-                            input_shapes.push(DimExpr::from_concrete(*shape));
-                        } else {
-                            return Err(Error::UnboundPlaceholder {
-                                input_key: format!("{:?}", k),
-                            });
-                        }
-                    } else {
-                        return Err(Error::UnboundPlaceholder {
-                            input_key: format!("{:?}", k),
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(
-                        "expected Input key in graph inputs".to_string(),
-                    ));
-                }
-            }
-        }
-
-        Ok(compile_std_to_exec(&compiled, &input_dtypes, &input_shapes))
-    }
-
-    /// Evaluate this traced tensor, binding external tensors to any
-    /// placeholder leaves present in the graph.
-    ///
-    /// Each `(placeholder, tensor)` pair maps a placeholder
-    /// [`TracedTensor`] (built via
-    /// [`TracedTensor::input_concrete_shape`] or
-    /// [`TracedTensor::input_symbolic_shape`]) to the concrete
-    /// [`Tensor`] that should take its place during execution. Leaves that
-    /// carry their own data (from [`TracedTensor::from_vec`],
-    /// [`TracedTensor::from_tensor_concrete_shape`], or
-    /// [`TracedTensor::from_tensor_symbolic_shape`]) must not appear in
-    /// `bindings`.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::UnexpectedBinding`] if a binding's left side is not a
-    ///   data-less placeholder leaf.
-    /// - [`Error::DuplicateBinding`] if the same placeholder key appears
-    ///   more than once in `bindings`.
-    /// - [`Error::PlaceholderDtypeMismatch`] if a binding tensor's dtype
-    ///   differs from the placeholder's declared dtype.
-    /// - [`Error::PlaceholderShapeMismatch`] if a binding tensor's shape
-    ///   differs from an `input_concrete_shape` placeholder's fixed shape.
-    /// - [`Error::PlaceholderRankMismatch`] if a binding tensor's rank
-    ///   differs from an `input_symbolic_shape` placeholder's rank.
-    /// - [`Error::UnboundPlaceholder`] if the compiled graph contains a
-    ///   placeholder that has no entry in `bindings`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{CpuBackend, Engine, Tensor, TracedTensor};
-    /// use tenferro_tensor::DType;
-    ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
-    /// let mut y = &x + &x;
-    /// let concrete = Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    /// let out = y.eval_with_inputs(&mut engine, &[(&x, &concrete)]).unwrap();
-    /// assert_eq!(out.shape(), &[3]);
-    /// ```
-    pub fn eval_with_inputs<B: TensorBackend>(
-        &mut self,
-        engine: &mut Engine<B>,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<&Tensor> {
-        // Build the binding map keyed on `TensorInputKey`, validating each
-        // binding as we go. We validate *before* the already-evaluated
-        // shortcut so that user mistakes (e.g. binding a data-carrying leaf)
-        // surface as errors rather than getting silently ignored when the
-        // output tensor happens to be cached.
-        let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
-        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
-            if placeholder.data.is_some() {
-                return Err(Error::UnexpectedBinding {
-                    binding_index: index,
-                });
-            }
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-
-            if placeholder.dtype != tensor.dtype() {
-                return Err(Error::PlaceholderDtypeMismatch {
-                    expected: placeholder.dtype,
-                    actual: tensor.dtype(),
-                });
-            }
-
-            match try_concrete_shape(placeholder) {
-                Some(expected_shape) => {
-                    if expected_shape.as_slice() != tensor.shape() {
-                        return Err(Error::PlaceholderShapeMismatch {
-                            expected: expected_shape,
-                            actual: tensor.shape().to_vec(),
-                        });
-                    }
-                }
-                None => {
-                    if placeholder.rank != tensor.shape().len() {
-                        return Err(Error::PlaceholderRankMismatch {
-                            expected: placeholder.rank,
-                            actual: tensor.shape().len(),
-                        });
-                    }
-                }
-            }
-
-            if binding_map.insert(key.clone(), *tensor).is_some() {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        // Already-evaluated shortcut — safe to take now that bindings passed
-        // validation.
-        if self.data.is_some() {
-            return Ok(self.data.as_ref().unwrap().as_ref());
-        }
-
-        let output_key = self.fragment.vals()[self.val].key.clone();
-
-        let view = resolve(self.resolve_roots());
-        let graph = materialize_merge(&view, &[output_key]);
-        let compiled = compile(&graph);
-
-        let mut input_tensors = Vec::with_capacity(graph.inputs.len());
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            match key {
-                GlobalValKey::Input(k) => {
-                    if let Some(tensor) = self.inputs_map.get(k) {
-                        input_tensors.push(tensor.as_ref().clone());
-                        input_dtypes.push(tensor.dtype());
-                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some(bound) = binding_map.get(k) {
-                        input_tensors.push((*bound).clone());
-                        input_dtypes.push(bound.dtype());
-                        input_shapes.push(DimExpr::from_concrete(bound.shape()));
-                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
-                        // Deferred zero-tangent: `k` is a tangent input whose
-                        // primal root was provided as a user binding. The
-                        // zero tensor inherits the primal's concrete shape and
-                        // dtype. This is the deferred zero-tangent policy used
-                        // for symbolic-shape placeholder gradients.
-                        input_dtypes.push(zero.dtype());
-                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
-                        input_tensors.push(zero);
-                    } else {
-                        return Err(Error::UnboundPlaceholder {
-                            input_key: format!("{:?}", k),
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(
-                        "expected Input key in graph inputs".to_string(),
-                    ));
-                }
-            }
-        }
-        let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-
-        let cached_exec = engine.get_or_compile(exec);
-        let mut results = engine.eval_exec_ir(&cached_exec, input_tensors)?;
-        if results.len() != 1 {
-            return Err(Error::Internal(format!(
-                "expected 1 output, got {}",
-                results.len()
-            )));
-        }
-
-        self.data = Some(Arc::new(results.remove(0)));
-        Ok(self.data.as_ref().unwrap().as_ref())
     }
 
     pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
@@ -890,8 +560,11 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// let maybe_dx = loss.try_grad(&x)?;
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// # let loss = x.scale_real(2.0);
+    /// let maybe_dx = loss.try_grad(&x).unwrap();
     /// ```
     pub fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
         if self.rank != 0 {
@@ -913,20 +586,28 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec(vec![], vec![3.0_f64]);
+    /// let mut compiler = GraphCompiler::new();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let mut y = &x * &x;
-    /// y.checkpoint(&mut engine).unwrap();
-    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// y.checkpoint(&mut compiler, &mut executor).unwrap();
+    ///
+    /// let program = compiler.compile(&y).unwrap();
+    /// assert_eq!(executor.run(&program).unwrap().shape(), &[] as &[usize]);
     /// ```
-    pub fn checkpoint<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<()> {
-        self.eval(engine)?;
-        let data = self
-            .data
-            .clone()
-            .ok_or_else(|| Error::Internal("checkpoint eval did not populate data".to_string()))?;
+    pub fn checkpoint<B: TensorBackend>(
+        &mut self,
+        compiler: &mut GraphCompiler,
+        executor: &mut GraphExecutor<B>,
+    ) -> Result<()> {
+        let data = if let Some(data) = &self.data {
+            data.clone()
+        } else {
+            let program = compiler.compile(self)?;
+            Arc::new(executor.run(&program)?)
+        };
         let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
 
         let old_fragment = self.fragment.clone();
@@ -960,6 +641,7 @@ impl TracedTensor {
         self.fragment = new_fragment;
         self.val = leaf_val;
         self.extra_roots.clear();
+        self.data = Some(data.clone());
         self.shape_hint = concrete_shape_hint;
         self.checkpoint_chain = Some(Arc::new(node));
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(new_metadata_scope));
@@ -1175,9 +857,9 @@ impl TracedTensor {
         // When `wrt` has a concrete shape we materialise the zero tensor
         // eagerly and store it in `inputs_map`. When `wrt` is symbolic
         // (shape_hint == None) we leave those tangent input keys absent from
-        // `inputs_map`; `eval_with_inputs` will synthesise the zeros at
-        // evaluation time once the concrete shape is known from the caller's
-        // binding. This is the deferred zero-tangent policy used for
+        // `inputs_map`; `GraphExecutor::run_with_inputs` synthesises the
+        // zeros once the concrete shape is known from the caller's binding.
+        // This is the deferred zero-tangent policy used for
         // symbolic-shape placeholder gradients.
         if let Some(concrete_shape) = try_concrete_shape(wrt) {
             let zero_tangent = Arc::new(zeros_tensor(wrt.dtype, concrete_shape));
@@ -1193,7 +875,7 @@ impl TracedTensor {
             }
         }
         // Symbolic case: tangent keys are intentionally absent from
-        // inputs_map; eval_with_inputs resolves them via deferred-zero
+        // inputs_map; GraphExecutor::run_with_inputs resolves them via deferred-zero
         // synthesis keyed on the primal binding.
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
@@ -1232,7 +914,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
     /// ```
@@ -1253,7 +938,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.mul(&z);
     /// let y2 = &x * &z;
     /// ```
@@ -1274,7 +962,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     /// let y = x.div(&z);
     /// let y2 = &x / &z;
     /// ```
@@ -1295,7 +986,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.neg();
     /// let y2 = -&x;
     /// ```
@@ -1307,7 +1000,13 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use num_complex::Complex64;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
+    /// #     vec![2],
+    /// #     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    /// # );
     /// let y = x.conj();
     /// ```
     pub fn conj(&self) -> TracedTensor {
@@ -1318,7 +1017,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]);
     /// let y = x.abs();
     /// ```
     pub fn abs(&self) -> TracedTensor {
@@ -1329,7 +1030,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]);
     /// let y = x.sign();
     /// ```
     pub fn sign(&self) -> TracedTensor {
@@ -1340,7 +1043,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.scale_real(2.0);
     /// ```
     pub fn scale_real(&self, factor: f64) -> TracedTensor {
@@ -1361,8 +1066,13 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use num_complex::Complex64;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
+    /// #     vec![2],
+    /// #     vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    /// # );
     /// let y = x.scale_complex(Complex64::new(0.0, 1.0)); // multiply by i
     /// ```
     pub fn scale_complex(&self, factor: Complex64) -> TracedTensor {
@@ -1384,7 +1094,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.exp();
     /// ```
     pub fn exp(&self) -> TracedTensor {
@@ -1395,7 +1107,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.log();
     /// ```
     pub fn log(&self) -> TracedTensor {
@@ -1406,7 +1120,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.sin();
     /// ```
     pub fn sin(&self) -> TracedTensor {
@@ -1417,7 +1133,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.cos();
     /// ```
     pub fn cos(&self) -> TracedTensor {
@@ -1428,7 +1146,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.tanh();
     /// ```
     pub fn tanh(&self) -> TracedTensor {
@@ -1439,7 +1159,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
     /// let y = x.sqrt();
     /// ```
     pub fn sqrt(&self) -> TracedTensor {
@@ -1450,7 +1172,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
     /// let y = x.rsqrt();
     /// ```
     pub fn rsqrt(&self) -> TracedTensor {
@@ -1461,7 +1185,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let base = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+    /// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]);
     /// let y = base.pow(&exp);
     /// ```
     pub fn pow(&self, other: &TracedTensor) -> TracedTensor {
@@ -1479,7 +1206,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.expm1();
     /// ```
     pub fn expm1(&self) -> TracedTensor {
@@ -1490,7 +1219,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let y = x.log1p();
     /// ```
     pub fn log1p(&self) -> TracedTensor {
@@ -1504,8 +1235,10 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
     /// use tenferro::DType;
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     ///
     /// let y = x.convert(DType::C64);
     /// ```
@@ -1530,7 +1263,16 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::{DotGeneralConfig, TracedTensor};
+    /// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    /// # let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+    /// # let config = DotGeneralConfig {
+    /// #     lhs_contracting_dims: vec![1],
+    /// #     rhs_contracting_dims: vec![0],
+    /// #     lhs_batch_dims: vec![],
+    /// #     rhs_batch_dims: vec![],
+    /// # };
     /// let y = a.dot_general(&b, config);
     /// ```
     pub fn dot_general(&self, other: &TracedTensor, config: DotGeneralConfig) -> TracedTensor {
@@ -1578,7 +1320,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_sum(&[0]);
     /// let y2 = x.sum(&[0]);
     /// ```
@@ -1606,7 +1350,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_max(&[0]);
     /// ```
     pub fn reduce_max(&self, axes: &[usize]) -> TracedTensor {
@@ -1633,7 +1379,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_min(&[0]);
     /// ```
     pub fn reduce_min(&self, axes: &[usize]) -> TracedTensor {
@@ -1657,7 +1405,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.reduce_prod(&[0]);
     /// ```
     pub fn reduce_prod(&self, axes: &[usize]) -> TracedTensor {
@@ -1681,7 +1431,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]);
     /// let y = x.reshape(&[2, 2]);
     /// ```
     pub fn reshape(&self, shape: &[usize]) -> TracedTensor {
@@ -1713,10 +1465,12 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let rows = x.sym_size(0);
     /// let cols = x.sym_size(1);
-    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// ```
     pub fn sym_size(&self, axis: usize) -> SymDim {
         assert!(
@@ -1748,7 +1502,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// // Concrete axis: reports the constant size.
     /// assert_eq!(a.axis_sym_dim(0).constant_value(), Some(2));
     ///
@@ -1782,7 +1536,7 @@ impl TracedTensor {
     /// use tenferro_tensor::DType;
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// assert!(a.sym_shape().is_some());
     /// assert_eq!(a.sym_shape().unwrap().len(), 2);
     ///
@@ -1797,10 +1551,12 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let rows = x.sym_size(0);
     /// let cols = x.sym_size(1);
-    /// let y = x.reshape_sym(&[rows * cols])?;
+    /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// ```
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
         let tensor_map = [(self.id, 0usize)];
@@ -1821,7 +1577,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
     /// let y = x.broadcast_in_dim(&[2, 3], &[1]);
     /// let y2 = x.broadcast(&[2, 3], &[1]);
     /// ```
@@ -1864,8 +1622,8 @@ impl TracedTensor {
     /// ```
     /// use tenferro::TracedTensor;
     ///
-    /// let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
-    /// let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    /// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
     /// let m = a.axis_sym_dim(0);
     /// let k = a.axis_sym_dim(1);
     /// let n = b.axis_sym_dim(1);
@@ -1932,7 +1690,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
     /// let y = x.transpose(&[1, 0]);
     /// ```
     pub fn transpose(&self, perm: &[usize]) -> TracedTensor {
@@ -1954,7 +1714,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.extract_diag(0, 1);
     /// ```
     pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
@@ -1981,7 +1743,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]);
     /// let y = x.embed_diag(0, 1);
     /// ```
     pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> TracedTensor {
@@ -2006,7 +1770,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     /// let y = x.sum(&[0]);
     /// ```
     pub fn sum(&self, axes: &[usize]) -> TracedTensor {
@@ -2017,7 +1783,9 @@ impl TracedTensor {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use tenferro::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]);
     /// let y = x.broadcast(&[2, 3], &[1]);
     /// ```
     pub fn broadcast(&self, shape: &[usize], dims: &[usize]) -> TracedTensor {
@@ -2031,12 +1799,14 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    /// let mut cols = x.shape_of(1);
-    /// assert_eq!(cols.eval(&mut engine).unwrap().shape(), &[] as &[usize]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    /// let cols = x.shape_of(1);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&cols).unwrap();
+    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// assert_eq!(out.shape(), &[] as &[usize]);
     /// ```
     pub fn shape_of(&self, axis: usize) -> TracedTensor {
         assert!(
@@ -2062,13 +1832,15 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    /// let size = TracedTensor::from_vec(vec![], vec![2.0_f64]);
-    /// let mut y = x.dynamic_truncate(&size, 0);
-    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[2]);
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    /// let y = x.dynamic_truncate(&size, 0);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// assert_eq!(out.shape(), &[2]);
     /// ```
     pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> TracedTensor {
         assert!(
@@ -2097,13 +1869,15 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{CpuBackend, Engine, TracedTensor};
+    /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
     ///
-    /// let mut engine = Engine::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-    /// let reference = TracedTensor::from_vec(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
-    /// let mut y = x.pad_to_match(&reference, 0);
-    /// assert_eq!(y.eval(&mut engine).unwrap().shape(), &[4]);
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);
+    /// let y = x.pad_to_match(&reference, 0);
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// assert_eq!(out.shape(), &[4]);
     /// ```
     pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> TracedTensor {
         assert!(
@@ -2425,7 +2199,7 @@ fn register_single_output_metadata(
 }
 
 impl TracedTensor {
-    fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
+    pub(crate) fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
         let mut roots = Vec::with_capacity(1 + self.extra_roots.len());
         roots.push(self.fragment.clone());
         roots.extend(self.extra_roots.iter().cloned());
@@ -2438,40 +2212,6 @@ fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
         GlobalValKey::Input(key) => key.clone(),
         other => panic!("expected traced leaf input, got {:?}", other),
     }
-}
-
-/// Chase the `Tangent { of: ... }` chain to find the root `User` key.
-///
-/// For a concrete user input key the function returns the key itself.
-/// For any depth of `Tangent` wrapping it returns the innermost key
-/// (which should be a `User` key under normal VJP use).
-fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
-    match key {
-        TensorInputKey::User { .. } => key,
-        TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
-    }
-}
-
-/// Synthesise a deferred zero tangent for `key` when its primal root is
-/// present in `binding_map`.
-///
-/// Returns `Some(zero_tensor)` if and only if `key` is a `Tangent` key
-/// whose root `User` key maps to a concrete tensor in `binding_map`. The
-/// synthesised zero tensor has the same shape and dtype as the bound
-/// primal tensor.
-///
-/// Returns `None` when `key` is a `User` key (i.e. not a tangent at all),
-/// or when the root primal key is not in `binding_map`.
-fn deferred_zero_for_tangent_key(
-    key: &TensorInputKey,
-    binding_map: &HashMap<TensorInputKey, &Tensor>,
-) -> Option<Tensor> {
-    if matches!(key, TensorInputKey::User { .. }) {
-        return None;
-    }
-    let root = tangent_primal_root(key);
-    let primal = binding_map.get(root)?;
-    Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
 }
 
 fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
@@ -2499,54 +2239,4 @@ fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }
-}
-
-pub fn eval_all<B: TensorBackend>(
-    engine: &mut Engine<B>,
-    outputs: &mut [&mut TracedTensor],
-) -> Result<Vec<Tensor>> {
-    let mut all_fragments = Vec::new();
-    let mut output_keys = Vec::new();
-    let mut all_inputs: HashMap<TensorInputKey, Arc<Tensor>> = HashMap::new();
-
-    for tt in outputs.iter() {
-        all_fragments.extend(tt.resolve_roots());
-        output_keys.push(tt.fragment.vals()[tt.val].key.clone());
-        all_inputs.extend(tt.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
-    }
-
-    let view = resolve(all_fragments);
-    let graph = materialize_merge(&view, &output_keys);
-    let compiled = compile(&graph);
-
-    let mut input_tensors = Vec::with_capacity(graph.inputs.len());
-    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-    for key in &graph.inputs {
-        match key {
-            GlobalValKey::Input(k) => {
-                let tensor = all_inputs.get(k).ok_or_else(|| {
-                    Error::MissingInput(format!("missing input data for key {:?}", k))
-                })?;
-                input_tensors.push(tensor.as_ref().clone());
-                input_dtypes.push(tensor.dtype());
-                input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-            }
-            _ => {
-                return Err(Error::Internal(
-                    "expected Input key in graph inputs".to_string(),
-                ));
-            }
-        }
-    }
-    let exec = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-
-    let cached_exec = engine.get_or_compile(exec);
-    let results: Vec<Tensor> = engine.eval_exec_ir(&cached_exec, input_tensors)?;
-
-    for (tt, result) in outputs.iter_mut().zip(results.iter()) {
-        tt.data = Some(Arc::new(result.clone()));
-    }
-
-    Ok(results)
 }

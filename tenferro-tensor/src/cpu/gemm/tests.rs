@@ -65,8 +65,8 @@ fn checked_product_rejects_product_overflow() {
 
 #[test]
 fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
-    let lhs = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
-    let rhs = TypedTensor::<f64>::from_vec(vec![3, 2], vec![0.0; 6]);
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![0, 1],
         rhs_contracting_dims: vec![1, 0],
@@ -89,7 +89,7 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
     let (_lhs_perm, rhs_perm, canonical_config) =
         canonical_gemm_layout(&config, lhs.shape.len(), rhs.shape.len());
     assert_eq!(rhs_perm.as_slice(), &[1, 0]);
-    let rhs_canonical = TypedTensor::<f64>::from_vec(vec![2, 3], vec![0.0; 6]);
+    let rhs_canonical = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
     let canonical = analyse_gemm_cached(
         &mut cache,
         Some(7),
@@ -112,8 +112,8 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
 #[cfg(feature = "cpu-blas")]
 #[test]
 fn blas_dot_general_contract_trailing_rhs_dim() {
-    let lhs = TypedTensor::from_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let rhs = TypedTensor::from_vec(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let lhs = TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TypedTensor::from_vec_col_major(vec![2, 3], vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0]);
     let config = DotGeneralConfig {
         lhs_contracting_dims: vec![1],
         rhs_contracting_dims: vec![1],

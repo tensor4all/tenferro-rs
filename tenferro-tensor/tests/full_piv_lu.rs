@@ -1,7 +1,7 @@
 use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {

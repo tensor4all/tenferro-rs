@@ -33,10 +33,10 @@ normalization modes are:
 
 ```rust
 use num_complex::Complex64;
-use tenferro::{CpuBackend, Engine, TracedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_fft::{fft, FftNorm};
 
-let x = TracedTensor::from_vec(
+let x = TracedTensor::from_vec_col_major(
     vec![4],
     vec![
         Complex64::new(1.0, 0.0),
@@ -45,10 +45,12 @@ let x = TracedTensor::from_vec(
         Complex64::new(4.0, 0.0),
     ],
 );
-let mut y = fft(&x, None, -1, FftNorm::Backward);
+let y = fft(&x, None, -1, FftNorm::Backward);
 
-let mut engine = Engine::new(CpuBackend::new());
-let out = y.eval(&mut engine)?;
+let mut compiler = GraphCompiler::new();
+let program = compiler.compile(&y)?;
+let mut executor = GraphExecutor::new(CpuBackend::new());
+let out = executor.run(&program)?;
 assert_eq!(out.shape(), &[4]);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

@@ -6,8 +6,8 @@ use tenferro::{CpuBackend, EinsumSubscripts, Tensor};
 
 #[test]
 fn tensor_einsum_owned_matches_borrowed() {
-    let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let mut borrowed_ctx = CpuBackend::new();
     let borrowed = einsum(&mut borrowed_ctx, &[&a, &b], "ij,jk->ik").unwrap();
@@ -22,8 +22,8 @@ fn tensor_einsum_owned_matches_borrowed() {
 
 #[test]
 fn typed_tensor_einsum_facade_matches_tensor_values() {
-    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+    let lhs = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
     let mut backend = CpuBackend::new();
 
     let out = typed_einsum(&mut backend, &[&lhs, &rhs], "ij,jk->ik").unwrap();
@@ -34,8 +34,8 @@ fn typed_tensor_einsum_facade_matches_tensor_values() {
 
 #[test]
 fn tensor_einsum_integer_subscripts_match_string_paths() {
-    let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 
     let mut borrowed_ctx = CpuBackend::new();
@@ -54,8 +54,8 @@ fn tensor_einsum_integer_subscripts_match_string_paths() {
 
 #[test]
 fn typed_tensor_einsum_integer_subscripts_match_string_path() {
-    let lhs = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    let rhs = TypedTensor::from_vec(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
+    let lhs = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let rhs = TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let mut backend = CpuBackend::new();
 

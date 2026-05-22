@@ -230,7 +230,7 @@ impl StdTensorOp {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
     /// let op = StdTensorOp::constant_f64(1.5);
@@ -246,7 +246,7 @@ impl StdTensorOp {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
     /// let op = StdTensorOp::constant_f32(1.5_f32);
@@ -262,7 +262,7 @@ impl StdTensorOp {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
     /// let op = StdTensorOp::constant_i64(7);
@@ -278,7 +278,7 @@ impl StdTensorOp {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use num_complex::Complex64;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///
@@ -298,7 +298,7 @@ impl StdTensorOp {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use num_complex::Complex32;
     /// use tenferro_ops::std_tensor_op::StdTensorOp;
     ///

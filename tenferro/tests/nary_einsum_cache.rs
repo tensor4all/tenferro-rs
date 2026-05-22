@@ -1,118 +1,147 @@
-//! Tests for the LRU-backed Engine::einsum_cache.
+//! Tests for traced einsum caches owned by graph compiler and executor.
 
 use std::num::NonZeroUsize;
 
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, Engine, TracedTensor};
+use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
-fn run_matmul(engine: &mut Engine<CpuBackend>, rows: usize, cols: usize, mid: usize) {
-    let a = TracedTensor::from_vec(
+fn build_static_matmul(compiler: &mut GraphCompiler, rows: usize, cols: usize, mid: usize) {
+    let a = TracedTensor::from_vec_col_major(
         vec![rows, mid],
         (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     );
-    let b = TracedTensor::from_vec(
+    let b = TracedTensor::from_vec_col_major(
         vec![mid, cols],
         (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
     );
-    let mut c = einsum(engine, &[&a, &b], "ij,jk->ik").expect("einsum");
-    c.eval(engine).expect("eval");
+    let _ = einsum(compiler, &[&a, &b], "ij,jk->ik").expect("einsum");
 }
 
-#[test]
-fn default_capacity_is_nonzero() {
-    let engine = Engine::new(CpuBackend::new());
-    assert_eq!(
-        engine.einsum_cache_capacity(),
-        NonZeroUsize::new(tenferro::engine::DEFAULT_EINSUM_CACHE_CAPACITY).unwrap(),
+fn run_symbolic_matmul(
+    executor: &mut GraphExecutor<CpuBackend>,
+    rows: usize,
+    cols: usize,
+    mid: usize,
+) {
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 2);
+    let mut compiler = GraphCompiler::new();
+    let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").expect("einsum");
+    let program = compiler
+        .compile_with_input_specs(
+            &c,
+            &[
+                (&a, DType::F64, &[rows, mid]),
+                (&b, DType::F64, &[mid, cols]),
+            ],
+        )
+        .expect("compile");
+
+    let lhs = Tensor::from_vec_col_major(
+        vec![rows, mid],
+        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
     );
+    let rhs = Tensor::from_vec_col_major(
+        vec![mid, cols],
+        (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
+    );
+    executor
+        .run_with_inputs(&program, &[(&a, &lhs), (&b, &rhs)])
+        .expect("eval");
 }
 
 #[test]
-fn with_einsum_cache_capacity_sets_capacity() {
+fn compiler_and_executor_default_einsum_capacities_are_nonzero() {
+    let compiler = GraphCompiler::new();
+    assert!(compiler.einsum_cache_capacity().get() > 0);
+
+    let executor = GraphExecutor::new(CpuBackend::new());
+    assert!(executor.einsum_cache_capacity().get() > 0);
+}
+
+#[test]
+fn compiler_with_einsum_cache_capacity_sets_static_cache_capacity() {
     let cap = NonZeroUsize::new(4).unwrap();
-    let engine = Engine::with_einsum_cache_capacity(CpuBackend::new(), cap);
-    assert_eq!(engine.einsum_cache_capacity(), cap);
+    let compiler = GraphCompiler::with_einsum_cache_capacity(cap);
+    assert_eq!(compiler.einsum_cache_capacity(), cap);
 }
 
 #[test]
-fn set_einsum_cache_capacity_shrinks_len() {
-    let mut engine =
-        Engine::with_einsum_cache_capacity(CpuBackend::new(), NonZeroUsize::new(10).unwrap());
-    // Populate with 5 distinct einsum shapes (same subscripts, different shapes).
+fn executor_with_einsum_cache_capacity_sets_runtime_cache_capacity() {
+    let cap = NonZeroUsize::new(4).unwrap();
+    let executor = GraphExecutor::with_einsum_cache_capacity(CpuBackend::new(), cap);
+    assert_eq!(executor.einsum_cache_capacity(), cap);
+}
+
+#[test]
+fn compiler_set_einsum_cache_capacity_shrinks_static_cache_len() {
+    let mut compiler = GraphCompiler::with_einsum_cache_capacity(NonZeroUsize::new(10).unwrap());
+
     for k in 1..=5 {
-        run_matmul(&mut engine, 2, 2, k);
+        build_static_matmul(&mut compiler, 2, 2, k);
     }
-    assert_eq!(engine.einsum_cache_len(), 5);
-    engine.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
-    assert_eq!(engine.einsum_cache_len(), 3);
+
+    assert_eq!(compiler.einsum_cache_len(), 5);
+    compiler.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
+    assert_eq!(compiler.einsum_cache_len(), 3);
     assert_eq!(
-        engine.einsum_cache_capacity(),
+        compiler.einsum_cache_capacity(),
         NonZeroUsize::new(3).unwrap()
     );
 }
 
 #[test]
-fn lru_eviction_preserves_recently_used() {
-    let mut engine =
-        Engine::with_einsum_cache_capacity(CpuBackend::new(), NonZeroUsize::new(2).unwrap());
-
-    // Three distinct cache keys via shapes A, B, C.
-    // Sequence: A (miss), B (miss), A (hit — now MRU), C (miss — evicts B).
-    // Expected final state: A and C present, B evicted.
-
-    let key_a = ("ij,jk->ik".to_string(), vec![vec![2, 3], vec![3, 2]]);
-    let key_b = ("ij,jk->ik".to_string(), vec![vec![2, 4], vec![4, 2]]);
-    let key_c = ("ij,jk->ik".to_string(), vec![vec![2, 5], vec![5, 2]]);
-
-    run_matmul(&mut engine, 2, 2, 3); // A
-    run_matmul(&mut engine, 2, 2, 4); // B
-    run_matmul(&mut engine, 2, 2, 3); // A again — should be a hit, moves A to MRU
-    run_matmul(&mut engine, 2, 2, 5); // C — cache full, evicts LRU (which is B)
-
-    assert_eq!(engine.einsum_cache_len(), 2);
-    assert!(
-        engine.einsum_cache_contains(&key_a),
-        "A should be retained (MRU)"
+fn executor_set_einsum_cache_capacity_shrinks_runtime_cache_len() {
+    let mut executor = GraphExecutor::with_einsum_cache_capacity(
+        CpuBackend::new(),
+        NonZeroUsize::new(10).unwrap(),
     );
-    assert!(!engine.einsum_cache_contains(&key_b), "B should be evicted");
-    assert!(
-        engine.einsum_cache_contains(&key_c),
-        "C should be present (just inserted)"
+
+    for k in 1..=5 {
+        run_symbolic_matmul(&mut executor, 2, 2, k);
+    }
+
+    assert_eq!(executor.einsum_cache_len(), 5);
+    executor.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
+    assert_eq!(executor.einsum_cache_len(), 3);
+    assert_eq!(
+        executor.einsum_cache_capacity(),
+        NonZeroUsize::new(3).unwrap()
     );
 }
 
-/// When an ExecProgram containing a NaryEinsum instruction is evaluated twice
-/// through Engine::eval_exec_ir with identical inputs, the second call must hit
-/// the cache — `einsum_cache_len()` stays at 1 after both runs.
 #[test]
-fn nary_einsum_on_exec_path_hits_cache() {
-    use tenferro::{Tensor, TracedTensor};
-    use tenferro_tensor::DType;
+fn concrete_traced_einsum_reuses_compiler_static_and_parse_caches() {
+    let mut compiler = GraphCompiler::with_einsum_cache_capacity(NonZeroUsize::new(2).unwrap());
 
-    let mut engine = Engine::new(CpuBackend::new());
+    build_static_matmul(&mut compiler, 2, 2, 3);
+    let after_first = compiler.cache_stats();
+    assert_eq!(after_first.static_einsum_plans.entries, 1);
+    assert_eq!(after_first.einsum_parse.entries, 1);
 
-    // Build an einsum with at least one symbolic-shape input so the graph keeps
-    // a NaryEinsum op (not decomposed at build time).
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2);
-    let b = TracedTensor::from_vec(vec![3, 4], vec![1.0_f64; 12]);
-    let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik").expect("einsum");
+    build_static_matmul(&mut compiler, 2, 2, 3);
+    let after_second = compiler.cache_stats();
+    assert_eq!(after_second.static_einsum_plans.entries, 1);
+    assert_eq!(after_second.einsum_parse.entries, 1);
 
-    // Concrete input for the symbolic leg.
-    let a_concrete = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    build_static_matmul(&mut compiler, 2, 2, 4);
+    build_static_matmul(&mut compiler, 2, 2, 5);
+    assert_eq!(compiler.einsum_cache_len(), 2);
+}
 
-    // First eval: miss -> inserts one entry.
-    c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])
-        .expect("eval 1");
-    let len_after_first = engine.einsum_cache_len();
+#[test]
+fn symbolic_nary_einsum_reuses_executor_runtime_cache() {
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    run_symbolic_matmul(&mut executor, 2, 4, 3);
+    let len_after_first = executor.einsum_cache_len();
     assert_eq!(
         len_after_first, 1,
         "expected one cache entry after first eval"
     );
 
-    // Second eval with the same concrete input: must hit the cache.
-    c.eval_with_inputs(&mut engine, &[(&a, &a_concrete)])
-        .expect("eval 2");
-    let len_after_second = engine.einsum_cache_len();
+    run_symbolic_matmul(&mut executor, 2, 4, 3);
+    let len_after_second = executor.einsum_cache_len();
     assert_eq!(
         len_after_second, 1,
         "cache len must stay at 1 on repeated identical (subscripts, shapes)"

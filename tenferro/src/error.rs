@@ -2,7 +2,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```rust
 //! use tenferro::error::Error;
 //!
 //! let err = Error::InvalidSubscripts("bad label".into());
@@ -15,7 +15,7 @@ use tenferro_tensor::DType;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro::error::Error;
 ///
 /// let err = Error::InvalidSubscripts("rank mismatch".into());
@@ -46,7 +46,7 @@ pub enum Error {
     #[error(transparent)]
     ADRule(#[from] chainrules_core::ADRuleError),
 
-    /// A `TracedTensor` passed to `eval_with_inputs` bindings is not a
+    /// A `TracedTensor` passed to graph-executor input bindings is not a
     /// placeholder (has attached data).
     #[error(
         "binding #{binding_index} is not a placeholder; \
@@ -56,7 +56,7 @@ pub enum Error {
     UnexpectedBinding { binding_index: usize },
 
     /// A placeholder appearing in the graph has no binding supplied.
-    #[error("placeholder {input_key} has no binding in eval_with_inputs")]
+    #[error("placeholder {input_key} has no runtime input binding")]
     UnboundPlaceholder { input_key: String },
 
     /// The same placeholder was bound more than once in the `bindings` slice.
@@ -89,7 +89,7 @@ pub enum Error {
     /// Operation attempted to mix tensors from different eager contexts.
     #[error(
         "tensors belong to different eager contexts ({lhs} vs {rhs}); \
-         use EagerTensor::detach_into or EagerContext::constant_from"
+         use EagerTensor::detach_into or EagerRuntime::constant_from"
     )]
     ContextMismatch { lhs: ContextId, rhs: ContextId },
 
@@ -98,9 +98,9 @@ pub enum Error {
     Internal(String),
 }
 
-/// Opaque identifier for an [`EagerContext`], used in [`Error::ContextMismatch`].
+/// Opaque identifier for an [`EagerRuntime`], used in [`Error::ContextMismatch`].
 ///
-/// [`EagerContext`]: crate::EagerContext
+/// [`EagerRuntime`]: crate::EagerRuntime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContextId(usize);
 

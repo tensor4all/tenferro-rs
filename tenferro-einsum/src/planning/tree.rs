@@ -152,7 +152,9 @@ impl ContractionTree {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
     /// // Three tensors: A[ij] B[jk] C[kl] -> D[il]
     /// // Contract B and C first, then A with the result:
     /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
@@ -245,7 +247,7 @@ impl ContractionTree {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_einsum::{ContractionTree, Subscripts};
     ///
     /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
@@ -269,7 +271,7 @@ impl ContractionTree {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_einsum::{ContractionTree, Subscripts};
     ///
     /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
@@ -293,7 +295,7 @@ impl ContractionTree {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_einsum::{ContractionTree, Subscripts};
     ///
     /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);

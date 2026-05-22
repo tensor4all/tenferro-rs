@@ -12,7 +12,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::DotGeneralConfig;
 ///
 /// let config = DotGeneralConfig {
@@ -49,7 +49,7 @@ impl DotGeneralConfig {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```rust
     /// use tenferro_tensor::DotGeneralConfig;
     ///
     /// let config = DotGeneralConfig {
@@ -135,7 +135,7 @@ impl DotGeneralConfig {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::CompareDir;
 ///
 /// let dir = CompareDir::Eq;
@@ -153,7 +153,7 @@ pub enum CompareDir {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::GatherConfig;
 ///
 /// let config = GatherConfig {
@@ -177,7 +177,7 @@ pub struct GatherConfig {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::ScatterConfig;
 ///
 /// let config = ScatterConfig {
@@ -199,7 +199,7 @@ pub struct ScatterConfig {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::SliceConfig;
 ///
 /// let config = SliceConfig {
@@ -219,7 +219,7 @@ pub struct SliceConfig {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use tenferro_tensor::PadConfig;
 ///
 /// let config = PadConfig {
