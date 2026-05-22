@@ -81,30 +81,17 @@ pub(crate) struct CpuGraphExecutorCacheStats {
 /// Cache key derived from compiled graph topology.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CacheKey {
-    shape: (usize, usize, usize, usize),
-    op_hash: u64,
+    fingerprint: String,
 }
 
 pub(crate) fn compute_cache_key(exec: &ExecProgram) -> CacheKey {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for inst in &exec.instructions {
-        format!("{:?}", inst.op).hash(&mut hasher);
-        inst.input_slots.hash(&mut hasher);
-        inst.output_slots.hash(&mut hasher);
-    }
-    exec.input_slots.hash(&mut hasher);
-    exec.output_slots.hash(&mut hasher);
-
     CacheKey {
-        shape: (
-            exec.instructions.len(),
-            exec.input_slots.len(),
-            exec.output_slots.len(),
-            exec.n_slots,
-        ),
-        op_hash: hasher.finish(),
+        fingerprint: format!("{exec:?}"),
     }
+}
+
+fn cache_key_retained_bytes(key: &CacheKey) -> usize {
+    size_of::<CacheKey>() + key.fingerprint.capacity()
 }
 
 fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
@@ -155,7 +142,9 @@ pub(crate) fn compile_cache_stats(cache: &LruCache<CacheKey, ExecProgram>) -> Ca
         entries: cache.len(),
         retained_bytes: cache
             .iter()
-            .map(|(_, program)| size_of::<CacheKey>() + exec_program_retained_bytes(program))
+            .map(|(key, program)| {
+                cache_key_retained_bytes(key) + exec_program_retained_bytes(program)
+            })
             .sum(),
     }
 }

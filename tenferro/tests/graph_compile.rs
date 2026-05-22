@@ -54,3 +54,61 @@ fn graph_compiler_cache_is_bounded_and_reports_stats() {
     assert_eq!(stats.compile.entries, 1);
     assert!(stats.compile.retained_bytes > 0);
 }
+
+#[test]
+fn graph_compiler_cache_distinguishes_symbolic_input_shapes() {
+    let mut compiler = GraphCompiler::new();
+    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = &x + &x;
+
+    let _ = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let _ = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
+        .unwrap();
+
+    assert_eq!(compiler.compile_cache_len(), 2);
+}
+
+#[test]
+fn graph_compiler_cache_distinguishes_dtypes() {
+    let mut compiler = GraphCompiler::new();
+    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
+
+    let x_f64 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let y_f64 = &x_f64 + &x_f64;
+    let x_f32 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]);
+    let y_f32 = &x_f32 + &x_f32;
+
+    let _ = compiler.compile(&y_f64).unwrap();
+    let _ = compiler.compile(&y_f32).unwrap();
+
+    assert_eq!(compiler.compile_cache_len(), 2);
+}
+
+#[test]
+fn graph_compiler_compile_many_returns_multi_output_program() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let y = &x + &x;
+    let z = x.neg();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_many(&[&y, &z]).unwrap();
+
+    assert_eq!(program.input_count(), 1);
+    assert_eq!(program.output_count(), 2);
+}
+
+#[test]
+fn graph_compiler_einsum_cache_capacity_is_configurable() {
+    let mut compiler = GraphCompiler::with_einsum_cache_capacity(NonZeroUsize::new(2).unwrap());
+
+    assert_eq!(compiler.einsum_cache_len(), 0);
+    assert_eq!(compiler.einsum_cache_capacity().get(), 2);
+
+    compiler.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
+    assert_eq!(compiler.einsum_cache_capacity().get(), 3);
+}

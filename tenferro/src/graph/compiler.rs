@@ -79,6 +79,32 @@ impl GraphCompiler {
         }
     }
 
+    /// Create a compiler with an explicit static einsum cache capacity.
+    ///
+    /// The capacity applies to both the static contraction-plan cache and the
+    /// parsed-subscript cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::with_einsum_cache_capacity(
+    ///     NonZeroUsize::new(16).unwrap(),
+    /// );
+    /// assert_eq!(compiler.einsum_cache_capacity().get(), 16);
+    /// ```
+    pub fn with_einsum_cache_capacity(capacity: NonZeroUsize) -> Self {
+        Self {
+            compile_cache: LruCache::new(
+                NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
+            ),
+            static_einsum_cache: LruCache::new(capacity),
+            einsum_parse_cache: LruCache::new(capacity),
+        }
+    }
+
     /// Compile one traced output into a graph program.
     ///
     /// # Examples
@@ -227,6 +253,53 @@ impl GraphCompiler {
     /// ```
     pub fn compile_cache_len(&self) -> usize {
         self.compile_cache.len()
+    }
+
+    /// Number of cached static einsum contraction trees currently retained.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::new();
+    /// assert_eq!(compiler.einsum_cache_len(), 0);
+    /// ```
+    pub fn einsum_cache_len(&self) -> usize {
+        self.static_einsum_cache.len()
+    }
+
+    /// Current capacity of the static einsum caches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::new();
+    /// assert!(compiler.einsum_cache_capacity().get() > 0);
+    /// ```
+    pub fn einsum_cache_capacity(&self) -> NonZeroUsize {
+        self.static_einsum_cache.cap()
+    }
+
+    /// Resize the static einsum contraction-plan and parse caches.
+    ///
+    /// Shrinking below the current length evicts least-recently-used entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let mut compiler = GraphCompiler::new();
+    /// compiler.set_einsum_cache_capacity(NonZeroUsize::new(8).unwrap());
+    /// assert_eq!(compiler.einsum_cache_capacity().get(), 8);
+    /// ```
+    pub fn set_einsum_cache_capacity(&mut self, capacity: NonZeroUsize) {
+        self.static_einsum_cache.resize(capacity);
+        self.einsum_parse_cache.resize(capacity);
     }
 
     /// Current compiled-program cache capacity.
