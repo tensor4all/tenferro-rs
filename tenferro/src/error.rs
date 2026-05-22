@@ -89,7 +89,7 @@ pub enum Error {
     /// Operation attempted to mix tensors from different eager contexts.
     #[error(
         "tensors belong to different eager contexts ({lhs} vs {rhs}); \
-         use EagerTensor::detach_into or EagerContext::constant_from"
+         use EagerTensor::detach_into or EagerRuntime::constant_from"
     )]
     ContextMismatch { lhs: ContextId, rhs: ContextId },
 
@@ -98,9 +98,9 @@ pub enum Error {
     Internal(String),
 }
 
-/// Opaque identifier for an [`EagerContext`], used in [`Error::ContextMismatch`].
+/// Opaque identifier for an [`EagerRuntime`], used in [`Error::ContextMismatch`].
 ///
-/// [`EagerContext`]: crate::EagerContext
+/// [`EagerRuntime`]: crate::EagerRuntime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContextId(usize);
 

@@ -46,7 +46,7 @@ pub mod traced;
 pub mod traced_tensor;
 pub mod typed_tensor;
 
-pub use eager::{EagerContext, EagerTensor};
+pub use eager::{EagerRuntime, EagerTensor};
 pub use einsum_subscripts::parse_einsum_subscripts;
 pub use engine::Engine;
 pub use error::ContextId;

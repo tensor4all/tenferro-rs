@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro::{CpuBackend, DotGeneralConfig, EagerContext, EagerTensor, Tensor, TypedTensor};
+use tenferro::{CpuBackend, DotGeneralConfig, EagerRuntime, EagerTensor, Tensor, TypedTensor};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -78,7 +78,7 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
     }
 }
 
-fn eager_mps_tensors(ctx: &Arc<EagerContext>, tensors: &[Tensor]) -> Vec<EagerTensor> {
+fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: &[Tensor]) -> Vec<EagerTensor> {
     tensors
         .iter()
         .cloned()
@@ -87,7 +87,7 @@ fn eager_mps_tensors(ctx: &Arc<EagerContext>, tensors: &[Tensor]) -> Vec<EagerTe
 }
 
 fn eager_inner_product_local_path(
-    ctx: &Arc<EagerContext>,
+    ctx: &Arc<EagerRuntime>,
     bra: &[EagerTensor],
     ket: &[EagerTensor],
     configs: &LocalPathConfigs,
@@ -114,7 +114,7 @@ fn bench_mps_inner_product_eager(c: &mut Criterion) {
     let mut group = c.benchmark_group("mps_inner_product_eager/c64/one_thread");
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
-        let ctx = EagerContext::with_cpu_backend(CpuBackend::with_threads(1));
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1));
         let bra = eager_mps_tensors(&ctx, &fixture.bra_tensors);
         let ket = eager_mps_tensors(&ctx, &fixture.ket_tensors);
         let configs = LocalPathConfigs::new();

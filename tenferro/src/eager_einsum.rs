@@ -4,9 +4,9 @@
 //!
 //! ```rust
 //! use tenferro::eager_tensor::einsum;
-//! use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+//! use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 //!
-//! let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+//! let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 //! let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
 //! let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
 //! let loss = einsum(&[&x, &y], "i,i->").unwrap();
@@ -28,9 +28,9 @@ use crate::parse_einsum_subscripts;
 ///
 /// ```
 /// use tenferro::eager_tensor::einsum;
-/// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+/// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 ///
-/// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(
 ///     vec![2, 3],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],

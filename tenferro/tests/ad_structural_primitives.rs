@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
 const FD_H: f64 = 1.0e-6;
 const TOL: f64 = 1.0e-5;
@@ -19,8 +19,8 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn test_ctx() -> Arc<EagerContext> {
-    EagerContext::with_cpu_backend(CpuBackend::new())
+fn test_ctx() -> Arc<EagerRuntime> {
+    EagerRuntime::with_cpu_backend(CpuBackend::new())
 }
 
 fn finite_diff_unary(f: impl Fn(&[f64]) -> f64, base: &[f64]) -> Vec<f64> {

@@ -6,7 +6,7 @@
 use crate::error::Result;
 use crate::EinsumSubscripts;
 
-pub use crate::eager::{EagerContext, EagerTensor};
+pub use crate::eager::{EagerRuntime, EagerTensor};
 
 /// Execute an einsum eagerly and record it when any input requires gradients.
 ///
@@ -14,9 +14,9 @@ pub use crate::eager::{EagerContext, EagerTensor};
 ///
 /// ```
 /// use tenferro::eager_tensor::einsum;
-/// use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+/// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 ///
-/// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(
 ///     vec![2, 3],
 ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -40,10 +40,10 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// # Examples
 ///
 /// ```
-/// use tenferro::eager_tensor::{einsum_subscripts, EagerContext, EagerTensor};
+/// use tenferro::eager_tensor::{einsum_subscripts, EagerRuntime, EagerTensor};
 /// use tenferro::{CpuBackend, EinsumSubscripts, Tensor};
 ///
-/// let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let a = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![1.0_f64, 2.0, 3.0]), ctx.clone());
 /// let b = EagerTensor::from_tensor_in(Tensor::from_vec(vec![3], vec![4.0_f64, 5.0, 6.0]), ctx);
 /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
