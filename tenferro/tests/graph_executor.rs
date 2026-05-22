@@ -50,6 +50,45 @@ fn checkpoint_uses_explicit_compiler_and_executor() {
 }
 
 #[test]
+fn checkpoint_reuses_existing_cached_data_without_recompiling() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let mut y = &x + &x;
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    y.data = Some(std::sync::Arc::new(
+        executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap(),
+    ));
+
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
+
+    let program = compiler.compile(&y).unwrap();
+    let out = executor.run(&program).unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+}
+
+#[test]
+fn checkpoint_gradient_runs_through_graph_executor() {
+    let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
+    let mut y = &x * &x;
+
+    let mut compiler = GraphCompiler::new();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    y.checkpoint(&mut compiler, &mut executor).unwrap();
+
+    let z = &y * &y;
+    let grad = z.grad(&x).unwrap();
+    let program = compiler.compile(&grad).unwrap();
+    let out = executor.run(&program).unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
+}
+
+#[test]
 fn graph_executor_validates_runtime_bindings() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let y = &x + &x;

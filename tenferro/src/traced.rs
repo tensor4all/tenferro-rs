@@ -816,8 +816,12 @@ impl TracedTensor {
         compiler: &mut GraphCompiler,
         executor: &mut GraphExecutor<B>,
     ) -> Result<()> {
-        let program = compiler.compile(self)?;
-        let data = Arc::new(executor.run(&program)?);
+        let data = if let Some(data) = &self.data {
+            data.clone()
+        } else {
+            let program = compiler.compile(self)?;
+            Arc::new(executor.run(&program)?)
+        };
         let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
 
         let old_fragment = self.fragment.clone();
