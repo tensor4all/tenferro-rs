@@ -948,7 +948,7 @@ fn execute_nary_einsum<B: TensorBackend>(
     mode: DispatchMode,
     cache: &mut NaryEinsumCache,
 ) -> Result<Tensor> {
-    use tenferro_einsum::{build_einsum_fragment, ContractionOptimizerOptions, ContractionTree};
+    use tenferro_einsum::{build_einsum_fragment, ContractionTree};
 
     if inputs.is_empty() {
         return Err(Error::ContractionError(
@@ -970,7 +970,7 @@ fn execute_nary_einsum<B: TensorBackend>(
             ContractionTree::optimize_with_options(
                 &subs,
                 &shape_refs,
-                &ContractionOptimizerOptions::default(),
+                &crate::einsum::default_auto_options(),
             )
             .map_err(|e| Error::ContractionError(format!("{e}")))?,
         );

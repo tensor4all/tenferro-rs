@@ -380,7 +380,7 @@ fn is_default_auto_options(options: &ContractionOptimizerOptions) -> bool {
         && score_functions_equal_by_bits(&options.score, &default.score)
 }
 
-fn default_auto_options() -> ContractionOptimizerOptions {
+pub(crate) fn default_auto_options() -> ContractionOptimizerOptions {
     match EinsumOptimize::default() {
         EinsumOptimize::Auto(options) => options,
         _ => unreachable!("EinsumOptimize::default must be automatic optimization"),
