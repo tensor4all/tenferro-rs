@@ -35,7 +35,7 @@ and public multi-output linalg helpers.
 use tenferro::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
-let x = ctx.variable_from(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]));
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
 let loss = (&x * &x).reduce_sum(&[0]).unwrap();
 loss.backward().unwrap();
 
@@ -49,7 +49,7 @@ use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
-    Tensor::F64(TypedTensor::from_vec(shape, data))
+    Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
 }
 
 fn main() {

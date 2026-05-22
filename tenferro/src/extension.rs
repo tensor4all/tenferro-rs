@@ -62,7 +62,7 @@ pub use tenferro_ops::ExtensionFamilyId;
 /// `shape_hint` must be present (i.e. the extension must be used on
 /// tensors whose rank is known at graph-build time). For symbolic-shape
 /// composition, bind the placeholder tensors via
-/// [`GraphExecutor::run_with_inputs`] at evaluation time.
+/// [`crate::GraphExecutor::run_with_inputs`] at evaluation time.
 ///
 /// # Examples
 ///

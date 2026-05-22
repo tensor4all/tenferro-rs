@@ -130,11 +130,11 @@ The output ordering must be part of the primitive definition because
 
 ### Column-major (Fortran) convention
 
-Engine-produced intermediates and outputs use **column-major (Fortran)
-ordering**. This is the convention for all data produced by the execution
-engine. Input tensors may be contiguous with arbitrary axis ordering; the
-engine inspects strides and adjusts dispatch accordingly (e.g., BLAS trans
-flags for transposed inputs).
+Execution-produced intermediates and outputs use **column-major (Fortran)
+ordering**. This is the convention for all data produced by the backend
+execution pipeline. Input tensors may be contiguous with arbitrary axis
+ordering; dispatch inspects strides and adjusts backend calls accordingly
+(e.g., BLAS trans flags for transposed inputs).
 
 ### What tenferro is expected to implement
 
@@ -452,7 +452,7 @@ than as distinct graph primitives.
 
 Constants (scalar or tensor literals) are **not** Tenferro IR primitives.
 They enter the graph as `Fragment` input nodes with attached data
-(`TracedTensor::from(Tensor::from_vec(...))`). At StableHLO lowering, these
+(`TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(...))`). At StableHLO lowering, these
 become `stablehlo.constant` ops. Canonical lowerings that reference literal
 values (e.g., `1 / n` in `mean`, `1` in `reciprocal`) construct these as
 `Fragment` inputs.

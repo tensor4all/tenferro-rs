@@ -265,8 +265,8 @@ Note: `GlobalValKey` contains concrete `InputKey` and (via downstream usage)
 have identical topology are **not** automatic cache hits at the computegraph
 level. Normalization of `InputKey`/`DiffPassId` to achieve cache hits across
 higher-order AD passes is the responsibility of the downstream consumer (e.g.
-tenferro `Engine`), not computegraph itself. computegraph provides the raw
-structural identity; the Engine maps that to a normalized cache key.
+tenferro `GraphCompiler`), not computegraph itself. computegraph provides the
+raw structural identity; the compiler maps that to a normalized cache key.
 
 ---
 

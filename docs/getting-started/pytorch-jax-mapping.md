@@ -8,11 +8,11 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 |---|---|---|---|
 | Eager tensor | `numpy.ndarray` | — | `Tensor` + a backend |
 | Tensor handle | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `TracedTensor` |
-| Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `.eval(&mut engine)` |
-| Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `.eval()`) |
+| Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `GraphExecutor::run` |
+| Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor`) |
 | Eager gradients | `loss.backward()` | — | `EagerTensor::backward()` with accumulation |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()` |
-| Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `Engine` |
+| Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro::traced_tensor::einsum` |
 
@@ -20,13 +20,13 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 
 | Task | PyTorch | JAX | tenferro (eager) | tenferro (lazy/AD) |
 |---|---|---|---|---|
-| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec(shape, data)` | `TracedTensor::from_vec(shape, data)` |
+| Create tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
 | Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut ctx)` | `tenferro::traced_tensor::matmul(&a, &b)` |
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` | `x.reduce_sum(&axes)` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro::tensor::einsum(&mut ctx, ...)` | `tenferro::traced_tensor::einsum(&mut engine, ...)` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro::tensor::einsum(&mut ctx, ...)` | `tenferro::traced_tensor::einsum(&mut compiler, ...)` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut ctx)` | `tenferro::traced_tensor::svd(&x)` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut ctx)` | `tenferro::traced_tensor::qr(&x)` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut ctx)` | `tenferro::traced_tensor::cholesky(&x)` |
@@ -44,13 +44,15 @@ tenferro stores dense tensors in column-major order. If you write:
 
 ```rust
 use tenferro::TracedTensor;
-let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 
 then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 
-Convert flat input data first when it is already in PyTorch, NumPy, or JAX
-row-major order, then construct the tensor with `Tensor::from_vec`.
+Use `Tensor::from_vec_row_major` or `TracedTensor::from_vec_row_major` for flat
+data copied from PyTorch, NumPy, or JAX row-major arrays. Use
+`from_vec_col_major` only when the flat buffer is already in tenferro's
+physical order.
 
 ### Explicit CUDA transfer
 
@@ -63,11 +65,12 @@ CUDA support targets NVIDIA CUDA through the CubeCL backend. See
 [Devices and GPU](../guides/devices-and-gpu.md) for the current coverage and
 setup commands.
 
-### Lazy evaluation
+### Lazy traced execution
 
 PyTorch users usually expect every operation to execute immediately. JAX users
-often switch between eager execution and `jit`. tenferro stays lazy until you
-call `.eval(&mut engine)`.
+often switch between eager execution and `jit`. tenferro's traced surface stays
+lazy until you lower a `TracedTensor` graph with `GraphCompiler` and run the
+resulting `GraphProgram` with `GraphExecutor`.
 
 ### Autodiff split
 
@@ -76,10 +79,12 @@ accumulation semantics. Traced tenferro is the transform surface for
 `torch.autograd.grad`, `jax.grad`, `jax.vjp`, `jax.jvp`, and higher-order
 compositions such as HVPs.
 
-### Engine ownership
+### Compiler and executor ownership
 
-In tenferro, the backend and reusable execution state live in `Engine`, not on each tensor. That means most user code follows this pattern:
+In tenferro, graph lowering state and backend runtime state are separate. That
+means most traced user code follows this pattern:
 
 1. Create `TracedTensor` values.
 2. Build tensor expressions.
-3. Reuse one `Engine` to evaluate them.
+3. Reuse one `GraphCompiler` for graph lowering and static planning caches.
+4. Reuse one `GraphExecutor<B>` for backend execution and runtime caches.

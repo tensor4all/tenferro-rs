@@ -12,7 +12,7 @@ tenferro has three current facade einsum surfaces:
 The implementation is split between:
 
 - `tenferro/src/einsum.rs` for the user-facing traced facade, contraction
-  strategy selection, symbolic-shape handling, and engine cache integration,
+  strategy selection, symbolic-shape handling, and graph cache integration,
 - `tenferro/src/exec.rs` for runtime `NaryEinsum` execution,
 - `tenferro-einsum/src/syntax/` for subscript and nested-order parsing,
 - `tenferro-einsum/src/planning/` for contraction tree planning and per-step
@@ -29,16 +29,19 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 
 The facade crate exposes lazy traced einsum:
 
-```rust,ignore
+```rust
 use tenferro::traced_tensor::einsum;
-use tenferro::{CpuBackend, Engine, TracedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-let mut engine = Engine::new(CpuBackend::new());
-let mut c = einsum(&mut engine, &[&a, &b], "ij,jk->ik")?;
-let result = c.eval(&mut engine)?;
+let mut compiler = GraphCompiler::new();
+let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let program = compiler.compile(&c).unwrap();
+let mut executor = GraphExecutor::new(CpuBackend::new());
+let result = executor.run(&program).unwrap();
+assert_eq!(result.shape(), &[2, 2]);
 ```
 
 `einsum_with` accepts an explicit `EinsumOptimize` strategy:
@@ -62,8 +65,8 @@ use tenferro::tensor::einsum;
 use tenferro::{CpuBackend, Tensor, TensorBackend};
 
 let mut ctx = CpuBackend::new();
-let a = Tensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::from_vec(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let c = einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);
@@ -109,11 +112,11 @@ The traced facade chooses the lowering mode from input shape availability:
 | Inputs | Build-time behavior | Runtime behavior |
 | --- | --- | --- |
 | All concrete shapes | optimize the contraction tree at graph build time and lower into ordinary graph ops where possible | execute the lowered graph |
-| Any symbolic shape | emit one `NaryEinsum` op | optimize from actual input shapes at eval time |
+| Any symbolic shape | emit one `NaryEinsum` op | optimize from actual input shapes at runtime |
 
-`Engine` caches automatic contraction trees by `(subscripts, input shapes)` so
-repeated symbolic-shape evaluations with the same concrete shapes amortize
-planning cost.
+`GraphCompiler` caches concrete-shape contraction trees. `GraphExecutor`
+caches runtime contraction trees by `(subscripts, input shapes)` so repeated
+symbolic-shape runs with the same concrete shapes amortize planning cost.
 
 ## Planning
 

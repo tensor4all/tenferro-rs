@@ -121,7 +121,8 @@ patterns and lets the general path handle diagonalization.
 
 Implemented public surfaces include:
 
-- `TracedTensor` graph construction and evaluation through `Engine`.
+- `TracedTensor` graph construction through `GraphCompiler` and backend
+  execution through `GraphExecutor`.
 - `EagerTensor` / `EagerRuntime` for eager scalar-loss reverse-mode workflows.
 - Lazy traced `einsum` and `einsum_with`.
 - Public linalg free functions such as `svd`, `qr`, `cholesky`, `solve`,

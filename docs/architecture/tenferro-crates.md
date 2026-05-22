@@ -29,7 +29,7 @@ The previous architecture organized around eager execution families and tape-bas
 | `internal/ad-linalg` | → `tenferro-ops` PrimitiveOp impl | AD rules in ops/ad/linalg.rs |
 | `internal/ad-surface` | → tidu-rs `differentiate`/`transpose` | External crate |
 | `internal/frontend-core` | → `tenferro` TracedTensor | Lazy, not eager |
-| `internal/runtime` | → `tenferro` Engine | |
+| `internal/runtime` | → `tenferro` graph compiler/executor | |
 | `tenferro-dynamic-compute` | deleted | Always graph |
 | `tenferro-tensor-compute` | → `tenferro-ops` | |
 | `tenferro-linalg-prims` | → `tenferro-ops` | No need to separate |
@@ -46,7 +46,7 @@ The previous architecture organized around eager execution families and tape-bas
 | `tenferro-prims` | `tenferro-ops` | Rewritten: single TensorOp enum |
 | `tenferro-einsum` | `tenferro-einsum` | Rewritten: graph builder |
 | `tenferro-linalg` | → `tenferro-ops` + `tenferro` | AD rules → tenferro-ops, LAPACK kernels → tenferro backend |
-| `tenferro` (facade) | `tenferro` | TracedTensor, Engine, backends |
+| `tenferro` (facade) | `tenferro` | TracedTensor, GraphCompiler, GraphExecutor, backends |
 
 **29 crates → 6 crates** (plus 3 external: computegraph-rs, chainrules-rs,
 tidu-rs).
@@ -68,7 +68,7 @@ tenferro-ops ─────── computegraph-rs (GraphOp, Fragment)
     ├── tenferro-einsum (SemiringOps → Fragment construction)
     |
 tenferro ──────────── tidu-rs (differentiate, transpose)
-    (TracedTensor, Engine, backends)
+    (TracedTensor, GraphCompiler, GraphExecutor, backends)
 ```
 
 ---
@@ -263,20 +263,26 @@ compile_std_to_exec() -> ExecProgram -> eval_exec_ir()`. Custom algebra
 backends implement `SemiringBackend<Alg>` and follow the analogous
 `compile_semiring_to_exec() -> eval_semiring_ir()` path.
 
-`Engine<B: TensorBackend>` is the top-level entry point that orchestrates
-lowering + compilation + execution. `TensorBackend` (in tenferro-tensor)
-is the kernel-level trait that backend authors implement to provide kernels.
+`GraphCompiler` lowers traced outputs into backend-independent
+`GraphProgram`s. `GraphExecutor<B: TensorBackend>` owns backend runtime state
+and executes compiled programs. `TensorBackend` (in tenferro-tensor) is the
+kernel-level trait that backend authors implement to provide kernels.
 
 See [`spec/backend-contract.md`](../spec/backend-contract.md) for the
 canonical trait signatures.
 
-### Backend dispatch in Engine
+### Split graph compilation and backend execution
 
 ```rust
-struct Engine<B: TensorBackend> {
-    backend: B,
+struct GraphCompiler {
     compile_cache: CompileCache,
-    einsum_cache: EinsumCache,
+    static_einsum_cache: EinsumCache,
+}
+
+struct GraphExecutor<B: TensorBackend> {
+    backend: B,
+    runtime_einsum_cache: EinsumCache,
+    backend_cache: B::RuntimeCache,
 }
 ```
 
@@ -296,7 +302,7 @@ let result = backend.eval_program(&prog, &input_tensors);
 
 ---
 
-## IX. TracedTensor and Engine
+## IX. TracedTensor, GraphCompiler, and GraphExecutor
 
 `TracedTensor` is the user-facing lazy type for standard algebra:
 
@@ -319,9 +325,6 @@ impl TracedTensor {
     /// Create from concrete data
     fn from(tensor: Tensor) -> Self;
 
-    /// Lazy evaluation (single output, no intermediate sharing)
-    fn eval<B: TensorBackend>(&mut self, engine: &mut Engine<B>) -> Result<&Tensor>;
-
     /// VJP: differentiate → transpose (via tidu-rs), still lazy
     fn grad(&self, wrt: &TracedTensor) -> TracedTensor;
 
@@ -329,18 +332,16 @@ impl TracedTensor {
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
 }
 
-/// Evaluate multiple outputs together.
-/// All fragments are resolved into one MaterializedGraph, so shared
-/// intermediate nodes (primal values needed by both output and gradient)
-/// are computed only once via GlobalValKey deduplication.
-fn eval_all<B: TensorBackend>(
-    engine: &mut Engine<B>,
-    outputs: &mut [&mut TracedTensor],
-) -> Result<Vec<Tensor>>;
+/// Compile one or more lazy outputs into a reusable program.
+fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<GraphProgram>;
+
+/// Run one compiled program on a backend.
+fn run_many(&mut self, program: &GraphProgram) -> Result<Vec<Tensor>>;
 ```
 
-`eval_all` is the recommended API when primal outputs and their derivatives
-are needed together. Single-output `eval` is a convenience wrapper.
+`GraphCompiler::compile_many` is the recommended API when primal outputs and
+their derivatives are needed together. The compiled `GraphProgram` can then be
+reused through a `GraphExecutor`.
 
 For custom algebras, users work with `Fragment<SemiringOp<T>>` and
 `CompiledProgram<SemiringOp<T>>` directly through the computegraph-rs API,
@@ -481,9 +482,10 @@ Depends on: computegraph-rs, tenferro-ops.
 Top-level facade:
 
 - `TracedTensor` (lazy graph-aware wrapper)
-- `Engine` (compilation cache, backend dispatch via `TensorBackend` from
-  tenferro-tensor, einsum cache)
-- Public API: `einsum()`, `grad()`, `jvp()`, `eval()`, `eval_all()`
+- `GraphCompiler` (compilation cache and static einsum planning cache)
+- `GraphExecutor` (backend dispatch via `TensorBackend` from tenferro-tensor,
+  runtime einsum cache, backend runtime cache)
+- Public API: `einsum()`, `grad()`, `jvp()`, `compile()`, `run()`
 - `compile_std_to_exec()` (`CompiledProgram<StdTensorOp>` → `ExecProgram`)
 - `compile_semiring_to_exec()` (`CompiledProgram<SemiringOp<T>>` → `ExecProgram`)
 - Optimizing compiler passes on `ExecProgram`

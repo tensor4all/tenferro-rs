@@ -7,7 +7,7 @@ Use the simplest tensor layer that matches the workflow.
 | Direct concrete computation on a selected backend | `Tensor` + a `TensorBackend` |
 | Compile-time scalar type while still owning dense data | `TypedTensor<T>` |
 | PyTorch-style scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` |
-| `grad`, `vjp`, `jvp`, HVP, graph optimization | `TracedTensor` + `Engine<B>` |
+| `grad`, `vjp`, `jvp`, HVP, graph optimization | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
 | Tensor operation not built into tenferro | an extension crate; see [Custom Tensor Operations](custom-operations.md) |
 
 ## Rule of Thumb
@@ -20,7 +20,8 @@ graph reuse.
 data by default, and under the `cuda` feature they can also represent
 explicitly uploaded CUDA-resident data. `EagerTensor` keeps PyTorch-style
 gradient state for immediate workflows inside an `EagerRuntime`. `TracedTensor`
-builds a lazy expression graph that an `Engine<B>` can evaluate and reuse.
+builds a lazy expression graph that a `GraphCompiler` lowers into a reusable
+program and a `GraphExecutor<B>` runs on a backend.
 
 Across concrete, eager, and traced workflows, use `stack(..., -1)` to create a
 trailing batch axis and `index_select(-1, positions)` to align entries along

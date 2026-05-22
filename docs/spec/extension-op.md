@@ -710,8 +710,8 @@ comparisons.
 Extensions MUST NOT materialise zero cotangents for symbolic-shape inputs at
 linearize time. A tangent slot that is inactive MUST be represented as `None`
 in both `tangent_in` and the returned tangent-output vector. Zero synthesis
-happens at the evaluation boundary in `TracedTensor::eval_with_inputs`, not
-inside the extension's AD rules.
+happens at the `GraphExecutor::run_with_inputs` boundary, not inside the
+extension's AD rules.
 
 ### Failure signature
 

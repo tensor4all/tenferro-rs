@@ -181,8 +181,8 @@ use tenferro::cuda::{download_tensor, upload_tensor, CudaBackend};
 use tenferro::{Tensor, TensorBackend};
 
 let mut backend = CudaBackend::new(0)?;
-let a = Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]);
-let b = Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]);
+let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 
 let gpu_a = upload_tensor(backend.runtime(), &a)?;
 let gpu_b = upload_tensor(backend.runtime(), &b)?;

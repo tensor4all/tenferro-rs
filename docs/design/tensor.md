@@ -62,7 +62,7 @@ impl<T: Scalar> Tensor<T> {
     pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
     pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
     pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self>;
-    pub fn from_vec(data: Vec<T>, dims: &[usize], strides: &[isize], offset: isize) -> Result<Self>;
+    pub fn from_strided_vec(data: Vec<T>, dims: &[usize], strides: &[isize], offset: isize) -> Result<Self>;
     pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
 }
 ```
@@ -161,7 +161,7 @@ Arc-based shared ownership achieves both:
 
 ```rust
 impl<T> DataBuffer<T> {
-    pub fn from_vec(v: Vec<T>) -> Self;
+    pub fn from_owned_vec(v: Vec<T>) -> Self;
     pub unsafe fn from_external(ptr, len, release) -> Self;
     pub fn as_slice(&self) -> Option<&[T]>;        // None for GPU
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]>; // None if shared or GPU

@@ -36,7 +36,7 @@ tenferro-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
     |
 tenferro-einsum   -- subscripts + contraction planning + fragment builder
     |
-tenferro          -- Engine, TracedTensor, lowering, execution, public APIs
+tenferro          -- TracedTensor, GraphCompiler, GraphExecutor, public APIs
 
 tenferro-cubecl              -- internal CUDA kernel definitions
 tenferro-extension-macros    -- extension-op registration macros
