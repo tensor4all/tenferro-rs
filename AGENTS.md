@@ -2,7 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Before acting, read the vendored shared rules from `template-rs`:
+Before acting, read the latest shared Tensor4all agent rules from the
+`tensor4all-agent-rules` repository. If internet access is unavailable or the
+remote cannot be resolved, use the sibling checkout:
+
+- `../tensor4all-agent-rules/rules/index.md`
+
+Load only the common, Rust, performance, numerical, docs, or benchmark rule
+files relevant to the task.
+
+Then read the vendored `template-rs` baseline rules and the tenferro-specific
+rules:
 
 - `ai/vendor/template-rs/common-agent-rules.md`
 - `ai/vendor/template-rs/numerical-rust-rules.md`
@@ -18,6 +28,14 @@ Before touching AD rules, oracle replay, or linearized boundary code, review `RE
 ## Current Implementation Status
 
 The workspace contains active implementations alongside evolving APIs. Implementation work is allowed unless a task explicitly says otherwise.
+
+## Repository Rule Source
+
+Keep cross-repository implementation rules in `tensor4all-agent-rules`.
+Keep tenferro-specific durable rules in `REPOSITORY_RULES.md`. This
+`AGENTS.md` file is the entry point and tenferro-specific orientation; avoid
+duplicating the detailed performance, layout, CPU kernel, slicing, cache,
+threading, and GPU backend rules here.
 
 ### GPU Status
 
@@ -56,20 +74,21 @@ See [`docs/design/`](docs/design/) for architecture and design documents.
 
 **Note**: Files under `docs/plans/` are historical records of past design discussions and decisions. They may contradict the current API or design — do not update them to match the current state.
 
-## Performance-Critical Conventions
+## Performance, Layout, And Backend Rules
 
-### Column-Major Dimension Ordering
+See `REPOSITORY_RULES.md` for the authoritative performance and layout
+contracts, including column-major ordering, hidden materialization, range
+checks and slicing, CPU kernel ownership, anti-patterns, cache ownership, CPU
+threading, and GPU backend conventions.
 
-tenferro uses **column-major** (Fortran order) storage: the leftmost dimension has the smallest stride and varies fastest in memory. When designing internal layouts for multi-dimensional operations (einsum GEMM, linalg, etc.), dimension ordering must respect this:
-
-- **Batch dimensions go on the RIGHT (trailing)**: In col-major, rightmost dims have the largest stride. Placing batch dims on the right means each batch slice occupies a contiguous block of memory, giving good cache locality for the GEMM kernel operating within each slice.
-- **Contraction/compute dimensions go on the LEFT (leading)**: lo (M), sum (K), ro (N) dims should be leftmost so the GEMM kernel accesses contiguous memory.
-
-**Wrong** (batch on left in col-major): `A[batch..., m, k]` — batch has smallest stride, so elements within each `(m, k)` slice are scattered across memory.
-
-**Correct** (batch on right in col-major): `A[lo..., sum..., batch...]` — each batch slice is contiguous, matching strided-rs's convention and standard GEMM cache behavior.
-
-This applies to `target_a`, `target_b`, `c_gemm_shape` in einsum's `GemmPlan`, and to any future batched operation layout.
+Do not assume nearby existing implementation patterns are performance-correct.
+This repository still contains active optimization work and some legacy
+tradeoffs. Before copying patterns in tensor kernels, graph/compiler planning,
+caches, GPU kernels, benchmarks, or user-facing examples, check for hidden
+materialization, repeated per-element index work, avoidable large-state clones,
+repeated linear scans, accidental single-thread GPU execution, and weak
+shape-only validation. Prefer improving the pattern or documenting the residual
+risk rather than propagating it.
 
 ## Code Style
 
@@ -268,106 +287,6 @@ download single scalars.
 provided by any version of cuSOLVER. `CubeclBackend::eig` returns
 `BackendFailure`. Users must explicitly download the tensor to CPU and
 compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
-
-## CPU Kernel Implementation Rules
-
-**No naive CPU loop fallbacks.** All CPU tensor kernels must use optimized
-implementations. Hand-written element-by-element loops are prohibited in
-production code paths.
-
-Required backends by operation category:
-
-| Category | Required backend |
-|---|---|
-| Elementwise (add, mul, neg, exp, ...) | strided-kernel (`map_into`, `zip_map2_into`, etc.) |
-| Reduction (reduce_sum, reduce_prod, ...) | strided-kernel (`reduce`, `reduce_axis`) |
-| Structural (transpose, broadcast, extract_diag) | strided-kernel (`permute`+`copy_into`, `broadcast`, `diagonal_view`) |
-| GEMM (dot_general) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
-| Linalg (svd, qr, cholesky, eigh, solve) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
-
-Exceptions (no strided-kernel API available):
-- `reshape`: metadata-only (contiguous memory, shape swap only)
-- `embed_diagonal`: dedicated implementation
-- Indexing ops (gather, scatter, slice, pad, concatenate, reverse): dedicated implementation
-
-Exactly one CPU backend must be enabled at build time (`cpu-faer` or `cpu-blas`).
-Both disabled or both enabled triggers `compile_error!`.
-
-## Common Performance Anti-Patterns
-
-When writing performance-sensitive code (GEMM, tensor operations, inner loops), avoid these mistakes:
-
-### 1. Duplicated f64/f32 functions instead of generic code
-
-**Bad:** Copy-pasting the same function body for `f64` and `f32` (e.g., `run_f64` / `run_f32`).
-
-**Good:** Use a trait (e.g., `FaerGemm`) or macro to share the logic. TypeId dispatch only at the outer boundary.
-
-### 2. Allocating dense buffers when strided access is available
-
-**Bad:** `vec![0.0; m*k]` + copy from strided source + GEMM + copy back to strided destination.
-
-**Good:** Use `faer::MatRef::from_raw_parts(ptr, m, k, row_stride, col_stride)` to access strided data directly — zero allocation, zero copy.
-
-### 3. Zero-initializing buffers that will be immediately overwritten
-
-**Bad:** `vec![0.0; n]` followed by a loop that overwrites every element.
-
-**Good:** `Vec::with_capacity(n)` + `unsafe { set_len(n) }` if you will write all elements, or avoid allocation entirely (see #2).
-
-### 4. Per-element index multiplication in inner loops
-
-**Bad:**
-```rust
-for j in 0..n {
-    for i in 0..m {
-        let off = i as isize * row_stride + j as isize * col_stride;
-        *ptr.offset(off) *= beta;
-    }
-}
-```
-
-**Good:** Use incremental pointer offsets:
-```rust
-let mut col_off = 0isize;
-for _ in 0..n {
-    let mut off = col_off;
-    for _ in 0..m {
-        *ptr.offset(off) *= beta;
-        off += row_stride;
-    }
-    col_off += col_stride;
-}
-```
-
-### 5. Allocating Vec inside hot loops
-
-**Bad:**
-```rust
-for_each_index(&dims, |idx| {
-    for i in 0..n {
-        let buf = vec![0usize; rank];  // ALLOCATION PER ITERATION
-        // ...
-    }
-});
-```
-
-**Good:** Pre-allocate outside and reuse with `.fill(0)`:
-```rust
-let mut buf = vec![0usize; rank];
-for_each_index(&dims, |idx| {
-    for i in 0..n {
-        buf.fill(0);
-        // ...
-    }
-});
-```
-
-### 6. Calling `Backend::plan()` inside hot loops
-
-**Bad:** Computing plans per-step inside the execution loop.
-
-**Good:** Pre-compute all plans before the loop and pass them in.
 
 ## Workspace Architecture
 

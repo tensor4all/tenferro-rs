@@ -129,6 +129,28 @@ fn assert_slice_close_f32(actual: &[f32], expected: &[f32], tol: f32) {
     }
 }
 
+fn assert_lu_batch_reconstructs_f32(
+    input: &[f32],
+    p: &[f32],
+    l: &[f32],
+    u: &[f32],
+    dims: (usize, usize, usize),
+    batch: usize,
+) {
+    let (m, k, n) = dims;
+    let a_start = batch * m * n;
+    let p_start = batch * m * m;
+    let l_start = batch * m * k;
+    let u_start = batch * k * n;
+    let a_batch = &input[a_start..a_start + m * n];
+    let p_batch = &p[p_start..p_start + m * m];
+    let l_batch = &l[l_start..l_start + m * k];
+    let u_batch = &u[u_start..u_start + k * n];
+    let pa = matmul_f32(p_batch, a_batch, m, m, n);
+    let lu = matmul_f32(l_batch, u_batch, m, k, n);
+    assert_slice_close_f32(&pa, &lu, 1e-4);
+}
+
 fn assert_slice_close_c32(actual: &[Complex32], expected: &[Complex32], tol: f32) {
     assert_eq!(actual.len(), expected.len());
     for (lhs, rhs) in actual.iter().zip(expected.iter()) {
@@ -216,6 +238,58 @@ fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
     let lu = matmul_f32(&l_data, &u_data, 2, 2, 2);
     assert_slice_close_f32(&pa, &lu, 1e-4);
     assert_slice_close_f32(parity.as_slice::<f32>().unwrap(), &[-1.0], 1e-4);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_lu_f32_handles_rectangular_pivots() {
+    let rectangular = tensor_f32(vec![3, 2], vec![0.0, 2.0, 0.0, 1.0, 3.0, 0.0]);
+    let mut gpu = gpu_backend();
+    let outputs = gpu.lu(&upload(&gpu, &rectangular)).unwrap();
+    let p = download(&gpu, &outputs[0]);
+    let l = download(&gpu, &outputs[1]);
+    let u = download(&gpu, &outputs[2]);
+    let parity = download(&gpu, &outputs[3]);
+    assert_eq!(p.shape(), &[3, 3]);
+    assert_eq!(l.shape(), &[3, 2]);
+    assert_eq!(u.shape(), &[2, 2]);
+    assert_eq!(parity.shape(), &[] as &[usize]);
+    assert_lu_batch_reconstructs_f32(
+        rectangular.as_slice::<f32>().unwrap(),
+        p.as_slice::<f32>().unwrap(),
+        l.as_slice::<f32>().unwrap(),
+        u.as_slice::<f32>().unwrap(),
+        (3, 2, 2),
+        0,
+    );
+    assert_slice_close_f32(parity.as_slice::<f32>().unwrap(), &[-1.0], 1e-4);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_lu_f32_handles_batched_pivots() {
+    let batched = tensor_f32(vec![2, 2, 2], vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+    let mut gpu = gpu_backend();
+    let outputs = gpu.lu(&upload(&gpu, &batched)).unwrap();
+    let p = download(&gpu, &outputs[0]);
+    let l = download(&gpu, &outputs[1]);
+    let u = download(&gpu, &outputs[2]);
+    let parity = download(&gpu, &outputs[3]);
+    assert_eq!(p.shape(), &[2, 2, 2]);
+    assert_eq!(l.shape(), &[2, 2, 2]);
+    assert_eq!(u.shape(), &[2, 2, 2]);
+    assert_eq!(parity.shape(), &[2]);
+    for batch in 0..2 {
+        assert_lu_batch_reconstructs_f32(
+            batched.as_slice::<f32>().unwrap(),
+            p.as_slice::<f32>().unwrap(),
+            l.as_slice::<f32>().unwrap(),
+            u.as_slice::<f32>().unwrap(),
+            (2, 2, 2),
+            batch,
+        );
+    }
+    assert_slice_close_f32(parity.as_slice::<f32>().unwrap(), &[-1.0, 1.0], 1e-4);
 }
 
 #[test]

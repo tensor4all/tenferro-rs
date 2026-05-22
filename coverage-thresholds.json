@@ -9,6 +9,7 @@
     "tenferro-cubecl/src/elementwise.rs",
     "tenferro-cubecl/src/helpers.rs",
     "tenferro-cubecl/src/indexing.rs",
+    "tenferro-cubecl/src/linalg.rs",
     "tenferro-cubecl/src/reduce/kernels.rs",
     "tenferro-cubecl/src/reduce/launch.rs",
     "tenferro-cubecl/src/structural.rs"

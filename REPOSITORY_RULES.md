@@ -1,5 +1,8 @@
 # Repository Rules
 
+These are tenferro-specific rules. Apply them on top of the shared Tensor4all
+rules from `tensor4all-agent-rules`.
+
 ## Public Surface Drift
 
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
@@ -56,7 +59,9 @@
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
 
-## Complexity Budget
+## Performance And Layout Rules
+
+### Complexity Budget
 
 - Do not introduce accidental `O(n^2)` behavior in graph construction,
   metadata propagation, key hashing/equality, compilation, or execution
@@ -69,7 +74,132 @@
 - When optimizing compiler or graph-build overhead, measure scaling across
   increasing graph sizes, not only one fixed benchmark case.
 
-## Cache Ownership
+### Materialization And Copies
+
+- Production tensor paths must not silently materialize dense temporary buffers
+  whose memory or time scales with an unconstrained product of tensor
+  dimensions. Dense/reference implementations are allowed only when the API is
+  explicitly named and documented as dense, reference, or debug behavior.
+- Avoid dense copy-in/copy-out around operations that can consume strided
+  views, borrowed slices, backend-native buffers, or metadata-only layout
+  changes.
+- Do not introduce hidden CPU-GPU transfers. Follow the public device-transfer
+  policy: callers explicitly upload/download tensors, while execution pipeline
+  internals may move constants or scalar metadata only where the backend
+  contract documents that behavior.
+- When a copy or materialization is required by an output contiguity contract,
+  backend limitation, or external ABI boundary, make that boundary explicit in
+  the implementation and cover it with tests.
+
+### Dense Layout And Linear Algebra
+
+- tenferro uses column-major (Fortran order) dense storage: the leftmost
+  dimension has the smallest stride and varies fastest in memory.
+- Public flat-buffer constructors, exports, examples, FFI contracts, and docs
+  must state or preserve column-major semantics.
+- Do not add row-major compatibility shims or hidden row-major round-trips in
+  library code. If external data is naturally row-shaped, convert privately at
+  that explicit boundary.
+- For batched GEMM-style layouts, put contraction/compute dimensions on the
+  left and batch dimensions on the right. In column-major storage, this keeps
+  each batch slice contiguous for the GEMM kernel.
+- Use existing tensor/backend abstractions for GEMM, einsum, and dense linear
+  algebra. Do not reimplement linalg kernels locally in downstream layers when
+  the CPU/GPU backend already owns the operation.
+
+### Range Checks And Slicing
+
+- Public indexing and slicing APIs must validate rank, bounds, steps, output
+  shape, and empty/singleton boundary behavior at the API boundary or planning
+  boundary.
+- After validation, hot loops and kernels should not repeat the same range
+  checks per element. Carry validated shape/stride/offset metadata into the
+  inner implementation instead.
+- Prefer safe Rust patterns that help LLVM eliminate bounds checks: iterate
+  over slices directly, slice once before the loop, use `chunks_exact` when the
+  chunk size divides the length, and add explicit pre-loop assertions for
+  validated index ranges. Use unchecked indexing only as a last resort.
+- Prefer metadata-only slices, strided views, or backend-native slice kernels
+  over dense copies. If a slice must allocate, document and test the reason.
+- Slice, reshape, transpose, gather, scatter, pad, concatenate, and reverse
+  implementations must preserve column-major shape/stride/offset semantics.
+- If unchecked indexing or unsafe pointer access is used after validation, keep
+  the validation invariant close to the unsafe block and add tests for full
+  range, empty or singleton slices, lower and upper boundaries, out-of-range
+  errors, rank mismatch, and non-contiguous slices.
+
+### CPU Kernel Implementation
+
+- No naive CPU loop fallbacks. CPU tensor kernels must use optimized
+  implementations unless the operation is explicitly listed as an exception
+  below.
+- Required CPU implementations by operation category:
+
+  | Category | Required implementation |
+  |---|---|
+  | Elementwise (`add`, `mul`, `neg`, `exp`, ...) | `strided-kernel` (`map_into`, `zip_map2_into`, etc.) |
+  | Reduction (`reduce_sum`, `reduce_prod`, ...) | `strided-kernel` (`reduce`, `reduce_axis`) |
+  | Structural (`transpose`, `broadcast`, `extract_diag`) | `strided-kernel` (`permute` + `copy_into`, `broadcast`, `diagonal_view`) |
+  | GEMM (`dot_general`) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
+  | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
+
+- Exceptions with dedicated implementations are `reshape` (metadata-only),
+  `embed_diagonal`, and indexing ops such as gather, scatter, slice, pad,
+  concatenate, and reverse.
+- Exactly one CPU backend must be enabled at build time (`cpu-faer` or
+  `cpu-blas`). Both disabled or both enabled must fail at compile time.
+
+### Faer Integration
+
+- Prefer zero-copy `faer::MatRef` / `faer::MatMut` views over packing data into
+  temporary dense matrices. Validate shape, bounds, alignment, and aliasing
+  before constructing unsafe raw faer views.
+- Feed faer column-major-friendly layouts whenever possible. For faer dense
+  linalg, row stride `1` is the preferred contiguous layout; generic-stride
+  inputs that trigger faer performance warnings must be justified or converted
+  deliberately at an explicit boundary.
+- Pass faer parallelism through `CpuContext` only. Do not choose `Par::Rayon`
+  or thread counts independently inside operation helpers.
+- For linalg scratch space, compute scratch requirements before execution and
+  allocate reusable scratch once for the operation. Avoid repeated `Vec`
+  allocation in decomposition, solve, or batched inner loops.
+
+### Performance Anti-Patterns
+
+- Do not duplicate `f64`/`f32`/complex function bodies. Use generic helpers,
+  traits, or macros, and keep any unavoidable dtype dispatch isolated at the
+  outer boundary.
+- Do not allocate dense buffers when strided or backend-native access is
+  available.
+- Do not zero-initialize buffers that will be fully overwritten.
+- Avoid per-element index multiplication in hot loops; use incremental pointer
+  offsets or precomputed strides.
+- Do not allocate `Vec` or other heap buffers inside hot loops. Pre-allocate
+  and reuse scratch buffers.
+- Do not call `Backend::plan()` or equivalent planning APIs inside execution
+  loops. Pre-compute plans before the loop and pass them in.
+
+### Performance-Sensitive Tests And Benchmarks
+
+- Small reference tests may materialize dense tensors, but should materialize
+  each full result once and compare the whole result. Avoid per-element
+  re-contraction, re-evaluation, or repeated graph execution as the comparison
+  mechanism.
+- Long regression tests should be sized so accidental dense materialization,
+  accidental `O(n^2)` graph work, or unexpected copies fail quickly while the
+  intended algorithm remains cheap.
+- For approximate equality, report a useful residual such as an absolute max
+  error or relative norm error so performance-related failures remain
+  diagnosable.
+- Use release-mode benchmarks for performance claims. Prefer Criterion-style
+  benchmarks for microbenchmarks, wrap benchmark inputs and outputs with
+  `std::hint::black_box` where needed, and pin relevant thread counts when
+  comparing CPU behavior.
+- Benchmark scaling across representative tensor sizes, shapes, layouts, and
+  thread counts. A single fixed-size speedup is not enough evidence for a
+  performance-sensitive change.
+
+### Cache Ownership
 
 - Long-lived runtime/compiler caches must be owned by `Engine` or another
   explicit top-level runtime object, not hidden in thread-local/global state or
@@ -87,14 +217,14 @@
   capacity, memory behavior, entry/byte accounting, and
   clear/configuration/stats path.
 
-## CPU Threading Contract
+### CPU Threading Contract
 
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helper functions.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
 - Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
 
-## GPU Backend Contract
+### GPU Backend Contract
 
 - Before touching CubeCL/GPU backend code, read
   [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
