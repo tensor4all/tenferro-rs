@@ -578,91 +578,11 @@ impl TracedTensor {
         &self,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<CompiledTracedTensor> {
-        let mut binding_map: HashMap<TensorInputKey, &Tensor> = HashMap::new();
-        for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
-            if placeholder.data.is_some() {
-                return Err(Error::UnexpectedBinding {
-                    binding_index: index,
-                });
-            }
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-
-            if placeholder.dtype != tensor.dtype() {
-                return Err(Error::PlaceholderDtypeMismatch {
-                    expected: placeholder.dtype,
-                    actual: tensor.dtype(),
-                });
-            }
-
-            match try_concrete_shape(placeholder) {
-                Some(expected_shape) => {
-                    if expected_shape.as_slice() != tensor.shape() {
-                        return Err(Error::PlaceholderShapeMismatch {
-                            expected: expected_shape,
-                            actual: tensor.shape().to_vec(),
-                        });
-                    }
-                }
-                None => {
-                    if placeholder.rank != tensor.shape().len() {
-                        return Err(Error::PlaceholderRankMismatch {
-                            expected: placeholder.rank,
-                            actual: tensor.shape().len(),
-                        });
-                    }
-                }
-            }
-
-            if binding_map.insert(key.clone(), *tensor).is_some() {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
-        let graph = materialize_merge(&view, &[output_key]);
-        let compiled = compile(&graph);
-
-        let mut input_tensors = Vec::with_capacity(graph.inputs.len());
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            match key {
-                GlobalValKey::Input(k) => {
-                    if let Some(tensor) = self.inputs_map.get(k) {
-                        input_tensors.push(tensor.as_ref().clone());
-                        input_dtypes.push(tensor.dtype());
-                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some(bound) = binding_map.get(k) {
-                        input_tensors.push((*bound).clone());
-                        input_dtypes.push(bound.dtype());
-                        input_shapes.push(DimExpr::from_concrete(bound.shape()));
-                    } else if let Some(zero) = deferred_zero_for_tangent_key(k, &binding_map) {
-                        input_dtypes.push(zero.dtype());
-                        input_shapes.push(DimExpr::from_concrete(zero.shape()));
-                        input_tensors.push(zero);
-                    } else {
-                        return Err(Error::UnboundPlaceholder {
-                            input_key: format!("{:?}", k),
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(
-                        "expected Input key in graph inputs".to_string(),
-                    ));
-                }
-            }
-        }
-
-        let program = compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
+        let mut compiler = crate::graph::GraphCompiler::new();
+        let (program, inputs) = compiler.compile_with_tensor_bindings(self, bindings)?;
         Ok(CompiledTracedTensor {
-            program,
-            inputs: input_tensors,
+            program: program.exec,
+            inputs,
         })
     }
 
@@ -671,91 +591,9 @@ impl TracedTensor {
         &self,
         bindings: &[(&TracedTensor, DType, &[usize])],
     ) -> Result<ExecProgram> {
-        let mut binding_map: HashMap<TensorInputKey, (DType, &[usize])> = HashMap::new();
-        for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
-            if placeholder.data.is_some() {
-                return Err(Error::UnexpectedBinding {
-                    binding_index: index,
-                });
-            }
-            let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-                binding_index: index,
-            })?;
-
-            if placeholder.dtype != *dtype {
-                return Err(Error::PlaceholderDtypeMismatch {
-                    expected: placeholder.dtype,
-                    actual: *dtype,
-                });
-            }
-
-            match try_concrete_shape(placeholder) {
-                Some(expected_shape) => {
-                    if expected_shape.as_slice() != *shape {
-                        return Err(Error::PlaceholderShapeMismatch {
-                            expected: expected_shape,
-                            actual: (*shape).to_vec(),
-                        });
-                    }
-                }
-                None => {
-                    if placeholder.rank != shape.len() {
-                        return Err(Error::PlaceholderRankMismatch {
-                            expected: placeholder.rank,
-                            actual: shape.len(),
-                        });
-                    }
-                }
-            }
-
-            if binding_map.insert(key.clone(), (*dtype, *shape)).is_some() {
-                return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
-                });
-            }
-        }
-
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let view = resolve(self.resolve_roots());
-        let graph = materialize_merge(&view, &[output_key]);
-        let compiled = compile(&graph);
-
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            match key {
-                GlobalValKey::Input(k) => {
-                    if let Some(tensor) = self.inputs_map.get(k) {
-                        input_dtypes.push(tensor.dtype());
-                        input_shapes.push(DimExpr::from_concrete(tensor.shape()));
-                    } else if let Some((dtype, shape)) = binding_map.get(k) {
-                        input_dtypes.push(*dtype);
-                        input_shapes.push(DimExpr::from_concrete(*shape));
-                    } else if !matches!(k, TensorInputKey::User { .. }) {
-                        let root = tangent_primal_root(k);
-                        if let Some((dtype, shape)) = binding_map.get(root) {
-                            input_dtypes.push(*dtype);
-                            input_shapes.push(DimExpr::from_concrete(*shape));
-                        } else {
-                            return Err(Error::UnboundPlaceholder {
-                                input_key: format!("{:?}", k),
-                            });
-                        }
-                    } else {
-                        return Err(Error::UnboundPlaceholder {
-                            input_key: format!("{:?}", k),
-                        });
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(
-                        "expected Input key in graph inputs".to_string(),
-                    ));
-                }
-            }
-        }
-
-        Ok(compile_std_to_exec(&compiled, &input_dtypes, &input_shapes))
+        let mut compiler = crate::graph::GraphCompiler::new();
+        let program = compiler.compile_with_input_specs(self, bindings)?;
+        Ok(program.exec)
     }
 
     /// Evaluate this traced tensor, binding external tensors to any
@@ -2473,7 +2311,7 @@ fn register_single_output_metadata(
 }
 
 impl TracedTensor {
-    fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
+    pub(crate) fn resolve_roots(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
         let mut roots = Vec::with_capacity(1 + self.extra_roots.len());
         roots.push(self.fragment.clone());
         roots.extend(self.extra_roots.iter().cloned());
