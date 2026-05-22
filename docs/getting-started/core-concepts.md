@@ -8,14 +8,14 @@ tenferro provides four tensor types for different use cases:
 |-------|------|----------|-----------------|
 | `TypedTensor<T>` | Statically typed | Direct computation, compile-time dtype safety | No (needs a backend) |
 | `Tensor` | Dynamic dtype enum | Mixed-dtype workflows, FFI | No (needs a backend) |
-| `EagerTensor` | Eager AD handle | PyTorch-style scalar-loss backward | No (needs `EagerContext`) |
+| `EagerTensor` | Eager AD handle | PyTorch-style scalar-loss backward | No (needs `EagerRuntime`) |
 | `TracedTensor` | Lazy graph handle | Transform AD, graph reuse, graph optimization | Yes |
 
 Choose the simplest layer that meets your needs:
 
 - **Compile-time dtype safety** -> `TypedTensor<T>` + a backend such as `CpuBackend`
 - **No AD needed** -> `Tensor` + a backend
-- **PyTorch-style scalar-loss backward** -> `EagerTensor` + `EagerContext`
+- **PyTorch-style scalar-loss backward** -> `EagerTensor` + `EagerRuntime`
 - **Transform AD or graph reuse** -> `TracedTensor` + `Engine<B>`
 
 ## TypedTensor<T>: statically typed storage
@@ -62,7 +62,7 @@ If you have used NumPy or PyTorch in eager mode, this is the familiar pattern.
 
 ## EagerTensor: PyTorch-style scalar-loss backward
 
-`EagerTensor` wraps immediate tensor values in an `EagerContext` that records
+`EagerTensor` wraps immediate tensor values in an `EagerRuntime` that records
 operations for scalar-loss reverse-mode autodiff. Use it when you want the
 familiar PyTorch pattern of computing a loss and calling `.backward()` on it.
 
@@ -100,7 +100,7 @@ Input data -> TracedTensor -> operations -> .eval(&mut engine) -> Tensor result
 | Library | Mental model | tenferro equivalent |
 |---|---|---|
 | NumPy | Eager, no AD | `Tensor` + a backend |
-| PyTorch (eager) | Eager with autograd | `EagerTensor` + `EagerContext` |
+| PyTorch (eager) | Eager with autograd | `EagerTensor` + `EagerRuntime` |
 | JAX (`jit`) | Staged/lazy computation | `TracedTensor` + `Engine<B>` |
 
 ## Minimal examples

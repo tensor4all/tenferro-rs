@@ -6,7 +6,7 @@ Use the simplest tensor layer that matches the workflow.
 | --- | --- |
 | Direct concrete computation on a selected backend | `Tensor` + a `TensorBackend` |
 | Compile-time scalar type while still owning dense data | `TypedTensor<T>` |
-| PyTorch-style scalar-loss `backward()` | `EagerTensor` + `EagerContext` |
+| PyTorch-style scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` |
 | `grad`, `vjp`, `jvp`, HVP, graph optimization | `TracedTensor` + `Engine<B>` |
 | Tensor operation not built into tenferro | an extension crate; see [Custom Tensor Operations](custom-operations.md) |
 
@@ -19,7 +19,7 @@ graph reuse.
 `Tensor` and `TypedTensor<T>` are concrete data containers. They represent CPU
 data by default, and under the `cuda` feature they can also represent
 explicitly uploaded CUDA-resident data. `EagerTensor` keeps PyTorch-style
-gradient state for immediate workflows inside an `EagerContext`. `TracedTensor`
+gradient state for immediate workflows inside an `EagerRuntime`. `TracedTensor`
 builds a lazy expression graph that an `Engine<B>` can evaluate and reuse.
 
 Across concrete, eager, and traced workflows, use `stack(..., -1)` to create a

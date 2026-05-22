@@ -128,22 +128,22 @@ Public linalg methods wrap this:
 Single-output linalg (`cholesky`, `triangular_solve`) uses `unary_op` or
 `binary_op`.
 
-## EagerContext Public API
+## EagerRuntime Public API
 
-`EagerContext<B>` becomes `pub struct`. New constructors:
+`EagerRuntime<B>` becomes `pub struct`. New constructors:
 
 ```rust
-impl<B: TensorBackend> EagerContext<B> {
+impl<B: TensorBackend> EagerRuntime<B> {
     pub fn with_backend(backend: B) -> Rc<Self>;
 }
 
 impl<B: TensorBackend> EagerTensor<B> {
-    pub fn from_tensor_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self;
-    pub fn requires_grad_in(tensor: Tensor, ctx: Rc<EagerContext<B>>) -> Self;
+    pub fn from_tensor_in(tensor: Tensor, ctx: Rc<EagerRuntime<B>>) -> Self;
+    pub fn requires_grad_in(tensor: Tensor, ctx: Rc<EagerRuntime<B>>) -> Self;
 }
 ```
 
-`with_backend` creates an `Rc<EagerContext<B>>`. The `_in` suffixed
+`with_backend` creates an `Rc<EagerRuntime<B>>`. The `_in` suffixed
 constructors take a shared context, avoiding repeated `absorb_from()` calls
 when creating many tensors in the same computation.
 
@@ -193,7 +193,7 @@ eager_einsum(backend, &[tensor_a, tensor_b, ...], subscripts) -> Tensor
 
 ### Context merging
 
-Merges `EagerContext`s across all N inputs using the same `absorb_from`
+Merges `EagerRuntime`s across all N inputs using the same `absorb_from`
 pattern as `binary_op`, extended with a loop over all inputs.
 
 ## Structural Ops
@@ -453,7 +453,7 @@ Split `eager.rs` (currently 631 lines) to keep files focused:
 
 | File | Responsibility |
 |------|---------------|
-| `eager.rs` | `EagerTensor` struct, `EagerContext` (pub), `new_leaf`, `new_result`, `backward()`, `detach()`, `data()`, `grad()`, internal helpers (`saved_forward_values`, `derived_output_key`, etc.) |
+| `eager.rs` | `EagerTensor` struct, `EagerRuntime` (pub), `new_leaf`, `new_result`, `backward()`, `detach()`, `data()`, `grad()`, internal helpers (`saved_forward_values`, `derived_output_key`, etc.) |
 | `eager_ops.rs` | All op methods: `unary_op`, `binary_op`, `ternary_op`, `multi_output_unary_op`, `nary_op`, and every public method (`add`, `mul`, ..., `svd`, `transpose`, etc.) |
 | `eager_einsum.rs` | `eager_einsum_ad` free function |
 | `eager_exec.rs` | `exec_op_on_tensors` — add `NaryEinsum` branch (delegate to `eager_einsum`) |
@@ -473,7 +473,7 @@ Tests:
 - Change existing methods to `Result`
 - Split `eager.rs` → `eager.rs` + `eager_ops.rs`
 - Add `multi_output_unary_op` (with `saved_forward_values_multi`, shared `Arc<GradNode>`), `ternary_op`, `nary_op` internal helpers
-- Make `EagerContext` public, add `with_backend` / `from_tensor_in` / `requires_grad_in`
+- Make `EagerRuntime` public, add `with_backend` / `from_tensor_in` / `requires_grad_in`
 
 **Phase 2 (ops — parallelizable):**
 - Structural ops (transpose, reshape, slice, etc.)

@@ -18,7 +18,7 @@ CPU backend using the faer linear algebra library. With the `cuda` feature, the
 same concrete and eager APIs can execute supported operations on the CubeCL/CUDA
 backend when tensors are explicitly placed on the GPU.
 
-`EagerContext` is the gradient-owning wrapper for eager AD state. If you share
+`EagerRuntime` is the gradient-owning wrapper for eager AD state. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
@@ -169,9 +169,9 @@ Repeated `backward()` calls add to the existing gradients, and you clear them
 explicitly when you want a fresh pass.
 
 ```rust
-use tenferro::{CpuBackend, EagerContext, EagerTensor, Tensor};
+use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
-let ctx = EagerContext::with_cpu_backend(CpuBackend::new());
+let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
 let y = EagerTensor::requires_grad_in(Tensor::from_vec(vec![2], vec![3.0_f64, 4.0]), ctx.clone());
 

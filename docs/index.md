@@ -48,6 +48,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Workflow | Use |
 | --- | --- |
 | Direct CPU computation | `Tensor` or `TypedTensor` with `CpuBackend` |
-| Scalar-loss eager AD | `EagerTensor` with `EagerContext` |
+| Scalar-loss eager AD | `EagerTensor` with `EagerRuntime` |
 | Transform AD and graph optimization | `TracedTensor` with `Engine` |
 | CUDA execution | `tenferro::cuda::CudaBackend` with the `cuda` feature and explicit upload/download |
