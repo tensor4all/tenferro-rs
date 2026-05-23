@@ -1,13 +1,13 @@
 #![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
 
-use std::ffi::c_char;
+use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::inject::{
-    register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, BlasGemmFnPtrSet,
-    LapackFullPivLuFnPtrSet,
+    register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, register_lapack_provider_ptrs,
+    BlasGemmFnPtrSet, LapackFullPivLuFnPtrSet, LapackProviderPtrSet, ProviderAbi,
 };
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
 
@@ -16,6 +16,8 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 static DGEMM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
+static DGETRF_CALLS: AtomicUsize = AtomicUsize::new(0);
+static DGETRS_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 fn register_test_ptrs_once() {
     REGISTER_ONCE.call_once(|| unsafe {
@@ -28,6 +30,15 @@ fn register_test_ptrs_once() {
             dgesc2: Some(test_dgesc2),
             ..LapackFullPivLuFnPtrSet::new()
         });
+        register_lapack_provider_ptrs(
+            ProviderAbi::Lp64,
+            LapackProviderPtrSet {
+                dgetrf: Some(test_dgetrf as *const c_void),
+                dgetrs: Some(test_dgetrs as *const c_void),
+                ..LapackProviderPtrSet::new()
+            },
+        )
+        .expect("test dgetrf/dgetrs registration should succeed");
     });
 }
 
@@ -116,6 +127,43 @@ unsafe extern "C" fn test_dgesc2(
     DGESC2_CALLS.fetch_add(1, Ordering::SeqCst);
     unsafe {
         *scale = 1.0;
+    }
+}
+
+unsafe extern "C" fn test_dgetrf(
+    m: *const lapack_inject::lapackint,
+    n: *const lapack_inject::lapackint,
+    _a: *mut f64,
+    _lda: *const lapack_inject::lapackint,
+    ipiv: *mut lapack_inject::lapackint,
+    info: *mut lapack_inject::lapackint,
+) {
+    DGETRF_CALLS.fetch_add(1, Ordering::SeqCst);
+    let k = unsafe { (*m).min(*n) as usize };
+    for index in 0..k {
+        unsafe {
+            *ipiv.add(index) = (index + 1) as lapack_inject::lapackint;
+        }
+    }
+    unsafe {
+        *info = 0;
+    }
+}
+
+unsafe extern "C" fn test_dgetrs(
+    _trans: *const c_char,
+    _n: *const lapack_inject::lapackint,
+    _nrhs: *const lapack_inject::lapackint,
+    _a: *const f64,
+    _lda: *const lapack_inject::lapackint,
+    _ipiv: *const lapack_inject::lapackint,
+    _b: *mut f64,
+    _ldb: *const lapack_inject::lapackint,
+    info: *mut lapack_inject::lapackint,
+) {
+    DGETRS_CALLS.fetch_add(1, Ordering::SeqCst);
+    unsafe {
+        *info = 0;
     }
 }
 
@@ -238,6 +286,32 @@ fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
 
     assert_eq!(DGETC2_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(DGESC2_CALLS.load(Ordering::SeqCst), 1);
+    match x {
+        Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[4.0, 8.0]),
+        _ => panic!("expected f64 tensor"),
+    }
+}
+
+#[test]
+fn provider_inject_solve_uses_registered_lapack_getrf_getrs() {
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("provider-inject test lock poisoned");
+    register_test_ptrs_once();
+    DGETRF_CALLS.store(0, Ordering::SeqCst);
+    DGETRS_CALLS.store(0, Ordering::SeqCst);
+
+    let a = Tensor::F64(TypedTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0, 0.0, 0.0, 1.0],
+    ));
+    let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]));
+
+    let mut backend = CpuBackend::new();
+    let x = backend.solve(&a, &b);
+
+    assert_eq!(DGETRF_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(DGETRS_CALLS.load(Ordering::SeqCst), 1);
     match x {
         Ok(Tensor::F64(inner)) => assert_eq!(inner.host_data(), &[4.0, 8.0]),
         _ => panic!("expected f64 tensor"),

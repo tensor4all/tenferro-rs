@@ -395,6 +395,9 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::Cholesky { .. } => ExecOp::Cholesky,
         StdTensorOp::Lu { .. } => ExecOp::Lu,
         StdTensorOp::FullPivLu { .. } => ExecOp::FullPivLu,
+        StdTensorOp::Solve { transpose_a } => ExecOp::Solve {
+            transpose_a: *transpose_a,
+        },
         StdTensorOp::FullPivLuSolve { transpose_a } => ExecOp::FullPivLuSolve {
             transpose_a: *transpose_a,
         },

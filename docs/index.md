@@ -16,6 +16,7 @@ when the workflow needs them.
 - [Execution Models](guides/execution-models.md)
 - [Memory Order](guides/memory-order.md)
 - [Devices and GPU](guides/devices-and-gpu.md)
+- [CPU Benchmarks](performance/cpu-benchmarks.md)
 - [API Reference](api/index.md)
 
 Installation details live in the README. The online guides focus on the tensor

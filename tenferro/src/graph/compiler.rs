@@ -501,6 +501,17 @@ fn descriptor_for_input(
     }
     if !matches!(key, TensorInputKey::User { .. }) {
         let root = tangent_primal_root(key);
+        if let Some(tensor) = default_inputs.get(root) {
+            return Ok(InputDescriptor {
+                key: key.clone(),
+                dtype: tensor.dtype(),
+                shape: tensor.shape().to_vec(),
+                default_tensor: Some(Arc::new(zeros_tensor(
+                    tensor.dtype(),
+                    tensor.shape().to_vec(),
+                ))),
+            });
+        }
         if let Some(spec) = binding_specs.get(root) {
             return Ok(InputDescriptor {
                 key: key.clone(),

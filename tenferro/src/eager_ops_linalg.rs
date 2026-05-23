@@ -147,9 +147,7 @@ impl EagerTensor {
         self.binary_op(b, StdTensorOp::FullPivLuSolve { transpose_a: false })
     }
 
-    /// Solve `A x = rhs` using complete-pivoting LU factorization.
-    ///
-    /// This is a shorter alias for [`Self::full_piv_lu_solve`].
+    /// Solve `A x = rhs` using LU factorization and triangular solves.
     ///
     /// # Examples
     ///
@@ -164,7 +162,7 @@ impl EagerTensor {
     /// assert_eq!(x.data().as_slice::<f64>().unwrap(), &[2.0, 2.0]);
     /// ```
     pub fn solve(&self, rhs: &Self) -> Result<Self> {
-        self.full_piv_lu_solve(rhs)
+        self.binary_op(rhs, StdTensorOp::Solve { transpose_a: false })
     }
 
     /// Solve `x A = rhs`, returning `rhs * A^{-1}` without forming an inverse.
@@ -214,7 +212,7 @@ impl EagerTensor {
         }
         let a_t = self.transpose(&[1, 0])?;
         let rhs_t = rhs.transpose(&[1, 0])?;
-        a_t.full_piv_lu_solve(&rhs_t)?.transpose(&[1, 0])
+        a_t.solve(&rhs_t)?.transpose(&[1, 0])
     }
 
     /// Cholesky factorization: `A = L L^T` for real inputs.

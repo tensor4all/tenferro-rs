@@ -4,6 +4,7 @@ use computegraph::OpEmitter;
 use tenferro_tensor::{CompareDir, DotGeneralConfig};
 
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::{conjugate_primal_if_complex, conjugate_primal_if_dtype_complex};
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::{EinsumSubscripts, StdTensorOp};
 use crate::sym_dim::SymDim;
@@ -286,15 +287,14 @@ pub fn transpose_dot_general(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
+        let rhs_conj = conjugate_primal_if_complex(emitter, inputs[1].clone(), ctx);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = emitter.add_op(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
             },
-            vec![cotangent.clone(), ValRef::Local(rhs_conj)],
+            vec![cotangent.clone(), rhs_conj],
             OpMode::Linear {
                 active_mask: vec![true, false],
             },
@@ -304,15 +304,14 @@ pub fn transpose_dot_general(
     }
 
     if active_mask[1] {
-        let lhs_conj =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let lhs_conj = conjugate_primal_if_complex(emitter, inputs[0].clone(), ctx);
         let (transpose_config, new_lhs_rank, new_rhs_rank, perm) =
             transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free);
         let out = emitter.add_op(
             StdTensorOp::DotGeneral {
                 config: transpose_config,
             },
-            vec![ValRef::Local(lhs_conj), cotangent],
+            vec![lhs_conj, cotangent],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -330,6 +329,7 @@ pub fn transpose_nary_einsum(
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     subscripts: &EinsumSubscripts,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let input_labels = &subscripts.inputs;
     let output_labels = &subscripts.output;
@@ -364,12 +364,11 @@ pub fn transpose_nary_einsum(
             }
 
             vjp_input_labels.push(input_labels[input_idx].clone());
-            let conjugated = emitter.add_op(
-                StdTensorOp::Conj,
-                vec![inputs[input_idx].clone()],
-                OpMode::Primal,
-            );
-            vjp_inputs.push(ValRef::Local(conjugated[0]));
+            vjp_inputs.push(conjugate_primal_if_complex(
+                emitter,
+                inputs[input_idx].clone(),
+                ctx,
+            ));
         }
 
         let out = emitter.add_op(
@@ -488,14 +487,12 @@ pub fn transpose_reduce_prod(
                 vec![ValRef::Local(prod_broadcast), inputs[0].clone()],
                 OpMode::Primal,
             )[0];
-            let coeff_conj = emitter.add_op(
-                StdTensorOp::Conj,
-                vec![ValRef::Local(coeff)],
-                OpMode::Primal,
-            )[0];
+            let input_dtype = ctx.dtype_of(&inputs[0]);
+            let coeff_conj =
+                conjugate_primal_if_dtype_complex(emitter, ValRef::Local(coeff), input_dtype);
             let out = emitter.add_op(
                 StdTensorOp::Mul,
-                vec![ValRef::Local(coeff_conj), ValRef::Local(cotangent)],
+                vec![coeff_conj, ValRef::Local(cotangent)],
                 OpMode::Linear {
                     active_mask: vec![false, true],
                 },
@@ -565,14 +562,12 @@ pub fn transpose_reduce_chooser(
                 vec![ValRef::Local(indicators), ValRef::Local(counts_broadcast)],
                 OpMode::Primal,
             )[0];
-            let weights_conj = emitter.add_op(
-                StdTensorOp::Conj,
-                vec![ValRef::Local(weights)],
-                OpMode::Primal,
-            )[0];
+            let input_dtype = ctx.dtype_of(&inputs[0]);
+            let weights_conj =
+                conjugate_primal_if_dtype_complex(emitter, ValRef::Local(weights), input_dtype);
             let out = emitter.add_op(
                 StdTensorOp::Mul,
-                vec![ValRef::Local(weights_conj), ValRef::Local(cotangent)],
+                vec![weights_conj, ValRef::Local(cotangent)],
                 OpMode::Linear {
                     active_mask: vec![false, true],
                 },

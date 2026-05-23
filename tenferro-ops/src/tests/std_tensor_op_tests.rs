@@ -23,6 +23,10 @@ macro_rules! shape {
     };
 }
 
+fn sym_shape(dims: &[usize]) -> Vec<SymDim> {
+    dims.iter().copied().map(SymDim::from).collect()
+}
+
 fn subs_ij_jk_ik() -> EinsumSubscripts {
     EinsumSubscripts::new(
         &[&[b'i' as u32, b'j' as u32], &[b'j' as u32, b'k' as u32]],
@@ -116,6 +120,15 @@ fn seed_uniform_ref_metadata(
     inputs: &[ValRef<StdTensorOp>],
     shape: Vec<SymDim>,
 ) {
+    seed_uniform_ref_metadata_with_dtype(ctx, inputs, DType::F64, shape);
+}
+
+fn seed_uniform_ref_metadata_with_dtype(
+    ctx: &mut ShapeGuardContext,
+    inputs: &[ValRef<StdTensorOp>],
+    dtype: DType,
+    shape: Vec<SymDim>,
+) {
     for input in inputs {
         let key = match input {
             ValRef::External(key) => key.clone(),
@@ -123,7 +136,7 @@ fn seed_uniform_ref_metadata(
                 panic!("expected external input in test helper, got local {local_id}")
             }
         };
-        ctx.insert_metadata(key, TensorMeta::exact(DType::F64, shape.clone()));
+        ctx.insert_metadata(key, TensorMeta::exact(dtype, shape.clone()));
     }
 }
 
@@ -552,6 +565,124 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
 }
 
 #[test]
+fn test_std_tensor_op_mul_transpose_skips_real_conjugates_and_keeps_complex_conjugates() {
+    let (real_result, _, real_fragment) = run_transpose_case_with_input_shape(
+        StdTensorOp::Mul,
+        2,
+        &[true, true],
+        true,
+        Some(sym_shape(&[2])),
+    );
+
+    assert!(real_result.iter().all(Option::is_some));
+    assert!(
+        real_fragment
+            .ops()
+            .iter()
+            .all(|op| op.op != StdTensorOp::Conj),
+        "real mul transpose should not emit no-op Conj nodes"
+    );
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input_key(401));
+    let inputs = external_inputs(510, 2);
+    seed_uniform_ref_metadata_with_dtype(&mut ad_ctx, &inputs, DType::C64, sym_shape(&[2]));
+    let complex_result = StdTensorOp::Mul.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true, true]),
+        &mut ad_ctx,
+    );
+    let complex_fragment = builder.build();
+
+    assert!(complex_result.iter().all(Option::is_some));
+    assert!(
+        complex_fragment
+            .ops()
+            .iter()
+            .any(|op| op.op == StdTensorOp::Conj),
+        "complex mul transpose must still conjugate inactive primal factors"
+    );
+}
+
+#[test]
+fn test_std_tensor_op_conj_ad_skips_real_identity_and_keeps_complex_conjugation() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let primal_in = add_input_keys(&mut builder, 530, 1);
+    ad_ctx.insert_metadata(
+        primal_in[0].clone(),
+        TensorMeta::exact(DType::F64, sym_shape(&[2])),
+    );
+    let tangent = builder.add_input(tensor_input_key(540));
+    let real_linearized =
+        StdTensorOp::Conj.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let real_linear_fragment = builder.build();
+    assert_eq!(real_linearized, vec![Some(tangent)]);
+    assert!(real_linear_fragment.ops().is_empty());
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let input = ValRef::External(GlobalValKey::Input(tensor_input_key(541)));
+    seed_uniform_ref_metadata_with_dtype(
+        &mut ad_ctx,
+        std::slice::from_ref(&input),
+        DType::F64,
+        sym_shape(&[2]),
+    );
+    let cotangent = builder.add_input(tensor_input_key(542));
+    let real_transposed = StdTensorOp::Conj.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &[input],
+        &linear_mode(&[true]),
+        &mut ad_ctx,
+    );
+    let real_transpose_fragment = builder.build();
+    assert_eq!(real_transposed, vec![Some(cotangent)]);
+    assert!(real_transpose_fragment.ops().is_empty());
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let primal_in = add_input_keys(&mut builder, 550, 1);
+    ad_ctx.insert_metadata(
+        primal_in[0].clone(),
+        TensorMeta::exact(DType::C64, sym_shape(&[2])),
+    );
+    let tangent = builder.add_input(tensor_input_key(560));
+    let complex_linearized =
+        StdTensorOp::Conj.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let complex_linear_fragment = builder.build();
+    assert!(complex_linearized[0].is_some());
+    assert_eq!(complex_linear_fragment.ops().len(), 1);
+    assert_eq!(complex_linear_fragment.ops()[0].op, StdTensorOp::Conj);
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let input = ValRef::External(GlobalValKey::Input(tensor_input_key(561)));
+    seed_uniform_ref_metadata_with_dtype(
+        &mut ad_ctx,
+        std::slice::from_ref(&input),
+        DType::C64,
+        sym_shape(&[2]),
+    );
+    let cotangent = builder.add_input(tensor_input_key(562));
+    let complex_transposed = StdTensorOp::Conj.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &[input],
+        &linear_mode(&[true]),
+        &mut ad_ctx,
+    );
+    let complex_transpose_fragment = builder.build();
+    assert!(complex_transposed[0].is_some());
+    assert_eq!(complex_transpose_fragment.ops().len(), 1);
+    assert_eq!(complex_transpose_fragment.ops()[0].op, StdTensorOp::Conj);
+}
+
+#[test]
 fn test_std_tensor_op_hash_covers_remaining_variants() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -647,11 +778,55 @@ fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
 }
 
 #[test]
-fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
+fn test_std_tensor_op_nary_einsum_transpose_skips_real_conjugates_and_emits_vjp_term() {
     let op = StdTensorOp::NaryEinsum {
         subscripts: subs_ij_jk_kl_il(),
     };
-    let (result, _, fragment) = run_transpose_case(op, 3, &[false, true, false], true);
+    let (result, _, fragment) = run_transpose_case_with_input_shape(
+        op,
+        3,
+        &[false, true, false],
+        true,
+        Some(sym_shape(&[2, 3])),
+    );
+
+    assert_eq!(result[0], None);
+    assert!(result[1].is_some());
+    assert_eq!(result[2], None);
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(
+        fragment.ops()[0].op,
+        StdTensorOp::NaryEinsum {
+            subscripts: subs_il_ij_kl_jk(),
+        }
+    );
+    assert_eq!(
+        fragment.ops()[0].mode,
+        OpMode::Linear {
+            active_mask: vec![true, false, false],
+        }
+    );
+}
+
+#[test]
+fn test_std_tensor_op_nary_einsum_transpose_keeps_complex_conjugates() {
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input_key(420));
+    let inputs = external_inputs(520, 3);
+    seed_uniform_ref_metadata_with_dtype(&mut ad_ctx, &inputs, DType::C64, sym_shape(&[2, 3]));
+    let op = StdTensorOp::NaryEinsum {
+        subscripts: subs_ij_jk_kl_il(),
+    };
+
+    let result = op.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[false, true, false]),
+        &mut ad_ctx,
+    );
+    let fragment = builder.build();
 
     assert_eq!(result[0], None);
     assert!(result[1].is_some());
@@ -663,12 +838,6 @@ fn test_std_tensor_op_nary_einsum_transpose_emits_conjugates_and_vjp_term() {
         fragment.ops()[2].op,
         StdTensorOp::NaryEinsum {
             subscripts: subs_il_ij_kl_jk(),
-        }
-    );
-    assert_eq!(
-        fragment.ops()[2].mode,
-        OpMode::Linear {
-            active_mask: vec![true, false, false],
         }
     );
 }
@@ -1019,6 +1188,11 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(transpose_none_result, vec![None]);
     assert!(transpose_none_fragment.ops().is_empty());
 
+    let (identity_transpose_result, identity_transpose_fragment) =
+        run_linearize_case(StdTensorOp::Transpose { perm: vec![0, 1] }, 0, 0, &[true]);
+    assert!(identity_transpose_result[0].is_some());
+    assert!(identity_transpose_fragment.ops().is_empty());
+
     let reshape = StdTensorOp::Reshape {
         to_shape: shape![2, 2],
     };
@@ -1028,6 +1202,23 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
     assert_eq!(reshape_linear_fragment.ops().len(), 1);
     assert_eq!(reshape_linear_fragment.ops()[0].op, reshape);
 
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let primal_in = add_input_keys(&mut builder, 904, 1);
+    ad_ctx.insert_metadata(
+        primal_in[0].clone(),
+        TensorMeta::exact(DType::F64, sym_shape(&[2, 2])),
+    );
+    let tangent = builder.add_input(tensor_input_key(905));
+    let identity_reshape = StdTensorOp::Reshape {
+        to_shape: shape![2, 2],
+    };
+    let identity_reshape_result =
+        identity_reshape.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let identity_reshape_fragment = builder.build();
+    assert_eq!(identity_reshape_result, vec![Some(tangent)]);
+    assert!(identity_reshape_fragment.ops().is_empty());
+
     let (transpose_result, _, transpose_fragment) = run_transpose_case(
         StdTensorOp::Transpose { perm: vec![0, 1] },
         1,
@@ -1035,11 +1226,7 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
         true,
     );
     assert!(transpose_result[0].is_some());
-    assert_eq!(transpose_fragment.ops().len(), 1);
-    assert_eq!(
-        transpose_fragment.ops()[0].op,
-        StdTensorOp::Transpose { perm: vec![0, 1] }
-    );
+    assert!(transpose_fragment.ops().is_empty());
 
     let (broadcast_linear_result, broadcast_linear_fragment) = run_linearize_case(
         StdTensorOp::BroadcastInDim {
@@ -1058,6 +1245,24 @@ fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
             dims: vec![0, 2],
         }
     );
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let primal_in = add_input_keys(&mut builder, 906, 1);
+    ad_ctx.insert_metadata(
+        primal_in[0].clone(),
+        TensorMeta::exact(DType::F64, sym_shape(&[2, 3])),
+    );
+    let tangent = builder.add_input(tensor_input_key(907));
+    let identity_broadcast = StdTensorOp::BroadcastInDim {
+        shape: shape![2, 3],
+        dims: vec![0, 1],
+    };
+    let identity_broadcast_result =
+        identity_broadcast.linearize(&mut builder, &primal_in, &[], &[Some(tangent)], &mut ad_ctx);
+    let identity_broadcast_fragment = builder.build();
+    assert_eq!(identity_broadcast_result, vec![Some(tangent)]);
+    assert!(identity_broadcast_fragment.ops().is_empty());
 
     let (broadcast_none_result, broadcast_none_fragment) = run_linearize_case(
         StdTensorOp::BroadcastInDim {
@@ -1349,18 +1554,56 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
         },
     };
     let (scalar_transpose_result, _, scalar_transpose_fragment) =
-        run_transpose_case(scalar_contract, 2, &[true, false], true);
+        run_transpose_case(scalar_contract.clone(), 2, &[true, false], true);
     assert!(scalar_transpose_result[0].is_some());
     assert_eq!(scalar_transpose_result[1], None);
     assert_eq!(
         scalar_transpose_fragment.ops()[0].op,
         StdTensorOp::Reshape { to_shape: shape![] }
     );
-    assert_eq!(scalar_transpose_fragment.ops()[1].op, StdTensorOp::Conj);
+    assert!(scalar_transpose_fragment
+        .ops()
+        .iter()
+        .all(|node| node.op != StdTensorOp::Conj));
+    assert!(matches!(
+        scalar_transpose_fragment.ops()[1].op,
+        StdTensorOp::DotGeneral { .. }
+    ));
     assert_eq!(
         scalar_transpose_fragment.ops().last().unwrap().op,
         StdTensorOp::Transpose { perm: vec![1, 0] }
     );
+
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let mut ad_ctx = ShapeGuardContext::default();
+    let cotangent = builder.add_input(tensor_input_key(990));
+    let inputs = external_inputs(991, 2);
+    for (input, shape) in inputs.iter().zip([&[2, 3][..], &[3, 2][..]]) {
+        let ValRef::External(key) = input else {
+            unreachable!("external_inputs returns external refs")
+        };
+        ad_ctx.insert_metadata(
+            key.clone(),
+            TensorMeta::exact(
+                DType::C64,
+                shape.iter().copied().map(SymDim::from).collect(),
+            ),
+        );
+    }
+    let complex_transpose_result = scalar_contract.transpose_rule(
+        &mut builder,
+        &[Some(cotangent)],
+        &inputs,
+        &linear_mode(&[true, false]),
+        &mut ad_ctx,
+    );
+    let complex_transpose_fragment = builder.build();
+    assert!(complex_transpose_result[0].is_some());
+    assert_eq!(complex_transpose_result[1], None);
+    assert!(complex_transpose_fragment
+        .ops()
+        .iter()
+        .any(|node| node.op == StdTensorOp::Conj));
 }
 
 #[test]

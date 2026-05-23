@@ -2,6 +2,8 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 
+use crate::ad::context::ShapeGuardContext;
+use crate::ad::support::{conjugate_linear_if_dtype_complex, conjugate_primal_if_complex};
 use crate::std_tensor_op::StdTensorOp;
 
 pub fn linearize_add(
@@ -92,18 +94,14 @@ pub fn linearize_neg(
 
 pub fn linearize_conj(
     builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
         Some(dx) => {
-            let out = builder.add_op(
-                StdTensorOp::Conj,
-                vec![ValRef::Local(dx)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
-            );
-            vec![Some(out[0])]
+            let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
+            vec![Some(conjugate_linear_if_dtype_complex(builder, dx, dtype))]
         }
         None => vec![None],
     }
@@ -121,6 +119,7 @@ pub fn transpose_mul(
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let ct = match cotangent_out[0] {
         Some(ct) => ct,
@@ -135,11 +134,10 @@ pub fn transpose_mul(
     let mut result = vec![None, None];
 
     if active_mask[0] {
-        let rhs_conj =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[1].clone()], OpMode::Primal)[0];
+        let rhs_conj = conjugate_primal_if_complex(emitter, inputs[1].clone(), ctx);
         let out = emitter.add_op(
             StdTensorOp::Mul,
-            vec![ValRef::Local(rhs_conj), ValRef::Local(ct)],
+            vec![rhs_conj, ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -148,11 +146,10 @@ pub fn transpose_mul(
     }
 
     if active_mask[1] {
-        let lhs_conj =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let lhs_conj = conjugate_primal_if_complex(emitter, inputs[0].clone(), ctx);
         let out = emitter.add_op(
             StdTensorOp::Mul,
-            vec![ValRef::Local(lhs_conj), ValRef::Local(ct)],
+            vec![lhs_conj, ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -185,17 +182,13 @@ pub fn transpose_neg(
 pub fn transpose_conj(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
         Some(ct) => {
-            let out = emitter.add_op(
-                StdTensorOp::Conj,
-                vec![ValRef::Local(ct)],
-                OpMode::Linear {
-                    active_mask: vec![true],
-                },
-            );
-            vec![Some(out[0])]
+            let dtype = ctx.dtype_of(&inputs[0]);
+            vec![Some(conjugate_linear_if_dtype_complex(emitter, ct, dtype))]
         }
         None => vec![None],
     }

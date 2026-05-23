@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use computegraph::{GlobalValKey, LocalValId, OpEmitter, OpMode, ValRef};
+use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 
 use crate::eager_exec::exec_op_on_tensors;
 
@@ -31,6 +32,22 @@ impl<'a, B: TensorBackend> EagerEmitter<'a, B> {
     pub fn tensor(&self, id: LocalValId) -> Arc<Tensor> {
         Arc::clone(&self.results[id])
     }
+
+    fn external_tensor(&mut self, key: &GlobalValKey<StdTensorOp>) -> Arc<Tensor> {
+        if let Some(tensor) = self.external_data.get(key) {
+            return Arc::clone(tensor);
+        }
+
+        let base_key = missing_tangent_base_key(key)
+            .unwrap_or_else(|| panic!("EagerEmitter: missing external {:?}", key));
+        let base = self
+            .external_data
+            .get(&base_key)
+            .unwrap_or_else(|| panic!("EagerEmitter: missing tangent base {:?}", base_key));
+        let zero = Arc::new(zero_like_tensor(base.as_ref()));
+        self.external_data.insert(key.clone(), Arc::clone(&zero));
+        zero
+    }
 }
 
 impl<B: TensorBackend> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
@@ -40,16 +57,16 @@ impl<B: TensorBackend> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
         inputs: Vec<ValRef<StdTensorOp>>,
         _mode: OpMode,
     ) -> Vec<LocalValId> {
-        let concrete: Vec<&Tensor> = inputs
+        let concrete_values: Vec<Arc<Tensor>> = inputs
             .iter()
             .map(|value| match value {
-                ValRef::Local(id) => self.results[*id].as_ref(),
-                ValRef::External(key) => self
-                    .external_data
-                    .get(key)
-                    .unwrap_or_else(|| panic!("EagerEmitter: missing external {:?}", key))
-                    .as_ref(),
+                ValRef::Local(id) => Arc::clone(&self.results[*id]),
+                ValRef::External(key) => self.external_tensor(key),
             })
+            .collect();
+        let concrete: Vec<&Tensor> = concrete_values
+            .iter()
+            .map(|tensor| tensor.as_ref())
             .collect();
 
         let outputs = exec_op_on_tensors(&op, &concrete, self.backend)
@@ -60,5 +77,25 @@ impl<B: TensorBackend> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
             self.results.push(Arc::new(output));
         }
         (base..self.results.len()).collect()
+    }
+}
+
+fn missing_tangent_base_key(key: &GlobalValKey<StdTensorOp>) -> Option<GlobalValKey<StdTensorOp>> {
+    let GlobalValKey::Input(tangent_key) = key else {
+        return None;
+    };
+    let TensorInputKey::Tangent { of, .. } = tangent_key else {
+        return None;
+    };
+    Some(GlobalValKey::Input((**of).clone()))
+}
+
+fn zero_like_tensor(input: &Tensor) -> Tensor {
+    match input {
+        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape.clone())),
     }
 }

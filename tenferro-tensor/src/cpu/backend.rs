@@ -9,7 +9,6 @@ use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::validate::validate_nonsingular_u;
 use crate::{Buffer, CacheStats, Tensor, TensorRead, TypedTensor};
 
 use super::exec_session::CpuExecSession;
@@ -1271,19 +1270,58 @@ impl TensorBackend for CpuBackend {
             (b.clone(), None)
         };
 
-        let outputs = self.lu(a)?;
-        let p = &outputs[0];
-        let l = &outputs[1];
-        let u = &outputs[2];
-        validate_nonsingular_u(u)?;
+        #[cfg(feature = "cpu-faer")]
+        let ctx = Arc::clone(&self.ctx);
+        let result = self.linalg_with_pool(|buffers| match (a, &rhs) {
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::F64(a), Tensor::F64(b)) => {
+                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F32(a), Tensor::F32(b)) => {
+                linalg::solve(buffers, a, b, false).map(Tensor::F32)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::F64(a), Tensor::F64(b)) => {
+                linalg::solve(buffers, a, b, false).map(Tensor::F64)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::solve(buffers, a, b, false).map(Tensor::C32)
+            }
+            #[cfg(feature = "cpu-blas")]
+            (Tensor::C64(a), Tensor::C64(b)) => {
+                linalg::solve(buffers, a, b, false).map(Tensor::C64)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C32(a), Tensor::C32(b)) => {
+                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::C32)
+            }
+            #[cfg(feature = "cpu-faer")]
+            (Tensor::C64(a), Tensor::C64(b)) => {
+                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::C64)
+            }
+            _ => {
+                if a.dtype() != rhs.dtype() {
+                    Err(crate::Error::DTypeMismatch {
+                        op: "solve",
+                        lhs: a.dtype(),
+                        rhs: rhs.dtype(),
+                    })
+                } else {
+                    Err(unsupported_dtype("solve", a.dtype()))
+                }
+            }
+        })?;
 
-        let pb = matmul_preserve_trailing_batch(self, p, &rhs)?;
-        let z = self.triangular_solve(l, &pb, true, true, false, true)?;
-        let x = self.triangular_solve(u, &z, true, false, false, false)?;
         if let Some(shape) = restore_shape {
-            self.reshape(&x, &shape)
+            self.reshape(&result, &shape)
         } else {
-            Ok(x)
+            Ok(result)
         }
     }
 
@@ -1377,25 +1415,6 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     let mut rhs_shape = vec![b.shape()[0], 1];
     rhs_shape.extend_from_slice(&b.shape()[1..]);
     Some(rhs_shape)
-}
-
-fn matmul_preserve_trailing_batch(
-    backend: &mut CpuBackend,
-    lhs: &Tensor,
-    rhs: &Tensor,
-) -> crate::Result<Tensor> {
-    let rank = lhs.shape().len();
-    let batch_dims: Vec<usize> = (2..rank).collect();
-    backend.dot_general(
-        lhs,
-        rhs,
-        &DotGeneralConfig {
-            lhs_contracting_dims: vec![1],
-            rhs_contracting_dims: vec![0],
-            lhs_batch_dims: batch_dims.clone(),
-            rhs_batch_dims: batch_dims,
-        },
-    )
 }
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {

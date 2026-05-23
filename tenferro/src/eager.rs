@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use computegraph::fragment::Fragment;
-use computegraph::{GlobalValKey, ValRef};
+use computegraph::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
@@ -24,11 +24,12 @@ use crate::eager_emitter::EagerEmitter;
 use crate::eager_exec::exec_op_on_tensors;
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
-    metadata_scopes_for_scope, push_metadata_scope, register_scoped_fragment_metadata,
+    metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_fragment_metadata,
     register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
     MetadataScope,
 };
 use crate::traced::next_input_key;
+use tenferro_ops::TensorMeta;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
@@ -450,13 +451,31 @@ impl EagerTensor {
         grad_node: Option<Arc<GradNode<StdTensorOp>>>,
         metadata_scopes: Vec<Arc<MetadataScope>>,
     ) -> Self {
+        Self::new_result_arc(
+            ctx,
+            key,
+            Arc::new(tensor),
+            requires_grad,
+            grad_node,
+            metadata_scopes,
+        )
+    }
+
+    pub(crate) fn new_result_arc(
+        ctx: Arc<EagerRuntime>,
+        key: GlobalValKey<StdTensorOp>,
+        tensor: Arc<Tensor>,
+        requires_grad: bool,
+        grad_node: Option<Arc<GradNode<StdTensorOp>>>,
+        metadata_scopes: Vec<Arc<MetadataScope>>,
+    ) -> Self {
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.register_grad_slot(&key, &grad_slot);
         }
 
         Self {
-            data: Arc::new(tensor),
+            data: tensor,
             key,
             grad_node,
             requires_grad,
@@ -676,6 +695,83 @@ pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend> {
     metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
+fn missing_tangent_base_key(key: &GlobalValKey<StdTensorOp>) -> Option<GlobalValKey<StdTensorOp>> {
+    let GlobalValKey::Input(tangent_key) = key else {
+        return None;
+    };
+    let TensorInputKey::Tangent { of, .. } = tangent_key else {
+        return None;
+    };
+    Some(GlobalValKey::Input((**of).clone()))
+}
+
+fn eager_forward_input_metadata(
+    key: &GlobalValKey<StdTensorOp>,
+    initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+) -> TensorMeta {
+    if let Some(value) = initial_data.get(key) {
+        return tensor_meta_from_tensor(value.as_ref());
+    }
+
+    let base_key = missing_tangent_base_key(key)
+        .unwrap_or_else(|| panic!("missing concrete eager value for {:?}", key));
+    let base = initial_data
+        .get(&base_key)
+        .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
+    tensor_meta_from_tensor(base.as_ref())
+}
+
+fn eager_forward_value<B: TensorBackend>(
+    all_values: &mut HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+    key: &GlobalValKey<StdTensorOp>,
+    initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
+    backend: &mut B,
+) -> Arc<Tensor> {
+    if let Some(value) = all_values.get(key) {
+        return Arc::clone(value);
+    }
+
+    let base_key = missing_tangent_base_key(key)
+        .unwrap_or_else(|| panic!("missing concrete eager value for {:?}", key));
+    let base = initial_data
+        .get(&base_key)
+        .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
+    let value = Arc::new(zero_like_tensor(base.as_ref(), backend));
+    all_values.insert(key.clone(), Arc::clone(&value));
+    value
+}
+
+fn live_fragment_values(fragment: &Fragment<StdTensorOp>) -> HashSet<LocalValId> {
+    let mut producers = HashMap::new();
+    for (op_index, op_node) in fragment.ops().iter().enumerate() {
+        for &output_id in &op_node.outputs {
+            producers.insert(output_id, op_index);
+        }
+    }
+
+    let mut live = HashSet::new();
+    let mut stack = fragment.outputs().to_vec();
+    while let Some(local_id) = stack.pop() {
+        if !live.insert(local_id) {
+            continue;
+        }
+        let Some(&op_index) = producers.get(&local_id) else {
+            continue;
+        };
+        for input in &fragment.ops()[op_index].inputs {
+            if let ValRef::Local(input_id) = input {
+                stack.push(*input_id);
+            }
+        }
+    }
+
+    live
+}
+
+fn linear_op_depends_on_tangents(mode: &OpMode) -> bool {
+    matches!(mode, OpMode::Linear { active_mask } if active_mask.iter().any(|is_active| *is_active))
+}
+
 impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallbacks<'_, B> {
     fn execute_forward(
         &mut self,
@@ -683,43 +779,44 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
         initial_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>> {
         let mut all_values = initial_data.clone();
-
-        for &input_id in fragment.inputs() {
-            let key = fragment.vals()[input_id].key.clone();
-            all_values.entry(key.clone()).or_insert_with(|| {
-                let GlobalValKey::Input(tangent_key) = &key else {
-                    panic!("expected input key for eager forward: {:?}", key);
-                };
-                let tenferro_ops::input_key::TensorInputKey::Tangent { of, .. } = tangent_key
-                else {
-                    panic!("missing concrete eager value for {:?}", key);
-                };
-                let base_key = GlobalValKey::Input((**of).clone());
-                let base = initial_data
-                    .get(&base_key)
-                    .unwrap_or_else(|| panic!("missing base eager value for {:?}", base_key));
-                Arc::new(zero_like_tensor(base.as_ref(), self.backend))
-            });
-        }
+        let live_values = live_fragment_values(fragment);
+        let input_metadata = fragment
+            .inputs()
+            .iter()
+            .map(|&input_id| {
+                let key = fragment.vals()[input_id].key.clone();
+                let meta = eager_forward_input_metadata(&key, initial_data);
+                (key, meta)
+            })
+            .collect::<Vec<_>>();
 
         for op_node in fragment.ops() {
-            let resolved_inputs: Vec<&Tensor> = op_node
+            if linear_op_depends_on_tangents(&op_node.mode) {
+                continue;
+            }
+            if !op_node
+                .outputs
+                .iter()
+                .any(|output_id| live_values.contains(output_id))
+            {
+                continue;
+            }
+
+            let resolved_values: Vec<Arc<Tensor>> = op_node
                 .inputs
                 .iter()
                 .map(|input| match input {
                     ValRef::Local(local_id) => {
                         let key = &fragment.vals()[*local_id].key;
-                        all_values
-                            .get(key)
-                            .unwrap_or_else(|| panic!("missing eager value for local {:?}", key))
-                            .as_ref()
+                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
                     }
-                    ValRef::External(key) => all_values
-                        .get(key)
-                        .unwrap_or_else(|| panic!("missing eager value for external {:?}", key))
-                        .as_ref(),
+                    ValRef::External(key) => {
+                        eager_forward_value(&mut all_values, key, initial_data, self.backend)
+                    }
                 })
                 .collect();
+            let resolved_inputs: Vec<&Tensor> =
+                resolved_values.iter().map(|value| value.as_ref()).collect();
             let outputs = exec_op_on_tensors(&op_node.op, &resolved_inputs, self.backend)
                 .unwrap_or_else(|err| {
                     panic!("eager forward exec failed for {:?}: {}", op_node.op, err)
@@ -731,21 +828,8 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
             }
         }
 
-        let metadata_scope = register_scoped_fragment_metadata(
-            fragment,
-            fragment.inputs().iter().map(|input_id| {
-                let key = fragment.vals()[*input_id].key.clone();
-                let meta = tensor_meta_from_tensor(
-                    all_values
-                        .get(&key)
-                        .unwrap_or_else(|| {
-                            panic!("missing eager value for fragment input {:?}", key)
-                        })
-                        .as_ref(),
-                );
-                (key, meta)
-            }),
-        );
+        let metadata_scope =
+            register_scoped_live_fragment_metadata(fragment, &live_values, input_metadata);
         push_metadata_scope(&mut self.metadata_scopes, Arc::new(metadata_scope));
 
         all_values

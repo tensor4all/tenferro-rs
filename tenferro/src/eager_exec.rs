@@ -11,34 +11,54 @@ use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
 
+enum PromotedTensor<'a> {
+    Borrowed(&'a Tensor),
+    Owned(Tensor),
+}
+
+impl<'a> PromotedTensor<'a> {
+    fn tensor(&'a self) -> &'a Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Owned(tensor) => tensor,
+        }
+    }
+}
+
+fn promote_to_dtype<'a>(
+    exec: &mut dyn TensorExec,
+    tensor: &'a Tensor,
+    promoted: DType,
+) -> Result<PromotedTensor<'a>> {
+    if tensor.dtype() == promoted {
+        Ok(PromotedTensor::Borrowed(tensor))
+    } else {
+        Ok(PromotedTensor::Owned(
+            exec.convert(tensor, promoted).map_err(Error::from)?,
+        ))
+    }
+}
+
 /// If the two tensors have different dtypes, insert Convert ops so they
 /// both match the promoted result dtype. Returns the (possibly converted)
 /// tensors.
-fn promote_binary_to_dtype(
+fn promote_binary_to_dtype<'a>(
     exec: &mut dyn TensorExec,
-    a: &Tensor,
-    b: &Tensor,
+    a: &'a Tensor,
+    b: &'a Tensor,
     promoted: DType,
-) -> Result<(Tensor, Tensor)> {
-    let a = if a.dtype() != promoted {
-        exec.convert(a, promoted).map_err(Error::from)?
-    } else {
-        a.clone()
-    };
-    let b = if b.dtype() != promoted {
-        exec.convert(b, promoted).map_err(Error::from)?
-    } else {
-        b.clone()
-    };
+) -> Result<(PromotedTensor<'a>, PromotedTensor<'a>)> {
+    let a = promote_to_dtype(exec, a, promoted)?;
+    let b = promote_to_dtype(exec, b, promoted)?;
     Ok((a, b))
 }
 
-fn promote_binary(
+fn promote_binary<'a>(
     exec: &mut dyn TensorExec,
-    a: &Tensor,
-    b: &Tensor,
+    a: &'a Tensor,
+    b: &'a Tensor,
     op: &StdTensorOp,
-) -> Result<(Tensor, Tensor)> {
+) -> Result<(PromotedTensor<'a>, PromotedTensor<'a>)> {
     let promoted = promote_dtype_for_binary_op(op, a.dtype(), b.dtype());
     promote_binary_to_dtype(exec, a, b, promoted)
 }
@@ -54,7 +74,7 @@ pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
     let promoted = crate::shape_infer::promote_dtype(lhs.dtype(), rhs.dtype());
     backend.with_exec_session(|exec| {
         let (lhs, rhs) = promote_binary_to_dtype(exec, lhs, rhs, promoted)?;
-        exec.dot_general_with_conj(&lhs, &rhs, config, lhs_conj, rhs_conj)
+        exec.dot_general_with_conj(lhs.tensor(), rhs.tensor(), config, lhs_conj, rhs_conj)
             .map_err(Error::from)
     })
 }
@@ -88,20 +108,49 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
         });
     }
 
+    if let StdTensorOp::Solve { transpose_a } = op {
+        let promoted = promote_dtype_for_binary_op(op, inputs[0].dtype(), inputs[1].dtype());
+        let a_converted;
+        let b_converted;
+        let a = if inputs[0].dtype() == promoted {
+            inputs[0]
+        } else {
+            a_converted = backend.convert(inputs[0], promoted)?;
+            &a_converted
+        };
+        let b = if inputs[1].dtype() == promoted {
+            inputs[1]
+        } else {
+            b_converted = backend.convert(inputs[1], promoted)?;
+            &b_converted
+        };
+        let a_transposed;
+        let a_ref = if *transpose_a {
+            let rank = a.shape().len();
+            let mut perm: Vec<usize> = (0..rank).collect();
+            perm.swap(0, 1);
+            a_transposed = backend.transpose(a, &perm)?;
+            &a_transposed
+        } else {
+            a
+        };
+        return Ok(vec![backend.solve(a_ref, b)?]);
+    }
+
     backend.with_exec_session(|exec| {
         let result = match op {
             StdTensorOp::Add => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.add(&a, &b)?]
+                vec![exec.add(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Mul => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.mul(&a, &b)?]
+                vec![exec.mul(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Neg => vec![exec.neg(inputs[0])?],
             StdTensorOp::Div => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.div(&a, &b)?]
+                vec![exec.div(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Exp => vec![exec.exp(inputs[0])?],
             StdTensorOp::Log => vec![exec.log(inputs[0])?],
@@ -112,28 +161,28 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Rsqrt => vec![exec.rsqrt(inputs[0])?],
             StdTensorOp::Pow => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.pow(&a, &b)?]
+                vec![exec.pow(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Abs => vec![exec.abs(inputs[0])?],
             StdTensorOp::Sign => vec![exec.sign(inputs[0])?],
             StdTensorOp::Conj => vec![exec.conj(inputs[0])?],
             StdTensorOp::Maximum => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.maximum(&a, &b)?]
+                vec![exec.maximum(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Minimum => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.minimum(&a, &b)?]
+                vec![exec.minimum(a.tensor(), b.tensor())?]
             }
             StdTensorOp::Compare(dir) => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.compare(&a, &b, dir)?]
+                vec![exec.compare(a.tensor(), b.tensor(), dir)?]
             }
             StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
             StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
             StdTensorOp::DotGeneral { config, .. } => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.dot_general(&a, &b, config)?]
+                vec![exec.dot_general(a.tensor(), b.tensor(), config)?]
             }
             StdTensorOp::Reshape { to_shape, .. } => {
                 let shape = resolve_tensor_shape_exprs(inputs, to_shape);
@@ -163,25 +212,22 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
             StdTensorOp::Select => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
-                vec![exec.select(&a, &b, &c)?]
+                let (a, c) = promote_binary(exec, a.tensor(), inputs[2], op)?;
+                vec![exec.select(a.tensor(), b.tensor(), c.tensor())?]
             }
             StdTensorOp::Clamp => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, &a, inputs[2], op)?;
-                vec![exec.clamp(&a, &b, &c)?]
+                let (a, c) = promote_binary(exec, a.tensor(), inputs[2], op)?;
+                vec![exec.clamp(a.tensor(), b.tensor(), c.tensor())?]
             }
             StdTensorOp::Concatenate { axis, .. } => {
                 let promoted = crate::shape_infer::promote_dtypes(inputs.iter().map(|t| t.dtype()));
-                let mut promoted_inputs: Vec<Tensor> = Vec::with_capacity(inputs.len());
+                let mut promoted_inputs = Vec::with_capacity(inputs.len());
                 for t in inputs {
-                    if t.dtype() != promoted {
-                        promoted_inputs.push(exec.convert(t, promoted).map_err(Error::from)?);
-                    } else {
-                        promoted_inputs.push((*t).clone());
-                    }
+                    promoted_inputs.push(promote_to_dtype(exec, t, promoted)?);
                 }
-                let promoted_refs: Vec<&Tensor> = promoted_inputs.iter().collect();
+                let promoted_refs: Vec<&Tensor> =
+                    promoted_inputs.iter().map(PromotedTensor::tensor).collect();
                 vec![exec.concatenate(&promoted_refs, *axis)?]
             }
             StdTensorOp::NaryEinsum { .. } => {
@@ -209,14 +255,14 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             }
             StdTensorOp::Scatter(config) => {
                 let (operand, updates) = promote_binary(exec, inputs[0], inputs[2], op)?;
-                vec![exec.scatter(&operand, inputs[1], &updates, config)?]
+                vec![exec.scatter(operand.tensor(), inputs[1], updates.tensor(), config)?]
             }
             StdTensorOp::DynamicSlice { slice_sizes } => {
                 vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
             }
             StdTensorOp::DynamicUpdateSlice => {
                 let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.dynamic_update_slice(&operand, &update, inputs[2])?]
+                vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
             }
             StdTensorOp::Cholesky { .. } => vec![exec.cholesky(inputs[0])?],
             StdTensorOp::TriangularSolve {
@@ -228,8 +274,8 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             } => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.triangular_solve(
-                    &a,
-                    &b,
+                    a.tensor(),
+                    b.tensor(),
                     *left_side,
                     *lower,
                     *transpose_a,
@@ -240,9 +286,12 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Qr { .. } => exec.qr(inputs[0])?,
             StdTensorOp::Lu { .. } => exec.lu(inputs[0])?,
             StdTensorOp::FullPivLu { .. } => exec.full_piv_lu(inputs[0])?,
+            StdTensorOp::Solve { .. } => {
+                unreachable!("Solve is handled before opening an exec session")
+            }
             StdTensorOp::FullPivLuSolve { transpose_a } => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.full_piv_lu_solve(&a, &b, *transpose_a)?]
+                vec![exec.full_piv_lu_solve(a.tensor(), b.tensor(), *transpose_a)?]
             }
             StdTensorOp::Eigh { .. } => exec.eigh(inputs[0])?,
             StdTensorOp::Eig { .. } => exec.eig(inputs[0])?,

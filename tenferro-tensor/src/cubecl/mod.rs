@@ -2391,6 +2391,17 @@ impl TensorBackend for CubeclBackend {
         gemm::dot_general(self, lhs, rhs, config)
     }
 
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
     fn gather(
         &mut self,
         operand: &Tensor,

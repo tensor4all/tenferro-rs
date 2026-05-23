@@ -684,10 +684,10 @@ impl EagerTensor {
             .into_iter()
             .zip(outputs)
             .map(|(trace, output)| {
-                Self::new_result(
+                Self::new_result_arc(
                     Arc::clone(&self.ctx),
                     trace.key,
-                    output.as_ref().clone(),
+                    output,
                     trace.requires_grad,
                     trace.node,
                     metadata_scopes.clone(),
@@ -755,10 +755,10 @@ impl EagerTensor {
         }
 
         let result = profile_eager_op_section("nary_op.new_tracked_result", || {
-            Self::new_result(
+            Self::new_result_arc(
                 ctx,
                 trace.key,
-                output.as_ref().clone(),
+                output,
                 trace.requires_grad,
                 trace.node,
                 metadata_scopes,

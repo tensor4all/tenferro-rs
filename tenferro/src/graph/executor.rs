@@ -548,6 +548,16 @@ fn resolve_inputs(
         .map(|input| input.key.clone())
         .collect();
     let tangent_root_specs = tangent_root_specs(&program.inputs);
+    let default_map: HashMap<_, _> = program
+        .inputs
+        .iter()
+        .filter_map(|input| {
+            input
+                .default_tensor
+                .as_ref()
+                .map(|tensor| (input.key.clone(), tensor.as_ref()))
+        })
+        .collect();
     let mut binding_map = HashMap::new();
     for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
         if placeholder.data.is_some() {
@@ -575,7 +585,7 @@ fn resolve_inputs(
     program
         .inputs
         .iter()
-        .map(|input| resolve_input(input, &binding_map))
+        .map(|input| resolve_input(input, &binding_map, &default_map))
         .collect()
 }
 
@@ -594,12 +604,13 @@ fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &
 fn resolve_input(
     input: &GraphProgramInput,
     bindings: &HashMap<TensorInputKey, &Tensor>,
+    defaults: &HashMap<TensorInputKey, &Tensor>,
 ) -> Result<Tensor> {
     let tensor = if let Some(bound) = bindings.get(&input.key) {
         (*bound).clone()
     } else if let Some(default) = &input.default_tensor {
         default.as_ref().clone()
-    } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings) {
+    } else if let Some(zero) = deferred_zero_for_tangent_key(&input.key, bindings, defaults) {
         zero
     } else {
         return Err(Error::UnboundPlaceholder {
@@ -666,12 +677,13 @@ fn validate_input_tensor(input: &GraphProgramInput, tensor: &Tensor) -> Result<(
 fn deferred_zero_for_tangent_key(
     key: &TensorInputKey,
     bindings: &HashMap<TensorInputKey, &Tensor>,
+    defaults: &HashMap<TensorInputKey, &Tensor>,
 ) -> Option<Tensor> {
     if matches!(key, TensorInputKey::User { .. }) {
         return None;
     }
     let root = tangent_primal_root(key);
-    let primal = bindings.get(root)?;
+    let primal = bindings.get(root).or_else(|| defaults.get(root))?;
     Some(zeros_tensor(primal.dtype(), primal.shape().to_vec()))
 }
 

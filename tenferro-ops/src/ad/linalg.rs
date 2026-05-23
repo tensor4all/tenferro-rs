@@ -4,6 +4,7 @@ use computegraph::OpEmitter;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
 use super::context::{resolve_and_guard, ShapeGuardContext};
+use super::support::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex};
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -325,23 +326,45 @@ pub fn linearize_triangular_solve(
     vec![Some(out[0])]
 }
 
-pub fn linearize_full_piv_lu_solve(
+#[derive(Clone, Copy)]
+enum LinearSolveOp {
+    Solve,
+    FullPivLuSolve,
+}
+
+fn linear_solve_op(kind: LinearSolveOp, transpose_a: bool) -> StdTensorOp {
+    match kind {
+        LinearSolveOp::Solve => StdTensorOp::Solve { transpose_a },
+        LinearSolveOp::FullPivLuSolve => StdTensorOp::FullPivLuSolve { transpose_a },
+    }
+}
+
+fn linear_solve_op_name(kind: LinearSolveOp) -> &'static str {
+    match kind {
+        LinearSolveOp::Solve => "linearize_solve",
+        LinearSolveOp::FullPivLuSolve => "linearize_full_piv_lu_solve",
+    }
+}
+
+fn linearize_linear_solve(
     builder: &mut FragmentBuilder<StdTensorOp>,
     primal_in: &[GlobalValKey<StdTensorOp>],
     primal_out: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
+    kind: LinearSolveOp,
 ) -> Vec<Option<LocalValId>> {
     let lhs_rank = ctx.shape_of(&ValRef::External(primal_in[0].clone())).len();
     let rhs_rank = ctx.shape_of(&ValRef::External(primal_in[1].clone())).len();
+    let op_name = linear_solve_op_name(kind);
     assert!(
         lhs_rank >= 2 && rhs_rank >= 2,
-        "linearize_full_piv_lu_solve: expected matrix operands"
+        "{op_name}: expected matrix operands"
     );
     assert_eq!(
         lhs_rank, rhs_rank,
-        "linearize_full_piv_lu_solve: rank mismatch between lhs and rhs"
+        "{op_name}: rank mismatch between lhs and rhs"
     );
     let rank = lhs_rank;
     let mut rhs_tangent = tangent_in[1];
@@ -366,7 +389,7 @@ pub fn linearize_full_piv_lu_solve(
     };
 
     let out = builder.add_op(
-        StdTensorOp::FullPivLuSolve { transpose_a },
+        linear_solve_op(kind, transpose_a),
         vec![
             ValRef::External(primal_in[0].clone()),
             ValRef::Local(rhs_tangent),
@@ -376,6 +399,44 @@ pub fn linearize_full_piv_lu_solve(
         },
     );
     vec![Some(out[0])]
+}
+
+pub fn linearize_solve(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    linearize_linear_solve(
+        builder,
+        primal_in,
+        primal_out,
+        tangent_in,
+        transpose_a,
+        ctx,
+        LinearSolveOp::Solve,
+    )
+}
+
+pub fn linearize_full_piv_lu_solve(
+    builder: &mut FragmentBuilder<StdTensorOp>,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    primal_out: &[GlobalValKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValId>],
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    linearize_linear_solve(
+        builder,
+        primal_in,
+        primal_out,
+        tangent_in,
+        transpose_a,
+        ctx,
+        LinearSolveOp::FullPivLuSolve,
+    )
 }
 
 fn triangular_solve_rhs_tangent(
@@ -433,13 +494,14 @@ pub fn linearize_svd(
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
     let k = DimExpr::min(m.clone(), n.clone());
     let u = ValRef::External(primal_out[0].clone());
     let s = ValRef::External(primal_out[1].clone());
     let vt = ValRef::External(primal_out[2].clone());
 
-    let uh = adjoint_matrix_fixed(builder, u.clone(), matrix_rank);
-    let v = adjoint_matrix_fixed(builder, vt.clone(), matrix_rank);
+    let uh = adjoint_matrix_fixed(builder, u.clone(), matrix_rank, dtype);
+    let v = adjoint_matrix_fixed(builder, vt.clone(), matrix_rank, dtype);
     let tmp = matmul_linear(
         builder,
         ValRef::Local(uh),
@@ -485,14 +547,14 @@ pub fn linearize_svd(
     let s_inv = fixed_div(builder, s.clone(), ValRef::Local(safe_s_sq));
     let s_inv_mat = embed_diag_fixed(builder, ValRef::Local(s_inv));
 
-    let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank);
+    let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank, dtype);
     let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
     // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
     let d_udv_diag = hadamard_fixed_linear(builder, ValRef::Local(s_inv_mat), anti_hermitian);
     let d_udv_diag = linear_scale(builder, d_udv_diag, 0.5);
 
     let dss = hadamard_fixed_linear(builder, ValRef::Local(s_dim), ds_mat);
-    let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank);
+    let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
     let du_inner_sum = linear_add(builder, dss, dss_h);
     let du_inner = hadamard_fixed_linear(builder, ValRef::Local(f), du_inner_sum);
     let du_inner = linear_add(builder, du_inner, d_udv_diag);
@@ -505,7 +567,7 @@ pub fn linearize_svd(
     );
 
     let sds = hadamard_fixed_linear(builder, ValRef::Local(s_dim_t), ds_mat);
-    let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank);
+    let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank, dtype);
     let dv_inner_sum = linear_add(builder, sds, sds_h);
     let dv_inner = hadamard_fixed_linear(builder, ValRef::Local(f), dv_inner_sum);
     let mut dv = matmul_linear(
@@ -550,7 +612,7 @@ pub fn linearize_svd(
     }
 
     if n_size > m_size {
-        let da_h = adjoint_matrix_linear(builder, da, matrix_rank);
+        let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
         let d_ahu = matmul_linear(
             builder,
             ValRef::Local(da_h),
@@ -583,7 +645,7 @@ pub fn linearize_svd(
         dv = linear_add(builder, dv, correction);
     }
 
-    let dvt = adjoint_matrix_linear(builder, dv, matrix_rank);
+    let dvt = adjoint_matrix_linear(builder, dv, matrix_rank, dtype);
 
     vec![Some(du), Some(ds), Some(dvt)]
 }
@@ -603,11 +665,12 @@ pub fn linearize_eigh(
     let input_shape = primal_input_shape(ctx, primal_in);
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
     let w = ValRef::External(primal_out[0].clone());
     let v = ValRef::External(primal_out[1].clone());
-    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
 
-    let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank);
+    let vh = adjoint_matrix_fixed(builder, v.clone(), matrix_rank, dtype);
     let tmp = matmul_linear(
         builder,
         ValRef::Local(vh),
@@ -669,9 +732,10 @@ pub fn linearize_cholesky(
     let input_shape = primal_input_shape(ctx, primal_in);
     let input_shape = input_shape.as_slice();
     let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
     let l = ValRef::External(primal_out[0].clone());
-    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank);
-    let l_conj = fixed_unary(builder, StdTensorOp::Conj, l.clone());
+    let da_self_adjoint = self_adjoint_from_lower_linear(builder, da, matrix_rank, dtype);
+    let l_conj = conjugate_primal_if_dtype_complex(builder, l.clone(), dtype);
 
     let tmp = builder.add_op(
         StdTensorOp::TriangularSolve {
@@ -680,7 +744,7 @@ pub fn linearize_cholesky(
             transpose_a: true,
             unit_diagonal: false,
         },
-        vec![ValRef::Local(l_conj), ValRef::Local(da_self_adjoint)],
+        vec![l_conj, ValRef::Local(da_self_adjoint)],
         OpMode::Linear {
             active_mask: vec![false, true],
         },
@@ -736,11 +800,12 @@ pub fn linearize_qr(
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
     let (m_size, n_size) = resolve_and_guard(m, n, ctx);
     let matrix_rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
     let q = ValRef::External(primal_out[0].clone());
     let r = ValRef::External(primal_out[1].clone());
 
     if n_size > m_size {
-        let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank);
+        let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
         let leading_selector = leading_column_selector_fixed(
             builder,
             m_size,
@@ -764,8 +829,9 @@ pub fn linearize_qr(
             ValRef::Local(leading_selector_t),
             matrix_rank,
         );
-        let r_leading_h = adjoint_matrix_fixed(builder, ValRef::Local(r_leading), matrix_rank);
-        let da_leading_h = adjoint_matrix_linear(builder, da_leading, matrix_rank);
+        let r_leading_h =
+            adjoint_matrix_fixed(builder, ValRef::Local(r_leading), matrix_rank, dtype);
+        let da_leading_h = adjoint_matrix_linear(builder, da_leading, matrix_rank, dtype);
         let dx_rinv_h = builder.add_op(
             StdTensorOp::TriangularSolve {
                 left_side: true,
@@ -778,7 +844,7 @@ pub fn linearize_qr(
                 active_mask: vec![false, true],
             },
         )[0];
-        let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank);
+        let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank, dtype);
         let qt_dx_rinv = matmul_linear(
             builder,
             ValRef::Local(qh),
@@ -786,7 +852,7 @@ pub fn linearize_qr(
             vec![false, true],
             matrix_rank,
         );
-        let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank);
+        let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank, dtype);
         let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
         let upper = builder.add_op(
             StdTensorOp::Triu { k: 1 },
@@ -877,8 +943,8 @@ pub fn linearize_qr(
         return vec![Some(dq), Some(dr)];
     }
 
-    let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank);
-    let da_h = adjoint_matrix_linear(builder, da, matrix_rank);
+    let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank, dtype);
+    let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
     let dx_rinv_h = builder.add_op(
         StdTensorOp::TriangularSolve {
             left_side: true,
@@ -891,8 +957,8 @@ pub fn linearize_qr(
             active_mask: vec![false, true],
         },
     )[0];
-    let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank);
-    let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank);
+    let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank, dtype);
+    let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
     let qt_dx_rinv = matmul_linear(
         builder,
         ValRef::Local(qh),
@@ -900,7 +966,7 @@ pub fn linearize_qr(
         vec![false, true],
         matrix_rank,
     );
-    let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank);
+    let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank, dtype);
     let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
     let upper = builder.add_op(
         StdTensorOp::Triu { k: 1 },
@@ -953,8 +1019,8 @@ pub fn transpose_triangular_solve(
 
     let mut result = vec![None, None];
     if active_mask[0] || active_mask[1] {
-        let conjugated_a =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let dtype = ctx.dtype_of(&inputs[0]);
+        let conjugated_a = conjugate_primal_if_dtype_complex(emitter, inputs[0].clone(), dtype);
         let out = emitter.add_op(
             StdTensorOp::TriangularSolve {
                 left_side,
@@ -962,7 +1028,7 @@ pub fn transpose_triangular_solve(
                 transpose_a: !transpose_a,
                 unit_diagonal,
             },
-            vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
+            vec![conjugated_a, ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -987,6 +1053,7 @@ pub fn transpose_triangular_solve(
                 left_side,
                 transpose_a,
                 rank,
+                dtype,
             );
             let matrix_cotangent =
                 project_triangular_operand_linear(emitter, matrix_cotangent, lower, unit_diagonal);
@@ -1000,13 +1067,14 @@ pub fn transpose_triangular_solve(
     result
 }
 
-pub fn transpose_full_piv_lu_solve(
+fn transpose_linear_solve(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
     transpose_a: bool,
     ctx: &mut ShapeGuardContext,
+    kind: LinearSolveOp,
 ) -> Vec<Option<LocalValId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None];
@@ -1017,13 +1085,11 @@ pub fn transpose_full_piv_lu_solve(
 
     let mut result = vec![None, None];
     if active_mask[0] || active_mask[1] {
-        let conjugated_a =
-            emitter.add_op(StdTensorOp::Conj, vec![inputs[0].clone()], OpMode::Primal)[0];
+        let dtype = ctx.dtype_of(&inputs[0]);
+        let conjugated_a = conjugate_primal_if_dtype_complex(emitter, inputs[0].clone(), dtype);
         let out = emitter.add_op(
-            StdTensorOp::FullPivLuSolve {
-                transpose_a: !transpose_a,
-            },
-            vec![ValRef::Local(conjugated_a), ValRef::Local(ct)],
+            linear_solve_op(kind, !transpose_a),
+            vec![conjugated_a, ValRef::Local(ct)],
             OpMode::Linear {
                 active_mask: vec![false, true],
             },
@@ -1032,7 +1098,7 @@ pub fn transpose_full_piv_lu_solve(
         if active_mask[0] {
             let rank = ctx.shape_of(&inputs[0]).len();
             let solution = emitter.add_op(
-                StdTensorOp::FullPivLuSolve { transpose_a },
+                linear_solve_op(kind, transpose_a),
                 inputs.to_vec(),
                 OpMode::Primal,
             )[0];
@@ -1043,6 +1109,7 @@ pub fn transpose_full_piv_lu_solve(
                 true,
                 transpose_a,
                 rank,
+                dtype,
             ));
         }
         if active_mask[1] {
@@ -1053,6 +1120,44 @@ pub fn transpose_full_piv_lu_solve(
     result
 }
 
+pub fn transpose_solve(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    transpose_linear_solve(
+        emitter,
+        cotangent_out,
+        inputs,
+        mode,
+        transpose_a,
+        ctx,
+        LinearSolveOp::Solve,
+    )
+}
+
+pub fn transpose_full_piv_lu_solve(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    cotangent_out: &[Option<LocalValId>],
+    inputs: &[ValRef<StdTensorOp>],
+    mode: &OpMode,
+    transpose_a: bool,
+    ctx: &mut ShapeGuardContext,
+) -> Vec<Option<LocalValId>> {
+    transpose_linear_solve(
+        emitter,
+        cotangent_out,
+        inputs,
+        mode,
+        transpose_a,
+        ctx,
+        LinearSolveOp::FullPivLuSolve,
+    )
+}
+
 fn solve_matrix_cotangent(
     emitter: &mut impl OpEmitter<StdTensorOp>,
     rhs_cotangent: LocalValId,
@@ -1060,9 +1165,10 @@ fn solve_matrix_cotangent(
     left_side: bool,
     transpose_a: bool,
     rank: usize,
+    dtype: DType,
 ) -> LocalValId {
     let negative_rhs_cotangent = linear_neg(emitter, rhs_cotangent);
-    let solution_h = adjoint_matrix_fixed(emitter, solution, rank);
+    let solution_h = adjoint_matrix_fixed(emitter, solution, rank, dtype);
     let op_matrix_cotangent = if left_side {
         matmul_linear(
             emitter,
@@ -1384,17 +1490,19 @@ fn adjoint_matrix_fixed(
     builder: &mut impl OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     rank: usize,
+    dtype: DType,
 ) -> LocalValId {
-    let conjugated = fixed_unary(builder, StdTensorOp::Conj, input);
-    transpose_matrix_fixed(builder, ValRef::Local(conjugated), rank)
+    let input = conjugate_primal_if_dtype_complex(builder, input, dtype);
+    transpose_matrix_fixed(builder, input, rank)
 }
 
 fn adjoint_matrix_linear(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: LocalValId,
     rank: usize,
+    dtype: DType,
 ) -> LocalValId {
-    let conjugated = linear_unary(builder, StdTensorOp::Conj, input);
+    let conjugated = conjugate_linear_if_dtype_complex(builder, input, dtype);
     builder.add_op(
         StdTensorOp::Transpose {
             perm: matrix_transpose_perm(rank),
@@ -1444,6 +1552,7 @@ fn self_adjoint_from_lower_linear(
     builder: &mut FragmentBuilder<StdTensorOp>,
     input: LocalValId,
     rank: usize,
+    dtype: DType,
 ) -> LocalValId {
     let strict_lower = builder.add_op(
         StdTensorOp::Tril { k: -1 },
@@ -1452,14 +1561,18 @@ fn self_adjoint_from_lower_linear(
             active_mask: vec![true],
         },
     )[0];
-    let strict_lower_h = adjoint_matrix_linear(builder, strict_lower, rank);
+    let strict_lower_h = adjoint_matrix_linear(builder, strict_lower, rank, dtype);
     let offdiag = linear_add(builder, strict_lower, strict_lower_h);
 
     let diag = extract_diag_linear(builder, input);
-    let diag_h = linear_unary(builder, StdTensorOp::Conj, diag);
-    let diag_sum = linear_add(builder, diag, diag_h);
-    let real_diag = linear_scale(builder, diag_sum, 0.5);
-    let diag_mat = embed_diag_linear(builder, real_diag);
+    let diag = if matches!(dtype, DType::F32 | DType::F64) {
+        diag
+    } else {
+        let diag_h = conjugate_linear_if_dtype_complex(builder, diag, dtype);
+        let diag_sum = linear_add(builder, diag, diag_h);
+        linear_scale(builder, diag_sum, 0.5)
+    };
+    let diag_mat = embed_diag_linear(builder, diag);
     linear_add(builder, offdiag, diag_mat)
 }
 

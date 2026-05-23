@@ -79,7 +79,7 @@ pub fn try_linearize(
         StdTensorOp::Add => semiring::linearize_add(builder, tangent_in),
         StdTensorOp::Mul => semiring::linearize_mul(builder, primal_in, tangent_in),
         StdTensorOp::Neg => semiring::linearize_neg(builder, tangent_in),
-        StdTensorOp::Conj => semiring::linearize_conj(builder, tangent_in),
+        StdTensorOp::Conj => semiring::linearize_conj(builder, primal_in, tangent_in, ctx),
 
         // Elementwise (non-semiring) family.
         StdTensorOp::Div => elementwise::linearize_div(builder, primal_in, primal_out, tangent_in),
@@ -128,10 +128,10 @@ pub fn try_linearize(
             structural::linearize_transpose(builder, tangent_in, perm)
         }
         StdTensorOp::Reshape { .. } => {
-            structural::linearize_reshape(builder, primal_in, tangent_in, op)
+            structural::linearize_reshape(builder, primal_in, tangent_in, op, ctx)
         }
         StdTensorOp::BroadcastInDim { shape, dims } => {
-            structural::linearize_broadcast_in_dim(builder, primal_in, tangent_in, shape, dims)
+            structural::linearize_broadcast_in_dim(builder, primal_in, tangent_in, shape, dims, ctx)
         }
         StdTensorOp::Convert { from, to } => {
             structural::linearize_convert(builder, tangent_in, *from, *to)
@@ -197,6 +197,14 @@ pub fn try_linearize(
         StdTensorOp::FullPivLu => {
             linalg::linearize_full_piv_lu(builder, primal_in, primal_out, tangent_in, ctx)
         }
+        StdTensorOp::Solve { transpose_a } => linalg::linearize_solve(
+            builder,
+            primal_in,
+            primal_out,
+            tangent_in,
+            *transpose_a,
+            ctx,
+        ),
         StdTensorOp::FullPivLuSolve { transpose_a } => linalg::linearize_full_piv_lu_solve(
             builder,
             primal_in,
@@ -288,9 +296,9 @@ pub fn try_transpose_rule(
     let cotangents = match op {
         // Semiring-arithmetic family.
         StdTensorOp::Add => semiring::transpose_add(cotangent_out),
-        StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode),
+        StdTensorOp::Mul => semiring::transpose_mul(emitter, cotangent_out, inputs, mode, ctx),
         StdTensorOp::Neg => semiring::transpose_neg(emitter, cotangent_out),
-        StdTensorOp::Conj => semiring::transpose_conj(emitter, cotangent_out),
+        StdTensorOp::Conj => semiring::transpose_conj(emitter, cotangent_out, inputs, ctx),
 
         // Elementwise (non-semiring) family.
         StdTensorOp::Div => elementwise::transpose_div(emitter, cotangent_out, inputs, mode),
@@ -323,9 +331,14 @@ pub fn try_transpose_rule(
         StdTensorOp::DotGeneral { config } => {
             contraction::transpose_dot_general(emitter, cotangent_out, inputs, mode, config, ctx)
         }
-        StdTensorOp::NaryEinsum { subscripts } => {
-            contraction::transpose_nary_einsum(emitter, cotangent_out, inputs, mode, subscripts)
-        }
+        StdTensorOp::NaryEinsum { subscripts } => contraction::transpose_nary_einsum(
+            emitter,
+            cotangent_out,
+            inputs,
+            mode,
+            subscripts,
+            ctx,
+        ),
         StdTensorOp::ReduceSum { .. } => {
             contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs, ctx)
         }
@@ -435,6 +448,9 @@ pub fn try_transpose_rule(
             *unit_diagonal,
             ctx,
         ),
+        StdTensorOp::Solve { transpose_a } => {
+            linalg::transpose_solve(emitter, cotangent_out, inputs, mode, *transpose_a, ctx)
+        }
         StdTensorOp::FullPivLuSolve { transpose_a } => linalg::transpose_full_piv_lu_solve(
             emitter,
             cotangent_out,
