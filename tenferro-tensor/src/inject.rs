@@ -192,12 +192,20 @@ pub struct LapackProviderPtrSet {
     pub zpotrf: Option<*const c_void>,
     /// Fortran `sgetrf` raw function pointer.
     pub sgetrf: Option<*const c_void>,
+    /// Fortran `sgetrs` raw function pointer.
+    pub sgetrs: Option<*const c_void>,
     /// Fortran `dgetrf` raw function pointer.
     pub dgetrf: Option<*const c_void>,
+    /// Fortran `dgetrs` raw function pointer.
+    pub dgetrs: Option<*const c_void>,
     /// Fortran `cgetrf` raw function pointer.
     pub cgetrf: Option<*const c_void>,
+    /// Fortran `cgetrs` raw function pointer.
+    pub cgetrs: Option<*const c_void>,
     /// Fortran `zgetrf` raw function pointer.
     pub zgetrf: Option<*const c_void>,
+    /// Fortran `zgetrs` raw function pointer.
+    pub zgetrs: Option<*const c_void>,
     /// Fortran `ssyev` raw function pointer.
     pub ssyev: Option<*const c_void>,
     /// Fortran `dsyev` raw function pointer.
@@ -266,9 +274,13 @@ impl LapackProviderPtrSet {
             cpotrf: None,
             zpotrf: None,
             sgetrf: None,
+            sgetrs: None,
             dgetrf: None,
+            dgetrs: None,
             cgetrf: None,
+            cgetrs: None,
             zgetrf: None,
+            zgetrs: None,
             ssyev: None,
             dsyev: None,
             cheev: None,
@@ -863,12 +875,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_sgetrf_ilp64
     );
     register_field!(
+        sgetrs,
+        "sgetrs",
+        SgetrsLp64FnPtr,
+        SgetrsIlp64FnPtr,
+        register_sgetrs_lp64,
+        register_sgetrs_ilp64
+    );
+    register_field!(
         dgetrf,
         "dgetrf",
         DgetrfLp64FnPtr,
         DgetrfIlp64FnPtr,
         register_dgetrf_lp64,
         register_dgetrf_ilp64
+    );
+    register_field!(
+        dgetrs,
+        "dgetrs",
+        DgetrsLp64FnPtr,
+        DgetrsIlp64FnPtr,
+        register_dgetrs_lp64,
+        register_dgetrs_ilp64
     );
     register_field!(
         cgetrf,
@@ -879,12 +907,28 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_cgetrf_ilp64
     );
     register_field!(
+        cgetrs,
+        "cgetrs",
+        CgetrsLp64FnPtr,
+        CgetrsIlp64FnPtr,
+        register_cgetrs_lp64,
+        register_cgetrs_ilp64
+    );
+    register_field!(
         zgetrf,
         "zgetrf",
         ZgetrfLp64FnPtr,
         ZgetrfIlp64FnPtr,
         register_zgetrf_lp64,
         register_zgetrf_ilp64
+    );
+    register_field!(
+        zgetrs,
+        "zgetrs",
+        ZgetrsLp64FnPtr,
+        ZgetrsIlp64FnPtr,
+        register_zgetrs_lp64,
+        register_zgetrs_ilp64
     );
     register_field!(
         ssyev,

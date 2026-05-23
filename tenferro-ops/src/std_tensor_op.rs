@@ -186,6 +186,9 @@ pub enum StdTensorOp {
     Cholesky,
     Lu,
     FullPivLu,
+    Solve {
+        transpose_a: bool,
+    },
     FullPivLuSolve {
         transpose_a: bool,
     },
@@ -442,7 +445,8 @@ impl PartialEq for StdTensorOp {
             (Self::Svd { eps: a }, Self::Svd { eps: b })
             | (Self::Eigh { eps: a }, Self::Eigh { eps: b }) => a.to_bits() == b.to_bits(),
             (Self::Eig { input_dtype: a }, Self::Eig { input_dtype: b }) => a == b,
-            (Self::FullPivLuSolve { transpose_a: a }, Self::FullPivLuSolve { transpose_a: b }) => {
+            (Self::Solve { transpose_a: a }, Self::Solve { transpose_a: b })
+            | (Self::FullPivLuSolve { transpose_a: a }, Self::FullPivLuSolve { transpose_a: b }) => {
                 a == b
             }
             (
@@ -496,6 +500,9 @@ impl Hash for StdTensorOp {
                 hash_f64(*eps, state);
             }
             Self::Qr | Self::Cholesky | Self::Lu | Self::FullPivLu => {}
+            Self::Solve { transpose_a } => {
+                transpose_a.hash(state);
+            }
             Self::FullPivLuSolve { transpose_a } => {
                 transpose_a.hash(state);
             }
@@ -654,7 +661,7 @@ impl GraphOp for StdTensorOp {
             | Self::Eigh { .. }
             | Self::Eig { .. }
             | Self::ValidateNonsingular => 1,
-            Self::TriangularSolve { .. } | Self::FullPivLuSolve { .. } => 2,
+            Self::TriangularSolve { .. } | Self::Solve { .. } | Self::FullPivLuSolve { .. } => 2,
             Self::Extension(op) => ExtensionOp::n_inputs(op.as_ref()),
         }
     }
@@ -711,6 +718,7 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceMin { .. } => 1,
             Self::Cholesky
             | Self::TriangularSolve { .. }
+            | Self::Solve { .. }
             | Self::FullPivLuSolve { .. }
             | Self::ValidateNonsingular => 1,
             Self::Lu => 4,

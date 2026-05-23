@@ -9,6 +9,35 @@ use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
+fn is_identity_perm(perm: &[usize]) -> bool {
+    perm.iter()
+        .enumerate()
+        .all(|(index, &value)| index == value)
+}
+
+fn shape_exprs_match_primal_input(
+    ctx: &mut ShapeGuardContext,
+    primal_in: &[GlobalValKey<StdTensorOp>],
+    shape: &[DimExpr],
+) -> bool {
+    if primal_in.is_empty() || DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0) {
+        return false;
+    }
+
+    let input_shape = ctx
+        .shape_of(&ValRef::External(primal_in[0].clone()))
+        .to_vec();
+    if input_shape.len() != shape.len() {
+        return false;
+    }
+
+    let input_shapes = [input_shape.as_slice()];
+    shape
+        .iter()
+        .zip(input_shape.iter())
+        .all(|(expr, dim)| SymDim::from_dim_expr(expr, &input_shapes) == dim.clone())
+}
+
 pub fn linearize_transpose(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tangent_in: &[Option<LocalValId>],
@@ -16,6 +45,9 @@ pub fn linearize_transpose(
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
         Some(dx) => {
+            if is_identity_perm(perm) {
+                return vec![Some(dx)];
+            }
             let out = builder.add_op(
                 StdTensorOp::Transpose {
                     perm: perm.to_vec(),
@@ -36,6 +68,7 @@ pub fn linearize_reshape(
     primal_in: &[GlobalValKey<StdTensorOp>],
     tangent_in: &[Option<LocalValId>],
     op: &StdTensorOp,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     let StdTensorOp::Reshape { to_shape } = op else {
         unreachable!("linearize_reshape expects Reshape");
@@ -43,6 +76,9 @@ pub fn linearize_reshape(
 
     match tangent_in[0] {
         Some(dx) => {
+            if shape_exprs_match_primal_input(ctx, primal_in, to_shape) {
+                return vec![Some(dx)];
+            }
             let needs_shape_source =
                 DimExpr::max_input_idx_all(to_shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![ValRef::Local(dx)];
@@ -71,9 +107,15 @@ pub fn linearize_broadcast_in_dim(
     tangent_in: &[Option<LocalValId>],
     shape: &[DimExpr],
     dims: &[usize],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValId>> {
     match tangent_in[0] {
         Some(dx) => {
+            if dims.iter().copied().eq(0..dims.len())
+                && shape_exprs_match_primal_input(ctx, primal_in, shape)
+            {
+                return vec![Some(dx)];
+            }
             let needs_shape_source = DimExpr::max_input_idx_all(shape).is_some_and(|idx| idx > 0);
             let mut op_inputs = vec![ValRef::Local(dx)];
             let active_mask = if needs_shape_source {
@@ -272,6 +314,9 @@ pub fn transpose_transpose(
 
     match cotangent_out[0] {
         Some(ct) => {
+            if is_identity_perm(&inv) {
+                return vec![Some(ct)];
+            }
             let out = emitter.add_op(
                 StdTensorOp::Transpose { perm: inv },
                 vec![ValRef::Local(ct)],

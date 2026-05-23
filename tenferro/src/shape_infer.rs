@@ -114,6 +114,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::DotGeneral { .. }
         | StdTensorOp::NaryEinsum { .. }
         | StdTensorOp::TriangularSolve { .. }
+        | StdTensorOp::Solve { .. }
         | StdTensorOp::FullPivLuSolve { .. }
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::PadToMatch { .. }
@@ -298,7 +299,9 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         StdTensorOp::Eigh { .. } | StdTensorOp::Eig { .. } => {
             eig_like_shapes(require_input(op, input_shapes, 0))
         }
-        StdTensorOp::TriangularSolve { .. } | StdTensorOp::FullPivLuSolve { .. } => {
+        StdTensorOp::TriangularSolve { .. }
+        | StdTensorOp::Solve { .. }
+        | StdTensorOp::FullPivLuSolve { .. } => {
             vec![require_input(op, input_shapes, 1).to_vec()]
         }
         StdTensorOp::Extension(ext) => {

@@ -6,7 +6,7 @@ use num_traits::{One, Zero};
 
 use super::dispatch::{alloc_output, cubecl_buffer, dtype_mismatch, typed_from_cubecl};
 use super::ffi::cutensor::{
-    CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle,
+    CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::{CubeclBackend, CubeclRuntime};
@@ -18,12 +18,14 @@ const CUDA_ALLOCATION_ALIGNMENT: u32 = 256;
 
 trait CutensorScalar: CubeElement + CubePrimitive + Clone + One + Zero {
     const DATA_TYPE: CudaDataType;
+    const IS_COMPLEX: bool;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor;
 }
 
 impl CutensorScalar for f32 {
     const DATA_TYPE: CudaDataType = CudaDataType::R32F;
+    const IS_COMPLEX: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
@@ -32,6 +34,7 @@ impl CutensorScalar for f32 {
 
 impl CutensorScalar for f64 {
     const DATA_TYPE: CudaDataType = CudaDataType::R64F;
+    const IS_COMPLEX: bool = false;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
@@ -40,6 +43,7 @@ impl CutensorScalar for f64 {
 
 impl CutensorScalar for Complex32 {
     const DATA_TYPE: CudaDataType = CudaDataType::C32F;
+    const IS_COMPLEX: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_32f()
@@ -48,6 +52,7 @@ impl CutensorScalar for Complex32 {
 
 impl CutensorScalar for Complex64 {
     const DATA_TYPE: CudaDataType = CudaDataType::C64F;
+    const IS_COMPLEX: bool = true;
 
     fn compute_descriptor(handle: &CutensorHandle) -> CutensorComputeDescriptor {
         handle.compute_desc_64f()
@@ -107,11 +112,54 @@ pub(super) fn dot_general(
     }
 }
 
+pub(super) fn dot_general_with_conj(
+    backend: &CubeclBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<Tensor> {
+    match (lhs, rhs) {
+        (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+            dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
+                .map(Tensor::F32)
+        }
+        (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+            dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
+                .map(Tensor::F64)
+        }
+        (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+            dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
+                .map(Tensor::C32)
+        }
+        (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+            dot_general_typed_with_conj(backend, lhs, rhs, config, lhs_conj, rhs_conj)
+                .map(Tensor::C64)
+        }
+        _ => Err(dtype_mismatch(OP, lhs, rhs)),
+    }
+}
+
 fn dot_general_typed<T>(
     backend: &CubeclBackend,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CutensorScalar,
+{
+    dot_general_typed_with_conj(backend, lhs, rhs, config, false, false)
+}
+
+fn dot_general_typed_with_conj<T>(
+    backend: &CubeclBackend,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: CutensorScalar,
@@ -152,12 +200,14 @@ where
         CUDA_ALLOCATION_ALIGNMENT,
         OP,
     )?;
-    let op_desc = OperationDescriptor::new_contraction(
+    let op_desc = OperationDescriptor::new_contraction_with_ops(
         cutensor,
         &desc_a,
         &layout.lhs_modes,
+        cutensor_conj_op::<T>(lhs_conj),
         &desc_b,
         &layout.rhs_modes,
+        cutensor_conj_op::<T>(rhs_conj),
         &desc_out,
         &layout.output_modes,
         &desc_out,
@@ -202,6 +252,14 @@ where
     }
 
     Ok(output)
+}
+
+fn cutensor_conj_op<T: CutensorScalar>(conj: bool) -> CutensorOperator {
+    if conj && T::IS_COMPLEX {
+        CutensorOperator::Conj
+    } else {
+        CutensorOperator::Identity
+    }
 }
 
 fn raw_stream(rt: &CubeclRuntime) -> crate::Result<CutensorCudaStream> {

@@ -815,11 +815,6 @@ impl TracedTensor {
             )],
         );
         ad_ctx.refresh_global_metadata();
-        let linear_tangent_input_ids: Vec<LocalValId> = linear
-            .tangent_inputs
-            .iter()
-            .map(|(_, local_id)| *local_id)
-            .collect();
         let transposed = try_transpose(&linear, &mut ad_ctx)?;
         let cotangent_input_key =
             linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
@@ -852,31 +847,10 @@ impl TracedTensor {
                 .clone()
                 .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
         );
-        // Build the zero-cotangent for inactive tangent inputs.
-        //
-        // When `wrt` has a concrete shape we materialise the zero tensor
-        // eagerly and store it in `inputs_map`. When `wrt` is symbolic
-        // (shape_hint == None) we leave those tangent input keys absent from
-        // `inputs_map`; `GraphExecutor::run_with_inputs` synthesises the
-        // zeros once the concrete shape is known from the caller's binding.
-        // This is the deferred zero-tangent policy used for
-        // symbolic-shape placeholder gradients.
-        if let Some(concrete_shape) = try_concrete_shape(wrt) {
-            let zero_tangent = Arc::new(zeros_tensor(wrt.dtype, concrete_shape));
-            for (_, local_id) in &transposed.tangent_inputs {
-                let tangent_input_key = linear_input_key(&transposed.fragment, *local_id);
-                if tangent_input_key != cotangent_input_key {
-                    inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
-                }
-            }
-            for local_id in linear_tangent_input_ids {
-                let tangent_input_key = linear_input_key(&linear_fragment, local_id);
-                inputs_map.insert(tangent_input_key, Arc::clone(&zero_tangent));
-            }
-        }
-        // Symbolic case: tangent keys are intentionally absent from
-        // inputs_map; GraphExecutor::run_with_inputs resolves them via deferred-zero
-        // synthesis keyed on the primal binding.
+        // Inactive tangent keys are intentionally absent from `inputs_map`.
+        // Graph execution resolves them through deferred-zero synthesis keyed
+        // on the primal binding, avoiding dense zero tensors during VJP graph
+        // construction.
 
         let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
         extra_roots.extend(checkpoint_fragments);
@@ -2228,15 +2202,5 @@ fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
         DType::I64 => Tensor::I64(TypedTensor::ones(shape)),
         DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
         DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
-    }
-}
-
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
-    match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
-        DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }
 }

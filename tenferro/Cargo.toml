@@ -69,3 +69,7 @@ harness = false
 [[bench]]
 name = "mps_inner_product_eager"
 harness = false
+
+[[bench]]
+name = "cpu_bench"
+harness = false

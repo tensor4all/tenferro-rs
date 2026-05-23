@@ -5,6 +5,7 @@ mod full_piv_lu;
 mod helpers;
 mod lu;
 mod qr;
+mod solve;
 mod svd;
 mod triangular_solve;
 
@@ -14,5 +15,6 @@ pub(crate) use eigh::eigh;
 pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
 pub(crate) use lu::lu;
 pub(crate) use qr::qr;
+pub(crate) use solve::solve;
 pub(crate) use svd::svd;
 pub(crate) use triangular_solve::triangular_solve;

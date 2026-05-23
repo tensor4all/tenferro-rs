@@ -1,5 +1,5 @@
 use computegraph::fragment::Fragment;
-use computegraph::types::{GlobalValKey, ValRef};
+use computegraph::types::{GlobalValKey, LocalValId, ValRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -58,7 +58,19 @@ pub(crate) fn register_scoped_fragment_metadata(
     fragment: &Fragment<StdTensorOp>,
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
-    register_scoped_global_metadata_batch(fragment_metadata_registrations(fragment, seeded))
+    register_scoped_global_metadata_batch(fragment_metadata_registrations(fragment, None, seeded))
+}
+
+pub(crate) fn register_scoped_live_fragment_metadata(
+    fragment: &Fragment<StdTensorOp>,
+    live_values: &HashSet<LocalValId>,
+    seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
+) -> MetadataScope {
+    register_scoped_global_metadata_batch(fragment_metadata_registrations(
+        fragment,
+        Some(live_values),
+        seeded,
+    ))
 }
 
 pub(crate) fn metadata_scopes_with_new<'a>(
@@ -114,6 +126,7 @@ fn extend_metadata_scopes<'a>(
 
 fn fragment_metadata_registrations(
     fragment: &Fragment<StdTensorOp>,
+    live_values: Option<&HashSet<LocalValId>>,
     seeded: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 ) -> Vec<(GlobalValKey<StdTensorOp>, TensorMeta)> {
     let seeded: Vec<_> = seeded.into_iter().collect();
@@ -128,6 +141,16 @@ fn fragment_metadata_registrations(
 
     let mut registrations = seeded;
     for op_node in fragment.ops() {
+        if let Some(live_values) = live_values {
+            if !op_node
+                .outputs
+                .iter()
+                .any(|output_id| live_values.contains(output_id))
+            {
+                continue;
+            }
+        }
+
         let input_metas: Vec<_> = op_node
             .inputs
             .iter()

@@ -34,6 +34,13 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> crate::Result<TypedTensor<Self>>;
+    fn solve_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        transpose_a: bool,
+    ) -> crate::Result<TypedTensor<Self>>;
     fn triangular_solve_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -1000,6 +1007,91 @@ macro_rules! impl_faer_linalg_for_real {
         Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
     }
 
+    fn solve_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        transpose_a: bool,
+    ) -> crate::Result<TypedTensor<Self>> {
+        let n = square_matrix_dim(a, "solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
+
+        let mut lu = Mat::zeros(n, n);
+        lu.copy_from(MatRef::from_column_major_slice(a.host_data(), n, n));
+        let mut row_perm = vec![0usize; n];
+        let mut row_perm_inv = vec![0usize; n];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
+                n,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let (_, row_perm_ref) = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut row_perm,
+            &mut row_perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        );
+        for i in 0..n {
+            if lu[(i, i)] == 0.0 {
+                return Err(crate::Error::BackendFailure {
+                    op: "solve",
+                    message: "matrix is singular".into(),
+                });
+            }
+        }
+
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
+        rhs_data.extend_from_slice(b.host_data());
+        let rhs = MatMut::from_column_major_slice_mut(&mut rhs_data, n, b_cols);
+        let mut mem = MemBuffer::new(if transpose_a {
+            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
+                usize,
+                Self,
+            >(n, b_cols, ctx.faer_par())
+        } else {
+            faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<usize, Self>(
+                n,
+                b_cols,
+                ctx.faer_par(),
+            )
+        });
+        let stack = MemStack::new(&mut mem);
+        if transpose_a {
+            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place(
+                lu.as_ref(),
+                lu.as_ref(),
+                row_perm_ref,
+                rhs,
+                ctx.faer_par(),
+                stack,
+            );
+        } else {
+            faer::linalg::lu::partial_pivoting::solve::solve_in_place(
+                lu.as_ref(),
+                lu.as_ref(),
+                row_perm_ref,
+                rhs,
+                ctx.faer_par(),
+                stack,
+            );
+        }
+        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
+    }
+
     fn triangular_solve_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -1575,6 +1667,96 @@ macro_rules! impl_faer_linalg_for_complex {
         Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
     }
 
+    fn solve_2d(
+        ctx: &CpuContext,
+        buffers: &mut BufferPool,
+        a: &TypedTensor<Self>,
+        b: &TypedTensor<Self>,
+        transpose_a: bool,
+    ) -> crate::Result<TypedTensor<Self>> {
+        let n = square_matrix_dim(a, "solve")?;
+        let (b_rows, b_cols) = matrix_dims(b, "solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
+
+        let mut lu = Mat::zeros(n, n);
+        lu.copy_from(MatRef::from_column_major_slice(
+            $to_faer_slice(a.host_data()),
+            n,
+            n,
+        ));
+        let mut row_perm = vec![0usize; n];
+        let mut row_perm_inv = vec![0usize; n];
+        let mut mem = MemBuffer::new(
+            faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
+                n,
+                n,
+                ctx.faer_par(),
+                Default::default(),
+            ),
+        );
+        let stack = MemStack::new(&mut mem);
+        let (_, row_perm_ref) = faer::linalg::lu::partial_pivoting::factor::lu_in_place(
+            lu.as_mut(),
+            &mut row_perm,
+            &mut row_perm_inv,
+            ctx.faer_par(),
+            stack,
+            Default::default(),
+        );
+        for i in 0..n {
+            let value = lu[(i, i)];
+            if value.re == 0.0 && value.im == 0.0 {
+                return Err(crate::Error::BackendFailure {
+                    op: "solve",
+                    message: "matrix is singular".into(),
+                });
+            }
+        }
+
+        let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data().len());
+        rhs_data.extend_from_slice(b.host_data());
+        let rhs =
+            MatMut::from_column_major_slice_mut($to_faer_slice_mut(&mut rhs_data), n, b_cols);
+        let mut mem = MemBuffer::new(if transpose_a {
+            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
+                usize,
+                $faer_complex,
+            >(n, b_cols, ctx.faer_par())
+        } else {
+            faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<
+                usize,
+                $faer_complex,
+            >(n, b_cols, ctx.faer_par())
+        });
+        let stack = MemStack::new(&mut mem);
+        if transpose_a {
+            faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place(
+                lu.as_ref(),
+                lu.as_ref(),
+                row_perm_ref,
+                rhs,
+                ctx.faer_par(),
+                stack,
+            );
+        } else {
+            faer::linalg::lu::partial_pivoting::solve::solve_in_place(
+                lu.as_ref(),
+                lu.as_ref(),
+                row_perm_ref,
+                rhs,
+                ctx.faer_par(),
+                stack,
+            );
+        }
+        Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b))
+    }
+
     fn triangular_solve_2d(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -2047,6 +2229,41 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     }
     batched_binary_result("full_piv_lu_solve", buffers, a, b, 2, 2, |buffers, a, b| {
         T::full_piv_lu_solve_2d(ctx, buffers, a, b, transpose_a)
+    })
+}
+
+pub(crate) fn solve<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    transpose_a: bool,
+) -> crate::Result<TypedTensor<T>> {
+    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        let (n, a_batch_shape) = square_core_and_batch(a, "solve")?;
+        let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "solve")?;
+        if b_rows != n {
+            return Err(crate::Error::ShapeMismatch {
+                op: "solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
+        if a_batch_shape != b_batch_shape {
+            return Err(crate::Error::ShapeMismatch {
+                op: "solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
+        return Ok(tensor_from_vec_with_template(
+            b.shape.clone(),
+            Vec::new(),
+            b,
+        ));
+    }
+    batched_binary_result("solve", buffers, a, b, 2, 2, |buffers, a, b| {
+        T::solve_2d(ctx, buffers, a, b, transpose_a)
     })
 }
 

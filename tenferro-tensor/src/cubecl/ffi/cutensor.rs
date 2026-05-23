@@ -36,6 +36,7 @@ pub(crate) enum CudaDataType {
 #[derive(Clone, Copy)]
 pub(crate) enum CutensorOperator {
     Identity = 1,
+    Conj = 9,
 }
 
 #[repr(i32)]
@@ -395,12 +396,14 @@ pub(crate) struct OperationDescriptor {
 }
 
 impl OperationDescriptor {
-    pub(crate) fn new_contraction(
+    pub(crate) fn new_contraction_with_ops(
         handle: &CutensorHandle,
         desc_a: &TensorDescriptor,
         mode_a: &[i32],
+        op_a: CutensorOperator,
         desc_b: &TensorDescriptor,
         mode_b: &[i32],
+        op_b: CutensorOperator,
         desc_c: &TensorDescriptor,
         mode_c: &[i32],
         desc_d: &TensorDescriptor,
@@ -415,10 +418,10 @@ impl OperationDescriptor {
                 &mut raw,
                 desc_a.as_raw(),
                 mode_a.as_ptr(),
-                CutensorOperator::Identity,
+                op_a,
                 desc_b.as_raw(),
                 mode_b.as_ptr(),
-                CutensorOperator::Identity,
+                op_b,
                 desc_c.as_raw(),
                 mode_c.as_ptr(),
                 CutensorOperator::Identity,
