@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 use std::num::NonZeroUsize;
 
 use tenferro::extension::ExtensionCacheLimits;

@@ -11,6 +11,7 @@ use super::dot_general;
 use super::faer_gemm::FaerGemm;
 #[cfg(feature = "cpu-blas")]
 use crate::buffer_pool::BufferPool;
+use crate::cache::RuntimeCacheControl;
 use crate::config::DotGeneralConfig;
 #[cfg(feature = "cpu-faer")]
 use crate::cpu::CpuContext;
@@ -107,6 +108,50 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
         .canonical
         .as_ref()
         .is_some_and(|plan| plan.dims.is_some()));
+}
+
+#[test]
+fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = GemmAnalysisCache::default();
+
+    let first = analyse_gemm_cached(
+        &mut cache,
+        Some(3),
+        GemmAnalysisCacheKind::Direct,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .expect("first analysis should validate")
+    .expect("first analysis should be representable");
+    assert_eq!((first.m, first.n, first.k, first.batch_total), (2, 2, 3, 1));
+
+    let cached = analyse_gemm_cached(
+        &mut cache,
+        Some(3),
+        GemmAnalysisCacheKind::Direct,
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .expect("cached analysis should validate")
+    .expect("cached analysis should be present");
+    assert_eq!(
+        (cached.m, cached.n, cached.k, cached.batch_total),
+        (2, 2, 3, 1)
+    );
+
+    let stats = cache.stats();
+    assert_eq!(stats.entries, 1);
+    assert!(stats.retained_bytes > 0);
 }
 
 #[cfg(feature = "cpu-blas")]
