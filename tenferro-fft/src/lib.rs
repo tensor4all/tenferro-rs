@@ -427,7 +427,12 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
     let kind = match input.dtype {
         DType::C32 | DType::C64 => FftKind::C2C { forward: true },
         DType::F32 | DType::F64 => FftKind::R2C { onesided: false },
-        DType::I64 => panic!("fft expects real or complex floating input, got I64"),
+        DType::I32 | DType::I64 | DType::Bool => {
+            panic!(
+                "fft expects real or complex floating input, got {:?}",
+                input.dtype
+            )
+        }
     };
     apply_unary_fft(input, kind, n, axis, norm)
 }

@@ -312,9 +312,17 @@ fn constant_tensor(dtype: DType, bytes: &[u8]) -> Tensor {
             vec![],
             vec![f32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
         )),
+        DType::I32 => Tensor::I32(TypedTensor::from_vec_col_major(
+            vec![],
+            vec![i32::from_le_bytes(exact_bytes::<4>(dtype, bytes))],
+        )),
         DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
             vec![],
             vec![i64::from_le_bytes(exact_bytes::<8>(dtype, bytes))],
+        )),
+        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+            vec![],
+            vec![exact_bytes::<1>(dtype, bytes)[0] != 0],
         )),
         DType::C64 => {
             let data = exact_bytes::<16>(dtype, bytes);

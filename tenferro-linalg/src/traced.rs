@@ -276,7 +276,9 @@ fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
     match dtype {
         DType::F64 => TracedTensor::from_vec_col_major(vec![], vec![value]),
         DType::F32 => TracedTensor::from_vec_col_major(vec![], vec![value as f32]),
+        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32]),
         DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64]),
+        DType::Bool => TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]),
         DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
@@ -357,7 +359,7 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
     let eps = match dtype {
         DType::F32 | DType::C32 => f32::EPSILON as f64,
         DType::F64 | DType::C64 => f64::EPSILON,
-        DType::I64 => 0.0,
+        DType::I32 | DType::I64 | DType::Bool => 0.0,
     };
     eps * max_dim as f64
 }

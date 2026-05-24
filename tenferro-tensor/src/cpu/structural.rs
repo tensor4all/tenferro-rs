@@ -68,6 +68,34 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
     Ok(())
 }
 
+macro_rules! dispatch_tensor_unary_result {
+    ($input:expr, |$tensor:ident| $body:expr) => {
+        match $input {
+            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
+            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
+            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
+            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
+            Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
+            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
+            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+        }
+    };
+}
+
+macro_rules! dispatch_tensor_unary_with_bool_special_result {
+    ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {
+        match $input {
+            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
+            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
+            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
+            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
+            Tensor::Bool($bool_tensor) => Ok(Tensor::Bool($bool_body?)),
+            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
+            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+        }
+    };
+}
+
 fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, T, Identity>> {
     match &tensor.buffer {
         crate::Buffer::Host(data) => {
@@ -97,10 +125,21 @@ fn zeroed_tensor_from_pool<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> Ty
 where
     T: Zero + Clone + PoolScalar,
 {
+    filled_tensor_from_pool(buffers, shape, T::zero())
+}
+
+fn filled_tensor_from_pool<T>(
+    buffers: &mut BufferPool,
+    shape: Vec<usize>,
+    fill: T,
+) -> TypedTensor<T>
+where
+    T: Copy + Clone + PoolScalar,
+{
     let len = shape.iter().product();
-    // SAFETY: every element is initialized with zero before returning.
+    // SAFETY: every element is initialized with `fill` before returning.
     let mut data = unsafe { T::pool_acquire(buffers, len) };
-    data.fill(T::zero());
+    data.fill(fill);
     TypedTensor::from_vec_col_major(shape, data)
 }
 
@@ -142,23 +181,11 @@ pub(crate) fn transpose_with_pool(
     input: &Tensor,
     perm: &[usize],
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_transpose_with_pool(buffers, t, perm)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_transpose_with_pool(buffers, t, perm)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_transpose_with_pool(buffers, t, perm)?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_transpose_with_pool(buffers, t, perm)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_transpose_with_pool(buffers, t, perm)?)),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_transpose_with_pool(buffers, t, perm))
 }
 
 pub fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_reshape(t, shape)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_reshape(t, shape)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_reshape(t, shape)?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_reshape(t, shape)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_reshape(t, shape)?)),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_reshape(t, shape))
 }
 
 pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor> {
@@ -171,23 +198,9 @@ pub(crate) fn broadcast_in_dim_with_pool(
     shape: &[usize],
     dims: &[usize],
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_broadcast_in_dim_with_pool(
-            buffers, t, shape, dims,
-        )?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_broadcast_in_dim_with_pool(
-            buffers, t, shape, dims,
-        )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_broadcast_in_dim_with_pool(
-            buffers, t, shape, dims,
-        )?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_broadcast_in_dim_with_pool(
-            buffers, t, shape, dims,
-        )?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_broadcast_in_dim_with_pool(
-            buffers, t, shape, dims,
-        )?)),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_broadcast_in_dim_with_pool(
+        buffers, t, shape, dims
+    ))
 }
 
 pub fn convert(input: &Tensor, to: DType) -> crate::Result<Tensor> {
@@ -204,8 +217,14 @@ pub(crate) fn convert_with_pool(
         (Tensor::F32(t), DType::F64) => {
             Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
         }
+        (Tensor::F32(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
+        }
         (Tensor::F32(t), DType::I64) => {
             Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
+        }
+        (Tensor::F32(t), DType::Bool) => {
+            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0.0))
         }
         (Tensor::F32(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
             Complex32::new(x, 0.0)
@@ -217,8 +236,14 @@ pub(crate) fn convert_with_pool(
             Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
         }
         (Tensor::F64(t), DType::F64) => Tensor::F64(t.clone()),
+        (Tensor::F64(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
+        }
         (Tensor::F64(t), DType::I64) => {
             Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
+        }
+        (Tensor::F64(t), DType::Bool) => {
+            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0.0))
         }
         (Tensor::F64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
             Complex32::new(x as f32, 0.0)
@@ -226,26 +251,92 @@ pub(crate) fn convert_with_pool(
         (Tensor::F64(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
             Complex64::new(x, 0.0)
         })),
+        (Tensor::I32(t), DType::F32) => {
+            Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
+        }
+        (Tensor::I32(t), DType::F64) => {
+            Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
+        }
+        (Tensor::I32(t), DType::I32) => Tensor::I32(t.clone()),
+        (Tensor::I32(t), DType::I64) => {
+            Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
+        }
+        (Tensor::I32(t), DType::Bool) => {
+            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0))
+        }
+        (Tensor::I32(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
+            Complex32::new(x as f32, 0.0)
+        })),
+        (Tensor::I32(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
+            Complex64::new(x as f64, 0.0)
+        })),
         (Tensor::I64(t), DType::F32) => {
             Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
         }
         (Tensor::I64(t), DType::F64) => {
             Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
         }
+        (Tensor::I64(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
+        }
         (Tensor::I64(t), DType::I64) => Tensor::I64(t.clone()),
+        (Tensor::I64(t), DType::Bool) => {
+            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0))
+        }
         (Tensor::I64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
             Complex32::new(x as f32, 0.0)
         })),
         (Tensor::I64(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
             Complex64::new(x as f64, 0.0)
         })),
+        (Tensor::Bool(t), DType::F32) => Tensor::F32(typed_convert_with_pool(buffers, t, |x| {
+            if x {
+                1.0
+            } else {
+                0.0
+            }
+        })),
+        (Tensor::Bool(t), DType::F64) => Tensor::F64(typed_convert_with_pool(buffers, t, |x| {
+            if x {
+                1.0
+            } else {
+                0.0
+            }
+        })),
+        (Tensor::Bool(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(
+                buffers,
+                t,
+                |x| if x { 1 } else { 0 },
+            ))
+        }
+        (Tensor::Bool(t), DType::I64) => {
+            Tensor::I64(typed_convert_with_pool(
+                buffers,
+                t,
+                |x| if x { 1 } else { 0 },
+            ))
+        }
+        (Tensor::Bool(t), DType::Bool) => Tensor::Bool(t.clone()),
+        (Tensor::Bool(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
+            Complex32::new(if x { 1.0 } else { 0.0 }, 0.0)
+        })),
+        (Tensor::Bool(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
+            Complex64::new(if x { 1.0 } else { 0.0 }, 0.0)
+        })),
         (Tensor::C32(t), DType::F32) => Tensor::F32(typed_convert_with_pool(buffers, t, |z| z.re)),
         (Tensor::C32(t), DType::F64) => {
             Tensor::F64(typed_convert_with_pool(buffers, t, |z| z.re as f64))
         }
+        (Tensor::C32(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(buffers, t, |z| z.re as i32))
+        }
         (Tensor::C32(t), DType::I64) => {
             Tensor::I64(typed_convert_with_pool(buffers, t, |z| z.re as i64))
         }
+        (Tensor::C32(t), DType::Bool) => Tensor::Bool(typed_convert_with_pool(buffers, t, |z| {
+            z.re != 0.0 || z.im != 0.0
+        })),
         (Tensor::C32(t), DType::C32) => Tensor::C32(t.clone()),
         (Tensor::C32(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |z| {
             Complex64::new(z.re as f64, z.im as f64)
@@ -254,9 +345,15 @@ pub(crate) fn convert_with_pool(
             Tensor::F32(typed_convert_with_pool(buffers, t, |z| z.re as f32))
         }
         (Tensor::C64(t), DType::F64) => Tensor::F64(typed_convert_with_pool(buffers, t, |z| z.re)),
+        (Tensor::C64(t), DType::I32) => {
+            Tensor::I32(typed_convert_with_pool(buffers, t, |z| z.re as i32))
+        }
         (Tensor::C64(t), DType::I64) => {
             Tensor::I64(typed_convert_with_pool(buffers, t, |z| z.re as i64))
         }
+        (Tensor::C64(t), DType::Bool) => Tensor::Bool(typed_convert_with_pool(buffers, t, |z| {
+            z.re != 0.0 || z.im != 0.0
+        })),
         (Tensor::C64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |z| {
             Complex32::new(z.re as f32, z.im as f32)
         })),
@@ -275,23 +372,9 @@ pub(crate) fn extract_diagonal_with_pool(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_extract_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_extract_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_extract_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_extract_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_extract_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_extract_diagonal_with_pool(
+        buffers, t, axis_a, axis_b
+    ))
 }
 
 pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
@@ -304,23 +387,14 @@ pub(crate) fn embed_diagonal_with_pool(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_embed_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_embed_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_embed_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_embed_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_embed_diagonal_with_pool(
-            buffers, t, axis_a, axis_b,
-        )?)),
-    }
+    dispatch_tensor_unary_with_bool_special_result!(
+        input,
+        |t| typed_embed_diagonal_with_pool(buffers, t, axis_a, axis_b),
+        bool | t
+            | typed_embed_diagonal_impl(t, axis_a, axis_b, |shape| {
+                filled_tensor_from_pool(buffers, shape, false)
+            })
+    )
 }
 
 pub fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
@@ -332,13 +406,11 @@ pub(crate) fn tril_with_pool(
     input: &Tensor,
     k: i64,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_tril_with_pool(buffers, t, k)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_tril_with_pool(buffers, t, k)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_tril_with_pool(buffers, t, k)?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_tril_with_pool(buffers, t, k)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_tril_with_pool(buffers, t, k)?)),
-    }
+    dispatch_tensor_unary_with_bool_special_result!(
+        input,
+        |t| typed_tril_with_pool(buffers, t, k),
+        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, false, false)
+    )
 }
 
 pub fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
@@ -350,16 +422,14 @@ pub(crate) fn triu_with_pool(
     input: &Tensor,
     k: i64,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_triu_with_pool(buffers, t, k)?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_triu_with_pool(buffers, t, k)?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_triu_with_pool(buffers, t, k)?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_triu_with_pool(buffers, t, k)?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_triu_with_pool(buffers, t, k)?)),
-    }
+    dispatch_tensor_unary_with_bool_special_result!(
+        input,
+        |t| typed_triu_with_pool(buffers, t, k),
+        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, true, false)
+    )
 }
 
-pub fn typed_transpose<T: Copy + Zero + Clone>(
+pub fn typed_transpose<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -379,7 +449,7 @@ pub(crate) fn typed_transpose_with_pool<T>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     validate_permutation("transpose", perm, tensor.shape.len())?;
     let src = host_view(tensor)?;
@@ -411,7 +481,7 @@ pub fn typed_reshape<T: Clone>(
     })
 }
 
-pub fn typed_broadcast_in_dim<T: Copy + Zero + Clone>(
+pub fn typed_broadcast_in_dim<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
@@ -428,7 +498,7 @@ pub(crate) fn typed_broadcast_in_dim_with_pool<T>(
     dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
         typed_array_uninit_from_pool(buffers, shape)
@@ -442,7 +512,7 @@ fn typed_broadcast_in_dim_impl<T>(
     make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone,
+    T: Copy + Clone,
 {
     validate_rank("broadcast_in_dim", tensor.shape.len(), dims.len())?;
     let mut seen = vec![false; shape.len()];
@@ -500,7 +570,7 @@ fn typed_convert_with_pool<S, T>(
 ) -> TypedTensor<T>
 where
     S: Copy,
-    T: Copy + Clone + Zero + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &tensor.shape) };
@@ -508,7 +578,7 @@ where
     tensor_from_array(out)
 }
 
-pub fn typed_extract_diagonal<T: Copy + Zero + Clone>(
+pub fn typed_extract_diagonal<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
@@ -534,7 +604,7 @@ pub(crate) fn typed_extract_diagonal_with_pool<T>(
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     validate_axis("extract_diagonal", axis_a, tensor.shape.len())?;
     validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
@@ -579,7 +649,7 @@ fn typed_embed_diagonal_impl<T>(
     make_zeroed: impl FnOnce(Vec<usize>) -> TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone,
+    T: Copy + Clone,
 {
     validate_axis("embed_diagonal", axis_a, tensor.shape.len())?;
     if axis_b > tensor.shape.len() {
@@ -644,7 +714,7 @@ pub(crate) fn typed_tril_with_pool<T>(
 where
     T: Copy + Zero + Clone + PoolScalar,
 {
-    typed_triangular_mask_with_pool(buffers, tensor, k, false)
+    typed_triangular_mask_with_fill_pool(buffers, tensor, k, false, T::zero())
 }
 
 pub fn typed_triu<T: Copy + Zero + Clone>(
@@ -662,7 +732,7 @@ pub(crate) fn typed_triu_with_pool<T>(
 where
     T: Copy + Zero + Clone + PoolScalar,
 {
-    typed_triangular_mask_with_pool(buffers, tensor, k, true)
+    typed_triangular_mask_with_fill_pool(buffers, tensor, k, true, T::zero())
 }
 
 fn typed_triangular_mask<T: Copy + Zero + Clone>(
@@ -720,14 +790,15 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     Ok(out)
 }
 
-fn typed_triangular_mask_with_pool<T>(
+fn typed_triangular_mask_with_fill_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
     k: i64,
     upper: bool,
+    fill: T,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     if tensor.shape.len() < 2 {
         return Err(crate::Error::RankMismatch {
@@ -766,7 +837,7 @@ where
                     row >= boundary
                 };
                 if !keep {
-                    data[base + row as usize + col * rows] = T::zero();
+                    data[base + row as usize + col * rows] = fill;
                 }
             }
         }

@@ -529,7 +529,7 @@ fn eig_output_dtype(dtype: DType) -> DType {
     match dtype {
         DType::F64 | DType::C64 => DType::C64,
         DType::F32 | DType::C32 => DType::C32,
-        DType::I64 => DType::C64,
+        DType::I32 | DType::I64 | DType::Bool => DType::C64,
     }
 }
 
@@ -552,8 +552,10 @@ fn promote_dtype(lhs: DType, rhs: DType) -> DType {
         (rhs, lhs)
     };
     match (a, b) {
-        (I64, F32 | F64) => F64,
-        (I64, C32 | C64) => C64,
+        (Bool, other) => other,
+        (I32, I64) => I64,
+        (I32 | I64, F32 | F64) => F64,
+        (I32 | I64, C32 | C64) => C64,
         (F32, F64) => F64,
         (F32, C32) => C32,
         (F32, C64) => C64,
@@ -566,11 +568,13 @@ fn promote_dtype(lhs: DType, rhs: DType) -> DType {
 
 fn promotion_rank(dtype: DType) -> u8 {
     match dtype {
-        DType::I64 => 0,
-        DType::F32 => 1,
-        DType::F64 => 2,
-        DType::C32 => 3,
-        DType::C64 => 4,
+        DType::Bool => 0,
+        DType::I32 => 1,
+        DType::I64 => 2,
+        DType::F32 => 3,
+        DType::F64 => 4,
+        DType::C32 => 5,
+        DType::C64 => 6,
     }
 }
 
@@ -581,6 +585,8 @@ fn hash_dtype(hasher: &mut dyn Hasher, dtype: DType) {
         DType::I64 => 2,
         DType::C64 => 3,
         DType::C32 => 4,
+        DType::I32 => 5,
+        DType::Bool => 6,
     };
     hasher.write_u8(tag);
 }

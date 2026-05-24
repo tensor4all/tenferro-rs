@@ -697,7 +697,7 @@ fn conjugate_primal_if_complex(
     ctx: &mut ShapeGuardContext,
 ) -> ValRef<StdTensorOp> {
     match ctx.dtype_of(&input) {
-        DType::F32 | DType::F64 | DType::I64 => input,
+        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => input,
         DType::C32 | DType::C64 => {
             ValRef::Local(emitter.add_op(StdTensorOp::Conj, vec![input], OpMode::Primal)[0])
         }
@@ -722,8 +722,10 @@ fn promote_dtype(lhs: DType, rhs: DType) -> DType {
         (rhs, lhs)
     };
     match (a, b) {
-        (I64, F32 | F64) => F64,
-        (I64, C32 | C64) => C64,
+        (Bool, other) => other,
+        (I32, I64) => I64,
+        (I32 | I64, F32 | F64) => F64,
+        (I32 | I64, C32 | C64) => C64,
         (F32, F64) => F64,
         (F32, C32) => C32,
         (F32, C64) => C64,
@@ -736,11 +738,13 @@ fn promote_dtype(lhs: DType, rhs: DType) -> DType {
 
 fn promotion_rank(dt: DType) -> u8 {
     match dt {
-        DType::I64 => 0,
-        DType::F32 => 1,
-        DType::F64 => 2,
-        DType::C32 => 3,
-        DType::C64 => 4,
+        DType::Bool => 0,
+        DType::I32 => 1,
+        DType::I64 => 2,
+        DType::F32 => 3,
+        DType::F64 => 4,
+        DType::C32 => 5,
+        DType::C64 => 6,
     }
 }
 

@@ -14,9 +14,12 @@ use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceCon
 /// precision loss, following the policy defined in [#811].
 ///
 /// Rules:
+/// - Bool + T -> T
+/// - I32 + I32 -> I32
+/// - I32 + I64 -> I64
 /// - I64 + I64 → I64 (integer-preserving; Div/Pow use [`promote_dtype_div_like`])
-/// - I64 + F32/F64 → F64 (F32 does not have enough mantissa bits for arbitrary I64)
-/// - I64 + C32/C64 → C64
+/// - I32/I64 + F32/F64 → F64 (F32 does not have enough mantissa bits for arbitrary integers)
+/// - I32/I64 + C32/C64 → C64
 /// - F32 + F64 → F64
 /// - F32 + C32 → C32
 /// - F32/C32 + C64 → C64
@@ -35,14 +38,16 @@ pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
         (rhs, lhs)
     };
     match (a, b) {
-        (I64, F32 | F64) => F64, // I64 → F64 (F32 can't represent all I64)
-        (I64, C32 | C64) => C64, // I64 → C64
-        (F32, F64) => F64,       // F32 → F64
-        (F32, C32) => C32,       // F32 + C32 → C32
-        (F32, C64) => C64,       // F32 + C64 → C64
-        (F64, C32) => C64,       // F64 + C32 → C64
-        (F64, C64) => C64,       // F64 + C64 → C64
-        (C32, C64) => C64,       // C32 → C64
+        (Bool, other) => other,
+        (I32, I64) => I64,
+        (I32 | I64, F32 | F64) => F64,
+        (I32 | I64, C32 | C64) => C64,
+        (F32, F64) => F64,
+        (F32, C32) => C32,
+        (F32, C64) => C64,
+        (F64, C32) => C64,
+        (F64, C64) => C64,
+        (C32, C64) => C64,
         _ => unreachable!("promote_dtype: unhandled pair {:?} {:?}", lhs, rhs),
     }
 }
@@ -65,21 +70,23 @@ pub fn promote_dtype_for_binary_op(op: &StdTensorOp, lhs: DType, rhs: DType) -> 
     }
 }
 
-/// Internal promotion ordering: I64 < F32 < F64 < C32 < C64.
+/// Internal promotion ordering: Bool < I32 < I64 < F32 < F64 < C32 < C64.
 fn promotion_rank(dt: DType) -> u8 {
     match dt {
-        DType::I64 => 0,
-        DType::F32 => 1,
-        DType::F64 => 2,
-        DType::C32 => 3,
-        DType::C64 => 4,
+        DType::Bool => 0,
+        DType::I32 => 1,
+        DType::I64 => 2,
+        DType::F32 => 3,
+        DType::F64 => 4,
+        DType::C32 => 5,
+        DType::C64 => 6,
     }
 }
 
 /// Like [`promote_dtype`], but for division-like ops where I64 / I64
 /// should produce F64 to avoid integer truncation.
 pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
-    if lhs == DType::I64 && rhs == DType::I64 {
+    if matches!(lhs, DType::I32 | DType::I64) && matches!(rhs, DType::I32 | DType::I64) {
         return DType::F64;
     }
     promote_dtype(lhs, rhs)

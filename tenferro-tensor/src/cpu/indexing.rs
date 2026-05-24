@@ -11,49 +11,98 @@ trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
 }
 
-impl TensorAsTyped<f32> for Tensor {
-    fn as_typed(&self) -> Option<&TypedTensor<f32>> {
-        match self {
-            Tensor::F32(tensor) => Some(tensor),
-            _ => None,
-        }
-    }
+macro_rules! impl_tensor_as_typed {
+    ($(($ty:ty, $variant:ident)),+ $(,)?) => {
+        $(
+            impl TensorAsTyped<$ty> for Tensor {
+                fn as_typed(&self) -> Option<&TypedTensor<$ty>> {
+                    match self {
+                        Tensor::$variant(tensor) => Some(tensor),
+                        _ => None,
+                    }
+                }
+            }
+        )+
+    };
 }
 
-impl TensorAsTyped<f64> for Tensor {
-    fn as_typed(&self) -> Option<&TypedTensor<f64>> {
-        match self {
-            Tensor::F64(tensor) => Some(tensor),
-            _ => None,
+impl_tensor_as_typed!(
+    (f32, F32),
+    (f64, F64),
+    (i32, I32),
+    (i64, I64),
+    (bool, Bool),
+    (num_complex::Complex<f32>, C32),
+    (num_complex::Complex<f64>, C64),
+);
+
+macro_rules! dispatch_tensor_unary_result {
+    ($input:expr, |$tensor:ident| $body:expr) => {
+        match $input {
+            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
+            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
+            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
+            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
+            Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
+            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
+            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
         }
-    }
+    };
 }
 
-impl TensorAsTyped<i64> for Tensor {
-    fn as_typed(&self) -> Option<&TypedTensor<i64>> {
-        match self {
-            Tensor::I64(tensor) => Some(tensor),
-            _ => None,
+macro_rules! dispatch_tensor_unary_with_bool_special_result {
+    ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {
+        match $input {
+            Tensor::F32($tensor) => Ok(Tensor::F32($body?)),
+            Tensor::F64($tensor) => Ok(Tensor::F64($body?)),
+            Tensor::I32($tensor) => Ok(Tensor::I32($body?)),
+            Tensor::I64($tensor) => Ok(Tensor::I64($body?)),
+            Tensor::Bool($bool_tensor) => Ok(Tensor::Bool($bool_body?)),
+            Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
+            Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
         }
-    }
+    };
 }
 
-impl TensorAsTyped<num_complex::Complex<f32>> for Tensor {
-    fn as_typed(&self) -> Option<&TypedTensor<num_complex::Complex<f32>>> {
-        match self {
-            Tensor::C32(tensor) => Some(tensor),
-            _ => None,
+macro_rules! dispatch_same_dtype_result {
+    ($op:literal, $lhs:expr, $rhs:expr, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {
+        match ($lhs, $rhs) {
+            (Tensor::F32($lhs_t), Tensor::F32($rhs_t)) => Ok(Tensor::F32($body?)),
+            (Tensor::F64($lhs_t), Tensor::F64($rhs_t)) => Ok(Tensor::F64($body?)),
+            (Tensor::I32($lhs_t), Tensor::I32($rhs_t)) => Ok(Tensor::I32($body?)),
+            (Tensor::I64($lhs_t), Tensor::I64($rhs_t)) => Ok(Tensor::I64($body?)),
+            (Tensor::Bool($lhs_t), Tensor::Bool($rhs_t)) => Ok(Tensor::Bool($body?)),
+            (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
+            (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
+            _ => Err(crate::Error::DTypeMismatch {
+                op: $op,
+                lhs: $lhs.dtype(),
+                rhs: $rhs.dtype(),
+            }),
         }
-    }
+    };
 }
 
-impl TensorAsTyped<num_complex::Complex<f64>> for Tensor {
-    fn as_typed(&self) -> Option<&TypedTensor<num_complex::Complex<f64>>> {
-        match self {
-            Tensor::C64(tensor) => Some(tensor),
-            _ => None,
+macro_rules! dispatch_same_dtype_without_bool_result {
+    ($op:literal, $lhs:expr, $rhs:expr, $bool_message:literal, |$lhs_t:ident, $rhs_t:ident| $body:expr) => {
+        match ($lhs, $rhs) {
+            (Tensor::F32($lhs_t), Tensor::F32($rhs_t)) => Ok(Tensor::F32($body?)),
+            (Tensor::F64($lhs_t), Tensor::F64($rhs_t)) => Ok(Tensor::F64($body?)),
+            (Tensor::I32($lhs_t), Tensor::I32($rhs_t)) => Ok(Tensor::I32($body?)),
+            (Tensor::I64($lhs_t), Tensor::I64($rhs_t)) => Ok(Tensor::I64($body?)),
+            (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
+            (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
+            (Tensor::Bool(_), Tensor::Bool(_)) => Err(crate::Error::BackendFailure {
+                op: $op,
+                message: $bool_message.into(),
+            }),
+            _ => Err(crate::Error::DTypeMismatch {
+                op: $op,
+                lhs: $lhs.dtype(),
+                rhs: $rhs.dtype(),
+            }),
         }
-    }
+    };
 }
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -61,12 +110,12 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     f(&mut buffers)
 }
 
-fn pooled_zeroed_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> TypedTensor<T>
+fn pooled_filled_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>, fill: T) -> TypedTensor<T>
 where
-    T: Clone + Zero + PoolScalar,
+    T: Copy + Clone + PoolScalar,
 {
     let mut out = pooled_uninit_tensor(buffers, shape);
-    out.host_data_mut().fill(T::zero());
+    out.host_data_mut().fill(fill);
     out
 }
 
@@ -97,16 +146,12 @@ pub(crate) fn gather_with_pool(
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
     let start_indices = try_index_tensor(start_indices)?;
-    match operand {
-        Tensor::F32(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::F32),
-        Tensor::F64(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::F64),
-        Tensor::C32(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::C32),
-        Tensor::C64(t) => typed_gather(buffers, t, &start_indices, config).map(Tensor::C64),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
-            op: "gather",
-            message: "I64 data tensors are not supported by this operation".into(),
-        }),
-    }
+    dispatch_tensor_unary_result!(operand, |t| typed_gather(
+        buffers,
+        t,
+        &start_indices,
+        config
+    ))
 }
 
 pub fn scatter(
@@ -126,29 +171,13 @@ pub(crate) fn scatter_with_pool(
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
     let scatter_indices = try_index_tensor(scatter_indices)?;
-    match (operand, updates) {
-        (Tensor::F32(op), Tensor::F32(upd)) => {
-            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::F32)
-        }
-        (Tensor::F64(op), Tensor::F64(upd)) => {
-            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::F64)
-        }
-        (Tensor::C32(op), Tensor::C32(upd)) => {
-            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::C32)
-        }
-        (Tensor::C64(op), Tensor::C64(upd)) => {
-            typed_scatter(buffers, op, &scatter_indices, upd, config).map(Tensor::C64)
-        }
-        (Tensor::I64(_), Tensor::I64(_)) => Err(crate::Error::BackendFailure {
-            op: "scatter",
-            message: "I64 data tensors are not supported by this operation".into(),
-        }),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "scatter",
-            lhs: operand.dtype(),
-            rhs: updates.dtype(),
-        }),
-    }
+    dispatch_same_dtype_without_bool_result!(
+        "scatter",
+        operand,
+        updates,
+        "Bool data tensors are not supported by additive scatter",
+        |op, upd| typed_scatter(buffers, op, &scatter_indices, upd, config)
+    )
 }
 
 pub fn slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
@@ -164,13 +193,7 @@ pub(crate) fn try_slice_with_pool(
     input: &Tensor,
     config: &SliceConfig,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_slice(buffers, tensor, config)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_slice(buffers, tensor, config)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_slice(buffers, tensor, config)?)),
-        Tensor::C32(tensor) => Ok(Tensor::C32(typed_slice(buffers, tensor, config)?)),
-        Tensor::C64(tensor) => Ok(Tensor::C64(typed_slice(buffers, tensor, config)?)),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, t, config))
 }
 
 pub fn dynamic_slice(
@@ -188,16 +211,12 @@ pub(crate) fn dynamic_slice_with_pool(
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
-    match input {
-        Tensor::F32(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::F32),
-        Tensor::F64(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::F64),
-        Tensor::C32(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::C32),
-        Tensor::C64(t) => typed_dynamic_slice(buffers, t, &starts, slice_sizes).map(Tensor::C64),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
-            op: "dynamic_slice",
-            message: "I64 data tensors are not supported by this operation".into(),
-        }),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_dynamic_slice(
+        buffers,
+        t,
+        &starts,
+        slice_sizes
+    ))
 }
 
 /// Return `operand` with `update` written at dynamic `starts`.
@@ -232,28 +251,9 @@ pub(crate) fn dynamic_update_slice_with_pool(
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
     let starts = try_index_tensor(starts)?;
-    match (operand, update) {
-        (Tensor::F32(op), Tensor::F32(upd)) => {
-            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::F32)
-        }
-        (Tensor::F64(op), Tensor::F64(upd)) => {
-            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::F64)
-        }
-        (Tensor::I64(op), Tensor::I64(upd)) => {
-            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::I64)
-        }
-        (Tensor::C32(op), Tensor::C32(upd)) => {
-            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::C32)
-        }
-        (Tensor::C64(op), Tensor::C64(upd)) => {
-            typed_dynamic_update_slice(buffers, op, upd, &starts).map(Tensor::C64)
-        }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "dynamic_update_slice",
-            lhs: operand.dtype(),
-            rhs: update.dtype(),
-        }),
-    }
+    dispatch_same_dtype_result!("dynamic_update_slice", operand, update, |op, upd| {
+        typed_dynamic_update_slice(buffers, op, upd, &starts)
+    })
 }
 
 pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
@@ -269,13 +269,11 @@ pub(crate) fn try_pad_with_pool(
     input: &Tensor,
     config: &PadConfig,
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(tensor) => Ok(Tensor::F32(typed_pad(buffers, tensor, config)?)),
-        Tensor::F64(tensor) => Ok(Tensor::F64(typed_pad(buffers, tensor, config)?)),
-        Tensor::I64(tensor) => Ok(Tensor::I64(typed_pad(buffers, tensor, config)?)),
-        Tensor::C32(tensor) => Ok(Tensor::C32(typed_pad(buffers, tensor, config)?)),
-        Tensor::C64(tensor) => Ok(Tensor::C64(typed_pad(buffers, tensor, config)?)),
-    }
+    dispatch_tensor_unary_with_bool_special_result!(
+        input,
+        |t| typed_pad(buffers, t, config),
+        bool | t | typed_pad_with_fill(buffers, t, config, false)
+    )
 }
 
 pub fn concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
@@ -298,23 +296,9 @@ pub(crate) fn try_concatenate_with_pool(
             op: "concatenate",
             message: "concatenate requires at least one input".into(),
         })?;
-    match first {
-        Tensor::F32(t) => Ok(Tensor::F32(typed_concatenate_from_dyn_inputs(
-            buffers, t, inputs, axis,
-        )?)),
-        Tensor::F64(t) => Ok(Tensor::F64(typed_concatenate_from_dyn_inputs(
-            buffers, t, inputs, axis,
-        )?)),
-        Tensor::I64(t) => Ok(Tensor::I64(typed_concatenate_from_dyn_inputs(
-            buffers, t, inputs, axis,
-        )?)),
-        Tensor::C32(t) => Ok(Tensor::C32(typed_concatenate_from_dyn_inputs(
-            buffers, t, inputs, axis,
-        )?)),
-        Tensor::C64(t) => Ok(Tensor::C64(typed_concatenate_from_dyn_inputs(
-            buffers, t, inputs, axis,
-        )?)),
-    }
+    dispatch_tensor_unary_result!(first, |t| typed_concatenate_from_dyn_inputs(
+        buffers, t, inputs, axis
+    ))
 }
 
 pub fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -326,13 +310,7 @@ pub(crate) fn reverse_with_pool(
     input: &Tensor,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
-    match input {
-        Tensor::F32(t) => typed_reverse(buffers, t, axes).map(Tensor::F32),
-        Tensor::F64(t) => typed_reverse(buffers, t, axes).map(Tensor::F64),
-        Tensor::I64(t) => typed_reverse(buffers, t, axes).map(Tensor::I64),
-        Tensor::C32(t) => typed_reverse(buffers, t, axes).map(Tensor::C32),
-        Tensor::C64(t) => typed_reverse(buffers, t, axes).map(Tensor::C64),
-    }
+    dispatch_tensor_unary_result!(input, |t| typed_reverse(buffers, t, axes))
 }
 
 fn typed_slice<T: Copy + Clone + PoolScalar>(
@@ -589,6 +567,10 @@ fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
 
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     match tensor {
+        Tensor::I32(t) => Ok(IndexTensor {
+            shape: t.shape.clone(),
+            values: t.host_data().iter().map(|&value| value as i64).collect(),
+        }),
         Tensor::I64(t) => Ok(IndexTensor {
             shape: t.shape.clone(),
             values: t.host_data().to_vec(),
@@ -615,6 +597,10 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 values: values?,
             })
         }
+        Tensor::Bool(_) => Err(crate::Error::InvalidConfig {
+            op: "index_tensor",
+            message: "bool index tensors are not supported".into(),
+        }),
         Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::InvalidConfig {
             op: "index_tensor",
             message: "complex index tensors are not supported".into(),
@@ -751,7 +737,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
         .collect()
 }
 
-fn typed_gather<T: Copy + Clone + Zero + PoolScalar>(
+fn typed_gather<T: Copy + Clone + PoolScalar>(
     buffers: &mut BufferPool,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
@@ -1174,7 +1160,7 @@ where
     Ok(out)
 }
 
-fn typed_dynamic_slice<T: Copy + Clone + Zero + PoolScalar>(
+fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1290,6 +1276,15 @@ fn typed_pad<T: Copy + Clone + Zero + PoolScalar>(
     input: &TypedTensor<T>,
     config: &PadConfig,
 ) -> crate::Result<TypedTensor<T>> {
+    typed_pad_with_fill(buffers, input, config, T::zero())
+}
+
+fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+    config: &PadConfig,
+    fill: T,
+) -> crate::Result<TypedTensor<T>> {
     let rank = input.shape.len();
     if config.edge_padding_low.len() != rank {
         return Err(crate::Error::RankMismatch {
@@ -1335,7 +1330,7 @@ fn typed_pad<T: Copy + Clone + Zero + PoolScalar>(
         );
     }
 
-    let mut out = pooled_zeroed_tensor(buffers, out_shape.clone());
+    let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill);
     let mut input_idx = vec![0usize; input.shape.len()];
     let mut out_idx = vec![0usize; input.shape.len()];
 

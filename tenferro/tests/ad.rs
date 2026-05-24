@@ -341,7 +341,15 @@ fn zeros_by_dtype(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
         DType::F32 => Tensor::F32(TypedTensor::zeros(shape)),
         DType::F64 => Tensor::F64(TypedTensor::zeros(shape)),
+        DType::I32 => Tensor::I32(TypedTensor::zeros(shape)),
         DType::I64 => Tensor::I64(TypedTensor::zeros(shape)),
+        DType::Bool => {
+            let n_elements = shape.iter().product();
+            Tensor::Bool(TypedTensor::from_vec_col_major(
+                shape,
+                vec![false; n_elements],
+            ))
+        }
         DType::C32 => Tensor::C32(TypedTensor::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::zeros(shape)),
     }

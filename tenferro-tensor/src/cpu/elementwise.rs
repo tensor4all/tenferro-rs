@@ -178,6 +178,7 @@ pub(crate) fn add_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_add_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::I32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
@@ -217,6 +218,7 @@ pub(crate) fn mul_with_pool(
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => Ok(Tensor::F32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_mul_with_pool(buffers, a, b)?)),
+        (Tensor::I32(a), Tensor::I32(b)) => Ok(Tensor::I32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
@@ -290,9 +292,9 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::BackendFailure {
             op: "neg",
-            message: "unsupported dtype I64".into(),
+            message: format!("unsupported dtype {:?}", input.dtype()),
         }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_neg_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_neg_with_pool(buffers, t)?)),
@@ -307,9 +309,9 @@ pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::BackendFailure {
             op: "conj",
-            message: "unsupported dtype I64".into(),
+            message: format!("unsupported dtype {:?}", input.dtype()),
         }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_conj_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_conj_with_pool(buffers, t)?)),
@@ -324,9 +326,9 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::BackendFailure {
             op: "abs",
-            message: "unsupported dtype I64".into(),
+            message: format!("unsupported dtype {:?}", input.dtype()),
         }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_abs_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_abs_with_pool(buffers, t)?)),
@@ -341,9 +343,9 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
-        Tensor::I64(_) => Err(crate::Error::BackendFailure {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::BackendFailure {
             op: "sign",
-            message: "unsupported dtype I64".into(),
+            message: format!("unsupported dtype {:?}", input.dtype()),
         }),
         Tensor::C32(t) => Ok(Tensor::C32(typed_sign_with_pool(buffers, t)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_sign_with_pool(buffers, t)?)),

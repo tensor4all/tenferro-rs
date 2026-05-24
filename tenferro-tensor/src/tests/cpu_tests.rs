@@ -3310,8 +3310,71 @@ fn test_backend_convert_supports_real_complex_and_precision_changes() {
                 inner.host_data(),
                 &[Complex64::new(1.25, -0.5), Complex64::new(-2.5, 4.0)]
             ),
+            _ => unreachable!("unexpected conversion case"),
         }
     }
+}
+
+#[test]
+fn test_cpu_supports_i32_and_bool_structural_paths() {
+    let mut backend = CpuBackend::new();
+
+    let i32_tensor = Tensor::from_vec_col_major(vec![2], vec![-1_i32, 0]);
+    let i32_as_bool = backend.convert(&i32_tensor, DType::Bool).unwrap();
+    assert_eq!(i32_as_bool.as_slice::<bool>().unwrap(), &[true, false]);
+
+    let bool_tensor = Tensor::from_vec_col_major(vec![2], vec![true, false]);
+    let bool_as_i64 = backend.convert(&bool_tensor, DType::I64).unwrap();
+    assert_eq!(bool_as_i64.as_slice::<i64>().unwrap(), &[1, 0]);
+
+    let bool_matrix =
+        Tensor::from_vec_col_major(vec![2, 3], vec![true, false, false, true, true, false]);
+    let transposed = transpose(&bool_matrix, &[1, 0]).unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(
+        transposed.as_slice::<bool>().unwrap(),
+        &[true, false, true, false, true, false]
+    );
+
+    let padded = pad(
+        &bool_tensor,
+        &PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![0],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        padded.as_slice::<bool>().unwrap(),
+        &[false, true, false, false]
+    );
+
+    let starts = Tensor::from_vec_col_major(vec![1], vec![1_i32]);
+    let sliced = dynamic_slice(
+        &Tensor::from_vec_col_major(vec![3], vec![true, false, true]),
+        &starts,
+        &[2],
+    )
+    .unwrap();
+    assert_eq!(sliced.as_slice::<bool>().unwrap(), &[false, true]);
+
+    let upper = triu(
+        &Tensor::from_vec_col_major(vec![2, 2], vec![true, true, false, true]),
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        upper.as_slice::<bool>().unwrap(),
+        &[true, false, false, true]
+    );
+
+    let i32_sum = reduce_sum(
+        &Tensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]),
+        &[0],
+    )
+    .unwrap();
+    assert_eq!(i32_sum.as_slice::<i32>().unwrap(), &[3, 7]);
 }
 
 #[test]
