@@ -97,32 +97,33 @@ coverage for CUDA-resident `Tensor` values. It is not an autodiff coverage table
 
 Legend:
 
-- `F32`, `F64`, `I64`, `C32`, and `C64` are the current public `Tensor` dtypes.
+- `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64` are the current public `Tensor` dtypes.
 - Listed dtypes have CUDA implementations for that operation.
 - Missing dtypes or rows marked "No CUDA implementation" return an error
   rather than silently falling back to CPU.
 
 | Operation or family | CUDA dtype support | Notes |
 | --- | --- | --- |
-| Allocation, upload, download | `F32`, `F64`, `I64`, `C32`, `C64` | Explicit CPU/GPU transfer only |
-| `add`, `mul`, `div` | `F32`, `F64`, `C32`, `C64` | Same dtype inputs only; `I64` arithmetic is not implemented |
-| `neg` | `F32`, `F64`, `C32`, `C64` | `I64` is not implemented |
-| `conj` | `F32`, `F64`, `C32`, `C64` | Real dtypes are identity; `I64` is not implemented |
-| `abs`, `sign` | `F32`, `F64` | Complex and `I64` inputs are not implemented |
+| Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
+| `add`, `mul`, `div` | `F32`, `F64`, `C32`, `C64` | Same dtype inputs only; integer and `Bool` arithmetic are not implemented |
+| `neg` | `F32`, `F64`, `C32`, `C64` | Integer and `Bool` negation are not implemented |
+| `conj` | `F32`, `F64`, `C32`, `C64` | Real floating dtypes are identity; integer and `Bool` inputs are not implemented |
+| `abs`, `sign` | `F32`, `F64` | Complex, integer, and `Bool` inputs are not implemented |
 | `maximum`, `minimum`, `compare`, `select`, `clamp` | `F32`, `F64` | Complex ordering is not defined; `compare` returns a numeric 0/1 tensor |
 | `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p` | `F32`, `F64` | Complex analytic kernels are not implemented |
 | `pow` | `F32`, `F64` | Same dtype inputs only |
-| `transpose`, `reshape`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I64`, `C32`, `C64` | Structural tensor operations |
-| `convert` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I64` identity only | Conversion to or from `I64` is not implemented except `I64 -> I64` |
-| `reduce_sum`, `reduce_prod` | `F32`, `F64`, `I64`, `C32`, `C64` | Multi-axis reductions are composed from single-axis kernels |
-| `reduce_max`, `reduce_min` | `F32`, `F64` | Complex ordering is not defined; `I64` min/max is not implemented |
+| `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
+| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Structural tensor operations; `Bool` is not implemented |
+| `convert` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I32`, `I64`, and `Bool` identity only | Conversion to or from integer or `Bool` dtypes is not implemented except identity |
+| `reduce_sum`, `reduce_prod` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Multi-axis reductions are composed from single-axis kernels; `Bool` is not implemented |
+| `reduce_max`, `reduce_min` | `F32`, `F64` | Complex ordering is not defined; integer and `Bool` min/max are not implemented |
 | `dot_general` | `F32`, `F64`, `C32`, `C64` | cuTENSOR-backed contraction; same dtype inputs only |
-| `gather` | operand `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, or `I64` | Complex index tensors and `I64` operands are not implemented |
-| `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, or `I64` | Add-scatter semantics; complex index tensors and `I64` operands are not implemented |
-| `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I64`, `C32`, `C64` | Dense structural/indexing operations |
-| `dynamic_slice` | input `F32`, `F64`, `C32`, `C64`; starts `F32`, `F64`, or `I64` | Complex start tensors and `I64` inputs are not implemented |
+| `gather` | operand `F32`, `F64`, `I32`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` and `Bool` operands are not implemented |
+| `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
+| `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Dense structural/indexing operations; `Bool` is not implemented |
+| `dynamic_slice` | input `F32`, `F64`, `I32`, `C32`, `C64`; starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` and `Bool` inputs are not implemented |
 | `dynamic_update_slice` | No CUDA implementation | Returns an error |
-| `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; `svd` and `eigh` return real singular/eigenvalue tensors for complex inputs |
+| `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |
 | General `eig` | No CUDA implementation | cuSOLVER does not provide LAPACK `dgeev`-style general eigendecomposition; download to CPU explicitly |
 | AMD/ROCm | No supported backend | ROCm remains a feature stub |

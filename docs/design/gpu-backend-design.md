@@ -13,9 +13,9 @@ allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
 kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
 Performance optimization is still active work. The remaining unsupported CUDA
 cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
-`dynamic_update_slice`, `I64` numeric/linalg gaps, and selected complex
-analytic or ordering operations. HIP/ROCm is still a feature stub rather than
-a supported execution path.
+`dynamic_update_slice`, integer numeric/linalg gaps, `Bool` kernel gaps beyond
+transfer and reshape, and selected complex analytic or ordering operations.
+HIP/ROCm is still a feature stub rather than a supported execution path.
 
 See also:
 
@@ -218,11 +218,11 @@ CUDA library calls:
 
 | Category | Current status |
 | --- | --- |
-| Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge |
+| Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
 | Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `C32`/`C64` add/mul/div/neg/conj |
-| Reductions | sum/prod for all tensor dtypes; min/max for `F32`/`F64` |
-| Structural | transpose, reshape, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks for all tensor dtypes |
-| Indexing | slice/pad/concatenate/reverse for all tensor dtypes; gather/scatter/dynamic_slice for floating and complex data with numeric index tensors |
+| Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`/`F64` |
+| Structural | reshape for all public tensor dtypes; transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, and triangular masks for non-`Bool` dtypes with CubeCL element storage |
+| Indexing | slice/pad/concatenate/reverse for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; gather/dynamic_slice for `F32`, `F64`, `I32`, `C32`, and `C64` data with `F32`, `F64`, `I32`, or `I64` start/index tensors; scatter for floating and complex data with those numeric index tensors |
 | Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes |
 | Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
 
@@ -245,7 +245,9 @@ The following are intentionally outside the current batch:
 - selected complex analytic kernels and ordering operations,
 - CUDA implementations for `full_piv_lu`, `full_piv_lu_solve`, and
   `dynamic_update_slice`,
-- `I64` numeric/linalg CUDA kernels beyond structural and reduction paths,
+- integer numeric/linalg CUDA kernels beyond structural and reduction paths,
+- `Bool` CUDA kernels beyond allocation, upload/download, and metadata-only
+  reshape,
 - changing the public placement contract.
 
 ## Tests
