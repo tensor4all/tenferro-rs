@@ -10,10 +10,12 @@ use computegraph::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
+use tenferro_runtime::extension_cache::ExtensionCacheLimits;
+use tenferro_runtime::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
 use tenferro_tensor::cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_tensor::cubecl::CubeclBackend;
-use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TypedTensor};
 use tidu::{
     topo_sort_grad_dag, try_backward_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,
     LinearFragment,
@@ -21,7 +23,7 @@ use tidu::{
 
 use crate::eager_backend::EagerBackend;
 use crate::eager_emitter::EagerEmitter;
-use crate::eager_exec::exec_op_on_tensors;
+use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::{
     metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_fragment_metadata,
@@ -119,10 +121,19 @@ pub(crate) fn print_and_reset_eager_op_profile() {
     });
 }
 
+/// Stats for caches owned by an [`EagerRuntime`].
+///
+/// `retained_bytes` fields are logical payload estimates, not process RSS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EagerRuntimeCacheStats {
+    /// Generic extension runtime caches.
+    pub extensions: CacheStats,
+}
+
 /// Shared eager execution context for tensors on a backend.
 ///
-/// Reusing one context lets eager tensors share backend state and gradient
-/// storage across a computation.
+/// Reusing one context lets eager tensors share backend state, extension
+/// runtime caches, and gradient storage across a computation.
 ///
 /// # Examples
 ///
@@ -138,6 +149,7 @@ pub(crate) fn print_and_reset_eager_op_profile() {
 /// ```
 pub struct EagerRuntime {
     pub(crate) backend: Mutex<EagerBackend>,
+    pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
     grad_slots: Mutex<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
 }
 
@@ -145,6 +157,7 @@ impl EagerRuntime {
     fn from_backend(backend: EagerBackend) -> Self {
         Self {
             backend: Mutex::new(backend),
+            extension_executor: Mutex::new(ExtensionExecutor::new()),
             grad_slots: Mutex::new(HashMap::new()),
         }
     }
@@ -205,6 +218,93 @@ impl EagerRuntime {
     /// ```
     pub fn id(&self) -> ContextId {
         ContextId::from_ptr(self)
+    }
+
+    /// Register one extension runtime on this eager context.
+    pub fn register_extension(
+        &self,
+        register: impl FnOnce(
+            &mut ExtensionExecutor<EagerBackend>,
+        ) -> std::result::Result<(), ExtensionRuntimeRegistryError>,
+    ) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
+        register(&mut self.extension_executor.lock().unwrap())
+    }
+
+    /// Clear generic extension runtime cache entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerRuntime};
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// ctx.clear_extension_caches();
+    /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    /// ```
+    pub fn clear_extension_caches(&self) {
+        self.extension_executor.lock().unwrap().clear_caches();
+    }
+
+    /// Clear every cache owned by this eager context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerRuntime};
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// ctx.clear_caches();
+    /// assert_eq!(ctx.cache_stats().extensions.entries, 0);
+    /// ```
+    pub fn clear_caches(&self) {
+        self.clear_extension_caches();
+    }
+
+    /// Return eager runtime cache-entry and retained-byte stats.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, EagerRuntime};
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let stats = ctx.cache_stats();
+    /// assert_eq!(stats.extensions.entries, 0);
+    /// ```
+    pub fn cache_stats(&self) -> EagerRuntimeCacheStats {
+        EagerRuntimeCacheStats {
+            extensions: self.extension_executor.lock().unwrap().cache_stats(),
+        }
+    }
+
+    /// Return the extension cache retention limits.
+    pub fn extension_cache_limits(&self) -> ExtensionCacheLimits {
+        self.extension_executor.lock().unwrap().cache_limits()
+    }
+
+    /// Replace extension cache retention limits.
+    pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) {
+        self.extension_executor
+            .lock()
+            .unwrap()
+            .set_cache_limits(limits);
+    }
+
+    pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
+        let mut backend =
+            profile_eager_op_section("exec_outputs.lock_backend", || self.backend.lock().unwrap());
+        let mut extension_executor =
+            profile_eager_op_section("exec_outputs.lock_extensions", || {
+                self.extension_executor.lock().unwrap()
+            });
+        profile_eager_op_section("exec_outputs.exec_op", || {
+            exec_op_on_tensors_with_extension_executor(
+                op,
+                inputs,
+                &mut *backend,
+                Some(&mut *extension_executor),
+            )
+        })
     }
 
     pub(crate) fn register_grad_slot(&self, key: &GlobalValKey<StdTensorOp>, slot: &GradSlot) {
@@ -632,6 +732,11 @@ impl EagerTensor {
         self.ctx.id()
     }
 
+    /// Borrow the eager runtime context that owns this tensor.
+    pub fn runtime(&self) -> &Arc<EagerRuntime> {
+        &self.ctx
+    }
+
     /// Check whether two tensors belong to the same eager context.
     ///
     /// # Examples
@@ -678,20 +783,24 @@ impl EagerTensor {
 
         let sorted = topo_sort_grad_dag(&self.grad_node);
         let mut backend = self.ctx.backend.lock().unwrap();
+        let mut extension_executor = self.ctx.extension_executor.lock().unwrap();
         let seed = Arc::new(one_like_tensor(self.data.as_ref(), &mut *backend));
         let mut callbacks = TenferroBackwardCallbacks {
             backend: &mut *backend,
+            extension_executor: Some(&mut *extension_executor),
             metadata_scopes: self.metadata_scopes.clone(),
         };
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
         let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)?;
+        drop(callbacks);
         self.ctx.store_grads(&cotangents, &mut *backend)?;
         Ok(cotangents)
     }
 }
 
-pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend> {
+pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
+    extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
@@ -772,7 +881,9 @@ fn linear_op_depends_on_tangents(mode: &OpMode) -> bool {
     matches!(mode, OpMode::Linear { active_mask } if active_mask.iter().any(|is_active| *is_active))
 }
 
-impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallbacks<'_, B> {
+impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
+    for TenferroBackwardCallbacks<'_, B>
+{
     fn execute_forward(
         &mut self,
         fragment: &Fragment<StdTensorOp>,
@@ -817,7 +928,17 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
                 .collect();
             let resolved_inputs: Vec<&Tensor> =
                 resolved_values.iter().map(|value| value.as_ref()).collect();
-            let outputs = exec_op_on_tensors(&op_node.op, &resolved_inputs, self.backend)
+            let outputs =
+                if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+                    exec_op_on_tensors_with_extension_executor(
+                        &op_node.op,
+                        &resolved_inputs,
+                        self.backend,
+                        Some(extension_executor),
+                    )
+                } else {
+                    exec_op_on_tensors(&op_node.op, &resolved_inputs, self.backend)
+                }
                 .unwrap_or_else(|err| {
                     panic!("eager forward exec failed for {:?}: {}", op_node.op, err)
                 });
@@ -842,7 +963,11 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
         external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
     ) -> Vec<Option<Arc<Tensor>>> {
-        let mut emitter = EagerEmitter::new(self.backend);
+        let mut emitter = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+            EagerEmitter::with_extension_executor(self.backend, extension_executor)
+        } else {
+            EagerEmitter::new(self.backend)
+        };
         emitter.external_data = external_data.clone();
         let cotangent_seed_ids = cotangent_out
             .iter()
@@ -867,7 +992,11 @@ impl<B: TensorBackend> BackwardCallbacks<StdTensorOp> for TenferroBackwardCallba
         external_data: &HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
         ctx: &mut ShapeGuardContext,
     ) -> chainrules_core::ADRuleResult<Vec<Option<Arc<Tensor>>>> {
-        let mut emitter = EagerEmitter::new(self.backend);
+        let mut emitter = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+            EagerEmitter::with_extension_executor(self.backend, extension_executor)
+        } else {
+            EagerEmitter::new(self.backend)
+        };
         emitter.external_data = external_data.clone();
         let cotangent_seed_ids = cotangent_out
             .iter()
@@ -957,12 +1086,7 @@ pub(crate) fn exec_single_output(
     inputs: &[&Tensor],
     ctx: &EagerRuntime,
 ) -> Result<Tensor> {
-    let mut backend = profile_eager_op_section("exec_single_output.lock_backend", || {
-        ctx.backend.lock().unwrap()
-    });
-    let mut outputs = profile_eager_op_section("exec_single_output.exec_op", || {
-        exec_op_on_tensors(op, inputs, &mut *backend)
-    })?;
+    let mut outputs = ctx.exec_outputs(op, inputs)?;
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(
             "expected one eager output for {:?}, got {}",

@@ -26,11 +26,13 @@ use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
+use num_complex::{Complex32, Complex64};
 use tenferro::extension::{
     apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionExecutionContext,
     ExtensionRuntime,
 };
 use tenferro::{CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
@@ -328,6 +330,210 @@ impl ExtensionOp for TestNoAd {
 }
 
 // ----------------------------------------------------------------------
+// TestProbeIdentity: identity op whose linearization carries a second
+// non-differentiated input so eager transpose materializes missing tangents.
+// ----------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestProbeIdentity {
+    probe_shape: Vec<usize>,
+}
+
+impl ExtensionOp for TestProbeIdentity {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.probe_identity.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hash_shape(&self.probe_shape, hasher);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<TestProbeIdentity>() == Some(self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        2
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct TestProbeLinear {
+    probe_shape: Vec<usize>,
+}
+
+impl ExtensionOp for TestProbeLinear {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.probe_linear.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hash_shape(&self.probe_shape, hasher);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<TestProbeLinear>() == Some(self)
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        2
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+fn ensure_probe_registered() {
+    register_rule_once(Arc::new(TestProbeIdentityRule));
+    register_rule_once(Arc::new(TestProbeLinearRule));
+}
+
+#[derive(Debug)]
+struct TestProbeIdentityRule;
+
+impl ExtensionAdRuleTrait for TestProbeIdentityRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.probe_identity.v1"
+    }
+
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let op = op
+            .as_any()
+            .downcast_ref::<TestProbeIdentity>()
+            .expect("TestProbeIdentityRule received a different op");
+        let Some(dx) = tangent_in[0] else {
+            return Ok(vec![None]);
+        };
+        let Some(dprobe) = tangent_in[1] else {
+            return Ok(vec![Some(dx)]);
+        };
+
+        let out = builder.add_op(
+            StdTensorOp::Extension(Arc::new(TestProbeLinear {
+                probe_shape: op.probe_shape.clone(),
+            })),
+            vec![ValRef::Local(dx), ValRef::Local(dprobe)],
+            OpMode::Linear {
+                active_mask: vec![true, true],
+            },
+        );
+        Ok(vec![Some(out[0])])
+    }
+
+    fn transpose_rule(
+        &self,
+        _op: &dyn ExtensionOp,
+        _emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        _inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![cotangent_out[0], None])
+    }
+}
+
+#[derive(Debug)]
+struct TestProbeLinearRule;
+
+impl ExtensionAdRuleTrait for TestProbeLinearRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.probe_linear.v1"
+    }
+
+    fn linearize(
+        &self,
+        _op: &dyn ExtensionOp,
+        _builder: &mut FragmentBuilder<StdTensorOp>,
+        _primal_in: &[GlobalValKey<StdTensorOp>],
+        _primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        Ok(vec![tangent_in[0]])
+    }
+
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        _mode: &OpMode,
+        _ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        let Some(ct) = cotangent_out[0] else {
+            return Ok(vec![None, None]);
+        };
+        let op = op
+            .as_any()
+            .downcast_ref::<TestProbeLinear>()
+            .expect("TestProbeLinearRule received a different op");
+        let _probe_value = emitter.add_op(
+            StdTensorOp::Reshape {
+                to_shape: DimExpr::from_concrete(&op.probe_shape),
+            },
+            vec![inputs[1].clone()],
+            OpMode::Primal,
+        );
+        Ok(vec![Some(ct), None])
+    }
+}
+
+// ----------------------------------------------------------------------
 // TestBadOutputCount: malformed extension for facade validation paths.
 // ----------------------------------------------------------------------
 
@@ -380,6 +586,13 @@ impl ExtensionOp for TestBadOutputCount {
 // ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------
+
+fn hash_shape(shape: &[usize], hasher: &mut dyn Hasher) {
+    hasher.write_usize(shape.len());
+    for &dim in shape {
+        hasher.write_usize(dim);
+    }
+}
 
 fn f64_slice(tensor: &Tensor) -> &[f64] {
     match tensor {
@@ -484,6 +697,44 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
         x.grad().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 2.0, 2.0, 2.0]
     );
+}
+
+fn assert_probe_identity_eager_backward(probe: Tensor) {
+    ensure_probe_registered();
+
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]),
+        ctx.clone(),
+    );
+    let probe_shape = probe.shape().to_vec();
+    let probe = EagerTensor::from_tensor_in(probe, ctx);
+    let y = apply_eager(Arc::new(TestProbeIdentity { probe_shape }), &[&x, &probe])
+        .expect("probe identity eager apply")
+        .into_iter()
+        .next()
+        .expect("single probe identity output");
+    let loss = y.reduce_sum(&[0]).expect("loss");
+
+    let _ = loss.backward().expect("eager backward");
+
+    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[1.0, 1.0]);
+}
+
+#[test]
+fn eager_backward_materializes_missing_tangent_zeros_for_all_probe_dtypes() {
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]));
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]));
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]));
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(vec![2], vec![true, false]));
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex32::new(1.0, -1.0), Complex32::new(2.0, -2.0)],
+    ));
+    assert_probe_identity_eager_backward(Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, -2.0)],
+    ));
 }
 
 #[test]

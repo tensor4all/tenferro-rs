@@ -2,8 +2,8 @@
 use crate::TensorBackend;
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, tensor_i64,
-    upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c64, tensor_f64,
+    tensor_i32, tensor_i64, upload,
 };
 
 #[test]
@@ -100,6 +100,53 @@ fn test_cubecl_i64_sum_and_prod_match_cpu() {
     let gpu_out = gpu.reduce_prod(&gpu_input, &[2]).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_i32_sum_and_prod_match_cpu() {
+    let input = tensor_i32(vec![2, 3, 2], vec![1, 2, 3, 4, 5, 6, -1, -2, 2, 3, -3, 4]);
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+
+    let expected = cpu.reduce_sum(&input, &[0]).unwrap();
+    let gpu_out = gpu.reduce_sum(&gpu_input, &[0]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+
+    let expected = cpu.reduce_prod(&input, &[2]).unwrap();
+    let gpu_out = gpu.reduce_prod(&gpu_input, &[2]).unwrap();
+    let actual = download(&gpu, &gpu_out);
+    assert_tensor_close(&actual, &expected, 0.0);
+}
+
+#[test]
+#[ignore]
+fn test_cubecl_bool_reductions_are_unsupported() {
+    let input = tensor_bool(vec![2, 3], vec![true, false, true, true, false, false]);
+
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &input);
+
+    let err = gpu.reduce_sum(&gpu_input, &[0]).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "reduce_sum",
+            ..
+        }
+    ));
+
+    let err = gpu.reduce_prod(&gpu_input, &[1]).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "reduce_prod",
+            ..
+        }
+    ));
 }
 
 #[test]

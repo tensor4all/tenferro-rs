@@ -262,12 +262,11 @@ consistent with the workspace cache ownership rules. The op payload MAY hold an
 detail and two equal payloads remain interchangeable when their cache handles
 differ.
 
-There is no monolithic core runtime owner for extension cache state, and the
-current `EagerRuntime`, `GraphCompiler`, and `GraphExecutor` do not expose a
-general public extension cache slot. Compiled extension execution delegates to
-`ExtensionOp::eager_execute`, so eager and traced execution use the same
-extension-owned runtime cache path. First-class extension cache slots are
-tracked in [issue #878](https://github.com/tensor4all/tenferro-rs/issues/878).
+There is no monolithic core runtime owner for arbitrary extension cache state.
+`EagerRuntime`, `GraphCompiler`, and `GraphExecutor` own explicit generic
+extension cache stores. Extension crates may use those stores only through the
+owning compiler/runtime/executor context; they MUST NOT hide long-lived caches
+inside semantic payloads, process globals, or thread-local state.
 
 ### Rationale
 
@@ -507,20 +506,24 @@ both, with a normatively-split responsibility.
 
 ### Eager path
 
-The eager path runs through `tenferro/src/eager_exec.rs::exec_op_on_tensors`
-and `tenferro/src/eager_emitter.rs::EagerEmitter::add_op`. The implementation
-MUST include a single match arm in `exec_op_on_tensors` that routes
-`StdTensorOp::Extension(op)` to `op.eager_execute(inputs)`:
+The eager path runs through `EagerRuntime` and
+`tenferro/src/eager_exec.rs::exec_op_on_tensors_with_extension_executor`.
+When execution is attached to an `EagerRuntime` and a runtime is registered for
+the extension family, the implementation MUST route `StdTensorOp::Extension(op)`
+through that runtime's `ExtensionExecutor`:
 
 ```rust
 // Conceptual:
-StdTensorOp::Extension(ext) => ext.eager_execute(inputs)?,
+StdTensorOp::Extension(ext) => extension_executor.execute(backend, ext, inputs)?,
 ```
 
 The eager path MUST NOT open a backend execution session for extension
-ops (i.e. MUST NOT wrap `eager_execute` in
-`backend.with_exec_session`); the extension owns its execution model
-and may choose to open its own session internally if needed.
+ops before handing control to the extension runtime; the extension runtime owns
+its execution model and receives the backend plus its runtime-owned cache store.
+The context-free `ExtensionOp::eager_execute` method is a compatibility
+fallback for direct execution helpers and for unregistered eager extension
+families. Built-in extensions with long-lived caches MUST register a runtime so
+`EagerRuntime`-attached execution uses the runtime-owned cache store.
 
 ### Compiled path
 
@@ -535,8 +538,7 @@ The compiled path runs through
    `op.infer_output_meta(...)` to populate
    `ExecInstruction::dtype` and `ExecInstruction::output_shapes`.
 3. An `execute_extension_op` dispatcher in `tenferro/src/exec.rs` that,
-   at runtime, calls `ext.eager_execute(inputs)` (the same method used
-   by the eager path).
+   at runtime, calls the registered `ExtensionExecutor<B>`.
 4. A single-instruction-boundary category for extensions in
    `tenferro/src/segment.rs` (similar to `DotGeneral` / `NaryEinsum`).
    Extensions MUST NOT participate in elementwise fusion planning
@@ -549,20 +551,17 @@ The compiled path runs through
   `infer_output_meta` for metadata population, and assigning
   `last_use` markers. It does not invoke backend kernels.
 - **`eager_exec` / `eager_emitter`** are responsible for: resolving
-  inputs from the emitter's tensor cache and calling
-  `eager_execute`.
-- **Extension impl (`eager_execute`)** is responsible for: actual
-  forward computation, backend selection, and device placement of
-  outputs. The core pipeline MUST NOT second-guess these choices.
+  inputs from the emitter's tensor cache and calling the runtime-owned
+  extension executor when one is available.
+- **Extension runtime (`ExtensionRuntime<B>`)** is responsible for: actual
+  forward computation, backend use, runtime cache entries, and device placement
+  of outputs. The core pipeline MUST NOT second-guess these choices.
 
 ### Rationale
 
-Keeping one `eager_execute` method (rather than separate eager/compiled
-APIs) avoids a second virtual-function surface and matches how
-non-extension linalg ops work today: they flow through the same
-`TensorBackend` trait regardless of compiled vs. eager entry. Extensions
-are lighter-weight than linalg ops (no backend trait to satisfy), but
-the single-method design keeps the two paths congruent.
+Using one `ExtensionRuntime<B>` contract for eager and compiled execution keeps
+runtime caches tied to explicit owners (`EagerRuntime` or `GraphExecutor`) and
+avoids hidden thread-local or process-global state in extension crates.
 
 ### Failure signature
 
@@ -808,15 +807,15 @@ these error types / behaviours in the listed scenarios.
 
 | Scenario | Required behaviour |
 |---|---|
-| `eager_execute` returns `Err` | Propagate to caller as `Error::BackendFailure { op: "extension", message }` with `family_id` included in `message`. MUST NOT retry, MUST NOT swallow. |
-| Backend lacks a capability the extension needs | The extension's `eager_execute` SHOULD return `Error::BackendFailure` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
-| Graph references an unregistered `family_id` at eager-execute time | Return `Error::Unsupported { op: "extension", message: "<family_id>: not registered" }`. |
+| Extension runtime execution returns `Err` | Propagate to caller as `Error::BackendFailure { op: "extension", message }` with `family_id` included in `message`. MUST NOT retry, MUST NOT swallow. |
+| Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::BackendFailure` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
+| Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
 | AD rules (`frule` / `rrule`, or low-level `linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through `tenferro::Error`. |
 | Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
-| `eager_execute` returns a tensor on the wrong device | Propagate to the caller as `Error::BackendFailure` (the core pipeline does not re-locate tensors). |
+| Extension runtime returns a tensor on the wrong device | Propagate to the caller as `Error::BackendFailure` (the core pipeline does not re-locate tensors). |
 | Registration with malformed `family_id` | `RegistrationError::MalformedFamilyId`. |
 
 ### Constants for `op` field

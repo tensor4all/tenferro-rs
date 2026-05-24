@@ -1,9 +1,14 @@
+#![cfg(feature = "autodiff")]
+
 use std::num::NonZeroUsize;
 
 use tenferro::extension::ExtensionCacheLimits;
-use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro::{
+    CpuBackend, DType, EagerRuntime, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+};
 use tenferro_einsum::{
-    einsum, einsum_with, parse_einsum_subscripts, ContractionOptimizerOptions, EinsumOptimize,
+    eager_tensor::einsum as eager_einsum, einsum, einsum_with, parse_einsum_subscripts,
+    ContractionOptimizerOptions, EinsumOptimize,
 };
 
 fn register_runtime(executor: &mut GraphExecutor<CpuBackend>) {
@@ -80,6 +85,26 @@ fn run_runtime_planned_matmul(
         .expect("run")
 }
 
+fn run_eager_matmul(
+    ctx: &std::sync::Arc<EagerRuntime>,
+    rows: usize,
+    cols: usize,
+    mid: usize,
+) -> Tensor {
+    let a = ctx.constant_from(Tensor::from_vec_col_major(
+        vec![rows, mid],
+        (0..rows * mid).map(|i| i as f64).collect::<Vec<_>>(),
+    ));
+    let b = ctx.constant_from(Tensor::from_vec_col_major(
+        vec![mid, cols],
+        (0..mid * cols).map(|i| i as f64).collect::<Vec<_>>(),
+    ));
+    eager_einsum(&[&a, &b], "ij,jk->ik")
+        .expect("eager einsum")
+        .data()
+        .clone()
+}
+
 fn extension_cache_entries(compiler: &GraphCompiler) -> usize {
     compiler.cache_stats().extensions.entries
 }
@@ -141,6 +166,44 @@ fn extension_compile_cache_limits_bound_static_einsum_entries() {
         compiler.extension_caches().limits().max_entries(),
         NonZeroUsize::new(3).unwrap()
     );
+}
+
+#[test]
+fn eager_einsum_runtime_plan_cache_is_owned_by_context() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+
+    let out = run_eager_matmul(&ctx, 2, 4, 3);
+    assert_eq!(out.shape(), &[2, 4]);
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+
+    let _ = run_eager_matmul(&ctx, 2, 4, 3);
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+
+    let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let _ = run_eager_matmul(&other_ctx, 2, 4, 3);
+    assert_eq!(ctx.cache_stats().extensions.entries, 1);
+    assert_eq!(other_ctx.cache_stats().extensions.entries, 1);
+}
+
+#[test]
+fn eager_extension_cache_limits_bound_runtime_planned_einsum_entries() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    ctx.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(3).unwrap()));
+
+    for mid in 1..=5 {
+        let _ = run_eager_matmul(&ctx, 2, 2, mid);
+    }
+
+    let stats = ctx.cache_stats();
+    assert_eq!(stats.extensions.entries, 3);
+    assert!(stats.extensions.retained_bytes > 0);
+    assert_eq!(
+        ctx.extension_cache_limits().max_entries(),
+        NonZeroUsize::new(3).unwrap()
+    );
+
+    ctx.clear_caches();
+    assert_eq!(ctx.cache_stats().extensions.entries, 0);
 }
 
 #[test]

@@ -42,10 +42,9 @@ use crate::{ContractionTree, EinsumSubscripts, Subscripts};
 
 /// Standard einsum extension payload.
 ///
-/// This mirrors the current `tenferro.einsum.v1` payload shape without pulling
-/// in the facade/runtime crate. Execution still requires the future generic
-/// runtime to provide backend and cache context, so [`ExtensionOp::eager_execute`]
-/// intentionally returns an error for now.
+/// This mirrors the current `tenferro.einsum.v1` payload shape. Runtime-owned
+/// execution goes through [`EinsumRuntime`]; [`ExtensionOp::eager_execute`] is
+/// kept only as a context-free compatibility fallback.
 #[derive(Clone)]
 pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,

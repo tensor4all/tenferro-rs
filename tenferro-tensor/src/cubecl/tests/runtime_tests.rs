@@ -69,6 +69,36 @@ gpu_test!(test_upload_download_i64, {
     );
 });
 
+gpu_test!(test_upload_download_i32, {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![2, 3], vec![1_i32, -2, 3, -4, 5, -6]);
+    let gpu = upload_tensor(&rt, &host).unwrap();
+
+    assert_eq!(gpu.dtype(), crate::DType::I32);
+
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(back.shape(), host.shape());
+    assert_eq!(
+        back.as_slice::<i32>().unwrap(),
+        host.as_slice::<i32>().unwrap()
+    );
+});
+
+gpu_test!(test_upload_download_bool, {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![2, 3], vec![true, false, true, true, false, false]);
+    let gpu = upload_tensor(&rt, &host).unwrap();
+
+    assert_eq!(gpu.dtype(), crate::DType::Bool);
+
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(back.shape(), host.shape());
+    assert_eq!(
+        back.as_slice::<bool>().unwrap(),
+        host.as_slice::<bool>().unwrap()
+    );
+});
+
 gpu_test!(test_upload_download_c64, {
     use num_complex::Complex64;
 
@@ -165,6 +195,22 @@ gpu_test!(test_full_round_trip_all_dtypes, {
     assert_eq!(
         back.as_slice::<i64>().unwrap(),
         t.as_slice::<i64>().unwrap()
+    );
+
+    let t = Tensor::from_vec_col_major(vec![3], vec![1_i32, -2, 3]);
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<i32>().unwrap(),
+        t.as_slice::<i32>().unwrap()
+    );
+
+    let t = Tensor::from_vec_col_major(vec![4], vec![true, false, false, true]);
+    let gpu = upload_tensor(&rt, &t).unwrap();
+    let back = download_tensor(&rt, &gpu).unwrap();
+    assert_eq!(
+        back.as_slice::<bool>().unwrap(),
+        t.as_slice::<bool>().unwrap()
     );
 
     let t = Tensor::from_vec_col_major(

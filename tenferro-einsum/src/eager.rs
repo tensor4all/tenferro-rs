@@ -3,15 +3,9 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use lru::LruCache;
-#[cfg(test)]
-use std::mem::size_of;
-#[cfg(test)]
-use tenferro_tensor::CacheStats;
 use tenferro_tensor::{
     DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead, TensorView,
 };
@@ -19,8 +13,6 @@ use tenferro_tensor::{
 use crate::{ContractionTree, Subscripts};
 
 const EAGER_EINSUM_OP: &str = "eager_einsum";
-/// Default number of eager einsum contraction plans retained per thread.
-pub(crate) const DEFAULT_EAGER_EINSUM_CACHE_CAPACITY: usize = 256;
 
 #[derive(Debug, Default, Clone)]
 struct EagerEinsumProfileEntry {
@@ -31,97 +23,6 @@ struct EagerEinsumProfileEntry {
 thread_local! {
     static EAGER_EINSUM_PROFILE_STATE: RefCell<HashMap<&'static str, EagerEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
-    static EAGER_EINSUM_PLAN_CACHE: RefCell<EagerEinsumPlanCache> =
-        RefCell::new(EagerEinsumPlanCache::new(default_eager_einsum_cache_capacity()));
-}
-
-type EagerEinsumPlanCacheKey = (Subscripts, Vec<Vec<usize>>);
-
-struct EagerEinsumPlanCache {
-    plans: LruCache<EagerEinsumPlanCacheKey, Arc<ContractionTree>>,
-}
-
-impl EagerEinsumPlanCache {
-    fn new(capacity: NonZeroUsize) -> Self {
-        Self {
-            plans: LruCache::new(capacity),
-        }
-    }
-
-    #[cfg(test)]
-    fn capacity(&self) -> NonZeroUsize {
-        self.plans.cap()
-    }
-
-    #[cfg(test)]
-    fn set_capacity(&mut self, capacity: NonZeroUsize) {
-        self.plans.resize(capacity);
-    }
-
-    #[cfg(test)]
-    fn clear(&mut self) {
-        self.plans.clear();
-    }
-
-    #[cfg(test)]
-    fn stats(&self) -> CacheStats {
-        let mut retained_bytes = 0usize;
-        for (key, tree) in self.plans.iter() {
-            retained_bytes += eager_plan_key_retained_bytes(key)
-                + size_of::<Arc<ContractionTree>>()
-                + tree.retained_bytes_for_cache_stats();
-        }
-        CacheStats {
-            entries: self.plans.len(),
-            retained_bytes,
-        }
-    }
-}
-
-fn default_eager_einsum_cache_capacity() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_EAGER_EINSUM_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
-}
-
-#[cfg(test)]
-fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
-}
-
-#[cfg(test)]
-fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
-    values.iter().map(vec_retained_bytes).sum()
-}
-
-#[cfg(test)]
-fn subscripts_retained_bytes(subscripts: &Subscripts) -> usize {
-    vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
-}
-
-#[cfg(test)]
-fn eager_plan_key_retained_bytes(key: &EagerEinsumPlanCacheKey) -> usize {
-    subscripts_retained_bytes(&key.0) + vec_of_vec_retained_bytes(&key.1)
-}
-
-#[must_use]
-#[cfg(test)]
-pub(crate) fn eager_einsum_cache_capacity() -> NonZeroUsize {
-    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().capacity())
-}
-
-#[cfg(test)]
-pub(crate) fn set_eager_einsum_cache_capacity(capacity: NonZeroUsize) {
-    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().set_capacity(capacity));
-}
-
-#[cfg(test)]
-pub(crate) fn clear_eager_einsum_cache() {
-    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
-}
-
-#[must_use]
-#[cfg(test)]
-pub(crate) fn eager_einsum_cache_stats() -> CacheStats {
-    EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().stats())
 }
 
 fn eager_einsum_profile_enabled() -> bool {
@@ -132,11 +33,6 @@ fn eager_einsum_profile_enabled() -> bool {
 fn eager_einsum_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_EINSUM").is_ok())
-}
-
-fn eager_einsum_cache_disabled() -> bool {
-    static DISABLED: OnceLock<bool> = OnceLock::new();
-    *DISABLED.get_or_init(|| env::var("TENFERRO_DISABLE_EAGER_EINSUM_CACHE").is_ok())
 }
 
 fn record_eager_einsum_profile(section: &'static str, elapsed: Duration) {
@@ -426,40 +322,6 @@ fn plan_subscripts(subs: &Subscripts, input_shapes: &[&[usize]]) -> Result<Contr
 
     ContractionTree::optimize(subs, input_shapes)
         .map_err(|err| eager_invalid_config(format!("failed to optimize contraction tree: {err}")))
-}
-
-fn cached_plan_subscripts(
-    subs: &Subscripts,
-    input_shapes: &[&[usize]],
-) -> Result<Arc<ContractionTree>> {
-    if eager_einsum_cache_disabled() {
-        return Ok(Arc::new(plan_subscripts(subs, input_shapes)?));
-    }
-
-    let key = profile_eager_einsum_section("plan_cache_key", || {
-        (
-            subs.clone(),
-            input_shapes
-                .iter()
-                .map(|shape| shape.to_vec())
-                .collect::<Vec<_>>(),
-        )
-    });
-
-    if let Some(tree) = profile_eager_einsum_section("plan_cache_lookup", || {
-        EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().plans.get(&key).cloned())
-    }) {
-        return Ok(tree);
-    }
-
-    let tree = profile_eager_einsum_section("plan_cache_miss_optimize", || {
-        plan_subscripts(subs, input_shapes)
-    })?;
-    let tree = Arc::new(tree);
-    EAGER_EINSUM_PLAN_CACHE.with(|cache| {
-        cache.borrow_mut().plans.put(key, Arc::clone(&tree));
-    });
-    Ok(tree)
 }
 
 fn take_labeled<'a>(
@@ -1056,10 +918,10 @@ pub(crate) fn eager_einsum_subscripts(
                 .collect::<Vec<_>>()
         });
         let tree = profile_eager_einsum_section("plan_subscripts", || {
-            cached_plan_subscripts(subscripts, &shapes)
+            plan_subscripts(subscripts, &shapes)
         })?;
         let result = profile_eager_einsum_section("with_exec_session", || {
-            ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, tree.as_ref()))
+            ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree))
         });
         record_eager_einsum_profile("total", total_started.elapsed());
         maybe_print_eager_einsum_profile();
@@ -1073,11 +935,11 @@ pub(crate) fn eager_einsum_subscripts(
         let shape_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let tree = cached_plan_subscripts(subscripts, &shapes)?;
+        let tree = plan_subscripts(subscripts, &shapes)?;
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let result = ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, tree.as_ref()));
+        let result = ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree));
         let exec_us = started.elapsed().as_secs_f64() * 1.0e6;
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
@@ -1091,8 +953,8 @@ pub(crate) fn eager_einsum_subscripts(
     }
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = cached_plan_subscripts(subscripts, &shapes)?;
-    ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, tree.as_ref()))
+    let tree = plan_subscripts(subscripts, &shapes)?;
+    ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree))
 }
 
 /// Eager N-ary einsum on read-only tensor inputs.
@@ -1111,8 +973,8 @@ pub(crate) fn eager_einsum_read_subscripts(
     }
 
     let shapes: Vec<&[usize]> = inputs.iter().map(TensorRead::shape).collect();
-    let tree = cached_plan_subscripts(subscripts, &shapes)?;
-    ctx.with_exec_session(|exec| eager_einsum_exec_read(exec, inputs, tree.as_ref()))
+    let tree = plan_subscripts(subscripts, &shapes)?;
+    ctx.with_exec_session(|exec| eager_einsum_exec_read(exec, inputs, &tree))
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.
@@ -1144,9 +1006,9 @@ pub(crate) fn eager_einsum_owned_subscripts(
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = cached_plan_subscripts(subscripts, &shapes)?;
+    let tree = plan_subscripts(subscripts, &shapes)?;
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
-    ctx.with_exec_session(|exec| eager_einsum_exec_values(exec, values, tree.as_ref()))
+    ctx.with_exec_session(|exec| eager_einsum_exec_values(exec, values, &tree))
 }
 
 #[cfg(test)]

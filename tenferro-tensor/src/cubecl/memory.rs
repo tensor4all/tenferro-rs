@@ -25,7 +25,9 @@ pub fn upload_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Tenso
     match tensor {
         Tensor::F64(t) => upload_typed::<f64>(client, rt.device_ordinal(), t).map(Tensor::F64),
         Tensor::F32(t) => upload_typed::<f32>(client, rt.device_ordinal(), t).map(Tensor::F32),
+        Tensor::I32(t) => upload_typed::<i32>(client, rt.device_ordinal(), t).map(Tensor::I32),
         Tensor::I64(t) => upload_typed::<i64>(client, rt.device_ordinal(), t).map(Tensor::I64),
+        Tensor::Bool(t) => upload_bool(client, rt.device_ordinal(), t).map(Tensor::Bool),
         Tensor::C64(t) => {
             upload_typed::<Complex64>(client, rt.device_ordinal(), t).map(Tensor::C64)
         }
@@ -50,7 +52,9 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
     match tensor {
         Tensor::F64(t) => download_typed::<f64>(client, t).map(Tensor::F64),
         Tensor::F32(t) => download_typed::<f32>(client, t).map(Tensor::F32),
+        Tensor::I32(t) => download_typed::<i32>(client, t).map(Tensor::I32),
         Tensor::I64(t) => download_typed::<i64>(client, t).map(Tensor::I64),
+        Tensor::Bool(t) => download_bool(client, t).map(Tensor::Bool),
         Tensor::C64(t) => download_typed::<Complex64>(client, t).map(Tensor::C64),
         Tensor::C32(t) => download_typed::<Complex32>(client, t).map(Tensor::C32),
     }
@@ -143,11 +147,79 @@ fn download_typed<T: CubeElement + Clone>(
     Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
 }
 
+fn upload_bool(
+    client: &ComputeClient<CudaRuntime>,
+    device_ordinal: usize,
+    typed: &TypedTensor<bool>,
+) -> crate::Result<TypedTensor<bool>> {
+    let host_data = match &typed.buffer {
+        Buffer::Host(data) => data,
+        Buffer::Backend(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "upload",
+                message: "expected host buffer".into(),
+            });
+        }
+        Buffer::Cubecl(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "upload",
+                message: "tensor is already backed by CubeCL storage".into(),
+            });
+        }
+    };
+
+    let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
+    let handle = client.create_from_slice(&bytes);
+    Ok(TypedTensor {
+        buffer: Buffer::Cubecl(CubeclBuffer::new(handle, host_data.len())),
+        shape: typed.shape.clone(),
+        placement: Placement {
+            memory_kind: MemoryKind::Device,
+            resident_device: Some(ComputeDevice {
+                kind: "cuda".into(),
+                ordinal: device_ordinal,
+            }),
+        },
+    })
+}
+
+fn download_bool(
+    client: &ComputeClient<CudaRuntime>,
+    typed: &TypedTensor<bool>,
+) -> crate::Result<TypedTensor<bool>> {
+    let handle = match &typed.buffer {
+        Buffer::Host(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "download",
+                message: "expected CubeCL buffer".into(),
+            });
+        }
+        Buffer::Backend(_) => {
+            return Err(crate::Error::BackendFailure {
+                op: "download",
+                message: "expected CubeCL buffer".into(),
+            });
+        }
+        Buffer::Cubecl(buffer) => buffer.handle.clone(),
+    };
+
+    let bytes = client
+        .read_one(handle)
+        .map_err(|err| crate::Error::BackendFailure {
+            op: "download",
+            message: format!("{err:?}"),
+        })?;
+    let data = bytes.iter().map(|&byte| byte != 0).collect();
+    Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
+}
+
 fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl::server::Handle> {
     match tensor {
         Tensor::F64(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::F32(t) => cubecl_handle_from_buffer(&t.buffer),
+        Tensor::I32(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::I64(t) => cubecl_handle_from_buffer(&t.buffer),
+        Tensor::Bool(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::C64(t) => cubecl_handle_from_buffer(&t.buffer),
         Tensor::C32(t) => cubecl_handle_from_buffer(&t.buffer),
     }

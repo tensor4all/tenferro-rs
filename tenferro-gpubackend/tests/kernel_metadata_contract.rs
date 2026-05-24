@@ -39,7 +39,6 @@ fn logical_kernels_do_not_take_tensor_shapes_as_comptime_parameters() {
 }
 
 #[test]
-#[ignore = "tracked in https://github.com/tensor4all/tenferro-rs/issues/881"]
 fn reduction_kernels_do_not_hide_unbounded_axis_work_in_one_worker() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let launch_source = fs::read_to_string(root.join("reduce").join("launch.rs"))

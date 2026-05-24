@@ -54,7 +54,9 @@ pub mod traced_tensor;
 pub mod typed_tensor;
 
 #[cfg(feature = "autodiff")]
-pub use eager::{EagerRuntime, EagerTensor};
+pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
+#[cfg(feature = "autodiff")]
+pub use eager_backend::EagerBackend;
 pub use error::ContextId;
 pub use graph::{
     CpuGraphExecutorCacheStats, GraphCompiler, GraphCompilerCacheStats, GraphExecutor,

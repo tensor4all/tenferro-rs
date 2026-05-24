@@ -43,6 +43,14 @@ fn tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Tensor {
     Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
 }
 
+fn tensor_i32(shape: Vec<usize>, data: Vec<i32>) -> Tensor {
+    Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn tensor_bool(shape: Vec<usize>, data: Vec<bool>) -> Tensor {
+    Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
+}
+
 fn tensor_c32(shape: Vec<usize>, data: Vec<Complex32>) -> Tensor {
     Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
 }
@@ -79,6 +87,16 @@ fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {
         (Tensor::I64(_), Tensor::I64(_)) => {
             let actual = actual.as_slice::<i64>().unwrap();
             let expected = expected.as_slice::<i64>().unwrap();
+            assert_eq!(actual, expected);
+        }
+        (Tensor::I32(_), Tensor::I32(_)) => {
+            let actual = actual.as_slice::<i32>().unwrap();
+            let expected = expected.as_slice::<i32>().unwrap();
+            assert_eq!(actual, expected);
+        }
+        (Tensor::Bool(_), Tensor::Bool(_)) => {
+            let actual = actual.as_slice::<bool>().unwrap();
+            let expected = expected.as_slice::<bool>().unwrap();
             assert_eq!(actual, expected);
         }
         (Tensor::C32(_), Tensor::C32(_)) => {

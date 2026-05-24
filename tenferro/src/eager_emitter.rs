@@ -4,20 +4,35 @@ use std::sync::Arc;
 use computegraph::{GlobalValKey, LocalValId, OpEmitter, OpMode, ValRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_runtime::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 
-use crate::eager_exec::exec_op_on_tensors;
+use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 
-pub struct EagerEmitter<'a, B: TensorBackend> {
+pub struct EagerEmitter<'a, B: TensorBackend + 'static> {
     pub backend: &'a mut B,
+    pub extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     pub external_data: HashMap<GlobalValKey<StdTensorOp>, Arc<Tensor>>,
     pub results: Vec<Arc<Tensor>>,
 }
 
-impl<'a, B: TensorBackend> EagerEmitter<'a, B> {
+impl<'a, B: TensorBackend + 'static> EagerEmitter<'a, B> {
     pub fn new(backend: &'a mut B) -> Self {
         Self {
             backend,
+            extension_executor: None,
+            external_data: HashMap::new(),
+            results: Vec::new(),
+        }
+    }
+
+    pub fn with_extension_executor(
+        backend: &'a mut B,
+        extension_executor: &'a mut ExtensionExecutor<B>,
+    ) -> Self {
+        Self {
+            backend,
+            extension_executor: Some(extension_executor),
             external_data: HashMap::new(),
             results: Vec::new(),
         }
@@ -50,7 +65,7 @@ impl<'a, B: TensorBackend> EagerEmitter<'a, B> {
     }
 }
 
-impl<B: TensorBackend> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
+impl<B: TensorBackend + 'static> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
     fn add_op(
         &mut self,
         op: StdTensorOp,
@@ -69,8 +84,17 @@ impl<B: TensorBackend> OpEmitter<StdTensorOp> for EagerEmitter<'_, B> {
             .map(|tensor| tensor.as_ref())
             .collect();
 
-        let outputs = exec_op_on_tensors(&op, &concrete, self.backend)
-            .unwrap_or_else(|err| panic!("eager exec failed for {:?}: {}", op, err));
+        let outputs = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
+            exec_op_on_tensors_with_extension_executor(
+                &op,
+                &concrete,
+                self.backend,
+                Some(extension_executor),
+            )
+        } else {
+            exec_op_on_tensors(&op, &concrete, self.backend)
+        }
+        .unwrap_or_else(|err| panic!("eager exec failed for {:?}: {}", op, err));
 
         let base = self.results.len();
         for output in outputs {

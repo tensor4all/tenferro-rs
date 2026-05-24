@@ -6,7 +6,9 @@ use tenferro::error::{Error, Result};
 use tenferro::extension::apply_eager;
 use tenferro::EagerTensor;
 
-use crate::extension::{ensure_einsum_extension_rule_registered, EinsumExtensionOp};
+use crate::extension::{
+    ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
+};
 use crate::{parse_einsum_subscripts, EinsumSubscripts};
 
 /// Execute an einsum eagerly on [`EagerTensor`] values.
@@ -22,6 +24,12 @@ pub fn einsum_subscripts(
     subscripts: &EinsumSubscripts,
 ) -> Result<EagerTensor> {
     ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
+    if let Some(first) = inputs.first() {
+        first
+            .runtime()
+            .register_extension(register_runtime)
+            .map_err(|err| Error::Internal(err.to_string()))?;
+    }
 
     let op = Arc::new(EinsumExtensionOp::new(subscripts.clone()));
     let mut outputs = apply_eager(op, inputs)?;

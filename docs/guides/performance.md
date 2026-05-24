@@ -60,10 +60,11 @@ VECLIB_MAXIMUM_THREADS=4 \
 
 ## Reuse compiler and executor state
 
-Use one `GraphCompiler` per traced workload when you want to retain graph
-lowering and static einsum planning caches. Use one `GraphExecutor<B>` per
-backend execution context when you want to retain runtime einsum plans, backend
-analysis, and reusable CPU buffers.
+Use one `EagerRuntime` per eager backend context when you want to retain eager
+einsum plans across immediate operations. Use one `GraphCompiler` per traced
+workload when you want to retain graph lowering and static einsum planning
+caches. Use one `GraphExecutor<B>` per backend execution context when you want
+to retain runtime einsum plans, backend analysis, and reusable CPU buffers.
 
 ## Cache management
 
@@ -72,21 +73,31 @@ or cleared independently.
 
 ```rust
 use std::num::NonZeroUsize;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor};
+use tenferro::extension::ExtensionCacheLimits;
+use tenferro::{CpuBackend, EagerRuntime, GraphCompiler, GraphExecutor};
+
+let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
+eager.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
+assert_eq!(eager.cache_stats().extensions.entries, 0);
 
 let mut compiler = GraphCompiler::new();
 compiler.set_compile_cache_capacity(NonZeroUsize::new(128).unwrap());
-compiler.set_einsum_cache_capacity(NonZeroUsize::new(128).unwrap());
+compiler
+    .extension_caches_mut()
+    .set_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
 assert_eq!(compiler.cache_stats().compile.entries, 0);
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.set_einsum_cache_capacity(NonZeroUsize::new(128).unwrap());
+executor
+    .extension_executor_mut()
+    .set_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
 executor.set_gemm_analysis_cache_capacity(512);
-assert_eq!(executor.cache_stats().runtime_einsum_plans.entries, 0);
+assert_eq!(executor.cache_stats().extensions.entries, 0);
 assert_eq!(executor.cache_stats().backend.entries, 0);
 
 compiler.clear_caches();
 executor.clear_caches();
+eager.clear_caches();
 ```
 
 For CPU executors, `cpu_cache_stats()` also reports the CPU buffer pool.
@@ -123,7 +134,7 @@ For multi-input traced contractions, `GraphCompiler` plans concrete-shape
 einsums and `GraphExecutor` caches runtime plans for symbolic-shape einsums.
 Reuse both objects for repeated shapes and subscripts.
 
-Direct, typed, and eager einsum routes execute immediately and use bounded
-planning internally. If you need explicit long-lived planning and runtime cache
-ownership, use the traced route and reuse `GraphCompiler` and
-`GraphExecutor<B>`.
+Direct and typed einsum routes execute immediately without retaining a hidden
+plan cache. `EagerTensor` einsum uses the owning `EagerRuntime` extension cache.
+For traced workloads, reuse `GraphCompiler` and `GraphExecutor<B>` to retain
+compile-time and runtime extension plans.
