@@ -461,31 +461,7 @@ fn outer_product(
 ///
 /// Returns an error if the supplied tree, input values, or input shapes are
 /// internally inconsistent.
-///
-/// # Examples
-///
-/// ```
-/// use computegraph::fragment::FragmentBuilder;
-/// use computegraph::types::ValRef;
-/// use tenferro_einsum::{build_einsum_fragment, ContractionTree, Subscripts};
-/// use tenferro_ops::input_key::TensorInputKey;
-/// use tenferro_ops::std_tensor_op::StdTensorOp;
-///
-/// let subs = Subscripts::parse("ij,jk->ik").unwrap();
-/// let shapes: [&[usize]; 2] = [&[2, 3], &[3, 4]];
-/// let tree = ContractionTree::optimize(&subs, &shapes).unwrap();
-/// let mut builder = FragmentBuilder::<StdTensorOp>::new();
-/// let a = builder.add_input(TensorInputKey::User { id: 0 });
-/// let b = builder.add_input(TensorInputKey::User { id: 1 });
-/// let out = build_einsum_fragment(
-///     &mut builder,
-///     &tree,
-///     &[ValRef::Local(a), ValRef::Local(b)],
-///     &[vec![2, 3], vec![3, 4]],
-/// )
-/// .unwrap();
-/// ```
-pub fn build_einsum_fragment(
+pub(crate) fn build_einsum_fragment(
     builder: &mut FragmentBuilder<StdTensorOp>,
     tree: &ContractionTree,
     input_vals: &[ValRef<StdTensorOp>],

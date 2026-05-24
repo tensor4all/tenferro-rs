@@ -1,10 +1,8 @@
 use num_complex::Complex64;
 use tenferro::error::Error;
 use tenferro::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
-use tenferro::parse_einsum_subscripts;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ShapeExtent;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor, TensorBackend, TypedTensor,
@@ -30,13 +28,6 @@ fn scalar_value(tensor: &Tensor) -> f64 {
     match tensor {
         Tensor::F64(inner) => inner.host_data()[0],
         other => panic!("expected scalar f64 tensor, got {other:?}"),
-    }
-}
-
-fn f64_data(tensor: &Tensor) -> &[f64] {
-    match tensor {
-        Tensor::F64(inner) => inner.host_data(),
-        other => panic!("expected f64 tensor, got {other:?}"),
     }
 }
 
@@ -483,24 +474,6 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         (ExecOp::ReduceProd { axes: vec![0] }, 1, "reduce_prod", 29.0),
         (ExecOp::ReduceMax { axes: vec![0] }, 1, "reduce_max", 30.0),
         (ExecOp::ReduceMin { axes: vec![0] }, 1, "reduce_min", 31.0),
-        (ExecOp::Cholesky, 1, "cholesky", 40.0),
-        (
-            ExecOp::TriangularSolve {
-                left_side: true,
-                lower: true,
-                transpose_a: false,
-                unit_diagonal: false,
-            },
-            2,
-            "triangular_solve",
-            40.5,
-        ),
-        (
-            ExecOp::FullPivLuSolve { transpose_a: false },
-            2,
-            "full_piv_lu_solve",
-            41.625,
-        ),
     ];
 
     for (op, n_inputs, expected_call, expected_value) in cases {
@@ -515,27 +488,6 @@ fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {
         assert_eq!(outputs.len(), 1);
         assert_eq!(scalar_value(&outputs[0]), expected_value);
     }
-}
-
-#[test]
-fn eval_exec_ir_executes_nary_einsum_via_nested_program() {
-    let mut backend = CpuBackend::new();
-    let program = single_instruction_program(
-        ExecOp::NaryEinsum {
-            subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
-        },
-        2,
-    );
-    let inputs = vec![
-        f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-        f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-    ];
-
-    let outputs = eval_exec_ir(&mut backend, &program, inputs).unwrap();
-
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0].shape(), &[2, 2]);
-    assert_eq!(f64_data(&outputs[0]), &[22.0, 28.0, 49.0, 64.0]);
 }
 
 #[test]
@@ -688,89 +640,6 @@ fn eval_exec_ir_reports_missing_slots_as_runtime_errors() {
         err,
         Error::TensorRuntime(tenferro_tensor::Error::MissingValue { slot: 1 })
     ));
-}
-
-fn multi_output_program(op: ExecOp, n_inputs: usize, n_outputs: usize) -> ExecProgram {
-    let output_slots: Vec<usize> = (n_inputs..n_inputs + n_outputs).collect();
-    ExecProgram {
-        instructions: vec![ExecInstruction {
-            op,
-            input_slots: (0..n_inputs).collect(),
-            output_slots: output_slots.clone(),
-            dtype: DType::F64,
-            output_shapes: vec![Vec::new(); n_outputs],
-            output_extents: empty_extents(n_outputs),
-            last_use: vec![false; n_inputs],
-        }],
-        input_slots: (0..n_inputs).collect(),
-        output_slots,
-        n_slots: n_inputs + n_outputs,
-    }
-}
-
-#[test]
-fn eval_exec_ir_dispatches_multi_output_linalg_ops() {
-    let mut backend = FakeTensorBackend::default();
-
-    // LU: 1 input, 4 outputs
-    let program = multi_output_program(ExecOp::Lu, 1, 4);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["lu"]);
-    assert_eq!(outputs.len(), 4);
-    assert_eq!(scalar_value(&outputs[0]), 40.75);
-    assert_eq!(scalar_value(&outputs[1]), 41.0);
-    assert_eq!(scalar_value(&outputs[2]), 41.25);
-    assert_eq!(scalar_value(&outputs[3]), 41.5);
-
-    backend.calls.clear();
-
-    // Full-pivot LU: 1 input, 5 outputs
-    let program = multi_output_program(ExecOp::FullPivLu, 1, 5);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["full_piv_lu"]);
-    assert_eq!(outputs.len(), 5);
-    assert_eq!(scalar_value(&outputs[0]), 41.75);
-    assert_eq!(scalar_value(&outputs[4]), 42.75);
-
-    backend.calls.clear();
-
-    // SVD: 1 input, 2 outputs (fake returns 2)
-    let program = multi_output_program(ExecOp::Svd, 1, 2);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["svd"]);
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 42.0);
-    assert_eq!(scalar_value(&outputs[1]), 42.5);
-
-    backend.calls.clear();
-
-    // QR: 1 input, 2 outputs
-    let program = multi_output_program(ExecOp::Qr, 1, 2);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["qr"]);
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 43.0);
-    assert_eq!(scalar_value(&outputs[1]), 43.5);
-
-    backend.calls.clear();
-
-    // Eigh: 1 input, 2 outputs
-    let program = multi_output_program(ExecOp::Eigh, 1, 2);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["eigh"]);
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_value(&outputs[0]), 44.0);
-    assert_eq!(scalar_value(&outputs[1]), 44.5);
-
-    backend.calls.clear();
-
-    // Eig: 1 input, 2 outputs
-    let program = multi_output_program(ExecOp::Eig, 1, 2);
-    let outputs = eval_exec_ir(&mut backend, &program, vec![scalar_tensor(1.0)]).unwrap();
-    assert_eq!(backend.calls, vec!["eig"]);
-    assert_eq!(outputs.len(), 2);
-    assert_eq!(scalar_c64_value(&outputs[0]), Complex64::new(45.0, 0.5));
-    assert_eq!(scalar_c64_value(&outputs[1]), Complex64::new(45.5, -0.5));
 }
 
 #[test]

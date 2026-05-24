@@ -3,11 +3,9 @@
 //! Called during `StdTensorOp -> ExecProgram` lowering to populate
 //! `ExecInstruction::output_shapes` and `ExecInstruction::dtype`.
 
-use std::collections::HashMap;
-
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_ops::std_tensor_op::{EinsumSubscripts, StdTensorOp};
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
@@ -98,11 +96,6 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
     match op {
         StdTensorOp::Constant { dtype, .. } => *dtype,
         StdTensorOp::Convert { to, .. } => *to,
-        StdTensorOp::Eig { input_dtype, .. } => match input_dtype {
-            DType::F32 | DType::C32 => DType::C32,
-            DType::F64 | DType::C64 => DType::C64,
-            DType::I64 => DType::C64,
-        },
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
         // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
@@ -112,10 +105,6 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::Select
         | StdTensorOp::Clamp
         | StdTensorOp::DotGeneral { .. }
-        | StdTensorOp::NaryEinsum { .. }
-        | StdTensorOp::TriangularSolve { .. }
-        | StdTensorOp::Solve { .. }
-        | StdTensorOp::FullPivLuSolve { .. }
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::PadToMatch { .. }
         | StdTensorOp::DynamicTruncate { .. }
@@ -155,14 +144,7 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         | StdTensorOp::DynamicSlice { .. }
         | StdTensorOp::Slice(_)
         | StdTensorOp::Pad(_)
-        | StdTensorOp::Reverse { .. }
-        | StdTensorOp::Cholesky { .. }
-        | StdTensorOp::Lu { .. }
-        | StdTensorOp::FullPivLu { .. }
-        | StdTensorOp::Svd { .. }
-        | StdTensorOp::Qr { .. }
-        | StdTensorOp::Eigh { .. }
-        | StdTensorOp::ValidateNonsingular { .. } => input_dtypes[0],
+        | StdTensorOp::Reverse { .. } => input_dtypes[0],
         StdTensorOp::ShapeOf { .. } => DType::F64,
     }
 }
@@ -206,9 +188,7 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
         | StdTensorOp::Tril { .. }
         | StdTensorOp::Triu { .. }
         | StdTensorOp::Reverse { .. }
-        | StdTensorOp::Scatter(_)
-        | StdTensorOp::Cholesky { .. }
-        | StdTensorOp::ValidateNonsingular { .. } => {
+        | StdTensorOp::Scatter(_) => {
             vec![require_input(op, input_shapes, 0).to_vec()]
         }
         StdTensorOp::Transpose { perm } => {
@@ -273,9 +253,6 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             require_input(op, input_shapes, 1),
             config,
         )],
-        StdTensorOp::NaryEinsum { subscripts } => {
-            vec![einsum_output_shape(subscripts, input_shapes)]
-        }
         StdTensorOp::Concatenate { axis, .. } => vec![concatenate_shape(input_shapes, *axis)],
         StdTensorOp::ShapeOf { .. } => vec![Vec::new()],
         StdTensorOp::DynamicTruncate { axis } => {
@@ -292,18 +269,6 @@ pub fn infer_output_shapes(op: &StdTensorOp, input_shapes: &[&[DimExpr]]) -> Vec
             require_input(op, input_shapes, 1),
             *axis,
         )],
-        StdTensorOp::Lu { .. } => lu_shapes(require_input(op, input_shapes, 0)),
-        StdTensorOp::FullPivLu { .. } => full_piv_lu_shapes(require_input(op, input_shapes, 0)),
-        StdTensorOp::Svd { .. } => svd_shapes(require_input(op, input_shapes, 0)),
-        StdTensorOp::Qr { .. } => qr_shapes(require_input(op, input_shapes, 0)),
-        StdTensorOp::Eigh { .. } | StdTensorOp::Eig { .. } => {
-            eig_like_shapes(require_input(op, input_shapes, 0))
-        }
-        StdTensorOp::TriangularSolve { .. }
-        | StdTensorOp::Solve { .. }
-        | StdTensorOp::FullPivLuSolve { .. } => {
-            vec![require_input(op, input_shapes, 1).to_vec()]
-        }
         StdTensorOp::Extension(ext) => {
             let metas = infer_extension_output_meta(ext.as_ref(), &[], input_shapes);
             metas.into_iter().map(|(_dtype, shape)| shape).collect()
@@ -779,50 +744,6 @@ fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Vec<DimExpr> {
     output_shape
 }
 
-fn einsum_output_shape(subscripts: &EinsumSubscripts, input_shapes: &[&[DimExpr]]) -> Vec<DimExpr> {
-    assert_eq!(
-        subscripts.inputs.len(),
-        input_shapes.len(),
-        "einsum subscripts expect {} inputs, got {}",
-        subscripts.inputs.len(),
-        input_shapes.len()
-    );
-
-    let mut label_dims: HashMap<u32, DimExpr> = HashMap::new();
-    for (labels, shape) in subscripts.inputs.iter().zip(input_shapes.iter()) {
-        assert_eq!(
-            labels.len(),
-            shape.len(),
-            "einsum input rank mismatch: labels={}, shape={}",
-            labels.len(),
-            shape.len()
-        );
-        for (&label, dim) in labels.iter().zip(shape.iter()) {
-            if let Some(existing) = label_dims.get(&label) {
-                if let (DimExpr::Const(lhs), DimExpr::Const(rhs)) = (existing, dim) {
-                    assert_eq!(
-                        lhs, rhs,
-                        "einsum label {label} has inconsistent concrete sizes {lhs} vs {rhs}"
-                    );
-                }
-            } else {
-                label_dims.insert(label, dim.clone());
-            }
-        }
-    }
-
-    subscripts
-        .output
-        .iter()
-        .map(|label| {
-            label_dims
-                .get(label)
-                .cloned()
-                .unwrap_or_else(|| panic!("einsum output label {label} missing from inputs"))
-        })
-        .collect()
-}
-
 fn pad_to_match_shape(
     input_shape: &[DimExpr],
     reference_shape: &[DimExpr],
@@ -839,71 +760,6 @@ fn pad_to_match_shape(
     let mut output_shape = input_shape.to_vec();
     output_shape[axis] = dim_max(input_shape[axis].clone(), reference_shape[axis].clone());
     output_shape
-}
-
-fn matrix_parts(input_shape: &[DimExpr]) -> (&DimExpr, &DimExpr, &[DimExpr]) {
-    assert!(
-        input_shape.len() >= 2,
-        "linalg op expects rank >= 2, got {}",
-        input_shape.len()
-    );
-    (&input_shape[0], &input_shape[1], &input_shape[2..])
-}
-
-fn svd_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
-    let (m, n, batch) = matrix_parts(input_shape);
-    let k = dim_min(m.clone(), n.clone());
-    let mut u_shape = vec![m.clone(), k.clone()];
-    u_shape.extend_from_slice(batch);
-    let mut s_shape = vec![k.clone()];
-    s_shape.extend_from_slice(batch);
-    let mut vt_shape = vec![k, n.clone()];
-    vt_shape.extend_from_slice(batch);
-    vec![u_shape, s_shape, vt_shape]
-}
-
-fn qr_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
-    let (m, n, batch) = matrix_parts(input_shape);
-    let k = dim_min(m.clone(), n.clone());
-    let mut q_shape = vec![m.clone(), k.clone()];
-    q_shape.extend_from_slice(batch);
-    let mut r_shape = vec![k, n.clone()];
-    r_shape.extend_from_slice(batch);
-    vec![q_shape, r_shape]
-}
-
-fn lu_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
-    let (m, n, batch) = matrix_parts(input_shape);
-    let k = dim_min(m.clone(), n.clone());
-    let mut p_shape = vec![m.clone(), m.clone()];
-    p_shape.extend_from_slice(batch);
-    let mut l_shape = vec![m.clone(), k.clone()];
-    l_shape.extend_from_slice(batch);
-    let mut u_shape = vec![k, n.clone()];
-    u_shape.extend_from_slice(batch);
-    vec![p_shape, l_shape, u_shape, batch.to_vec()]
-}
-
-fn full_piv_lu_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
-    let (n, _, batch) = matrix_parts(input_shape);
-    let mut p_shape = vec![n.clone(), n.clone()];
-    p_shape.extend_from_slice(batch);
-    let mut l_shape = vec![n.clone(), n.clone()];
-    l_shape.extend_from_slice(batch);
-    let mut u_shape = vec![n.clone(), n.clone()];
-    u_shape.extend_from_slice(batch);
-    let mut q_shape = vec![n.clone(), n.clone()];
-    q_shape.extend_from_slice(batch);
-    vec![p_shape, l_shape, u_shape, q_shape, batch.to_vec()]
-}
-
-fn eig_like_shapes(input_shape: &[DimExpr]) -> Vec<Vec<DimExpr>> {
-    let (n, _, batch) = matrix_parts(input_shape);
-    let mut values_shape = vec![n.clone()];
-    values_shape.extend_from_slice(batch);
-    let mut vectors_shape = vec![n.clone(), n.clone()];
-    vectors_shape.extend_from_slice(batch);
-    vec![values_shape, vectors_shape]
 }
 
 fn dim_add(lhs: DimExpr, rhs: DimExpr) -> DimExpr {

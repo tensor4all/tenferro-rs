@@ -74,7 +74,7 @@ pub mod types;
 pub mod validate;
 
 #[cfg(all(
-    feature = "cubecl",
+    feature = "cuda",
     any(feature = "cpu-faer", feature = "cpu-blas"),
     not(all(feature = "cpu-faer", feature = "cpu-blas"))
 ))]

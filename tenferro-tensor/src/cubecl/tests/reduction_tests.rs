@@ -1,4 +1,4 @@
-// Run with: cargo test --features cubecl -- --ignored
+// Run with: cargo test --features cuda -- --ignored
 use crate::TensorBackend;
 
 use super::{

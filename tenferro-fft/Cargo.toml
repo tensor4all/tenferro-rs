@@ -1,20 +1,27 @@
 [package]
 name = "tenferro-fft"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
-publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
 description = "FFT extension operations for tenferro."
 
-[workspace]
+[features]
+default = ["autodiff", "cpu-faer"]
+autodiff = ["chainrules-core", "tenferro/autodiff", "tenferro-ops/autodiff"]
+cpu-faer = ["tenferro/cpu-faer", "tenferro-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro/cpu-blas", "tenferro-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
+gpu = ["tenferro/gpu", "tenferro-ops/gpu", "tenferro-tensor/gpu"]
+cuda = ["gpu", "tenferro/cuda", "tenferro-ops/cuda", "tenferro-tensor/cuda"]
+rocm = ["gpu", "tenferro/rocm", "tenferro-ops/rocm", "tenferro-tensor/rocm"]
 
 [dependencies]
-tenferro = { path = "../tenferro" }
-tenferro-tensor = { path = "../tenferro-tensor" }
-tenferro-ops = { path = "../tenferro-ops" }
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "2d7662140d92f0dd73b2402aefc2272feafc9270", package = "chainrules" }
-computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc" }
-num-complex = "0.4"
-num-traits = "0.2"
+tenferro = { path = "../tenferro", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-ops = { path = "../tenferro-ops", default-features = false }
+chainrules-core = { workspace = true, optional = true }
+computegraph.workspace = true
+num-complex.workspace = true
+num-traits.workspace = true
 rustfft = "6"

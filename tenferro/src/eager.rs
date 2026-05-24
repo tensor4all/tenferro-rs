@@ -11,7 +11,7 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 use tenferro_tensor::cubecl::CubeclBackend;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 use tidu::{
@@ -188,7 +188,7 @@ impl EagerRuntime {
     /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend;
     /// ```
-    #[cfg(feature = "cubecl")]
+    #[cfg(feature = "cuda")]
     pub fn with_cuda_backend(backend: CubeclBackend) -> Arc<Self> {
         Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
     }

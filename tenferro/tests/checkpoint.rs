@@ -1,5 +1,7 @@
+#![cfg(feature = "autodiff")]
+
 mod support;
-use support::{einsum, RunTraced};
+use support::RunTraced;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-6;
@@ -250,7 +252,7 @@ fn grad_both_independently_checkpointed_matches_fd() {
 }
 
 #[test]
-fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
+fn grad_mul_both_independently_checkpointed_wrt_rhs() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let mut compiler = GraphCompiler::new();
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -264,19 +266,19 @@ fn grad_einsum_both_independently_checkpointed_wrt_rhs() {
     x2.checkpoint(&mut compiler, &mut executor).unwrap();
     y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
-    let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
+    let z = &x2 * &y2;
 
     let grad_y = z.grad(&y).unwrap();
     let grad_y = grad_y;
     let grad_y_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(
         (grad_y_value - 24.0).abs() < TOL,
-        "d/dy (x^2 * y^2) at x=2, y=3 via einsum: expected 24.0, got {grad_y_value}"
+        "d/dy (x^2 * y^2) at x=2, y=3: expected 24.0, got {grad_y_value}"
     );
 }
 
 #[test]
-fn grad_einsum_both_independently_checkpointed_wrt_lhs() {
+fn grad_mul_both_independently_checkpointed_wrt_lhs() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let mut compiler = GraphCompiler::new();
     let mut executor = GraphExecutor::new(CpuBackend::new());
@@ -290,19 +292,19 @@ fn grad_einsum_both_independently_checkpointed_wrt_lhs() {
     x2.checkpoint(&mut compiler, &mut executor).unwrap();
     y2.checkpoint(&mut compiler, &mut executor).unwrap();
 
-    let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
+    let z = &x2 * &y2;
 
     let grad_x = z.grad(&x).unwrap();
     let grad_x = grad_x;
     let grad_x_value = get_f64_scalar(&grad_x.run_with(&mut engine).unwrap());
     assert!(
         (grad_x_value - 36.0).abs() < TOL,
-        "d/dx (x^2 * y^2) at x=2, y=3 via einsum: expected 36.0, got {grad_x_value}"
+        "d/dx (x^2 * y^2) at x=2, y=3: expected 36.0, got {grad_x_value}"
     );
 }
 
 #[test]
-fn grad_einsum_both_independently_checkpointed_matches_fd() {
+fn grad_mul_both_independently_checkpointed_matches_fd() {
     let x_val = 2.0_f64;
     let y_val = 3.0_f64;
 
@@ -318,7 +320,7 @@ fn grad_einsum_both_independently_checkpointed_matches_fd() {
     let mut y2 = &y * &y;
     x2.checkpoint(&mut compiler, &mut executor).unwrap();
     y2.checkpoint(&mut compiler, &mut executor).unwrap();
-    let z = einsum(&mut engine, &[&x2, &y2], ",->").unwrap();
+    let z = &x2 * &y2;
     let grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(&grad_y.run_with(&mut engine).unwrap());
     assert!(

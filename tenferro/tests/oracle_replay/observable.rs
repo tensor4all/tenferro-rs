@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
-use tenferro::traced_tensor::einsum;
-use tenferro::{GraphCompiler, TracedTensor};
+use tenferro::{DotGeneralConfig, GraphCompiler, TracedTensor};
 
 use crate::dispatch::NamedTensor;
 
@@ -10,7 +9,7 @@ pub type ObservableResult = Result<Vec<NamedTensor>, String>;
 pub fn apply_observable(
     kind: &str,
     outputs: Vec<NamedTensor>,
-    compiler: &mut GraphCompiler,
+    _compiler: &mut GraphCompiler,
 ) -> ObservableResult {
     let outputs = output_map(outputs);
     match kind {
@@ -28,8 +27,7 @@ pub fn apply_observable(
             let u = required(&outputs, "u")?;
             let s = required(&outputs, "s")?;
             let vh = required(&outputs, "vh")?;
-            let subscripts = svd_uvh_subscripts(u.rank.saturating_sub(2))?;
-            let product = einsum(compiler, &[u, vh], &subscripts).map_err(|err| err.to_string())?;
+            let product = batched_matmul_preserve_batch_prefix(u, vh)?;
             Ok(vec![named("s", s.clone()), named("uvh", product)])
         }
         "eigh_values_vectors_abs" => Ok(vec![
@@ -67,18 +65,37 @@ fn named(name: &str, tensor: TracedTensor) -> NamedTensor {
     }
 }
 
-fn svd_uvh_subscripts(batch_rank: usize) -> Result<String, String> {
-    const BATCH_AXES: &[u8] = b"abcdefghlmnopqrstuvwxyzABCDEFGHLMNOPQRSTUVWXYZ";
-    if batch_rank > BATCH_AXES.len() {
+fn batched_matmul_preserve_batch_prefix(
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+) -> Result<TracedTensor, String> {
+    if lhs.rank < 2 || rhs.rank < 2 {
+        return Err("svd_uvh_product expects rank >= 2 inputs".to_string());
+    }
+    let batch_rank = lhs.rank - 2;
+    if rhs.rank != lhs.rank {
         return Err(format!(
-            "svd_uvh_product batch rank {batch_rank} exceeds supported axis budget"
+            "svd_uvh_product expects matching ranks, got lhs={} rhs={}",
+            lhs.rank, rhs.rank
         ));
     }
 
-    let batch: String = BATCH_AXES
-        .iter()
-        .take(batch_rank)
-        .map(|axis| char::from(*axis))
-        .collect();
-    Ok(format!("{batch}ij,{batch}jk->{batch}ik"))
+    let product = lhs.dot_general(
+        rhs,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![batch_rank + 1],
+            rhs_contracting_dims: vec![batch_rank],
+            lhs_batch_dims: (0..batch_rank).collect(),
+            rhs_batch_dims: (0..batch_rank).collect(),
+        },
+    );
+
+    if batch_rank == 0 {
+        return Ok(product);
+    }
+
+    let mut perm: Vec<usize> = (2..2 + batch_rank).collect();
+    perm.push(0);
+    perm.push(1);
+    Ok(product.transpose(&perm))
 }

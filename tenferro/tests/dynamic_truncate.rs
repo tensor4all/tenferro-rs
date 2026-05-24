@@ -2,7 +2,9 @@ mod support;
 use support::RunTraced;
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
+#[cfg(feature = "autodiff")]
 const TOL: f64 = 1.0e-5;
+#[cfg(feature = "autodiff")]
 const FD_H: f64 = 1.0e-5;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -99,6 +101,7 @@ fn pad_to_match_no_op_when_same_size() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn dynamic_truncate_vjp_correct() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
@@ -116,6 +119,7 @@ fn dynamic_truncate_vjp_correct() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn dynamic_truncate_jvp_correct() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(
@@ -137,6 +141,7 @@ fn dynamic_truncate_jvp_correct() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn dynamic_truncate_hvp_correct() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
 
@@ -166,6 +171,7 @@ fn dynamic_truncate_hvp_correct() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn dynamic_truncate_hvp_finite_diff() {
     let x_data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let v_data = vec![0.1, -0.2, 0.3, 0.4, -0.5];
@@ -217,6 +223,7 @@ fn dynamic_truncate_hvp_finite_diff() {
 // ═══════════════════════════════════════════
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn pad_to_match_vjp_correct() {
     // f(x) = sum(pad_to_match(x, ref, axis=0)^2)
     // x = [1,2,3], ref has size 5 → padded = [1,2,3,0,0]
@@ -234,6 +241,7 @@ fn pad_to_match_vjp_correct() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn pad_to_match_jvp_correct() {
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0]));
@@ -250,6 +258,7 @@ fn pad_to_match_jvp_correct() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn pad_to_match_hvp_correct() {
     // f(x) = sum(pad(x,ref,0)^2) → Hessian = diag(2,2,2)
     // HVP with v=[1,1,1] → [2,2,2]

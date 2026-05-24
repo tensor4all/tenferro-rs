@@ -23,19 +23,25 @@ use std::sync::Arc;
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
+#[cfg(feature = "autodiff")]
 use computegraph::GraphOp;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
+#[cfg(feature = "autodiff")]
 use tenferro_tensor::Tensor;
 
 use crate::checkpoint::CheckpointNode;
+#[cfg(feature = "autodiff")]
 use crate::eager::{record_eager_outputs, EagerTensor};
+#[cfg(feature = "autodiff")]
 use crate::eager_exec::exec_op_on_tensors;
+#[cfg(feature = "autodiff")]
 use crate::error::{Error, Result};
 use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
+#[cfg(feature = "autodiff")]
 pub use tenferro_ops::ext_op::{
     is_extension_rule_registered, lookup_extension_rule, register_extension_chain_rule,
     register_extension_rule, AdValue, ExtensionAdRule as _ExtensionAdRuleReexport,
@@ -46,10 +52,20 @@ pub use tenferro_ops::ext_op::{
 // Re-export under a canonical name (the `_ExtensionOpReexport` alias above
 // exists only so the macro-generated doc-test type bounds can find the
 // trait; downstream callers should use this name).
+#[cfg(feature = "autodiff")]
 pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
+#[cfg(feature = "autodiff")]
 pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
 pub use tenferro_ops::ExtensionFamilyId;
+
+pub use tenferro_runtime::extension_cache::{
+    ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
+};
+pub use tenferro_runtime::extension_runtime::{
+    ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
+    ExtensionRuntimeRegistryError,
+};
 
 /// Apply an extension op in the traced graph.
 ///
@@ -217,6 +233,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
 /// usual eager execution path, then records the same `StdTensorOp::Extension`
 /// node used by traced graphs. Eager backward therefore uses registered
 /// [`ExtensionAdRuleTrait`] rules through the same AD source of truth.
+#[cfg(feature = "autodiff")]
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let Some(first) = inputs.first() else {
         return Err(Error::Internal(

@@ -10,7 +10,7 @@ use crate::exec::{
     initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
-use crate::graph::cache::{NaryEinsumCache, DEFAULT_EINSUM_CACHE_CAPACITY};
+use tenferro_runtime::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
 };
@@ -145,23 +145,18 @@ pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
 /// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
 ///     eval_exec_segmented::<CpuBackend>;
 /// ```
-pub fn eval_exec_segmented<B: TensorBackend>(
+pub fn eval_exec_segmented<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
 ) -> Result<Vec<Tensor>> {
-    let mut cache = NaryEinsumCache::new(
-        std::num::NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
-            .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
-    );
-    eval_exec_segmented_with_cache(backend, program, inputs, &mut cache)
+    eval_exec_segmented_with_cache(backend, program, inputs)
 }
 
-pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
+pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    cache: &mut NaryEinsumCache,
 ) -> Result<Vec<Tensor>> {
     let mut slots = Vec::new();
     let mut backend_cache = B::RuntimeCache::default();
@@ -169,19 +164,19 @@ pub(crate) fn eval_exec_segmented_with_cache<B: TensorBackend>(
         backend,
         program,
         inputs,
-        cache,
         &mut slots,
         &mut backend_cache,
+        None,
     )
 }
 
-pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend>(
+pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    cache: &mut NaryEinsumCache,
     slots: &mut Vec<Option<Tensor>>,
     backend_cache: &mut B::RuntimeCache,
+    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
     let has_fused_segment = has_multi_instruction_fused_segment(program);
     if !has_fused_segment && can_run_in_single_exec_session(program) {
@@ -196,7 +191,11 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend>(
 
     if !has_fused_segment {
         return eval_exec_ir_unsegmented_with_cache_and_workspace(
-            backend, program, inputs, cache, slots,
+            backend,
+            program,
+            inputs,
+            slots,
+            extension_executor,
         );
     }
 
@@ -254,8 +253,8 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend>(
                         slots,
                         inst,
                         DispatchMode::Segmented,
-                        cache,
                         Some(inst_idx),
+                        extension_executor.as_deref_mut(),
                     )?;
                     reclaim_last_use_inputs_backend(slots, inst, backend);
                     inst_idx += 1;

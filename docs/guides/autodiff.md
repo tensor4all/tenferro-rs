@@ -15,8 +15,8 @@ For eager forward execution and scalar-loss accumulation semantics, see
 - Higher-order AD via composition, such as `jvp(grad(f))` for HVPs
 
 AD rules are extensible outside the core crate. Extension crates can register
-JVP/VJP rules for their operations; [FFT (extension)](tenferro-fft.md) is the
-current example.
+JVP/VJP rules for their operations; [FFT (extension)](tenferro-fft.md) and
+`tenferro-einsum` are standard extensions built on that mechanism.
 
 ## Reverse-mode gradient with `grad`
 
@@ -39,7 +39,6 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 ## Gradient through einsum
 
 ```rust
-use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -52,12 +51,13 @@ let b = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let loss = y.reduce_sum(&[0, 1]);
 let grad_a = loss.grad(&a).unwrap();
 let program = compiler.compile(&grad_a).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 3]);
 ```
@@ -65,7 +65,6 @@ assert_eq!(result.shape(), &[2, 3]);
 ## Vector-Jacobian product with `vjp`
 
 ```rust
-use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -82,11 +81,12 @@ let cotangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let ct_a = y.vjp(&a, &cotangent);
 let program = compiler.compile(&ct_a).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 3]);
 ```
@@ -94,7 +94,6 @@ assert_eq!(result.shape(), &[2, 3]);
 ## Jacobian-vector product with `jvp`
 
 ```rust
-use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -111,11 +110,12 @@ let tangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let dy = y.jvp(&a, &tangent);
 let program = compiler.compile(&dy).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```

@@ -7,22 +7,20 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::GlobalValKey;
 use lru::LruCache;
-use tenferro_einsum::ContractionTree;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{DType, Tensor};
 
 use super::cache::{
-    compile_cache_stats, compute_cache_key, einsum_parse_cache_stats, nary_einsum_cache_stats,
-    CacheKey, EinsumCacheKey, EinsumParseCache, GraphCompilerCacheStats, NaryEinsumCache,
-    ParsedEinsum, DEFAULT_COMPILE_CACHE_CAPACITY, DEFAULT_EINSUM_CACHE_CAPACITY,
+    compile_cache_stats, compute_cache_key, CacheKey, GraphCompilerCacheStats,
+    DEFAULT_COMPILE_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
 use crate::compiler::compile_std_to_exec;
-use crate::einsum_subscripts::parse_einsum_subscripts;
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::traced::{try_concrete_shape, TracedTensor};
+use tenferro_runtime::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 
 #[derive(Clone)]
 struct InputDescriptor {
@@ -50,8 +48,7 @@ struct InputDescriptor {
 /// ```
 pub struct GraphCompiler {
     compile_cache: LruCache<CacheKey, ExecProgram>,
-    static_einsum_cache: NaryEinsumCache,
-    einsum_parse_cache: EinsumParseCache,
+    extension_cache: ExtensionCacheStore,
 }
 
 impl GraphCompiler {
@@ -70,40 +67,7 @@ impl GraphCompiler {
             compile_cache: LruCache::new(
                 NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
             ),
-            static_einsum_cache: LruCache::new(
-                NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
-                    .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
-            ),
-            einsum_parse_cache: LruCache::new(
-                NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
-                    .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
-            ),
-        }
-    }
-
-    /// Create a compiler with an explicit static einsum cache capacity.
-    ///
-    /// The capacity applies to both the static contraction-plan cache and the
-    /// parsed-subscript cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::with_einsum_cache_capacity(
-    ///     NonZeroUsize::new(16).unwrap(),
-    /// );
-    /// assert_eq!(compiler.einsum_cache_capacity().get(), 16);
-    /// ```
-    pub fn with_einsum_cache_capacity(capacity: NonZeroUsize) -> Self {
-        Self {
-            compile_cache: LruCache::new(
-                NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
-            ),
-            static_einsum_cache: LruCache::new(capacity),
-            einsum_parse_cache: LruCache::new(capacity),
+            extension_cache: ExtensionCacheStore::new(),
         }
     }
 
@@ -209,53 +173,6 @@ impl GraphCompiler {
         self.compile_cache.len()
     }
 
-    /// Number of cached static einsum contraction trees currently retained.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::new();
-    /// assert_eq!(compiler.einsum_cache_len(), 0);
-    /// ```
-    pub fn einsum_cache_len(&self) -> usize {
-        self.static_einsum_cache.len()
-    }
-
-    /// Current capacity of the static einsum caches.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::new();
-    /// assert!(compiler.einsum_cache_capacity().get() > 0);
-    /// ```
-    pub fn einsum_cache_capacity(&self) -> NonZeroUsize {
-        self.static_einsum_cache.cap()
-    }
-
-    /// Resize the static einsum contraction-plan and parse caches.
-    ///
-    /// Shrinking below the current length evicts least-recently-used entries.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// compiler.set_einsum_cache_capacity(NonZeroUsize::new(8).unwrap());
-    /// assert_eq!(compiler.einsum_cache_capacity().get(), 8);
-    /// ```
-    pub fn set_einsum_cache_capacity(&mut self, capacity: NonZeroUsize) {
-        self.static_einsum_cache.resize(capacity);
-        self.einsum_parse_cache.resize(capacity);
-    }
-
     /// Current compiled-program cache capacity.
     ///
     /// # Examples
@@ -301,7 +218,7 @@ impl GraphCompiler {
         self.compile_cache.clear();
     }
 
-    /// Clear parsed and planned einsum caches owned by the compiler.
+    /// Clear generic extension compile-time cache entries.
     ///
     /// # Examples
     ///
@@ -309,12 +226,11 @@ impl GraphCompiler {
     /// use tenferro::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
-    /// compiler.clear_einsum_caches();
-    /// assert_eq!(compiler.cache_stats().static_einsum_plans.entries, 0);
+    /// compiler.clear_extension_caches();
+    /// assert_eq!(compiler.cache_stats().extensions.entries, 0);
     /// ```
-    pub fn clear_einsum_caches(&mut self) {
-        self.static_einsum_cache.clear();
-        self.einsum_parse_cache.clear();
+    pub fn clear_extension_caches(&mut self) {
+        self.extension_cache.clear();
     }
 
     /// Clear every cache owned by the compiler.
@@ -330,7 +246,7 @@ impl GraphCompiler {
     /// ```
     pub fn clear_caches(&mut self) {
         self.clear_compile_cache();
-        self.clear_einsum_caches();
+        self.clear_extension_caches();
     }
 
     /// Return cache-entry and retained-byte stats.
@@ -347,35 +263,36 @@ impl GraphCompiler {
     pub fn cache_stats(&self) -> GraphCompilerCacheStats {
         GraphCompilerCacheStats {
             compile: compile_cache_stats(&self.compile_cache),
-            static_einsum_plans: nary_einsum_cache_stats(&self.static_einsum_cache),
-            einsum_parse: einsum_parse_cache_stats(&self.einsum_parse_cache),
+            extensions: self.extension_cache.stats(ExtensionCacheSelector::All),
         }
     }
 
-    pub(crate) fn cached_subscripts(&mut self, subscripts: &str) -> Result<Arc<ParsedEinsum>> {
-        if let Some(cached) = self.einsum_parse_cache.get(subscripts) {
-            return Ok(Arc::clone(cached));
-        }
-
-        let parsed = parse_einsum_subscripts(subscripts)?;
-        let cached = Arc::new(ParsedEinsum { subscripts: parsed });
-        self.einsum_parse_cache
-            .put(subscripts.to_owned(), Arc::clone(&cached));
-        Ok(cached)
+    /// Borrow generic extension compile-time cache storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let compiler = GraphCompiler::new();
+    /// assert!(compiler.extension_caches().is_empty());
+    /// ```
+    pub fn extension_caches(&self) -> &ExtensionCacheStore {
+        &self.extension_cache
     }
 
-    pub(crate) fn cached_static_einsum_tree(
-        &mut self,
-        key: EinsumCacheKey,
-        build: impl FnOnce() -> Result<ContractionTree>,
-    ) -> Result<Arc<ContractionTree>> {
-        if let Some(cached) = self.static_einsum_cache.get(&key) {
-            return Ok(Arc::clone(cached));
-        }
-
-        let tree = Arc::new(build()?);
-        self.static_einsum_cache.put(key, Arc::clone(&tree));
-        Ok(tree)
+    /// Mutably borrow generic extension compile-time cache storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::GraphCompiler;
+    ///
+    /// let mut compiler = GraphCompiler::new();
+    /// compiler.extension_caches_mut().clear();
+    /// ```
+    pub fn extension_caches_mut(&mut self) -> &mut ExtensionCacheStore {
+        &mut self.extension_cache
     }
 
     fn compile_many_with_descriptors(
@@ -532,6 +449,7 @@ fn descriptor_for_input(
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     match key {
         TensorInputKey::User { .. } => key,
+        #[cfg(feature = "autodiff")]
         TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
     }
 }

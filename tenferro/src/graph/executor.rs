@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroUsize;
 
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_tensor::{
@@ -7,20 +6,18 @@ use tenferro_tensor::{
     TensorBackend, TypedTensor,
 };
 
-use super::cache::{
-    nary_einsum_cache_stats, CpuGraphExecutorCacheStats, GraphExecutorCacheStats, NaryEinsumCache,
-    DEFAULT_EINSUM_CACHE_CAPACITY,
-};
+use super::cache::{CpuGraphExecutorCacheStats, GraphExecutorCacheStats};
 use super::program::{GraphProgram, GraphProgramInput};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::traced::TracedTensor;
+use tenferro_runtime::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
 
 /// Executes compiled graph programs on a concrete tensor backend.
 ///
 /// A graph executor owns backend execution state only: backend runtime caches,
-/// runtime einsum plans, and reusable execution workspace. Compilation state
-/// lives in [`GraphCompiler`](super::GraphCompiler).
+/// extension runtime state, and reusable execution workspace. Compilation
+/// state lives in [`GraphCompiler`](super::GraphCompiler).
 ///
 /// # Examples
 ///
@@ -36,14 +33,14 @@ use crate::traced::TracedTensor;
 /// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 /// ```
-pub struct GraphExecutor<B: TensorBackend> {
+pub struct GraphExecutor<B: TensorBackend + 'static> {
     backend: B,
     backend_cache: B::RuntimeCache,
-    runtime_einsum_cache: NaryEinsumCache,
+    extension_executor: ExtensionExecutor<B>,
     slot_workspace: Vec<Option<Tensor>>,
 }
 
-impl<B: TensorBackend> GraphExecutor<B> {
+impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// Create an executor with the given backend and bounded default caches.
     ///
     /// # Examples
@@ -52,39 +49,13 @@ impl<B: TensorBackend> GraphExecutor<B> {
     /// use tenferro::{CpuBackend, GraphExecutor};
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert_eq!(executor.einsum_cache_len(), 0);
+    /// assert_eq!(executor.cache_stats().extensions.entries, 0);
     /// ```
     pub fn new(backend: B) -> Self {
         Self {
             backend,
             backend_cache: B::RuntimeCache::default(),
-            runtime_einsum_cache: NaryEinsumCache::new(
-                NonZeroUsize::new(DEFAULT_EINSUM_CACHE_CAPACITY)
-                    .expect("DEFAULT_EINSUM_CACHE_CAPACITY must be non-zero"),
-            ),
-            slot_workspace: Vec::new(),
-        }
-    }
-
-    /// Create an executor with an explicit runtime einsum cache capacity.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::with_einsum_cache_capacity(
-    ///     CpuBackend::new(),
-    ///     NonZeroUsize::new(8).unwrap(),
-    /// );
-    /// assert_eq!(executor.einsum_cache_capacity().get(), 8);
-    /// ```
-    pub fn with_einsum_cache_capacity(backend: B, capacity: NonZeroUsize) -> Self {
-        Self {
-            backend,
-            backend_cache: B::RuntimeCache::default(),
-            runtime_einsum_cache: NaryEinsumCache::new(capacity),
+            extension_executor: ExtensionExecutor::new(),
             slot_workspace: Vec::new(),
         }
     }
@@ -101,6 +72,44 @@ impl<B: TensorBackend> GraphExecutor<B> {
     /// ```
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    /// Borrow the extension runtime executor owned by this graph executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, GraphExecutor};
+    ///
+    /// let executor = GraphExecutor::new(CpuBackend::new());
+    /// assert_eq!(executor.extension_executor().cache_stats().entries, 0);
+    /// ```
+    pub fn extension_executor(&self) -> &ExtensionExecutor<B> {
+        &self.extension_executor
+    }
+
+    /// Mutably borrow the extension runtime executor owned by this graph executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro::{CpuBackend, GraphExecutor};
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// executor.extension_executor_mut().clear_caches();
+    /// ```
+    pub fn extension_executor_mut(&mut self) -> &mut ExtensionExecutor<B> {
+        &mut self.extension_executor
+    }
+
+    /// Register one extension runtime on this executor.
+    pub fn register_extension(
+        &mut self,
+        register: impl FnOnce(
+            &mut ExtensionExecutor<B>,
+        ) -> std::result::Result<(), ExtensionRuntimeRegistryError>,
+    ) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
+        register(&mut self.extension_executor)
     }
 
     /// Run a one-output program using the program's default input tensors.
@@ -226,9 +235,9 @@ impl<B: TensorBackend> GraphExecutor<B> {
             &mut self.backend,
             program,
             inputs,
-            &mut self.runtime_einsum_cache,
             &mut self.slot_workspace,
             &mut self.backend_cache,
+            Some(&mut self.extension_executor),
         )
     }
 
@@ -254,50 +263,6 @@ impl<B: TensorBackend> GraphExecutor<B> {
         self.eval_exec_ir(program, inputs.to_vec())
     }
 
-    /// Number of runtime einsum contraction trees currently retained.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert_eq!(executor.einsum_cache_len(), 0);
-    /// ```
-    pub fn einsum_cache_len(&self) -> usize {
-        self.runtime_einsum_cache.len()
-    }
-
-    /// Current capacity of the runtime einsum cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert!(executor.einsum_cache_capacity().get() > 0);
-    /// ```
-    pub fn einsum_cache_capacity(&self) -> NonZeroUsize {
-        self.runtime_einsum_cache.cap()
-    }
-
-    /// Resize the runtime einsum contraction-plan cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro::{CpuBackend, GraphExecutor};
-    ///
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.set_einsum_cache_capacity(NonZeroUsize::new(4).unwrap());
-    /// assert_eq!(executor.einsum_cache_capacity().get(), 4);
-    /// ```
-    pub fn set_einsum_cache_capacity(&mut self, capacity: NonZeroUsize) {
-        self.runtime_einsum_cache.resize(capacity);
-    }
-
     /// Clear backend-specific runtime analysis cache entries.
     ///
     /// # Examples
@@ -313,7 +278,7 @@ impl<B: TensorBackend> GraphExecutor<B> {
         self.backend_cache.clear();
     }
 
-    /// Clear runtime einsum contraction-plan cache entries.
+    /// Clear generic extension runtime cache entries.
     ///
     /// # Examples
     ///
@@ -321,11 +286,11 @@ impl<B: TensorBackend> GraphExecutor<B> {
     /// use tenferro::{CpuBackend, GraphExecutor};
     ///
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.clear_einsum_caches();
-    /// assert_eq!(executor.cache_stats().runtime_einsum_plans.entries, 0);
+    /// executor.clear_extension_caches();
+    /// assert_eq!(executor.cache_stats().extensions.entries, 0);
     /// ```
-    pub fn clear_einsum_caches(&mut self) {
-        self.runtime_einsum_cache.clear();
+    pub fn clear_extension_caches(&mut self) {
+        self.extension_executor.clear_caches();
     }
 
     /// Clear every executor-owned runtime cache.
@@ -340,7 +305,7 @@ impl<B: TensorBackend> GraphExecutor<B> {
     /// assert_eq!(executor.cache_stats().backend.entries, 0);
     /// ```
     pub fn clear_caches(&mut self) {
-        self.clear_einsum_caches();
+        self.clear_extension_caches();
         self.clear_backend_cache();
     }
 
@@ -353,17 +318,17 @@ impl<B: TensorBackend> GraphExecutor<B> {
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// let stats = executor.cache_stats();
-    /// assert_eq!(stats.runtime_einsum_plans.entries, 0);
+    /// assert_eq!(stats.extensions.entries, 0);
     /// ```
     pub fn cache_stats(&self) -> GraphExecutorCacheStats {
         GraphExecutorCacheStats {
-            runtime_einsum_plans: nary_einsum_cache_stats(&self.runtime_einsum_cache),
+            extensions: self.extension_executor.cache_stats(),
             backend: self.backend_cache.stats(),
         }
     }
 }
 
-impl<B: TensorBackend> Default for GraphExecutor<B>
+impl<B: TensorBackend + 'static> Default for GraphExecutor<B>
 where
     B: Default,
 {
@@ -426,7 +391,7 @@ impl GraphExecutor<CpuBackend> {
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// let stats = executor.cpu_cache_stats();
-    /// assert_eq!(stats.executor.runtime_einsum_plans.entries, 0);
+    /// assert_eq!(stats.executor.extensions.entries, 0);
     /// assert_eq!(stats.buffer_pool.entries, 0);
     /// ```
     pub fn cpu_cache_stats(&self) -> CpuGraphExecutorCacheStats {
@@ -690,6 +655,7 @@ fn deferred_zero_for_tangent_key(
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
     match key {
         TensorInputKey::User { .. } => key,
+        #[cfg(feature = "autodiff")]
         TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
     }
 }

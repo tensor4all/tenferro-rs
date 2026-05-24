@@ -1,4 +1,4 @@
-// Run with: cargo test -p tenferro-tensor --features cubecl -- --ignored
+// Run with: cargo test -p tenferro-tensor --features cuda -- --ignored
 use cubecl::prelude::*;
 use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 

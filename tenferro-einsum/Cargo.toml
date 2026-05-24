@@ -8,18 +8,37 @@ publish.workspace = true
 description = "High-level einsum with N-ary contraction tree optimization for the tenferro workspace."
 
 [features]
-default = ["cpu-faer"]
-cpu-faer = ["tenferro-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
-cubecl = ["tenferro-ops/cubecl", "tenferro-tensor/cubecl"]
+default = ["autodiff", "cpu-faer"]
+autodiff = ["chainrules-core", "tenferro/autodiff", "tenferro-ops/autodiff"]
+cpu-faer = ["tenferro/cpu-faer", "tenferro-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro/cpu-blas", "tenferro-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
+gpu = ["tenferro-ops/gpu", "tenferro-tensor/gpu"]
+cuda = ["gpu", "tenferro/cuda", "tenferro-ops/cuda", "tenferro-tensor/cuda"]
+rocm = ["gpu", "tenferro/rocm", "tenferro-ops/rocm", "tenferro-tensor/rocm"]
 
 [dependencies]
+tenferro = { path = "../tenferro", default-features = false }
 tenferro-device = { path = "../tenferro-device" }
 tenferro-ops = { path = "../tenferro-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true
+chainrules-core = { workspace = true, optional = true }
 lru.workspace = true
 omeco.workspace = true
 
 [dev-dependencies]
 tenferro-ops = { path = "../tenferro-ops", default-features = false }
+criterion.workspace = true
+num-complex.workspace = true
+
+[[bench]]
+name = "einsum_cpu_bench"
+harness = false
+
+[[bench]]
+name = "mps_inner_product"
+harness = false
+
+[[bench]]
+name = "mps_inner_product_compile"
+harness = false

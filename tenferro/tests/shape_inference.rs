@@ -1,4 +1,3 @@
-use tenferro::parse_einsum_subscripts;
 use tenferro::shape_infer::{infer_output_extents, infer_output_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -121,18 +120,6 @@ fn test_shape_of_returns_scalar() {
 }
 
 #[test]
-fn test_svd_three_outputs() {
-    let op = StdTensorOp::Svd { eps: 1e-10 };
-    let input = vec![cst(3), cst(4)];
-    let out = infer_output_shapes(&op, &[&input]);
-    assert_eq!(out.len(), 3);
-    assert_eq!(
-        out,
-        vec![vec![cst(3), cst(3)], vec![cst(3)], vec![cst(3), cst(4)],]
-    );
-}
-
-#[test]
 fn test_shared_passthrough_shape_rules_cover_remaining_elementwise_ops() {
     let unary_input = vec![cst(2), cst(5)];
     for op in [
@@ -152,8 +139,6 @@ fn test_shared_passthrough_shape_rules_cover_remaining_elementwise_ops() {
         StdTensorOp::Tril { k: -1 },
         StdTensorOp::Triu { k: 2 },
         StdTensorOp::Reverse { axes: vec![0] },
-        StdTensorOp::ValidateNonsingular,
-        StdTensorOp::Cholesky,
     ] {
         let out = infer_output_shapes(&op, &[&unary_input]);
         assert_eq!(
@@ -269,16 +254,6 @@ fn test_structural_indexing_and_dynamic_shapes() {
         vec![vec![cst(4), cst(12)]]
     );
 
-    let einsum = StdTensorOp::NaryEinsum {
-        subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
-    };
-    let lhs = vec![cst(3), cst(4)];
-    let rhs = vec![cst(4), cst(6)];
-    assert_eq!(
-        infer_output_shapes(&einsum, &[&lhs, &rhs]),
-        vec![vec![cst(3), cst(6)]]
-    );
-
     let dynamic_truncate = StdTensorOp::DynamicTruncate { axis: 1 };
     let scalar = vec![];
     assert_eq!(
@@ -329,54 +304,5 @@ fn gather_dynamic_slice_sizes_uses_shape_source_input() {
     assert_eq!(
         infer_output_shapes(&op, &[&operand, &indices, &updates]),
         vec![vec![cst(1), cst(2)]]
-    );
-}
-
-#[test]
-fn test_multi_output_linalg_shape_rules() {
-    let input = vec![cst(3), cst(4), cst(2)];
-
-    let qr = StdTensorOp::Qr;
-    assert_eq!(
-        infer_output_shapes(&qr, &[&input]),
-        vec![vec![cst(3), cst(3), cst(2)], vec![cst(3), cst(4), cst(2)]]
-    );
-
-    let lu = StdTensorOp::Lu;
-    assert_eq!(
-        infer_output_shapes(&lu, &[&input]),
-        vec![
-            vec![cst(3), cst(3), cst(2)],
-            vec![cst(3), cst(3), cst(2)],
-            vec![cst(3), cst(4), cst(2)],
-            vec![cst(2)],
-        ]
-    );
-
-    let eigh = StdTensorOp::Eigh { eps: 1e-12 };
-    let eigh_input = vec![cst(3), cst(3), cst(2)];
-    assert_eq!(
-        infer_output_shapes(&eigh, &[&eigh_input]),
-        vec![vec![cst(3), cst(2)], vec![cst(3), cst(3), cst(2)]]
-    );
-
-    let eig = StdTensorOp::Eig {
-        input_dtype: tenferro_tensor::DType::F64,
-    };
-    assert_eq!(
-        infer_output_shapes(&eig, &[&eigh_input]),
-        vec![vec![cst(3), cst(2)], vec![cst(3), cst(3), cst(2)]]
-    );
-
-    let triangular_solve = StdTensorOp::TriangularSolve {
-        left_side: true,
-        lower: true,
-        transpose_a: false,
-        unit_diagonal: false,
-    };
-    let rhs = vec![cst(3), cst(2)];
-    assert_eq!(
-        infer_output_shapes(&triangular_solve, &[&eigh_input, &rhs]),
-        vec![rhs]
     );
 }

@@ -1,6 +1,7 @@
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TensorRead, TensorView};
 
-use crate::{eager_einsum, eager_einsum_owned, eager_einsum_read_subscripts, Subscripts};
+use crate::eager::{eager_einsum, eager_einsum_owned, eager_einsum_read_subscripts};
+use crate::Subscripts;
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
     assert_eq!(tensor.shape(), shape);

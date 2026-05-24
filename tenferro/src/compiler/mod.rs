@@ -349,9 +349,6 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
             bytes: bytes.clone(),
         },
         StdTensorOp::DotGeneral { config, .. } => ExecOp::DotGeneral(config.clone()),
-        StdTensorOp::NaryEinsum { subscripts, .. } => ExecOp::NaryEinsum {
-            subscripts: subscripts.clone(),
-        },
         StdTensorOp::ReduceSum { axes, .. } => ExecOp::ReduceSum { axes: axes.clone() },
         StdTensorOp::ReduceProd { axes, .. } => ExecOp::ReduceProd { axes: axes.clone() },
         StdTensorOp::ReduceMax { axes, .. } => ExecOp::ReduceMax { axes: axes.clone() },
@@ -392,32 +389,6 @@ fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
         StdTensorOp::ShapeOf { axis } => ExecOp::ShapeOf { axis: *axis },
         StdTensorOp::DynamicTruncate { axis } => ExecOp::DynamicTruncate { axis: *axis },
         StdTensorOp::PadToMatch { axis } => ExecOp::PadToMatch { axis: *axis },
-        StdTensorOp::Cholesky { .. } => ExecOp::Cholesky,
-        StdTensorOp::Lu { .. } => ExecOp::Lu,
-        StdTensorOp::FullPivLu { .. } => ExecOp::FullPivLu,
-        StdTensorOp::Solve { transpose_a } => ExecOp::Solve {
-            transpose_a: *transpose_a,
-        },
-        StdTensorOp::FullPivLuSolve { transpose_a } => ExecOp::FullPivLuSolve {
-            transpose_a: *transpose_a,
-        },
-        StdTensorOp::Svd { .. } => ExecOp::Svd,
-        StdTensorOp::Qr { .. } => ExecOp::Qr,
-        StdTensorOp::Eigh { .. } => ExecOp::Eigh,
-        StdTensorOp::Eig { .. } => ExecOp::Eig,
-        StdTensorOp::TriangularSolve {
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-            ..
-        } => ExecOp::TriangularSolve {
-            left_side: *left_side,
-            lower: *lower,
-            transpose_a: *transpose_a,
-            unit_diagonal: *unit_diagonal,
-        },
-        StdTensorOp::ValidateNonsingular { .. } => ExecOp::ValidateNonsingular,
         StdTensorOp::Extension(ext) => ExecOp::Extension(ext.clone()),
     }
 }
@@ -1777,8 +1748,7 @@ fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
 // dead `Transpose` instructions (the folded-out producer is bypassed but
 // remains in the program), and DCE reclaims that wasted runtime work.
 
-/// Drop instructions with no downstream consumer. Preserves instructions with
-/// observable side effects (`ValidateNonsingular`).
+/// Drop instructions with no downstream consumer.
 pub fn eliminate_dead_code(program: &mut ExecProgram) {
     let mut live_slots = vec![false; program.n_slots];
     for &slot in &program.output_slots {
@@ -1794,8 +1764,7 @@ pub fn eliminate_dead_code(program: &mut ExecProgram) {
             .output_slots
             .iter()
             .any(|&slot| live_slots.get(slot).copied().unwrap_or(false));
-        let is_side_effecting = matches!(&instr.op, ExecOp::ValidateNonsingular);
-        if has_live_output || is_side_effecting {
+        if has_live_output {
             keep[idx] = true;
             for &slot in &instr.input_slots {
                 if slot >= live_slots.len() {

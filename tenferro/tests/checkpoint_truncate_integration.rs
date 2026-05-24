@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 mod support;
 use support::RunTraced;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};

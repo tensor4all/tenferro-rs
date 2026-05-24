@@ -1,32 +1,15 @@
 #![allow(dead_code)]
 
 use tenferro::error::Result;
-use tenferro::traced_tensor::EinsumOptimize;
-use tenferro::{
-    DType, EinsumSubscripts, GraphCompiler, GraphExecutor, Tensor, TensorBackend, TracedTensor,
-};
-
-pub trait TestEinsumContext {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R>;
-}
-
-impl TestEinsumContext for GraphCompiler {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R> {
-        f(self)
-    }
-}
-
-impl<B: TensorBackend> TestEinsumContext for GraphExecutor<B> {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R> {
-        let mut compiler = GraphCompiler::new();
-        f(&mut compiler)
-    }
-}
+use tenferro::{DType, GraphCompiler, GraphExecutor, Tensor, TensorBackend, TracedTensor};
 
 pub trait RunTraced {
-    fn run_with<B: TensorBackend>(&self, executor: &mut GraphExecutor<B>) -> Result<Tensor>;
+    fn run_with<B: TensorBackend + 'static>(
+        &self,
+        executor: &mut GraphExecutor<B>,
+    ) -> Result<Tensor>;
 
-    fn run_with_inputs_auto<B: TensorBackend>(
+    fn run_with_inputs_auto<B: TensorBackend + 'static>(
         &self,
         executor: &mut GraphExecutor<B>,
         bindings: &[(&TracedTensor, &Tensor)],
@@ -34,13 +17,16 @@ pub trait RunTraced {
 }
 
 impl RunTraced for TracedTensor {
-    fn run_with<B: TensorBackend>(&self, executor: &mut GraphExecutor<B>) -> Result<Tensor> {
+    fn run_with<B: TensorBackend + 'static>(
+        &self,
+        executor: &mut GraphExecutor<B>,
+    ) -> Result<Tensor> {
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(self)?;
         executor.run(&program)
     }
 
-    fn run_with_inputs_auto<B: TensorBackend>(
+    fn run_with_inputs_auto<B: TensorBackend + 'static>(
         &self,
         executor: &mut GraphExecutor<B>,
         bindings: &[(&TracedTensor, &Tensor)],
@@ -60,51 +46,11 @@ impl RunTraced for TracedTensor {
     }
 }
 
-pub fn run_many_traced_with<B: TensorBackend>(
+pub fn run_many_traced_with<B: TensorBackend + 'static>(
     executor: &mut GraphExecutor<B>,
     outputs: &[&TracedTensor],
 ) -> Result<Vec<Tensor>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(outputs)?;
     executor.run_many(&program)
-}
-
-pub fn einsum<C: TestEinsumContext>(
-    ctx: &mut C,
-    inputs: &[&TracedTensor],
-    subscripts: &str,
-) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| tenferro::traced_tensor::einsum(compiler, inputs, subscripts))
-}
-
-pub fn einsum_with<C: TestEinsumContext>(
-    ctx: &mut C,
-    inputs: &[&TracedTensor],
-    subscripts: &str,
-    optimize: EinsumOptimize,
-) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| {
-        tenferro::traced_tensor::einsum_with(compiler, inputs, subscripts, optimize)
-    })
-}
-
-pub fn einsum_subscripts<C: TestEinsumContext>(
-    ctx: &mut C,
-    inputs: &[&TracedTensor],
-    subscripts: &EinsumSubscripts,
-) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| {
-        tenferro::traced_tensor::einsum_subscripts(compiler, inputs, subscripts)
-    })
-}
-
-pub fn einsum_subscripts_with<C: TestEinsumContext>(
-    ctx: &mut C,
-    inputs: &[&TracedTensor],
-    subscripts: &EinsumSubscripts,
-    optimize: EinsumOptimize,
-) -> Result<TracedTensor> {
-    ctx.with_compiler(|compiler| {
-        tenferro::traced_tensor::einsum_subscripts_with(compiler, inputs, subscripts, optimize)
-    })
 }

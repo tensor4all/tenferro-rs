@@ -6,7 +6,7 @@ use tenferro_tensor::{CompareDir, DotGeneralConfig};
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{conjugate_primal_if_complex, conjugate_primal_if_dtype_complex};
 use crate::dim_expr::DimExpr;
-use crate::std_tensor_op::{EinsumSubscripts, StdTensorOp};
+use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 
 pub fn linearize_dot_general(
@@ -67,60 +67,6 @@ pub fn linearize_dot_general(
             vec![Some(sum[0])]
         }
         _ => unreachable!("dot_general linearization creates at most two terms"),
-    }
-}
-
-pub fn linearize_nary_einsum(
-    builder: &mut FragmentBuilder<StdTensorOp>,
-    primal_in: &[GlobalValKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValId>],
-    subscripts: &EinsumSubscripts,
-) -> Vec<Option<LocalValId>> {
-    let mut terms = Vec::new();
-
-    for (active_idx, tangent) in tangent_in.iter().enumerate() {
-        let Some(dt) = tangent else {
-            continue;
-        };
-
-        let mut inputs = Vec::with_capacity(primal_in.len());
-        for (input_idx, key) in primal_in.iter().enumerate() {
-            if input_idx == active_idx {
-                inputs.push(ValRef::Local(*dt));
-            } else {
-                inputs.push(ValRef::External(key.clone()));
-            }
-        }
-
-        let out = builder.add_op(
-            StdTensorOp::NaryEinsum {
-                subscripts: subscripts.clone(),
-            },
-            inputs,
-            OpMode::Linear {
-                active_mask: (0..primal_in.len()).map(|idx| idx == active_idx).collect(),
-            },
-        );
-        terms.push(out[0]);
-    }
-
-    match terms.as_slice() {
-        [] => vec![None],
-        [only] => vec![Some(*only)],
-        [head, tail @ ..] => {
-            let mut result = *head;
-            for &term in tail {
-                let sum = builder.add_op(
-                    StdTensorOp::Add,
-                    vec![ValRef::Local(result), ValRef::Local(term)],
-                    OpMode::Linear {
-                        active_mask: vec![true, true],
-                    },
-                );
-                result = sum[0];
-            }
-            vec![Some(result)]
-        }
     }
 }
 
@@ -318,74 +264,6 @@ pub fn transpose_dot_general(
         );
         let _ = (new_lhs_rank, new_rhs_rank);
         result[1] = Some(add_transpose_if_needed(emitter, out[0], &perm));
-    }
-
-    result
-}
-
-pub fn transpose_nary_einsum(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    cotangent_out: &[Option<LocalValId>],
-    inputs: &[ValRef<StdTensorOp>],
-    mode: &OpMode,
-    subscripts: &EinsumSubscripts,
-    ctx: &mut ShapeGuardContext,
-) -> Vec<Option<LocalValId>> {
-    let input_labels = &subscripts.inputs;
-    let output_labels = &subscripts.output;
-    let n_inputs = input_labels.len();
-
-    let ct = match cotangent_out[0] {
-        Some(ct) => ct,
-        None => return vec![None; n_inputs],
-    };
-
-    let active_mask = match mode {
-        OpMode::Linear { active_mask } => active_mask,
-        OpMode::Primal => return vec![None; n_inputs],
-    };
-
-    let mut result = Vec::with_capacity(n_inputs);
-    for active_idx in 0..n_inputs {
-        if !active_mask[active_idx] {
-            result.push(None);
-            continue;
-        }
-
-        let mut vjp_input_labels = Vec::with_capacity(n_inputs);
-        let mut vjp_inputs = Vec::with_capacity(n_inputs);
-
-        vjp_input_labels.push(output_labels.clone());
-        vjp_inputs.push(ValRef::Local(ct));
-
-        for input_idx in 0..n_inputs {
-            if input_idx == active_idx {
-                continue;
-            }
-
-            vjp_input_labels.push(input_labels[input_idx].clone());
-            vjp_inputs.push(conjugate_primal_if_complex(
-                emitter,
-                inputs[input_idx].clone(),
-                ctx,
-            ));
-        }
-
-        let out = emitter.add_op(
-            StdTensorOp::NaryEinsum {
-                subscripts: EinsumSubscripts {
-                    inputs: vjp_input_labels,
-                    output: input_labels[active_idx].clone(),
-                },
-            },
-            vjp_inputs,
-            OpMode::Linear {
-                active_mask: std::iter::once(true)
-                    .chain(std::iter::repeat_n(false, n_inputs.saturating_sub(1)))
-                    .collect(),
-            },
-        );
-        result.push(Some(out[0]));
     }
 
     result

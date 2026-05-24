@@ -4,17 +4,14 @@
 //! graphs. The operation names stay independent of execution mode; the module
 //! name identifies the tensor family.
 
-use crate::DotGeneralConfig;
+use crate::{DType, DotGeneralConfig};
 
-pub use crate::einsum::{
-    einsum, einsum_subscripts, einsum_subscripts_with, einsum_with, EinsumOptimize,
-};
-pub use crate::linalg_api::{
-    cholesky, convert, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu,
-    full_piv_lu_solve, inv, lu, norm, pinv, pinv_with_rtol, qr, slogdet, solve, svd, svd_with_eps,
-    triangular_solve,
-};
 pub use crate::traced::{TracedTensor, TracedTensorId};
+
+/// Convert a traced tensor to a different dtype.
+pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
+    input.convert(to)
+}
 
 /// Matrix multiplication helper for rank-2 traced tensors.
 ///

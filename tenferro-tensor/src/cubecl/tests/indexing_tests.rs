@@ -1,4 +1,4 @@
-// Run with: cargo test --features cubecl -- --ignored
+// Run with: cargo test --features cuda -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
 use crate::TensorBackend;
 use num_complex::Complex64;

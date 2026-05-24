@@ -40,6 +40,22 @@ pub(crate) fn standard_available_parallelism() -> Option<usize> {
         .map(NonZeroUsize::get)
 }
 
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn count_affinity_mask_bits(mask: &[u8]) -> Option<usize> {
+    let count = mask.iter().map(|byte| byte.count_ones() as usize).sum();
+    (count > 0).then_some(count)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const LINUX_EINVAL: i32 = 22;
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn linux_next_affinity_mask_bytes(mask_bytes: usize, errno: Option<i32>) -> Option<usize> {
+    (errno == Some(LINUX_EINVAL))
+        .then(|| mask_bytes.checked_mul(2))
+        .flatten()
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_process_cpu_affinity_count() -> Option<usize> {
     unsafe extern "C" {
@@ -47,7 +63,6 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
     }
 
     const INITIAL_MASK_BYTES: usize = 128;
-    const EINVAL: i32 = 22;
 
     let mut mask_bytes = INITIAL_MASK_BYTES;
     loop {
@@ -56,16 +71,13 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
             sched_getaffinity(0, mask_bytes, mask.as_mut_ptr().cast::<core::ffi::c_void>())
         };
         if rc == 0 {
-            let count = mask.iter().map(|byte| byte.count_ones() as usize).sum();
-            return (count > 0).then_some(count);
+            return count_affinity_mask_bits(&mask);
         }
 
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(errno) if errno == EINVAL => {
-                mask_bytes = mask_bytes.checked_mul(2)?;
-            }
-            _ => return None,
-        }
+        mask_bytes = linux_next_affinity_mask_bytes(
+            mask_bytes,
+            std::io::Error::last_os_error().raw_os_error(),
+        )?;
     }
 }
 
@@ -164,4 +176,50 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
 fn platform_process_cpu_affinity_count() -> Option<usize> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_affinity_mask_bits_returns_none_for_zero_masks() {
+        assert_eq!(count_affinity_mask_bits(&[]), None);
+        assert_eq!(count_affinity_mask_bits(&[0, 0, 0]), None);
+    }
+
+    #[test]
+    fn count_affinity_mask_bits_sums_all_set_bits() {
+        assert_eq!(count_affinity_mask_bits(&[0b0000_0001]), Some(1));
+        assert_eq!(
+            count_affinity_mask_bits(&[0b1010_0001, 0b1111_0000]),
+            Some(7)
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn linux_next_affinity_mask_bytes_retries_only_on_einval() {
+        assert_eq!(
+            linux_next_affinity_mask_bytes(128, Some(LINUX_EINVAL)),
+            Some(256)
+        );
+        assert_eq!(linux_next_affinity_mask_bytes(128, Some(1)), None);
+        assert_eq!(linux_next_affinity_mask_bytes(128, None), None);
+        assert_eq!(
+            linux_next_affinity_mask_bytes(usize::MAX / 2 + 1, Some(LINUX_EINVAL)),
+            None
+        );
+    }
+
+    #[test]
+    fn available_parallelism_helpers_report_positive_counts() {
+        assert!(available_parallelism() >= 1);
+        if let Some(count) = standard_available_parallelism() {
+            assert!(count >= 1);
+        }
+        if let Some(count) = process_cpu_affinity_count() {
+            assert!(count >= 1);
+        }
+    }
 }

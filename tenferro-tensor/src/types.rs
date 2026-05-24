@@ -103,7 +103,7 @@ impl<T> BufferHandle<T> {
 pub enum Buffer<T> {
     Host(Vec<T>),
     Backend(BufferHandle<T>),
-    #[cfg(feature = "cubecl")]
+    #[cfg(feature = "cuda")]
     Cubecl(CubeclBuffer<T>),
 }
 
@@ -117,7 +117,7 @@ pub enum Buffer<T> {
 /// let _name = core::any::type_name::<tenferro_tensor::CubeclBuffer<f64>>();
 /// assert!(_name.contains("CubeclBuffer"));
 /// ```
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 #[derive(Clone, Debug)]
 pub struct CubeclBuffer<T> {
     /// CubeCL server handle that owns the GPU allocation.
@@ -127,7 +127,7 @@ pub struct CubeclBuffer<T> {
     pub(crate) _marker: std::marker::PhantomData<T>,
 }
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 impl<T> CubeclBuffer<T> {
     /// Create a CubeCL buffer wrapper from a handle and element count.
     ///
@@ -909,7 +909,7 @@ impl<T: Clone> TypedTensor<T> {
                 op: "try_into_vec_col_major",
                 message: "backend buffers cannot be exported as host Vec".into(),
             }),
-            #[cfg(feature = "cubecl")]
+            #[cfg(feature = "cuda")]
             Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
                 op: "try_into_vec_col_major",
                 message: "GPU buffers cannot be exported as host Vec".into(),
@@ -939,7 +939,7 @@ impl<T: Clone> TypedTensor<T> {
                 op: "try_into_vec_row_major",
                 message: "backend buffers cannot be exported as host Vec".into(),
             }),
-            #[cfg(feature = "cubecl")]
+            #[cfg(feature = "cuda")]
             Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
                 op: "try_into_vec_row_major",
                 message: "GPU buffers cannot be exported as host Vec".into(),
@@ -975,7 +975,7 @@ impl<T: Clone> TypedTensor<T> {
         match &self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data called on backend buffer"),
-            #[cfg(feature = "cubecl")]
+            #[cfg(feature = "cuda")]
             Buffer::Cubecl(_) => {
                 panic!(
                     "Cannot access GPU buffer (Buffer::Cubecl) as host data. \
@@ -1017,7 +1017,7 @@ impl<T: Clone> TypedTensor<T> {
         match &mut self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data_mut called on backend buffer"),
-            #[cfg(feature = "cubecl")]
+            #[cfg(feature = "cuda")]
             Buffer::Cubecl(_) => {
                 panic!(
                     "Cannot access GPU buffer (Buffer::Cubecl) as host data. \

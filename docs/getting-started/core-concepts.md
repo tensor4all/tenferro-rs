@@ -77,17 +77,9 @@ assert_eq!(c.shape(), &[2, 2]);
 project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
-```rust
-use tenferro::typed_tensor::einsum;
-use tenferro::{CpuBackend, TypedTensor};
-
-let mut backend = CpuBackend::new();
-let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
-
-let c = einsum(&mut backend, &[&a, &b], "ij,jk->ik").unwrap();
-assert_eq!(c.shape.as_slice(), &[2, 2]);
-```
+Einsum is provided by the `tenferro-einsum` standard extension. Traced code
+uses `tenferro_einsum::einsum` and registers
+`tenferro_einsum::register_runtime` on the executor.
 
 ## Eager Execution And Backward
 

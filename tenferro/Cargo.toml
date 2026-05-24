@@ -15,14 +15,19 @@ name = "cuda_quickstart"
 required-features = ["cuda"]
 
 [features]
-default = ["cpu-faer"]
+default = ["autodiff", "cpu-faer"]
+autodiff = [
+    "chainrules-core",
+    "tenferro-ops/autodiff",
+    "tidu",
+]
 cpu-faer = [
-    "tenferro-einsum/cpu-faer",
+    "tenferro-runtime/cpu-faer",
     "tenferro-ops/cpu-faer",
     "tenferro-tensor/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-einsum/cpu-blas",
+    "tenferro-runtime/cpu-blas",
     "tenferro-ops/cpu-blas",
     "tenferro-tensor/cpu-blas",
 ]
@@ -33,21 +38,31 @@ src-intel-mkl-dynamic-parallel = [
     "provider-src",
     "tenferro-tensor/src-intel-mkl-dynamic-parallel",
 ]
-cubecl = [
-    "tenferro-einsum/cubecl",
-    "tenferro-ops/cubecl",
-    "tenferro-tensor/cubecl",
+gpu = [
+    "tenferro-runtime/gpu",
+    "tenferro-ops/gpu",
+    "tenferro-tensor/gpu",
 ]
-cuda = ["cubecl"]
+cuda = [
+    "gpu",
+    "tenferro-runtime/cuda",
+    "tenferro-ops/cuda",
+    "tenferro-tensor/cuda",
+]
+rocm = [
+    "gpu",
+    "tenferro-runtime/rocm",
+    "tenferro-ops/rocm",
+    "tenferro-tensor/rocm",
+]
 
 [dependencies]
+tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-ops = { path = "../tenferro-ops", default-features = false }
-tenferro-einsum = { path = "../tenferro-einsum", default-features = false }
-omeco.workspace = true
 computegraph.workspace = true
-chainrules-core.workspace = true
-tidu.workspace = true
+chainrules-core = { workspace = true, optional = true }
+tidu = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
@@ -57,14 +72,6 @@ lru = { workspace = true }
 criterion.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-
-[[bench]]
-name = "mps_inner_product"
-harness = false
-
-[[bench]]
-name = "mps_inner_product_compile"
-harness = false
 
 [[bench]]
 name = "mps_inner_product_eager"

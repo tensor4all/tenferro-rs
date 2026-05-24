@@ -7,6 +7,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{GatherConfig, Tensor, TypedTensor};
 
 use crate::checkpoint::CheckpointNode;
+#[cfg(feature = "autodiff")]
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
 use crate::metadata::{metadata_scopes_with_new, register_scoped_fragment_metadata};
@@ -117,6 +118,7 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "autodiff")]
 impl EagerTensor {
     /// Select entries from one axis using host-known indices.
     ///

@@ -3,22 +3,24 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
+#[cfg(test)]
+use std::mem::size_of;
+#[cfg(test)]
+use tenferro_tensor::CacheStats;
 use tenferro_tensor::{
-    CacheStats, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead,
-    TensorView,
+    DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead, TensorView,
 };
 
 use crate::{ContractionTree, Subscripts};
 
 const EAGER_EINSUM_OP: &str = "eager_einsum";
 /// Default number of eager einsum contraction plans retained per thread.
-pub const DEFAULT_EAGER_EINSUM_CACHE_CAPACITY: usize = 256;
+pub(crate) const DEFAULT_EAGER_EINSUM_CACHE_CAPACITY: usize = 256;
 
 #[derive(Debug, Default, Clone)]
 struct EagerEinsumProfileEntry {
@@ -46,18 +48,22 @@ impl EagerEinsumPlanCache {
         }
     }
 
+    #[cfg(test)]
     fn capacity(&self) -> NonZeroUsize {
         self.plans.cap()
     }
 
+    #[cfg(test)]
     fn set_capacity(&mut self, capacity: NonZeroUsize) {
         self.plans.resize(capacity);
     }
 
+    #[cfg(test)]
     fn clear(&mut self) {
         self.plans.clear();
     }
 
+    #[cfg(test)]
     fn stats(&self) -> CacheStats {
         let mut retained_bytes = 0usize;
         for (key, tree) in self.plans.iter() {
@@ -76,91 +82,45 @@ fn default_eager_einsum_cache_capacity() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_EAGER_EINSUM_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
 }
 
+#[cfg(test)]
 fn vec_retained_bytes<T>(values: &Vec<T>) -> usize {
     values.capacity() * size_of::<T>()
 }
 
+#[cfg(test)]
 fn vec_of_vec_retained_bytes<T>(values: &[Vec<T>]) -> usize {
     values.iter().map(vec_retained_bytes).sum()
 }
 
+#[cfg(test)]
 fn subscripts_retained_bytes(subscripts: &Subscripts) -> usize {
     vec_of_vec_retained_bytes(&subscripts.inputs) + vec_retained_bytes(&subscripts.output)
 }
 
+#[cfg(test)]
 fn eager_plan_key_retained_bytes(key: &EagerEinsumPlanCacheKey) -> usize {
     subscripts_retained_bytes(&key.0) + vec_of_vec_retained_bytes(&key.1)
 }
 
-/// Return the current thread's eager einsum plan-cache capacity.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::{
-///     eager_einsum_cache_capacity, DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
-/// };
-///
-/// assert_eq!(
-///     eager_einsum_cache_capacity().get(),
-///     DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
-/// );
-/// ```
 #[must_use]
-pub fn eager_einsum_cache_capacity() -> NonZeroUsize {
+#[cfg(test)]
+pub(crate) fn eager_einsum_cache_capacity() -> NonZeroUsize {
     EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().capacity())
 }
 
-/// Resize the current thread's eager einsum plan cache.
-///
-/// Shrinking below the current length evicts least-recently-used entries.
-///
-/// # Examples
-///
-/// ```
-/// use std::num::NonZeroUsize;
-/// use tenferro_einsum::{
-///     eager_einsum_cache_capacity, set_eager_einsum_cache_capacity,
-/// };
-///
-/// set_eager_einsum_cache_capacity(NonZeroUsize::new(1).unwrap());
-/// assert_eq!(eager_einsum_cache_capacity().get(), 1);
-/// ```
-pub fn set_eager_einsum_cache_capacity(capacity: NonZeroUsize) {
+#[cfg(test)]
+pub(crate) fn set_eager_einsum_cache_capacity(capacity: NonZeroUsize) {
     EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().set_capacity(capacity));
 }
 
-/// Clear the current thread's eager einsum plan cache.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::{clear_eager_einsum_cache, eager_einsum_cache_stats};
-///
-/// clear_eager_einsum_cache();
-/// assert_eq!(eager_einsum_cache_stats().entries, 0);
-/// ```
-pub fn clear_eager_einsum_cache() {
+#[cfg(test)]
+pub(crate) fn clear_eager_einsum_cache() {
     EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
-/// Return stats for the current thread's eager einsum plan cache.
-///
-/// `retained_bytes` is an owned payload estimate for cached contraction plans,
-/// not process RSS.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::{clear_eager_einsum_cache, eager_einsum_cache_stats};
-///
-/// clear_eager_einsum_cache();
-/// let stats = eager_einsum_cache_stats();
-/// assert_eq!(stats.entries, 0);
-/// assert_eq!(stats.retained_bytes, 0);
-/// ```
 #[must_use]
-pub fn eager_einsum_cache_stats() -> CacheStats {
+#[cfg(test)]
+pub(crate) fn eager_einsum_cache_stats() -> CacheStats {
     EAGER_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().stats())
 }
 
@@ -979,6 +939,7 @@ fn eager_einsum_exec(
     eager_einsum_exec_values(exec, values, tree)
 }
 
+#[cfg(test)]
 fn eager_einsum_exec_read(
     exec: &mut dyn TensorExec,
     inputs: &[TensorRead<'_>],
@@ -1059,21 +1020,8 @@ fn try_eager_einsum_binary_read_fast(
 /// traced einsum path, but executes each contraction immediately against the
 /// provided backend context.
 ///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::eager_einsum;
-/// use tenferro_tensor::{Tensor, TensorBackend, cpu::CpuBackend};
-///
-/// let mut ctx = CpuBackend::new();
-/// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let c = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
-///
-/// assert_eq!(c.shape(), &[2, 2]);
-/// assert_eq!(c.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
-/// ```
-pub fn eager_einsum(
+#[cfg(test)]
+pub(crate) fn eager_einsum(
     ctx: &mut impl TensorBackend,
     inputs: &[&Tensor],
     subscripts: &str,
@@ -1084,7 +1032,7 @@ pub fn eager_einsum(
 }
 
 /// Eager N-ary einsum on concrete [`Tensor`] values using integer labels.
-pub fn eager_einsum_subscripts(
+pub(crate) fn eager_einsum_subscripts(
     ctx: &mut impl TensorBackend,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
@@ -1152,7 +1100,8 @@ pub fn eager_einsum_subscripts(
 /// Owned tensors and borrowed host views share this entry point. Backends may
 /// consume views directly when their execution model supports it, or
 /// materialize/upload them inside the execution session.
-pub fn eager_einsum_read_subscripts(
+#[cfg(test)]
+pub(crate) fn eager_einsum_read_subscripts(
     ctx: &mut impl TensorBackend,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
@@ -1176,22 +1125,8 @@ pub fn eager_einsum_read_subscripts(
 /// Downstream crates should use this N-ary API even for two-input contractions
 /// instead of depending on binary lowering details.
 ///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::eager_einsum_owned;
-/// use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend};
-///
-/// let mut ctx = CpuBackend::new();
-/// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-/// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-///
-/// let c = eager_einsum_owned(&mut ctx, vec![a, b], "ij,jk->ik").unwrap();
-///
-/// assert_eq!(c.shape(), &[2, 2]);
-/// assert_eq!(c.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
-/// ```
-pub fn eager_einsum_owned(
+#[cfg(test)]
+pub(crate) fn eager_einsum_owned(
     ctx: &mut impl TensorBackend,
     inputs: Vec<Tensor>,
     subscripts: &str,
@@ -1202,7 +1137,8 @@ pub fn eager_einsum_owned(
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs using integer labels.
-pub fn eager_einsum_owned_subscripts(
+#[cfg(test)]
+pub(crate) fn eager_einsum_owned_subscripts(
     ctx: &mut impl TensorBackend,
     inputs: Vec<Tensor>,
     subscripts: &Subscripts,

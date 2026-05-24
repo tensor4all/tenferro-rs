@@ -193,14 +193,3 @@ fn graph_compiler_compile_many_returns_multi_output_program() {
     assert_eq!(program.input_count(), 1);
     assert_eq!(program.output_count(), 2);
 }
-
-#[test]
-fn graph_compiler_einsum_cache_capacity_is_configurable() {
-    let mut compiler = GraphCompiler::with_einsum_cache_capacity(NonZeroUsize::new(2).unwrap());
-
-    assert_eq!(compiler.einsum_cache_len(), 0);
-    assert_eq!(compiler.einsum_cache_capacity().get(), 2);
-
-    compiler.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
-    assert_eq!(compiler.einsum_cache_capacity().get(), 3);
-}

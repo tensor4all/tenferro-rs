@@ -53,10 +53,10 @@ dense linalg are implemented on CPU for the supported dtype subset of each op.
 ### CUDA/CubeCL Status
 
 The public facade exposes this backend as `tenferro::cuda::CudaBackend` behind
-the `cuda` feature. Internally, the `cubecl` feature enables
-`cubecl::CubeclBackend`, backed by CubeCL/CubeCL-CUDA and runtime-loaded
+the `cuda` feature. Internally, that feature enables `cubecl::CubeclBackend`,
+backed by CubeCL/CubeCL-CUDA and runtime-loaded
 cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
-`tenferro-cubecl` crate.
+`tenferro-gpubackend` crate.
 
 Implemented GPU coverage is broad. The user-facing
 [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains the current
@@ -91,13 +91,29 @@ CubeCL. ROCm is only a feature stub.
 - `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` are the semantic
   source of truth for AD rules.
 - The `ExtensionOp` boundary exists for registered extension operations.
+- With `default-features = false`, AD-specific rule code is not compiled.
 - Non-mainline semiring/algebra graph surfaces remain transitional and should
   not be extended by new work.
 
+## `tenferro-runtime`
+
+`tenferro-runtime` owns operation-agnostic runtime infrastructure:
+
+- `ExtensionRegistry` and `ExtensionExecutor` for backend-parametric extension
+  runtime registration,
+- `ExtensionExecutionContext` for passing backend and extension cache state to
+  one runtime call,
+- `ExtensionCacheStore`, `ExtensionCacheKey`, and cache selectors/limits.
+
+`tenferro` reexports these runtime types for application ergonomics, but the
+implementation lives in this crate.
+
 ## `tenferro-einsum`
 
-`tenferro-einsum` owns subscript parsing, contraction planning, graph-fragment
-lowering, and eager concrete execution.
+`tenferro-einsum` is the standard einsum extension. It owns subscript parsing,
+contraction planning, graph-fragment lowering, eager concrete execution,
+runtime registration, extension-owned caches, and the einsum AD rule when the
+`autodiff` feature is enabled.
 
 Implemented:
 
@@ -106,6 +122,8 @@ Implemented:
 - `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`.
 - `build_einsum_fragment` for traced graph lowering.
 - `eager_einsum` and `eager_einsum_owned` for concrete `Tensor` execution.
+- `tenferro_einsum::einsum` and `tenferro_einsum::register_runtime` for traced
+  extension use.
 - Repeated-label semantics:
   - `ii->` trace,
   - `ii->i` diagonal extraction,
@@ -114,6 +132,21 @@ Implemented:
 
 Strict binary lowering is an optimization only. It rejects repeated-label
 patterns and lets the general path handle diagonalization.
+
+## `tenferro-linalg`
+
+`tenferro-linalg` is the standard linalg extension. It exposes traced linalg
+functions such as `svd`, `qr`, `cholesky`, `solve`, `triangular_solve`, `lu`,
+`full_piv_lu`, `eig`, `eigh`, `pinv`, `det`, `slogdet`, and `norm`, plus an
+eager `EagerTensor` surface when `autodiff` is enabled.
+
+The crate owns the linalg extension payload, runtime registration, and linalg
+AD rules where implemented. Backend kernels remain in `tenferro-tensor`.
+
+## `tenferro-fft`
+
+`tenferro-fft` is the standard FFT extension. It follows the same explicit
+runtime registration model as einsum and linalg.
 
 ## `tenferro`
 
@@ -124,13 +157,11 @@ Implemented public surfaces include:
 - `TracedTensor` graph construction through `GraphCompiler` and backend
   execution through `GraphExecutor`.
 - `EagerTensor` / `EagerRuntime` for eager scalar-loss reverse-mode workflows.
-- Lazy traced `einsum` and `einsum_with`.
-- Public linalg free functions such as `svd`, `qr`, `cholesky`, `solve`,
-  `triangular_solve`, `lu`, `full_piv_lu`, `eig`, `eigh`, `pinv`, `det`,
-  `slogdet`, and `norm`.
 - Public AD transforms such as VJP/JVP/HVP over supported traced dense numeric
   paths.
 - Compiled execution through `ExecProgram` / `eval_exec_ir`.
+- Extension application and runtime registration APIs. Standard operation
+  families are imported from their own crates and registered explicitly.
 - Shape packing on concrete, eager, and traced tensors: use `stack(..., -1)`
   to create a trailing batch axis and `index_select(-1, positions)` to align
   entries along that axis.
@@ -152,8 +183,10 @@ errors rather than silently falling back to CPU.
 ## AD Support Notes
 
 Current mainline AD coverage is intentionally narrower than primal execution.
-Rules must live in `tenferro-ops/src/ad/` and must have corresponding
+Core primitive rules live in `tenferro-ops/src/ad/`; extension-specific rules
+live in the owning extension crate. Rules must have corresponding
 oracle/finite-difference coverage before being treated as supported mainline AD.
 
-Linalg AD for new matrix rules is separate work from the structural/einsum and
-CubeCL documentation updates covered here.
+The default feature set enables AD. Builds without AD use
+`default-features = false` plus an explicit backend feature such as `cpu-faer`;
+AD/eager-AD tests and AD rule modules are excluded in that configuration.

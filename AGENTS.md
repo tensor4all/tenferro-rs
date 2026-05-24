@@ -57,7 +57,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 **tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates). It provides:
 - Dense tensor types with CPU/GPU placement metadata
 - Graph-based traced execution via `TracedTensor` + `Engine`
-- High-level einsum with N-ary contraction tree optimization
+- Standard extension crates for operation families such as einsum, linalg, and FFT
 - Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
 - Single execution IR (`ExecOp`) plus a pass pipeline for backend dispatch
 
@@ -214,14 +214,14 @@ python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
 
-# GPU (CubeCL) tests — requires NVIDIA GPU + CUDA 12
+# GPU (CUDA/CubeCL) tests — requires NVIDIA GPU + CUDA 12
 # Set CUBECL_DEBUG_LOG=0 to suppress verbose JIT compilation logs.
 # GPU tests are marked #[ignore] so they don't fail on non-GPU machines.
 # Use --ignored to actually run them.
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-tensor --features cubecl -- --ignored
+  cargo test -p tenferro-tensor --features cuda -- --ignored
 ```
 
 ### CubeCL Environment Variables
@@ -294,9 +294,13 @@ compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
 
 ```
 Layer 4: tenferro             — Public traced frontend: Engine, TracedTensor, lowering, execution,
-                                einsum/linalg convenience APIs, VJP/JVP
-Layer 3: tenferro-einsum      — High-level einsum syntax, contraction planning, fragment builder
-         tenferro-ops         — Graph op vocabulary (`StdTensorOp`) and AD rules
+                                extension registration, VJP/JVP
+Layer 3: tenferro-einsum      — Standard extension: einsum syntax, contraction planning,
+                                fragment builder, runtime registration
+         tenferro-linalg      — Standard extension: linalg traced/eager APIs, AD rules,
+                                runtime registration
+         tenferro-fft         — Standard extension: FFT APIs and runtime registration
+         tenferro-ops         — Core graph op vocabulary (`StdTensorOp`) and primitive AD rules
 Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
                                 CUDA/ROCm backend stubs, execution kernels
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
@@ -312,8 +316,13 @@ of any tensor type. `chainrules` provides engine-independent scalar AD rules,
 and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
 `tenferro-tensor` owns the concrete dense runtime value types and backend
 execution surface. `tenferro-ops/src/ad/` is the semantic source of truth for
-AD rules. `tenferro` owns traced graph construction, lowering, and
-public evaluation APIs.
+core primitive AD rules. `tenferro` owns traced graph construction, lowering,
+extension registration, and public evaluation APIs.
+
+`tenferro` must not depend on standard operation extension crates and must not
+expose facade paths such as `tenferro::einsum`, `tenferro::linalg`, or
+`tenferro::fft`. Standard operation families remain separately imported crates
+such as `tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
 
 ## AI Workflow Scripts
 
@@ -355,10 +364,9 @@ tenferro-ops
      ← tenferro-tensor)
          │
          ▼
-tenferro-einsum
-    (← omeco, ← tenferro-ops)
-         │
-         ▼
 tenferro
-    (← computegraph, ← tidu, ← tenferro-einsum, ← tenferro-ops, ← tenferro-tensor)
+    (← computegraph, ← tidu, ← tenferro-ops, ← tenferro-tensor)
+
+tenferro-einsum / tenferro-linalg / tenferro-fft
+    (← tenferro, ← tenferro-ops, ← tenferro-tensor as needed)
 ```

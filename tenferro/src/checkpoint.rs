@@ -17,6 +17,7 @@ pub(crate) struct CheckpointNode {
 }
 
 impl CheckpointNode {
+    #[cfg(feature = "autodiff")]
     pub(crate) fn collect_aliases(&self) -> HashMap<TensorInputKey, GlobalValKey<StdTensorOp>> {
         let mut aliases = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
@@ -27,6 +28,7 @@ impl CheckpointNode {
         aliases
     }
 
+    #[cfg(feature = "autodiff")]
     pub(crate) fn collect_fragments(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
         let mut fragments = Vec::new();
         let mut current: Option<&CheckpointNode> = Some(self);
@@ -37,6 +39,7 @@ impl CheckpointNode {
         fragments
     }
 
+    #[cfg(feature = "autodiff")]
     pub(crate) fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
         let mut inputs = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);

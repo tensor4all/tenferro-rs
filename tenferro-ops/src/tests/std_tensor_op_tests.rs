@@ -1,7 +1,7 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{register_extension_rule, ExtensionAdRule, ExtensionOp};
-use crate::std_tensor_op::{EinsumSubscripts, StdTensorOp};
+use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 use chainrules_core::{ADRuleKind, ADRuleResult, PrimitiveOp};
 use computegraph::fragment::{Fragment, FragmentBuilder};
@@ -25,35 +25,6 @@ macro_rules! shape {
 
 fn sym_shape(dims: &[usize]) -> Vec<SymDim> {
     dims.iter().copied().map(SymDim::from).collect()
-}
-
-fn subs_ij_jk_ik() -> EinsumSubscripts {
-    EinsumSubscripts::new(
-        &[&[b'i' as u32, b'j' as u32], &[b'j' as u32, b'k' as u32]],
-        &[b'i' as u32, b'k' as u32],
-    )
-}
-
-fn subs_ij_jk_kl_il() -> EinsumSubscripts {
-    EinsumSubscripts::new(
-        &[
-            &[b'i' as u32, b'j' as u32],
-            &[b'j' as u32, b'k' as u32],
-            &[b'k' as u32, b'l' as u32],
-        ],
-        &[b'i' as u32, b'l' as u32],
-    )
-}
-
-fn subs_il_ij_kl_jk() -> EinsumSubscripts {
-    EinsumSubscripts::new(
-        &[
-            &[b'i' as u32, b'l' as u32],
-            &[b'i' as u32, b'j' as u32],
-            &[b'k' as u32, b'l' as u32],
-        ],
-        &[b'j' as u32, b'k' as u32],
-    )
 }
 
 fn tensor_input_key(id: u64) -> TensorInputKey {
@@ -323,13 +294,6 @@ fn test_std_tensor_op_input_output_counts() {
     );
     assert_eq!(StdTensorOp::DynamicUpdateSlice.n_inputs(), 3);
     assert_eq!(
-        StdTensorOp::NaryEinsum {
-            subscripts: subs_ij_jk_kl_il(),
-        }
-        .n_inputs(),
-        3
-    );
-    assert_eq!(
         StdTensorOp::Pad(PadConfig {
             edge_padding_low: vec![1],
             edge_padding_high: vec![1],
@@ -350,13 +314,6 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Exp.n_inputs(), 1);
     assert_eq!(StdTensorOp::Log1p.n_inputs(), 1);
     assert_eq!(StdTensorOp::constant_f64(1.0).n_outputs(), 1);
-    assert_eq!(
-        StdTensorOp::NaryEinsum {
-            subscripts: subs_ij_jk_ik(),
-        }
-        .n_outputs(),
-        1
-    );
     assert_eq!(
         StdTensorOp::EmbedDiag {
             axis_a: 0,
@@ -407,54 +364,6 @@ fn test_std_tensor_op_input_output_counts() {
     assert_eq!(StdTensorOp::Tril { k: -1 }.n_outputs(), 1);
     assert_eq!(StdTensorOp::Triu { k: 1 }.n_inputs(), 1);
     assert_eq!(StdTensorOp::Triu { k: 1 }.n_outputs(), 1);
-}
-
-#[test]
-fn test_std_tensor_op_linalg_input_output_counts() {
-    assert_eq!(StdTensorOp::Cholesky.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Cholesky.n_outputs(), 1);
-    assert_eq!(StdTensorOp::Svd { eps: 1.0e-12 }.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Svd { eps: 1.0e-12 }.n_outputs(), 3);
-    assert_eq!(StdTensorOp::Qr.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Qr.n_outputs(), 2);
-    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Eigh { eps: 1.0e-12 }.n_outputs(), 2);
-    assert_eq!(StdTensorOp::Lu.n_inputs(), 1);
-    assert_eq!(StdTensorOp::Lu.n_outputs(), 4);
-    assert_eq!(
-        StdTensorOp::Eig {
-            input_dtype: DType::F64,
-        }
-        .n_inputs(),
-        1
-    );
-    assert_eq!(
-        StdTensorOp::Eig {
-            input_dtype: DType::F64,
-        }
-        .n_outputs(),
-        2
-    );
-    assert_eq!(
-        StdTensorOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: false,
-        }
-        .n_inputs(),
-        2
-    );
-    assert_eq!(
-        StdTensorOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: false,
-        }
-        .n_outputs(),
-        1
-    );
 }
 
 #[test]
@@ -722,9 +631,6 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
             from: DType::F64,
             to: DType::C64,
         },
-        StdTensorOp::NaryEinsum {
-            subscripts: subs_ij_jk_kl_il(),
-        },
         StdTensorOp::Concatenate {
             axis: 1,
             n_inputs: 3,
@@ -749,97 +655,6 @@ fn test_std_tensor_op_hash_covers_remaining_variants() {
     let mut rhs = DefaultHasher::new();
     StdTensorOp::constant_f64(1.25).hash(&mut rhs);
     assert_eq!(lhs.finish(), rhs.finish());
-}
-
-#[test]
-fn test_std_tensor_op_nary_einsum_linearize_emits_term_sum() {
-    let op = StdTensorOp::NaryEinsum {
-        subscripts: subs_ij_jk_kl_il(),
-    };
-    let (result, fragment) = run_linearize_case(op.clone(), 3, 0, &[true, false, true]);
-
-    assert!(result[0].is_some());
-    assert_eq!(fragment.ops().len(), 3);
-    assert_eq!(fragment.ops()[0].op, op);
-    assert_eq!(
-        fragment.ops()[0].mode,
-        OpMode::Linear {
-            active_mask: vec![true, false, false],
-        }
-    );
-    assert_eq!(fragment.ops()[1].op, op);
-    assert_eq!(
-        fragment.ops()[1].mode,
-        OpMode::Linear {
-            active_mask: vec![false, false, true],
-        }
-    );
-    assert_eq!(fragment.ops()[2].op, StdTensorOp::Add);
-}
-
-#[test]
-fn test_std_tensor_op_nary_einsum_transpose_skips_real_conjugates_and_emits_vjp_term() {
-    let op = StdTensorOp::NaryEinsum {
-        subscripts: subs_ij_jk_kl_il(),
-    };
-    let (result, _, fragment) = run_transpose_case_with_input_shape(
-        op,
-        3,
-        &[false, true, false],
-        true,
-        Some(sym_shape(&[2, 3])),
-    );
-
-    assert_eq!(result[0], None);
-    assert!(result[1].is_some());
-    assert_eq!(result[2], None);
-    assert_eq!(fragment.ops().len(), 1);
-    assert_eq!(
-        fragment.ops()[0].op,
-        StdTensorOp::NaryEinsum {
-            subscripts: subs_il_ij_kl_jk(),
-        }
-    );
-    assert_eq!(
-        fragment.ops()[0].mode,
-        OpMode::Linear {
-            active_mask: vec![true, false, false],
-        }
-    );
-}
-
-#[test]
-fn test_std_tensor_op_nary_einsum_transpose_keeps_complex_conjugates() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default();
-    let cotangent = builder.add_input(tensor_input_key(420));
-    let inputs = external_inputs(520, 3);
-    seed_uniform_ref_metadata_with_dtype(&mut ad_ctx, &inputs, DType::C64, sym_shape(&[2, 3]));
-    let op = StdTensorOp::NaryEinsum {
-        subscripts: subs_ij_jk_kl_il(),
-    };
-
-    let result = op.transpose_rule(
-        &mut builder,
-        &[Some(cotangent)],
-        &inputs,
-        &linear_mode(&[false, true, false]),
-        &mut ad_ctx,
-    );
-    let fragment = builder.build();
-
-    assert_eq!(result[0], None);
-    assert!(result[1].is_some());
-    assert_eq!(result[2], None);
-    assert_eq!(fragment.ops().len(), 3);
-    assert_eq!(fragment.ops()[0].op, StdTensorOp::Conj);
-    assert_eq!(fragment.ops()[1].op, StdTensorOp::Conj);
-    assert_eq!(
-        fragment.ops()[2].op,
-        StdTensorOp::NaryEinsum {
-            subscripts: subs_il_ij_kl_jk(),
-        }
-    );
 }
 
 #[test]
@@ -1604,22 +1419,6 @@ fn test_std_tensor_op_contraction_special_cases_cover_none_and_scalar_paths() {
         .ops()
         .iter()
         .any(|node| node.op == StdTensorOp::Conj));
-}
-
-#[test]
-#[should_panic(
-    expected = "direct transpose_rule not implemented for FullPivLu; reverse-mode support is provided by linearize()"
-)]
-fn test_std_tensor_op_transpose_rule_panics_for_unimplemented_variant() {
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default();
-    let _ = StdTensorOp::FullPivLu.transpose_rule(
-        &mut builder,
-        &[None, None, None, None, None],
-        &external_inputs(950, 1),
-        &OpMode::Primal,
-        &mut ad_ctx,
-    );
 }
 
 #[derive(Clone, Debug)]

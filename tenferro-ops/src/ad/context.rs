@@ -541,16 +541,14 @@ fn release_scoped_global_metadata(keys: &[GlobalValKey<StdTensorOp>]) {
 /// works for `DimExpr::Const` and expressions composed entirely from constants.
 /// `DimExpr::InputDim` references will panic, which is currently a programming
 /// invariant enforced by the linalg AD callers.
-pub(crate) fn resolve_dim(dim: &DimExpr) -> usize {
+#[doc(hidden)]
+pub fn resolve_dim(dim: &DimExpr) -> usize {
     dim.eval(&[])
 }
 
 /// Resolve matrix dimensions and record their ordering as a guard.
-pub(crate) fn resolve_and_guard(
-    m: &DimExpr,
-    n: &DimExpr,
-    ctx: &mut ShapeGuardContext,
-) -> (usize, usize) {
+#[doc(hidden)]
+pub fn resolve_and_guard(m: &DimExpr, n: &DimExpr, ctx: &mut ShapeGuardContext) -> (usize, usize) {
     let m_size = resolve_dim(m);
     let n_size = resolve_dim(n);
     ctx.guards.push(ShapeGuard {

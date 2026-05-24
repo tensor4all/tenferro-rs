@@ -30,7 +30,7 @@ tenferro-tensor
     Tensor, TypedTensor, TensorBackend, TensorExec
         │
         ├── cpu::CpuBackend
-        └── cubecl::CubeclBackend (feature = "cubecl")
+        └── cubecl::CubeclBackend (feature = "cuda")
 ```
 
 There is exactly one dense runtime tensor type family (`Tensor` /

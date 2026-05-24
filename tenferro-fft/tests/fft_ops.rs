@@ -5,7 +5,11 @@ use tenferro_fft::{fft, ifft, irfft, rfft, FftNorm};
 fn run(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).unwrap();
-    GraphExecutor::new(CpuBackend::new()).run(&program).unwrap()
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_fft::register_runtime)
+        .unwrap();
+    executor.run(&program).unwrap()
 }
 
 fn assert_c64_close(actual: &[Complex64], expected: &[Complex64]) {
@@ -111,6 +115,7 @@ fn irfft_c64_reconstructs_real_signal() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn fft_c64_jvp_applies_fft_to_tangent() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],

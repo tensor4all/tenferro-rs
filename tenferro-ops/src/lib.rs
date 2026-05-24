@@ -7,6 +7,9 @@ pub mod std_tensor_op;
 pub mod sym_dim;
 
 pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
+#[cfg(not(feature = "autodiff"))]
+pub use ext_op::ExtensionOp;
+#[cfg(feature = "autodiff")]
 pub use ext_op::{
     is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
     register_extension_chain_rule, register_extension_rule, transpose_extension_rule, AdValue,
