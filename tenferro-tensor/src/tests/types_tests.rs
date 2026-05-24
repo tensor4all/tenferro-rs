@@ -4,8 +4,9 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
-    TypedTensorView,
+    MemoryKind, Placement, StridedSliceSpec, StridedTensorView, StridedTensorViewMut, Tensor,
+    TensorRead, TensorScalar, TensorView, TypedStridedTensorView, TypedStridedTensorViewMut,
+    TypedTensor, TypedTensorView,
 };
 use crate::Error;
 
@@ -290,6 +291,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
 fn tensor_shape_and_dtype_cover_all_variants() {
     let f32_tensor = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]));
     let f64_tensor = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0_f64]));
+    let i32_tensor = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1_i32, -2]));
     let c32_tensor = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![1],
         vec![Complex32::new(1.0, -2.0)],
@@ -298,11 +300,16 @@ fn tensor_shape_and_dtype_cover_all_variants() {
         vec![1, 1],
         vec![Complex64::new(-3.0, 4.0)],
     ));
+    let bool_tensor = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]));
 
     assert_eq!(f32_tensor.shape(), &[2]);
     assert_eq!(f32_tensor.dtype(), DType::F32);
     assert_eq!(f64_tensor.shape(), &[] as &[usize]);
     assert_eq!(f64_tensor.dtype(), DType::F64);
+    assert_eq!(i32_tensor.shape(), &[2]);
+    assert_eq!(i32_tensor.dtype(), DType::I32);
+    assert_eq!(bool_tensor.shape(), &[2]);
+    assert_eq!(bool_tensor.dtype(), DType::Bool);
     assert_eq!(c32_tensor.shape(), &[1]);
     assert_eq!(c32_tensor.dtype(), DType::C32);
     assert_eq!(c64_tensor.shape(), &[1, 1]);
@@ -326,7 +333,9 @@ fn typed_tensor_view_validates_shape_and_exposes_slice() {
 fn tensor_view_covers_dtype_shape_and_materialization() {
     let f32_data = [1.0_f32, 2.0];
     let f64_data = [1.0_f64, 2.0];
+    let i32_data = [1_i32, 2];
     let i64_data = [1_i64, 2];
+    let bool_data = [true, false];
     let c32_data = [Complex32::new(1.0, -1.0), Complex32::new(2.0, 0.5)];
     let c64_data = [Complex64::new(1.0, -1.0), Complex64::new(2.0, 0.5)];
     let shape = [2usize];
@@ -334,11 +343,21 @@ fn tensor_view_covers_dtype_shape_and_materialization() {
     let views = [
         TensorView::f32(&shape, &f32_data).unwrap(),
         TensorView::f64(&shape, &f64_data).unwrap(),
+        TensorView::i32(&shape, &i32_data).unwrap(),
         TensorView::i64(&shape, &i64_data).unwrap(),
+        TensorView::bool(&shape, &bool_data).unwrap(),
         TensorView::c32(&shape, &c32_data).unwrap(),
         TensorView::c64(&shape, &c64_data).unwrap(),
     ];
-    let dtypes = [DType::F32, DType::F64, DType::I64, DType::C32, DType::C64];
+    let dtypes = [
+        DType::F32,
+        DType::F64,
+        DType::I32,
+        DType::I64,
+        DType::Bool,
+        DType::C32,
+        DType::C64,
+    ];
 
     for (view, dtype) in views.iter().zip(dtypes) {
         assert_eq!(view.dtype(), dtype);
@@ -347,6 +366,200 @@ fn tensor_view_covers_dtype_shape_and_materialization() {
         assert_eq!(tensor.dtype(), dtype);
         assert_eq!(tensor.shape(), &[2]);
     }
+}
+
+#[test]
+fn strided_tensor_view_materializes_sliced_host_layouts() {
+    let row_major = [1_i32, 2, 3, 4, 5, 6];
+    let view = TypedStridedTensorView::new(&[2, 3], &[3, 1], 0, &row_major).unwrap();
+
+    assert_eq!(view.shape(), &[2, 3]);
+    assert_eq!(view.strides(), &[3, 1]);
+    assert_eq!(view.get(&[1, 2]), Some(&6));
+    assert_eq!(
+        view.materialize_col_major().unwrap().as_slice(),
+        &[1, 4, 2, 5, 3, 6]
+    );
+
+    let transposed = view.try_permute_axes(&[1, 0]).unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(
+        transposed.materialize_col_major().unwrap().as_slice(),
+        &[1, 2, 3, 4, 5, 6]
+    );
+
+    let reversed_cols = view.try_slice_axis(1, StridedSliceSpec::reverse()).unwrap();
+    assert_eq!(reversed_cols.strides(), &[3, -1]);
+    assert_eq!(
+        reversed_cols.materialize_col_major().unwrap().as_slice(),
+        &[3, 6, 2, 5, 1, 4]
+    );
+
+    let every_other_col = view
+        .try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 2)])
+        .unwrap();
+    assert_eq!(
+        every_other_col.materialize_col_major().unwrap().as_slice(),
+        &[1, 4, 3, 6]
+    );
+    assert!(view.try_reshape(&[6]).is_err());
+
+    let col_major = [1_i32, 4, 2, 5, 3, 6];
+    let contiguous = TypedStridedTensorView::from_col_major(&[2, 3], &col_major).unwrap();
+    assert_eq!(contiguous.try_reshape(&[6]).unwrap().strides(), &[1]);
+}
+
+#[test]
+fn dynamic_strided_tensor_view_covers_i32_and_bool() {
+    let i32_data = [1_i32, 2, 3, 4];
+    let i32_view = StridedTensorView::i32(&[2, 2], &[2, 1], 0, &i32_data).unwrap();
+    assert_eq!(i32_view.dtype(), DType::I32);
+    assert_eq!(
+        i32_view.to_tensor().unwrap().as_slice::<i32>().unwrap(),
+        &[1, 3, 2, 4]
+    );
+
+    let bool_data = [false, true, true];
+    let bool_view = StridedTensorView::bool(&[3], &[-1], 2, &bool_data).unwrap();
+    assert_eq!(bool_view.dtype(), DType::Bool);
+    assert_eq!(
+        bool_view.to_tensor().unwrap().as_slice::<bool>().unwrap(),
+        &[true, true, false]
+    );
+}
+
+#[test]
+fn strided_tensor_view_mut_updates_sliced_host_layouts() {
+    let mut row_major = [1_i32, 2, 3, 4, 5, 6];
+    let mut view = TypedStridedTensorViewMut::new(&[2, 3], &[3, 1], 0, &mut row_major).unwrap();
+
+    assert_eq!(view.shape(), &[2, 3]);
+    assert_eq!(view.strides(), &[3, 1]);
+    assert_eq!(view.get(&[1, 2]), Some(&6));
+
+    *view.get_mut(&[1, 2]).unwrap() = 60;
+    assert_eq!(view.get(&[1, 2]), Some(&60));
+
+    {
+        let mut transposed = view.try_permute_axes(&[1, 0]).unwrap();
+        *transposed.get_mut(&[2, 1]).unwrap() = 600;
+    }
+    assert_eq!(view.get(&[1, 2]), Some(&600));
+
+    {
+        let mut reversed_cols = view.try_slice_axis(1, StridedSliceSpec::reverse()).unwrap();
+        assert_eq!(reversed_cols.strides(), &[3, -1]);
+        *reversed_cols.get_mut(&[0, 0]).unwrap() = 30;
+    }
+    assert_eq!(view.get(&[0, 2]), Some(&30));
+
+    let materialized = view.materialize_col_major().unwrap();
+    assert_eq!(materialized.as_slice(), &[1, 4, 2, 5, 30, 600]);
+}
+
+#[test]
+fn strided_tensor_view_mut_rejects_aliasing_layouts() {
+    let data = [1_i32, 2, 3, 4];
+    assert!(TypedStridedTensorView::new(&[2, 2], &[1, 1], 0, &data).is_ok());
+
+    let mut data = [1_i32, 2, 3, 4];
+    let err = TypedStridedTensorViewMut::new(&[2, 2], &[1, 1], 0, &mut data).unwrap_err();
+    assert!(matches!(err, Error::InvalidConfig { .. }));
+
+    let mut data = [1_i32, 2];
+    assert!(TypedStridedTensorViewMut::new(&[2], &[0], 0, &mut data).is_err());
+
+    let mut data = [1_i32, 2, 3];
+    let mut reversed = TypedStridedTensorViewMut::new(&[3], &[-1], 2, &mut data).unwrap();
+    *reversed.get_mut(&[2]).unwrap() = 10;
+    assert_eq!(reversed.as_physical_slice(), &[10, 2, 3]);
+
+    let mut data = [1_i32, 2];
+    let singleton_zero_stride =
+        TypedStridedTensorViewMut::new(&[1, 2], &[0, 1], 0, &mut data).unwrap();
+    assert_eq!(singleton_zero_stride.shape(), &[1, 2]);
+}
+
+#[test]
+fn strided_tensor_view_mut_multi_slice_returns_option() {
+    let mut data = [1_i32, 2, 3, 4, 5, 6];
+    let mut view = TypedStridedTensorViewMut::new(&[6], &[1], 0, &mut data).unwrap();
+
+    {
+        let (mut left, mut right) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(0, Some(3), 1)],
+                &[StridedSliceSpec::new(3, Some(6), 1)],
+            )
+            .unwrap();
+        *left.get_mut(&[2]).unwrap() = 30;
+        *right.get_mut(&[0]).unwrap() = 40;
+    }
+    assert_eq!(view.as_physical_slice(), &[1, 2, 30, 40, 5, 6]);
+
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(4), 1)],
+            &[StridedSliceSpec::new(3, Some(6), 1)],
+        )
+        .is_none());
+
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(2), 0)],
+            &[StridedSliceSpec::new(3, Some(6), 1)],
+        )
+        .is_none());
+}
+
+#[test]
+fn dynamic_strided_tensor_view_mut_covers_i32_and_bool() {
+    let mut i32_data = [1_i32, 2, 3, 4];
+    let mut i32_view = StridedTensorViewMut::i32(&[2, 2], &[2, 1], 0, &mut i32_data).unwrap();
+    assert_eq!(i32_view.dtype(), DType::I32);
+    match &mut i32_view {
+        StridedTensorViewMut::I32(view) => *view.get_mut(&[1, 1]).unwrap() = 40,
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        i32_view.to_tensor().unwrap().as_slice::<i32>().unwrap(),
+        &[1, 3, 2, 40]
+    );
+
+    let mut bool_data = [false, true, true];
+    let mut bool_view = StridedTensorViewMut::bool(&[3], &[-1], 2, &mut bool_data).unwrap();
+    assert_eq!(bool_view.dtype(), DType::Bool);
+    match &mut bool_view {
+        StridedTensorViewMut::Bool(view) => *view.get_mut(&[2]).unwrap() = true,
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        bool_view.to_tensor().unwrap().as_slice::<bool>().unwrap(),
+        &[true, true, true]
+    );
+}
+
+#[test]
+fn dynamic_strided_tensor_view_mut_multi_slice_returns_option() {
+    let mut data = [1_i32, 2, 3, 4];
+    let mut view = StridedTensorViewMut::i32(&[4], &[1], 0, &mut data).unwrap();
+    {
+        let (left, right) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(0, Some(2), 1)],
+                &[StridedSliceSpec::new(2, Some(4), 1)],
+            )
+            .unwrap();
+        assert_eq!(left.shape(), &[2]);
+        assert_eq!(right.shape(), &[2]);
+    }
+
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(3), 1)],
+            &[StridedSliceSpec::new(2, Some(4), 1)],
+        )
+        .is_none());
 }
 
 #[test]
@@ -387,6 +600,27 @@ tensor_scalar_roundtrip_test!(
     f64,
     vec![2, 1],
     vec![1.25_f64, -2.5_f64]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_i32,
+    i32,
+    vec![2],
+    vec![1_i32, -2_i32]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_i64,
+    i64,
+    vec![2],
+    vec![1_i64, -2_i64]
+);
+
+tensor_scalar_roundtrip_test!(
+    tensor_scalar_roundtrip_bool,
+    bool,
+    vec![2],
+    vec![true, false]
 );
 
 tensor_scalar_roundtrip_test!(

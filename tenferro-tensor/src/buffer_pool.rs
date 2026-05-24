@@ -66,7 +66,9 @@ pub struct BufferPoolStats {
 pub struct BufferPool {
     f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
     f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
+    i32_pool: BTreeMap<usize, Vec<Vec<i32>>>,
     i64_pool: BTreeMap<usize, Vec<Vec<i64>>>,
+    bool_pool: BTreeMap<usize, Vec<Vec<bool>>>,
     c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
     c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
     retained_capacity_bytes: usize,
@@ -133,7 +135,9 @@ mod private {
 
     impl Sealed for f64 {}
     impl Sealed for f32 {}
+    impl Sealed for i32 {}
     impl Sealed for i64 {}
+    impl Sealed for bool {}
     impl Sealed for num_complex::Complex64 {}
     impl Sealed for num_complex::Complex32 {}
 }
@@ -168,7 +172,9 @@ fn evict_one_from_pool<T>(pool: &mut BTreeMap<usize, Vec<Vec<T>>>) -> Option<usi
 enum TypedPoolKind {
     F64,
     F32,
+    I32,
     I64,
+    Bool,
     C64,
     C32,
 }
@@ -223,7 +229,9 @@ macro_rules! impl_pool_scalar {
 
 impl_pool_scalar!(f64, f64_pool);
 impl_pool_scalar!(f32, f32_pool);
+impl_pool_scalar!(i32, i32_pool);
 impl_pool_scalar!(i64, i64_pool);
+impl_pool_scalar!(bool, bool_pool);
 impl_pool_scalar!(Complex64, c64_pool);
 impl_pool_scalar!(Complex32, c32_pool);
 
@@ -259,7 +267,9 @@ impl BufferPool {
         Self {
             f64_pool: BTreeMap::new(),
             f32_pool: BTreeMap::new(),
+            i32_pool: BTreeMap::new(),
             i64_pool: BTreeMap::new(),
+            bool_pool: BTreeMap::new(),
             c64_pool: BTreeMap::new(),
             c32_pool: BTreeMap::new(),
             retained_capacity_bytes: 0,
@@ -371,7 +381,9 @@ impl BufferPool {
         BufferPoolStats {
             buffers: pool_len(&self.f64_pool)
                 + pool_len(&self.f32_pool)
+                + pool_len(&self.i32_pool)
                 + pool_len(&self.i64_pool)
+                + pool_len(&self.bool_pool)
                 + pool_len(&self.c64_pool)
                 + pool_len(&self.c32_pool),
             capacity_bytes: self.retained_capacity_bytes,
@@ -443,7 +455,9 @@ impl BufferPool {
     pub fn is_empty(&self) -> bool {
         self.f64_pool.is_empty()
             && self.f32_pool.is_empty()
+            && self.i32_pool.is_empty()
             && self.i64_pool.is_empty()
+            && self.bool_pool.is_empty()
             && self.c64_pool.is_empty()
             && self.c32_pool.is_empty()
     }
@@ -467,7 +481,9 @@ impl BufferPool {
     pub fn clear(&mut self) {
         self.f64_pool.clear();
         self.f32_pool.clear();
+        self.i32_pool.clear();
         self.i64_pool.clear();
+        self.bool_pool.clear();
         self.c64_pool.clear();
         self.c32_pool.clear();
         self.retained_capacity_bytes = 0;
@@ -488,7 +504,9 @@ impl BufferPool {
         let candidates = [
             smallest_pool_candidate(&self.f64_pool, TypedPoolKind::F64),
             smallest_pool_candidate(&self.f32_pool, TypedPoolKind::F32),
+            smallest_pool_candidate(&self.i32_pool, TypedPoolKind::I32),
             smallest_pool_candidate(&self.i64_pool, TypedPoolKind::I64),
+            smallest_pool_candidate(&self.bool_pool, TypedPoolKind::Bool),
             smallest_pool_candidate(&self.c64_pool, TypedPoolKind::C64),
             smallest_pool_candidate(&self.c32_pool, TypedPoolKind::C32),
         ];
@@ -499,7 +517,9 @@ impl BufferPool {
         match kind {
             TypedPoolKind::F64 => evict_one_from_pool(&mut self.f64_pool),
             TypedPoolKind::F32 => evict_one_from_pool(&mut self.f32_pool),
+            TypedPoolKind::I32 => evict_one_from_pool(&mut self.i32_pool),
             TypedPoolKind::I64 => evict_one_from_pool(&mut self.i64_pool),
+            TypedPoolKind::Bool => evict_one_from_pool(&mut self.bool_pool),
             TypedPoolKind::C64 => evict_one_from_pool(&mut self.c64_pool),
             TypedPoolKind::C32 => evict_one_from_pool(&mut self.c32_pool),
         }

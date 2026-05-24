@@ -669,7 +669,9 @@ impl TensorExec for CpuExecSession<'_> {
         match tensor {
             Tensor::F32(t) => reclaim_typed(self.buffers, t),
             Tensor::F64(t) => reclaim_typed(self.buffers, t),
+            Tensor::I32(t) => reclaim_typed(self.buffers, t),
             Tensor::I64(t) => reclaim_typed(self.buffers, t),
+            Tensor::Bool(t) => reclaim_typed(self.buffers, t),
             Tensor::C32(t) => reclaim_typed(self.buffers, t),
             Tensor::C64(t) => reclaim_typed(self.buffers, t),
         }

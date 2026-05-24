@@ -94,7 +94,12 @@ fn zero_like_tensor(input: &Tensor) -> Tensor {
     match input {
         Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape.clone())),
         Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape.clone())),
         Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::Bool(tensor) => Tensor::Bool(TypedTensor::from_vec_col_major(
+            tensor.shape.clone(),
+            vec![false; tensor.n_elements()],
+        )),
         Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape.clone())),
         Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape.clone())),
     }

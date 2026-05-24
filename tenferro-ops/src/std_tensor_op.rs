@@ -190,6 +190,38 @@ impl StdTensorOp {
         }
     }
 
+    /// Create an `i32` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_i32(7);
+    /// ```
+    pub fn constant_i32(value: i32) -> Self {
+        Self::Constant {
+            dtype: DType::I32,
+            bytes: value.to_le_bytes().to_vec(),
+        }
+    }
+
+    /// Create a `bool` scalar constant op.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let op = StdTensorOp::constant_bool(true);
+    /// ```
+    pub fn constant_bool(value: bool) -> Self {
+        Self::Constant {
+            dtype: DType::Bool,
+            bytes: vec![u8::from(value)],
+        }
+    }
+
     /// Create a `Complex64` scalar constant op.
     ///
     /// # Examples

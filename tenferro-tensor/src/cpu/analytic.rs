@@ -148,10 +148,12 @@ macro_rules! define_unary_analytic_op {
             match input {
                 Tensor::F32(t) => Ok(Tensor::F32($typed_with_pool_fn(buffers, t)?)),
                 Tensor::F64(t) => Ok(Tensor::F64($typed_with_pool_fn(buffers, t)?)),
-                Tensor::I64(_) => Err(crate::Error::BackendFailure {
-                    op: stringify!($dispatch_fn),
-                    message: "unsupported dtype I64".into(),
-                }),
+                Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+                    Err(crate::Error::BackendFailure {
+                        op: stringify!($dispatch_fn),
+                        message: format!("unsupported dtype {:?}", input.dtype()),
+                    })
+                }
                 Tensor::C32(t) => Ok(Tensor::C32($typed_with_pool_fn(buffers, t)?)),
                 Tensor::C64(t) => Ok(Tensor::C64($typed_with_pool_fn(buffers, t)?)),
             }

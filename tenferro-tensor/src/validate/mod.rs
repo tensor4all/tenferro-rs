@@ -131,9 +131,9 @@ pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
         Tensor::F32(t) => check_singular_diagonal(t),
         Tensor::C64(t) => check_singular_diagonal(t),
         Tensor::C32(t) => check_singular_diagonal(t),
-        Tensor::I64(_) => Err(Error::BackendFailure {
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::BackendFailure {
             op: "solve",
-            message: "unsupported dtype I64".into(),
+            message: format!("unsupported dtype {:?}", u.dtype()),
         }),
     }
 }

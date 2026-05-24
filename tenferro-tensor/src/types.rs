@@ -5,6 +5,12 @@ use crate::{DotGeneralConfig, TensorBackend};
 
 mod accessors;
 mod shape_packing;
+mod strided_view;
+
+pub use strided_view::{
+    StridedSliceSpec, StridedTensorView, StridedTensorViewMut, TypedStridedTensorView,
+    TypedStridedTensorViewMut,
+};
 
 /// Memory location for tensor storage.
 ///
@@ -209,15 +215,17 @@ impl<'a, T> TypedTensorView<'a, T> {
 pub enum DType {
     F32,
     F64,
+    I32,
     I64,
+    Bool,
     C32,
     C64,
 }
 
 /// Sealed trait for scalar types that can be stored in a [`Tensor`].
 ///
-/// This trait is implemented for `f64`, `f32`, `i64`, [`Complex64`], and
-/// [`Complex32`].
+/// This trait is implemented for `f64`, `f32`, `i32`, `i64`, `bool`,
+/// [`Complex64`], and [`Complex32`].
 ///
 /// # Examples
 ///
@@ -285,7 +293,9 @@ mod private {
 
     impl Sealed for f64 {}
     impl Sealed for f32 {}
+    impl Sealed for i32 {}
     impl Sealed for i64 {}
+    impl Sealed for bool {}
     impl Sealed for num_complex::Complex64 {}
     impl Sealed for num_complex::Complex32 {}
 }
@@ -389,6 +399,72 @@ impl TensorScalar for i64 {
     }
 }
 
+impl TensorScalar for i32 {
+    type Real = i32;
+
+    fn dtype() -> DType {
+        DType::I32
+    }
+
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::I32(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::I32(t) => Some(t.host_data_mut()),
+            _ => None,
+        }
+    }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::I32(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
+impl TensorScalar for bool {
+    type Real = bool;
+
+    fn dtype() -> DType {
+        DType::Bool
+    }
+
+    fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
+        Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
+    }
+
+    fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
+        match tensor {
+            Tensor::Bool(t) => Some(t.host_data()),
+            _ => None,
+        }
+    }
+
+    fn try_as_slice_mut(tensor: &mut Tensor) -> Option<&mut [Self]> {
+        match tensor {
+            Tensor::Bool(t) => Some(t.host_data_mut()),
+            _ => None,
+        }
+    }
+
+    fn try_into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+        match tensor {
+            Tensor::Bool(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
 impl TensorScalar for Complex64 {
     type Real = f64;
 
@@ -469,7 +545,9 @@ impl TensorScalar for Complex32 {
 pub enum Tensor {
     F32(TypedTensor<f32>),
     F64(TypedTensor<f64>),
+    I32(TypedTensor<i32>),
     I64(TypedTensor<i64>),
+    Bool(TypedTensor<bool>),
     C32(TypedTensor<Complex<f32>>),
     C64(TypedTensor<Complex<f64>>),
 }
@@ -479,7 +557,9 @@ pub enum Tensor {
 pub enum TensorView<'a> {
     F32(TypedTensorView<'a, f32>),
     F64(TypedTensorView<'a, f64>),
+    I32(TypedTensorView<'a, i32>),
     I64(TypedTensorView<'a, i64>),
+    Bool(TypedTensorView<'a, bool>),
     C32(TypedTensorView<'a, Complex<f32>>),
     C64(TypedTensorView<'a, Complex<f64>>),
 }
@@ -543,6 +623,42 @@ impl From<TypedTensor<i64>> for Tensor {
     }
 }
 
+/// Wrap an `i32` [`TypedTensor`] into the corresponding [`Tensor`] variant.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![1_i32, 2]);
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.dtype(), DType::I32);
+/// assert_eq!(tensor.shape(), &[2]);
+/// ```
+impl From<TypedTensor<i32>> for Tensor {
+    fn from(t: TypedTensor<i32>) -> Self {
+        Tensor::I32(t)
+    }
+}
+
+/// Wrap a `bool` [`TypedTensor`] into the corresponding [`Tensor`] variant.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, Tensor, TypedTensor};
+///
+/// let typed = TypedTensor::from_vec_col_major(vec![2], vec![true, false]);
+/// let tensor: Tensor = typed.into();
+/// assert_eq!(tensor.dtype(), DType::Bool);
+/// assert_eq!(tensor.shape(), &[2]);
+/// ```
+impl From<TypedTensor<bool>> for Tensor {
+    fn from(t: TypedTensor<bool>) -> Self {
+        Tensor::Bool(t)
+    }
+}
+
 /// Wrap a [`Complex64`] [`TypedTensor`] into the corresponding [`Tensor`]
 /// variant.
 ///
@@ -600,6 +716,14 @@ impl<'a> TensorView<'a> {
         Ok(Self::I64(TypedTensorView::new(shape, data)?))
     }
 
+    pub fn i32(shape: &'a [usize], data: &'a [i32]) -> crate::Result<Self> {
+        Ok(Self::I32(TypedTensorView::new(shape, data)?))
+    }
+
+    pub fn bool(shape: &'a [usize], data: &'a [bool]) -> crate::Result<Self> {
+        Ok(Self::Bool(TypedTensorView::new(shape, data)?))
+    }
+
     pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
         Ok(Self::C32(TypedTensorView::new(shape, data)?))
     }
@@ -612,7 +736,9 @@ impl<'a> TensorView<'a> {
         match self {
             Self::F32(_) => DType::F32,
             Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
             Self::I64(_) => DType::I64,
+            Self::Bool(_) => DType::Bool,
             Self::C32(_) => DType::C32,
             Self::C64(_) => DType::C64,
         }
@@ -622,7 +748,9 @@ impl<'a> TensorView<'a> {
         match self {
             Self::F32(t) => t.shape,
             Self::F64(t) => t.shape,
+            Self::I32(t) => t.shape,
             Self::I64(t) => t.shape,
+            Self::Bool(t) => t.shape,
             Self::C32(t) => t.shape,
             Self::C64(t) => t.shape,
         }
@@ -632,7 +760,9 @@ impl<'a> TensorView<'a> {
         match self {
             Self::F32(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
             Self::F64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::I32(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
             Self::I64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
+            Self::Bool(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
             Self::C32(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
             Self::C64(t) => Tensor::from_vec_col_major(t.shape.to_vec(), t.data.to_vec()),
         }
@@ -1151,7 +1281,9 @@ impl Tensor {
         match self {
             Tensor::F32(t) => &t.shape,
             Tensor::F64(t) => &t.shape,
+            Tensor::I32(t) => &t.shape,
             Tensor::I64(t) => &t.shape,
+            Tensor::Bool(t) => &t.shape,
             Tensor::C32(t) => &t.shape,
             Tensor::C64(t) => &t.shape,
         }
@@ -1171,7 +1303,9 @@ impl Tensor {
         match self {
             Tensor::F32(_) => DType::F32,
             Tensor::F64(_) => DType::F64,
+            Tensor::I32(_) => DType::I32,
             Tensor::I64(_) => DType::I64,
+            Tensor::Bool(_) => DType::Bool,
             Tensor::C32(_) => DType::C32,
             Tensor::C64(_) => DType::C64,
         }

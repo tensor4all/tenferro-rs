@@ -107,11 +107,29 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
 
+    let i32_operand = Tensor::from_vec_col_major(vec![3], vec![1_i32, 2, 3]);
+    assert_eq!(
+        gather(&i32_operand, &indices, &simple_gather_config())
+            .unwrap()
+            .shape(),
+        &[2]
+    );
+
     let i64_operand = Tensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
-    assert!(matches!(
-        gather(&i64_operand, &indices, &simple_gather_config()),
-        Err(crate::Error::BackendFailure { op: "gather", .. })
-    ));
+    assert_eq!(
+        gather(&i64_operand, &indices, &simple_gather_config())
+            .unwrap()
+            .shape(),
+        &[2]
+    );
+
+    let bool_operand = Tensor::from_vec_col_major(vec![3], vec![true, false, true]);
+    assert_eq!(
+        gather(&bool_operand, &indices, &simple_gather_config())
+            .unwrap()
+            .shape(),
+        &[2]
+    );
 
     let scatter_indices = Tensor::from_vec_col_major(vec![2, 2], vec![0_i64, 1, 0, 1]);
 
@@ -160,11 +178,22 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2, 2]
     );
 
-    assert!(matches!(
+    assert_eq!(
         scatter(
             &Tensor::from_vec_col_major(vec![2, 2], vec![0_i64; 4]),
             &scatter_indices,
             &Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]),
+            &diagonal_scatter_config(),
+        )
+        .unwrap()
+        .shape(),
+        &[2, 2]
+    );
+    assert!(matches!(
+        scatter(
+            &Tensor::from_vec_col_major(vec![2, 2], vec![false; 4]),
+            &scatter_indices,
+            &Tensor::from_vec_col_major(vec![2], vec![true, false]),
             &diagonal_scatter_config(),
         ),
         Err(crate::Error::BackendFailure { op: "scatter", .. })
@@ -197,6 +226,12 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         &[2]
     );
     assert_eq!(
+        crate::cpu::indexing::slice(&bool_operand, &slice_cfg)
+            .unwrap()
+            .shape(),
+        &[2]
+    );
+    assert_eq!(
         crate::cpu::indexing::slice(&c32_operand, &slice_cfg)
             .unwrap()
             .shape(),
@@ -222,13 +257,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         dynamic_slice(&c64_operand, &starts, &[2]).unwrap().shape(),
         &[2]
     );
-    assert!(matches!(
-        dynamic_slice(&i64_operand, &starts, &[2]),
-        Err(crate::Error::BackendFailure {
-            op: "dynamic_slice",
-            ..
-        })
-    ));
+    assert_eq!(
+        dynamic_slice(&i64_operand, &starts, &[2]).unwrap().shape(),
+        &[2]
+    );
+    assert_eq!(
+        dynamic_slice(&bool_operand, &starts, &[2]).unwrap().shape(),
+        &[2]
+    );
 
     let pad_cfg = PadConfig {
         edge_padding_low: vec![1],
@@ -237,6 +273,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     };
     assert_eq!(pad(&f32_operand, &pad_cfg).unwrap().shape(), &[5]);
     assert_eq!(pad(&i64_operand, &pad_cfg).unwrap().shape(), &[5]);
+    assert_eq!(pad(&bool_operand, &pad_cfg).unwrap().shape(), &[5]);
     assert_eq!(pad(&c32_operand, &pad_cfg).unwrap().shape(), &[5]);
     assert_eq!(pad(&c64_operand, &pad_cfg).unwrap().shape(), &[5]);
 
@@ -271,6 +308,8 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
     );
 
     assert_eq!(backend.reverse(&f32_operand, &[0]).unwrap().shape(), &[3]);
+    assert_eq!(backend.reverse(&i64_operand, &[0]).unwrap().shape(), &[3]);
+    assert_eq!(backend.reverse(&bool_operand, &[0]).unwrap().shape(), &[3]);
     assert_eq!(backend.reverse(&c32_operand, &[0]).unwrap().shape(), &[3]);
     assert_eq!(backend.reverse(&c64_operand, &[0]).unwrap().shape(), &[3]);
 }

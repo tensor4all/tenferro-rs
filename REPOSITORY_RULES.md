@@ -181,9 +181,9 @@ rules from `tensor4all-agent-rules`.
 
 ### Performance Anti-Patterns
 
-- Do not duplicate `f64`/`f32`/complex function bodies. Use generic helpers,
-  traits, or macros, and keep any unavoidable dtype dispatch isolated at the
-  outer boundary.
+- Do not hand-copy near-identical dtype-specific operation bodies. Prefer
+  generic helpers, sealed traits, or macros, and keep any unavoidable dtype
+  dispatch isolated at the outer boundary.
 - Do not allocate dense buffers when strided or backend-native access is
   available.
 - Do not zero-initialize buffers that will be fully overwritten.
@@ -296,7 +296,13 @@ rules from `tensor4all-agent-rules`.
 - Use generic constructors with sealed traits instead of per-type functions.
 - Bad: `TracedTensor::from_f64(...)`, `TracedTensor::from_f32(...)`, etc.
 - Good: `TracedTensor::new<T: TensorScalar>(shape, data)` — type inference selects the variant.
-- Sealed traits (`TensorScalar`, `PoolScalar`, etc.) restrict to supported dtypes (f64, f32, Complex64, Complex32).
+- For dtype-polymorphic tensor operations, prefer one typed generic
+  implementation plus outer dtype dispatch over per-dtype copy-pasted
+  implementations.
+- If Rust generics cannot express the shared structure cleanly, use a local
+  macro to generate the repetitive dispatch or variant plumbing.
+- Sealed traits (`TensorScalar`, `PoolScalar`, etc.) restrict APIs to the
+  currently supported dtype set.
 
 ## Public API Convention
 
