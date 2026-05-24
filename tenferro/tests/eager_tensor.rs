@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 use std::sync::{Arc, OnceLock};
 
 use num_complex::Complex64;

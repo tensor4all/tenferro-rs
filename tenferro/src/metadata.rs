@@ -9,7 +9,9 @@ use tenferro_ops::ad::context::{
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::DType;
+#[cfg(feature = "autodiff")]
+use tenferro_tensor::Tensor;
 
 use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
 
@@ -32,6 +34,7 @@ pub(crate) fn symbolic_input_meta(dtype: DType, tensor_id: u64, rank: usize) -> 
     )
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
     concrete_tensor_meta(tensor.dtype(), tensor.shape())
 }
@@ -43,12 +46,14 @@ pub(crate) fn register_scoped_value_metadata(
     register_scoped_global_metadata_batch([(key, meta)])
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn register_scoped_metadata_batch(
     entries: impl IntoIterator<Item = (GlobalValKey<StdTensorOp>, TensorMeta)>,
 ) -> MetadataScope {
     register_scoped_global_metadata_batch(entries)
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn registered_meta(key: &GlobalValKey<StdTensorOp>) -> TensorMeta {
     lookup_global_metadata(key)
         .unwrap_or_else(|| panic!("metadata lookup: missing registered metadata for {:?}", key))
@@ -61,6 +66,7 @@ pub(crate) fn register_scoped_fragment_metadata(
     register_scoped_global_metadata_batch(fragment_metadata_registrations(fragment, None, seeded))
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn register_scoped_live_fragment_metadata(
     fragment: &Fragment<StdTensorOp>,
     live_values: &HashSet<LocalValId>,

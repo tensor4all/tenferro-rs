@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use tenferro::error::Error;
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
@@ -36,6 +34,7 @@ fn graph_executor_runs_compiled_multi_output_program() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn checkpoint_uses_explicit_compiler_and_executor() {
     let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     let mut y = &x * &x;
@@ -50,6 +49,7 @@ fn checkpoint_uses_explicit_compiler_and_executor() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn checkpoint_reuses_existing_cached_data_without_recompiling() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let mut y = &x + &x;
@@ -72,6 +72,7 @@ fn checkpoint_reuses_existing_cached_data_without_recompiling() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn checkpoint_gradient_runs_through_graph_executor() {
     let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
     let mut y = &x * &x;
@@ -209,18 +210,12 @@ fn graph_executor_cache_stats_are_separate_from_compiler_stats() {
     let _ = executor.run(&program).unwrap();
 
     assert!(compiler.cache_stats().compile.entries > 0);
-    assert_eq!(executor.cache_stats().runtime_einsum_plans.entries, 0);
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
 }
 
 #[test]
 fn graph_executor_cpu_cache_controls_are_available() {
-    let mut executor =
-        GraphExecutor::with_einsum_cache_capacity(CpuBackend::new(), NonZeroUsize::new(2).unwrap());
-
-    assert_eq!(executor.einsum_cache_len(), 0);
-    assert_eq!(executor.einsum_cache_capacity().get(), 2);
-    executor.set_einsum_cache_capacity(NonZeroUsize::new(3).unwrap());
-    assert_eq!(executor.einsum_cache_capacity().get(), 3);
+    let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let original_gemm_capacity = executor.gemm_analysis_cache_capacity();
     executor.set_gemm_analysis_cache_capacity(0);
@@ -233,7 +228,7 @@ fn graph_executor_cpu_cache_controls_are_available() {
     executor.set_buffer_pool_limit_bytes(original_pool_limit);
 
     let stats = executor.cpu_cache_stats();
-    assert_eq!(stats.executor.runtime_einsum_plans.entries, 0);
+    assert_eq!(stats.executor.extensions.entries, 0);
     assert_eq!(stats.buffer_pool.entries, executor.buffer_pool_len());
 
     executor.clear_all_caches();
@@ -242,6 +237,7 @@ fn graph_executor_cpu_cache_controls_are_available() {
 }
 
 #[test]
+#[cfg(feature = "autodiff")]
 fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     let loss = (&x * &x).reduce_sum(&[0]);

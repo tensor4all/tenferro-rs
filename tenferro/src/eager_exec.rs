@@ -1,12 +1,12 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::validate::validate_nonsingular_u;
+#[cfg(feature = "autodiff")]
+use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
-    DType, DotGeneralConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
+    DType, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
-use crate::einsum_subscripts::to_einsum_subscripts;
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
@@ -63,6 +63,7 @@ fn promote_binary<'a>(
     promote_binary_to_dtype(exec, a, b, promoted)
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
     lhs: &Tensor,
     rhs: &Tensor,
@@ -81,20 +82,13 @@ pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.
 ///
-/// Most ops produce one output tensor. Multi-output linalg ops return one
+/// Most ops produce one output tensor. Multi-output extensions return one
 /// tensor per output slot.
 pub fn exec_op_on_tensors<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
-    if let StdTensorOp::NaryEinsum { subscripts, .. } = op {
-        let parsed = to_einsum_subscripts(subscripts);
-        return Ok(vec![tenferro_einsum::eager_einsum_subscripts(
-            backend, inputs, &parsed,
-        )?]);
-    }
-
     if let StdTensorOp::Extension(ext) = op {
         // Per spec Section 8 the eager path MUST NOT open a backend exec
         // session for extension ops; the extension owns its execution
@@ -106,35 +100,6 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 message: format!("family_id={:?}: {err}", ext.family_id()),
             })
         });
-    }
-
-    if let StdTensorOp::Solve { transpose_a } = op {
-        let promoted = promote_dtype_for_binary_op(op, inputs[0].dtype(), inputs[1].dtype());
-        let a_converted;
-        let b_converted;
-        let a = if inputs[0].dtype() == promoted {
-            inputs[0]
-        } else {
-            a_converted = backend.convert(inputs[0], promoted)?;
-            &a_converted
-        };
-        let b = if inputs[1].dtype() == promoted {
-            inputs[1]
-        } else {
-            b_converted = backend.convert(inputs[1], promoted)?;
-            &b_converted
-        };
-        let a_transposed;
-        let a_ref = if *transpose_a {
-            let rank = a.shape().len();
-            let mut perm: Vec<usize> = (0..rank).collect();
-            perm.swap(0, 1);
-            a_transposed = backend.transpose(a, &perm)?;
-            &a_transposed
-        } else {
-            a
-        };
-        return Ok(vec![backend.solve(a_ref, b)?]);
     }
 
     backend.with_exec_session(|exec| {
@@ -230,9 +195,6 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                     promoted_inputs.iter().map(PromotedTensor::tensor).collect();
                 vec![exec.concatenate(&promoted_refs, *axis)?]
             }
-            StdTensorOp::NaryEinsum { .. } => {
-                unreachable!("NaryEinsum is handled before opening an exec session")
-            }
             StdTensorOp::Gather(config) => {
                 vec![exec.gather(inputs[0], inputs[1], config)?]
             }
@@ -264,37 +226,6 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                 let (operand, update) = promote_binary(exec, inputs[0], inputs[1], op)?;
                 vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
             }
-            StdTensorOp::Cholesky { .. } => vec![exec.cholesky(inputs[0])?],
-            StdTensorOp::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-                ..
-            } => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.triangular_solve(
-                    a.tensor(),
-                    b.tensor(),
-                    *left_side,
-                    *lower,
-                    *transpose_a,
-                    *unit_diagonal,
-                )?]
-            }
-            StdTensorOp::Svd { .. } => exec.svd(inputs[0])?,
-            StdTensorOp::Qr { .. } => exec.qr(inputs[0])?,
-            StdTensorOp::Lu { .. } => exec.lu(inputs[0])?,
-            StdTensorOp::FullPivLu { .. } => exec.full_piv_lu(inputs[0])?,
-            StdTensorOp::Solve { .. } => {
-                unreachable!("Solve is handled before opening an exec session")
-            }
-            StdTensorOp::FullPivLuSolve { transpose_a } => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.full_piv_lu_solve(a.tensor(), b.tensor(), *transpose_a)?]
-            }
-            StdTensorOp::Eigh { .. } => exec.eigh(inputs[0])?,
-            StdTensorOp::Eig { .. } => exec.eig(inputs[0])?,
             StdTensorOp::ShapeOf { axis } => {
                 let input = inputs[0];
                 if *axis >= input.shape().len() {
@@ -357,10 +288,6 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
                     };
                     vec![exec.pad(input, &config)?]
                 }
-            }
-            StdTensorOp::ValidateNonsingular { .. } => {
-                validate_nonsingular_u(inputs[0])?;
-                vec![inputs[0].clone()]
             }
             StdTensorOp::Extension(_) => {
                 unreachable!("Extension is handled before opening an exec session")

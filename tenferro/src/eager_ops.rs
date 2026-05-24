@@ -10,7 +10,7 @@ use crate::eager::{
     exec_single_output, maybe_print_eager_op_profile, profile_eager_op_section,
     record_eager_op_profile, record_eager_outputs, EagerTensor,
 };
-use crate::eager_exec::{exec_dot_general_with_conj_on_tensors, exec_op_on_tensors};
+use crate::eager_exec::exec_dot_general_with_conj_on_tensors;
 use crate::error::{Error, Result};
 use crate::metadata::push_metadata_scope;
 
@@ -637,63 +637,6 @@ impl EagerTensor {
 
     pub(crate) fn binary_op(&self, other: &Self, op: StdTensorOp) -> Result<Self> {
         Self::nary_op(&[self, other], op)
-    }
-
-    pub(crate) fn multi_output_unary_op(
-        &self,
-        op: StdTensorOp,
-        num_outputs: usize,
-    ) -> Result<Vec<Self>> {
-        let outputs = {
-            let mut backend = self.ctx.backend.lock().unwrap();
-            exec_op_on_tensors(&op, &[self.data.as_ref()], &mut *backend)?
-        };
-        if outputs.len() != num_outputs {
-            return Err(Error::Internal(format!(
-                "expected {} eager outputs for {:?}, got {}",
-                num_outputs,
-                op,
-                outputs.len()
-            )));
-        }
-
-        if !self.requires_grad {
-            return Ok(outputs
-                .into_iter()
-                .map(|output| Self::new_untracked_result(Arc::clone(&self.ctx), output))
-                .collect());
-        }
-
-        let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-        let recorded = record_eager_outputs(&op, &outputs, &[self]);
-        if recorded.traces.len() != outputs.len() {
-            return Err(Error::Internal(format!(
-                "expected {} eager traces for {:?}, got {}",
-                outputs.len(),
-                op,
-                recorded.traces.len()
-            )));
-        }
-        let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-        for scope in &self.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
-
-        Ok(recorded
-            .traces
-            .into_iter()
-            .zip(outputs)
-            .map(|(trace, output)| {
-                Self::new_result_arc(
-                    Arc::clone(&self.ctx),
-                    trace.key,
-                    output,
-                    trace.requires_grad,
-                    trace.node,
-                    metadata_scopes.clone(),
-                )
-            })
-            .collect())
     }
 
     pub(crate) fn ternary_op(&self, b: &Self, c: &Self, op: StdTensorOp) -> Result<Self> {

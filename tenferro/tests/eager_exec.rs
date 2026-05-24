@@ -180,25 +180,6 @@ fn constant_f32_parses_bytes() {
     assert_eq!(result[0].dtype(), DType::F32);
 }
 
-// ── Multi-output linalg ──
-
-#[test]
-fn svd_returns_three_outputs() {
-    let mut b = CpuBackend::new();
-    let m = f64t(vec![3, 2], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-    let result = exec_op_on_tensors(&StdTensorOp::Svd { eps: 1e-12 }, &[&m], &mut b).unwrap();
-    assert_eq!(result.len(), 3);
-    assert_eq!(result[1].shape(), &[2]); // S = min(m,n) singular values
-}
-
-#[test]
-fn lu_returns_four_outputs() {
-    let mut b = CpuBackend::new();
-    let m = f64t(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]);
-    let result = exec_op_on_tensors(&StdTensorOp::Lu, &[&m], &mut b).unwrap();
-    assert_eq!(result.len(), 4); // P, L, U, info
-}
-
 // ── DimExpr resolution ──
 
 #[test]

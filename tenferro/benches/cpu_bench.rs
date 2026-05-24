@@ -3,16 +3,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::{black_box, criterion_group, criterion_main, Bencher, BenchmarkId, Criterion};
-use num_complex::{Complex32, Complex64};
-use tenferro::eager_tensor::einsum;
-use tenferro::{CpuBackend, DType, EagerRuntime, EagerTensor, Tensor};
+use num_complex::Complex64;
+use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
 const SMALL_MATMUL_SIZES: &[usize] = &[2, 4, 8, 16, 32];
 const LARGE_MATMUL_SIZES: &[usize] = &[128, 256, 512];
-const SMALL_LINALG_SIZES: &[usize] = &[4, 8, 16, 32];
-const MEDIUM_LINALG_SIZES: &[usize] = &[64, 128];
-const BATCHES: &[usize] = &[16, 64, 256];
-const BATCHED_SMALL_SIZES: &[usize] = &[2, 4, 8, 16];
 
 fn bench_threads() -> usize {
     env::var("TENFERRO_BENCH_THREADS")
@@ -44,39 +39,6 @@ fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
         })
         .collect();
     Tensor::from_vec_col_major(shape, data)
-}
-
-fn f64_spd_tensor(n: usize, seed: usize) -> Tensor {
-    let mut data = vec![0.0; n * n];
-    for col in 0..n {
-        for row in 0..n {
-            let value = if row == col {
-                n as f64 + 2.0 + (row + seed) as f64 * 0.001
-            } else {
-                ((row + col + seed) % 7) as f64 * 0.01
-            };
-            data[row + col * n] = value;
-        }
-    }
-    Tensor::from_vec_col_major(vec![n, n], data)
-}
-
-fn c64_hermitian_tensor(n: usize, seed: usize) -> Tensor {
-    let mut data = vec![Complex64::new(0.0, 0.0); n * n];
-    for col in 0..n {
-        for row in 0..=col {
-            let value = if row == col {
-                Complex64::new(n as f64 + 2.0 + (row + seed) as f64 * 0.001, 0.0)
-            } else {
-                let re = ((row + col + seed) % 7) as f64 * 0.01;
-                let im = ((row * 3 + col + seed) % 5) as f64 * 0.01;
-                Complex64::new(re, im)
-            };
-            data[row + col * n] = value;
-            data[col + row * n] = value.conj();
-        }
-    }
-    Tensor::from_vec_col_major(vec![n, n], data)
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
@@ -118,28 +80,6 @@ fn consume_c64(tensor: &EagerTensor) {
     black_box(data.as_slice::<Complex64>().expect("c64 tensor")[0]);
 }
 
-fn consume_numeric(tensor: &EagerTensor) {
-    let data = tensor.data();
-    black_box(data.shape());
-    match data.dtype() {
-        DType::F32 => {
-            black_box(data.as_slice::<f32>().expect("f32 tensor")[0]);
-        }
-        DType::F64 => {
-            black_box(data.as_slice::<f64>().expect("f64 tensor")[0]);
-        }
-        DType::I64 => {
-            black_box(data.as_slice::<i64>().expect("i64 tensor")[0]);
-        }
-        DType::C32 => {
-            black_box(data.as_slice::<Complex32>().expect("c32 tensor")[0]);
-        }
-        DType::C64 => {
-            black_box(data.as_slice::<Complex64>().expect("c64 tensor")[0]);
-        }
-    }
-}
-
 fn bench_matmul(c: &mut Criterion) {
     let threads = bench_threads();
     let ctx = cpu_ctx(threads);
@@ -174,160 +114,9 @@ fn bench_matmul(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_linalg(c: &mut Criterion) {
-    let threads = bench_threads();
-    let ctx = cpu_ctx(threads);
-    let mut group = c.benchmark_group(format!("tenferro_cpu/linalg/threads_{threads}"));
-
-    for &n in SMALL_LINALG_SIZES.iter().chain(MEDIUM_LINALG_SIZES) {
-        let a = eager(&ctx, f64_spd_tensor(n, 1));
-        let b_col = eager(&ctx, f64_tensor(vec![n, 1], 2));
-        let b_mat = eager(&ctx, f64_tensor(vec![n, 4], 3));
-
-        group.bench_function(BenchmarkId::new("f64_svd", n), |bench| {
-            bench.iter(|| {
-                let (_, s, _) = black_box(&a).svd().expect("svd should succeed");
-                consume_f64(&s);
-            });
-        });
-        group.bench_function(BenchmarkId::new("f64_qr", n), |bench| {
-            bench.iter(|| {
-                let (_, r) = black_box(&a).qr().expect("qr should succeed");
-                consume_f64(&r);
-            });
-        });
-        group.bench_function(BenchmarkId::new("f64_eigh", n), |bench| {
-            bench.iter(|| {
-                let (values, _) = black_box(&a).eigh().expect("eigh should succeed");
-                consume_f64(&values);
-            });
-        });
-        group.bench_function(BenchmarkId::new("f64_solve_column_rhs1", n), |bench| {
-            bench.iter(|| {
-                let out = black_box(&a)
-                    .solve(black_box(&b_col))
-                    .expect("solve column RHS should succeed");
-                consume_f64(&out);
-            });
-        });
-        group.bench_function(BenchmarkId::new("f64_solve_matrix_rhs4", n), |bench| {
-            bench.iter(|| {
-                let out = black_box(&a)
-                    .solve(black_box(&b_mat))
-                    .expect("solve matrix RHS should succeed");
-                consume_f64(&out);
-            });
-        });
-
-        if n <= 32 {
-            let a = eager(&ctx, c64_hermitian_tensor(n, 5));
-            group.bench_function(BenchmarkId::new("c64_eigh", n), |bench| {
-                bench.iter(|| {
-                    let (values, _) = black_box(&a).eigh().expect("c64 eigh should succeed");
-                    consume_numeric(&values);
-                });
-            });
-        }
-    }
-
-    group.finish();
-}
-
-fn bench_batched_einsum(c: &mut Criterion) {
-    let threads = bench_threads();
-    let ctx = cpu_ctx(threads);
-    let mut group = c.benchmark_group(format!(
-        "tenferro_cpu/batched_einsum_rightmost_batch/threads_{threads}"
-    ));
-
-    for &batch in BATCHES {
-        for &n in BATCHED_SMALL_SIZES {
-            let a = eager(&ctx, f64_tensor(vec![n, n, batch], 1));
-            let b = eager(&ctx, f64_tensor(vec![n, n, batch], 2));
-            let params = format!("n_{n}_batch_{batch}");
-            group.bench_function(BenchmarkId::new("f64_ikb_knb_to_inb", params), |bench| {
-                bench.iter(|| {
-                    let out = einsum(&[black_box(&a), black_box(&b)], "ikb,knb->inb")
-                        .expect("batched einsum should succeed");
-                    consume_f64(&out);
-                });
-            });
-        }
-    }
-
-    group.finish();
-}
-
-fn bench_einsum_patterns(c: &mut Criterion) {
-    let threads = bench_threads();
-    let ctx = cpu_ctx(threads);
-    let mut group = c.benchmark_group(format!("tenferro_cpu/einsum_patterns/threads_{threads}"));
-
-    let a = eager(&ctx, f64_tensor(vec![64, 64], 1));
-    let b = eager(&ctx, f64_tensor(vec![64, 64], 2));
-    let c_tensor = eager(&ctx, f64_tensor(vec![64, 64], 3));
-    group.bench_function("f64_binary_ij_jk_to_ik", |bench| {
-        bench.iter(|| {
-            let out = einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik")
-                .expect("binary einsum should succeed");
-            consume_f64(&out);
-        });
-    });
-    group.bench_function("f64_chain_ij_jk_kl_to_il", |bench| {
-        bench.iter(|| {
-            let out = einsum(
-                &[black_box(&a), black_box(&b), black_box(&c_tensor)],
-                "ij,jk,kl->il",
-            )
-            .expect("chain einsum should succeed");
-            consume_f64(&out);
-        });
-    });
-
-    let x = eager(&ctx, f64_tensor(vec![8, 16, 8], 4));
-    let y = eager(&ctx, f64_tensor(vec![16, 8, 8], 5));
-    group.bench_function("f64_multiedge_ijk_jkl_to_il", |bench| {
-        bench.iter(|| {
-            let out = einsum(&[black_box(&x), black_box(&y)], "ijk,jkl->il")
-                .expect("multi-edge einsum should succeed");
-            consume_f64(&out);
-        });
-    });
-
-    let a = eager(&ctx, c64_tensor(vec![32, 32], 6));
-    let b = eager(&ctx, c64_tensor(vec![32, 32], 7));
-    group.bench_function("c64_binary_ij_jk_to_ik", |bench| {
-        bench.iter(|| {
-            let out = einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik")
-                .expect("c64 binary einsum should succeed");
-            consume_c64(&out);
-        });
-    });
-
-    group.finish();
-}
-
 fn bench_ad(c: &mut Criterion) {
     let threads = bench_threads();
     let mut group = c.benchmark_group(format!("tenferro_cpu/ad/threads_{threads}"));
-
-    for &n in SMALL_LINALG_SIZES.iter().chain(MEDIUM_LINALG_SIZES) {
-        group.bench_function(BenchmarkId::new("f64_grad_sum_svd_values", n), |bench| {
-            iter_excluding_setup_and_input_drop(
-                bench,
-                || {
-                    let ctx = cpu_ctx(threads);
-                    tracked(&ctx, f64_spd_tensor(n, 3))
-                },
-                |a| {
-                    let (_, s, _) = a.svd().expect("svd should succeed");
-                    let loss = s.reduce_sum(&[0]).expect("sum should succeed");
-                    black_box(loss.backward().expect("backward should succeed"));
-                    black_box(a.grad());
-                },
-            );
-        });
-    }
 
     for &n in &[4, 16, 64] {
         group.bench_function(BenchmarkId::new("f64_grad_sum_matmul", n), |bench| {
@@ -348,27 +137,6 @@ fn bench_ad(c: &mut Criterion) {
                 },
             );
         });
-
-        if n <= 16 {
-            group.bench_function(BenchmarkId::new("f64_grad_sum_solve", n), |bench| {
-                iter_excluding_setup_and_input_drop(
-                    bench,
-                    || {
-                        let ctx = cpu_ctx(threads);
-                        let a = tracked(&ctx, f64_spd_tensor(n, 4));
-                        let b = tracked(&ctx, f64_tensor(vec![n, 1], 5));
-                        (a, b)
-                    },
-                    |(a, b)| {
-                        let x = a.solve(&b).expect("solve should succeed");
-                        let loss = x.reduce_sum(&[0, 1]).expect("sum should succeed");
-                        black_box(loss.backward().expect("backward should succeed"));
-                        black_box(a.grad());
-                        black_box(b.grad());
-                    },
-                );
-            });
-        }
     }
 
     let n = 64;
@@ -474,12 +242,5 @@ fn bench_ad(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_matmul,
-    bench_linalg,
-    bench_batched_einsum,
-    bench_einsum_patterns,
-    bench_ad
-);
+criterion_group!(benches, bench_matmul, bench_ad);
 criterion_main!(benches);

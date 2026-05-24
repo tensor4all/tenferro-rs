@@ -2,14 +2,21 @@
 
 User-facing tensor facade for the `tenferro-rs` v2 workspace.
 
-`tenferro` is the main public crate for standard dense numeric computation.
+`tenferro` is the main public crate for tensor execution infrastructure.
 It exposes eager execution through `EagerTensor` and `EagerRuntime`, including
 scalar-loss reverse-mode accumulation via `backward()`, and it exposes
 traced, transform-oriented AD through `TracedTensor` with `grad`, `vjp`,
-`jvp`, and HVP composition. The crate also owns explicit graph compilation
-through `GraphCompiler`, backend execution through `GraphExecutor<B>`,
-StableHLO-style lowering, execution-IR compilation, public einsum helpers,
-and public multi-output linalg helpers.
+`jvp`, and HVP composition. The crate also owns explicit graph construction
+through `GraphCompiler`, backend execution through `GraphExecutor<B>`, and
+selected dense runtime type reexports. Low-level extension runtime dispatch and
+extension cache storage live in `tenferro-runtime` and are reexported here for
+application ergonomics.
+
+Operation families are separate extension crates. `tenferro` must not depend on
+`tenferro-einsum`, `tenferro-linalg`, or `tenferro-fft`, and it must never add
+facade paths such as `tenferro::einsum`, `tenferro::linalg`, or
+`tenferro::fft`. Users import the extension crate directly and register its
+runtime explicitly.
 
 ## Public Surface
 
@@ -18,14 +25,10 @@ and public multi-output linalg helpers.
 - `GraphExecutor`
 - `EagerTensor`
 - `EagerRuntime`
-- `traced_tensor::einsum` and `traced_tensor::einsum_with`
-- `eager_tensor::einsum`
-- `tensor::einsum` and `tensor::einsum_owned`
-- `typed_tensor::einsum`
-- traced linalg helpers under `traced_tensor`, such as `svd`, `qr`, `eigh`,
-  `solve`, `cholesky`, and `triangular_solve`
 - `EagerTensor::backward`, `EagerTensor::clear_grad`, `EagerRuntime::clear_grads`
 - `TracedTensor::grad`, `TracedTensor::jvp`, `TracedTensor::vjp`
+- `extension::*` registration and application APIs
+- re-exported extension runtime/cache types from `tenferro-runtime`
 - re-exported dense runtime types from `tenferro-tensor`:
   `Tensor`, `TypedTensor`, `DType`, `CpuBackend`
 
@@ -45,8 +48,8 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 ## Traced Example
 
 ```rust
-use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_einsum::einsum;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
@@ -65,7 +68,9 @@ fn main() {
     let mut compiler = GraphCompiler::new();
     let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
     let program = compiler.compile(&c).unwrap();
-    let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor.register_extension(tenferro_einsum::register_runtime).unwrap();
+    let out = executor.run(&program).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
 }
@@ -75,6 +80,10 @@ fn main() {
 
 - `Tensor` is the concrete dense runtime value at graph boundaries.
 - `TracedTensor` is the graph-aware lazy wrapper.
+- Einsum, linalg, and FFT are standard extension crates with direct APIs such
+  as `tenferro_einsum::einsum` and `tenferro_linalg::svd`.
+- `tenferro` does not depend on standard extensions. Register each extension
+  runtime explicitly on the `GraphExecutor` that will execute it.
+- The default feature set includes `autodiff` and `cpu-faer`. Primal-only builds
+  use `default-features = false` plus an explicit CPU backend feature.
 - CUDA GPU support is available through the feature-gated CubeCL backend.
-- The crate no longer exposes the older runtime-installation and dynamic-carrier
-  API family.

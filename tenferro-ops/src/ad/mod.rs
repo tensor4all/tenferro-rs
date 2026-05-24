@@ -1,55 +1,55 @@
 //! Automatic differentiation rules for [`StdTensorOp`].
 //!
-//! `linearize` and `transpose_rule` are separate graph-level contracts. Most
-//! ops have a direct transpose rule, but some primal ops are reverse-mode
-//! supported by first linearizing them into primitive linear ops and then
-//! transposing that emitted linear graph. The machine-readable support
-//! manifest in `support` records which path each core op uses; audits must
-//! consult it before treating a missing direct transpose arm as unsupported AD.
+//! `linearize` and `transpose_rule` are separate graph-level contracts.
+//! Core ops keep their rules here; extension ops own their own AD support
+//! through the extension trait.
 
 pub mod context;
 
+#[cfg(feature = "autodiff")]
 mod analytic;
+#[cfg(feature = "autodiff")]
 mod contraction;
+#[cfg(feature = "autodiff")]
 mod diagonal;
+#[cfg(feature = "autodiff")]
 mod dynamic;
+#[cfg(feature = "autodiff")]
 mod elementwise;
+#[cfg(feature = "autodiff")]
 mod indexing;
-mod linalg;
+#[cfg(feature = "autodiff")]
 mod semiring;
+#[cfg(feature = "autodiff")]
 mod structural;
+#[cfg(feature = "autodiff")]
 mod support;
+#[cfg(feature = "autodiff")]
 mod zeros;
 
+#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
+#[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+#[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
 
+#[cfg(feature = "autodiff")]
 use chainrules_core::ADRuleResult;
 
+#[cfg(feature = "autodiff")]
 use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
+#[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
-
-fn todo_transpose_rule(op: &StdTensorOp) -> ! {
-    match support::ad_rule_support(op) {
-        support::AdRuleSupport::SupportedViaLinearize => {
-            panic!(
-                "direct transpose_rule not implemented for {:?}; reverse-mode support is provided by linearize() and transposing the emitted linear primitive graph",
-                op
-            )
-        }
-        _ => todo!("transpose_rule not implemented for {:?}", op),
-    }
-}
 
 /// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its
 /// tangent inputs, emit the linearized fragment into `builder` and return
 /// the output tangents.
 ///
 /// Rules per op live in the category submodules (`semiring`, `analytic`,
-/// `elementwise`, `structural`, `contraction`, `indexing`, `linalg`,
-/// `diagonal`, `dynamic`). `StdTensorOp::Extension(_)` delegates to the
-/// trait.
+/// `elementwise`, `structural`, `contraction`, `indexing`, `diagonal`,
+/// `dynamic`). `StdTensorOp::Extension(_)` delegates to the trait.
+#[cfg(feature = "autodiff")]
 pub fn linearize(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
@@ -65,6 +65,7 @@ pub fn linearize(
 }
 
 /// Fallible forward-mode AD (JVP) for `StdTensorOp`.
+#[cfg(feature = "autodiff")]
 pub fn try_linearize(
     op: &StdTensorOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
@@ -107,9 +108,6 @@ pub fn try_linearize(
         // Contraction family.
         StdTensorOp::DotGeneral { config } => {
             contraction::linearize_dot_general(builder, primal_in, tangent_in, config, ctx)
-        }
-        StdTensorOp::NaryEinsum { subscripts } => {
-            contraction::linearize_nary_einsum(builder, primal_in, tangent_in, subscripts)
         }
         StdTensorOp::ReduceSum { axes } => {
             contraction::linearize_reduce_sum(builder, tangent_in, op, axes)
@@ -192,63 +190,6 @@ pub fn try_linearize(
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
 
-        // Linalg family.
-        StdTensorOp::Lu => linalg::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx),
-        StdTensorOp::FullPivLu => {
-            linalg::linearize_full_piv_lu(builder, primal_in, primal_out, tangent_in, ctx)
-        }
-        StdTensorOp::Solve { transpose_a } => linalg::linearize_solve(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            *transpose_a,
-            ctx,
-        ),
-        StdTensorOp::FullPivLuSolve { transpose_a } => linalg::linearize_full_piv_lu_solve(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            *transpose_a,
-            ctx,
-        ),
-        StdTensorOp::TriangularSolve {
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        } => linalg::linearize_triangular_solve(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            *left_side,
-            *lower,
-            *transpose_a,
-            *unit_diagonal,
-            ctx,
-        ),
-        StdTensorOp::Cholesky => {
-            linalg::linearize_cholesky(builder, primal_in, primal_out, tangent_in, ctx)
-        }
-        StdTensorOp::Svd { eps } => {
-            linalg::linearize_svd(builder, primal_in, primal_out, tangent_in, *eps, ctx)
-        }
-        StdTensorOp::Qr => linalg::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx),
-        StdTensorOp::Eigh { eps } => {
-            linalg::linearize_eigh(builder, primal_in, primal_out, tangent_in, *eps, ctx)
-        }
-        StdTensorOp::Eig { input_dtype } => linalg::linearize_eig(
-            builder,
-            primal_in,
-            primal_out,
-            tangent_in,
-            *input_dtype,
-            ctx,
-        ),
-        StdTensorOp::ValidateNonsingular => vec![tangent_in[0]],
-
         // Extension substrate.
         StdTensorOp::Extension(ext) => {
             return linearize_extension_rule(
@@ -270,6 +211,7 @@ pub fn try_linearize(
 ///
 /// See [`linearize`] for the category split; the same categories appear
 /// here.
+#[cfg(feature = "autodiff")]
 pub fn transpose_rule(
     op: &StdTensorOp,
     emitter: &mut impl OpEmitter<StdTensorOp>,
@@ -285,6 +227,7 @@ pub fn transpose_rule(
 }
 
 /// Fallible reverse-mode AD (VJP) for `StdTensorOp`.
+#[cfg(feature = "autodiff")]
 pub fn try_transpose_rule(
     op: &StdTensorOp,
     emitter: &mut impl OpEmitter<StdTensorOp>,
@@ -331,14 +274,6 @@ pub fn try_transpose_rule(
         StdTensorOp::DotGeneral { config } => {
             contraction::transpose_dot_general(emitter, cotangent_out, inputs, mode, config, ctx)
         }
-        StdTensorOp::NaryEinsum { subscripts } => contraction::transpose_nary_einsum(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            subscripts,
-            ctx,
-        ),
         StdTensorOp::ReduceSum { .. } => {
             contraction::transpose_reduce_sum(emitter, cotangent_out, op, inputs, ctx)
         }
@@ -431,36 +366,6 @@ pub fn try_transpose_rule(
         }
         StdTensorOp::ShapeOf { .. } => vec![None],
 
-        // Linalg family.
-        StdTensorOp::TriangularSolve {
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        } => linalg::transpose_triangular_solve(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            *left_side,
-            *lower,
-            *transpose_a,
-            *unit_diagonal,
-            ctx,
-        ),
-        StdTensorOp::Solve { transpose_a } => {
-            linalg::transpose_solve(emitter, cotangent_out, inputs, mode, *transpose_a, ctx)
-        }
-        StdTensorOp::FullPivLuSolve { transpose_a } => linalg::transpose_full_piv_lu_solve(
-            emitter,
-            cotangent_out,
-            inputs,
-            mode,
-            *transpose_a,
-            ctx,
-        ),
-        StdTensorOp::ValidateNonsingular => vec![cotangent_out[0]],
-
         // Extension substrate.
         StdTensorOp::Extension(ext) => {
             let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
@@ -473,8 +378,6 @@ pub fn try_transpose_rule(
                 ctx,
             );
         }
-
-        _ => todo_transpose_rule(op),
     };
     Ok(cotangents)
 }

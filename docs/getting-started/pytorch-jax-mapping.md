@@ -15,7 +15,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
-| Matrix contraction | `torch.einsum` | `jnp.einsum` | `typed_tensor::einsum`, `tensor::einsum`, `eager_tensor::einsum`, or `traced_tensor::einsum` |
+| Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro_einsum::einsum` standard extension |
 
 ## Function mapping
 
@@ -28,7 +28,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` | `x.reduce_sum(&axes)` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro::tensor::einsum(&mut ctx, ...)` | `tenferro::traced_tensor::einsum(&mut compiler, ...)` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro_einsum::eager_tensor::einsum(...)` | `tenferro_einsum::einsum(&mut compiler, ...)` plus `register_runtime` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut ctx)` | `tenferro::traced_tensor::svd(&x)` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut ctx)` | `tenferro::traced_tensor::qr(&x)` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut ctx)` | `tenferro::traced_tensor::cholesky(&x)` |

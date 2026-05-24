@@ -7,7 +7,7 @@ use cubecl_cuda::CudaRuntime;
 use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
-use tenferro_cubecl::linalg as cubecl_linalg;
+use tenferro_gpubackend::linalg as cubecl_linalg;
 
 use super::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, typed_from_cubecl,

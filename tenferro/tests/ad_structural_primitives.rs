@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 use std::sync::Arc;
 
 use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};

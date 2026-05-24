@@ -1,10 +1,15 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+#[cfg(feature = "autodiff")]
 use chainrules_core::{ADRuleResult, PrimitiveOp};
+#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
+#[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::{GraphOp, OpEmitter};
+use computegraph::GraphOp;
+#[cfg(feature = "autodiff")]
+use computegraph::OpEmitter;
 use num_complex::{Complex32, Complex64};
 
 use crate::dim_expr::DimExpr;
@@ -13,55 +18,6 @@ use crate::input_key::TensorInputKey;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-
-/// Canonical N-ary einsum subscripts using integer labels.
-///
-/// String notation is a user-facing convenience handled by higher-level
-/// crates. Graph ops keep this integer representation so execution, shape
-/// inference, and AD do not need to parse strings.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct EinsumSubscripts {
-    /// Index labels for each input tensor.
-    pub inputs: Vec<Vec<u32>>,
-    /// Index labels for the output tensor.
-    pub output: Vec<u32>,
-}
-
-impl EinsumSubscripts {
-    /// Create subscripts from integer label arrays.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ops::std_tensor_op::EinsumSubscripts;
-    ///
-    /// let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-    ///
-    /// assert_eq!(subscripts.inputs, vec![vec![0, 1], vec![1, 2]]);
-    /// assert_eq!(subscripts.output, vec![0, 2]);
-    /// ```
-    pub fn new(inputs: &[&[u32]], output: &[u32]) -> Self {
-        Self {
-            inputs: inputs.iter().map(|labels| labels.to_vec()).collect(),
-            output: output.to_vec(),
-        }
-    }
-
-    /// Number of input operands described by this specification.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ops::std_tensor_op::EinsumSubscripts;
-    ///
-    /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-    ///
-    /// assert_eq!(subscripts.n_inputs(), 2);
-    /// ```
-    pub fn n_inputs(&self) -> usize {
-        self.inputs.len()
-    }
-}
 
 #[derive(Clone, Debug)]
 pub enum StdTensorOp {
@@ -149,11 +105,6 @@ pub enum StdTensorOp {
     },
     DynamicUpdateSlice,
     Pad(PadConfig),
-    /// N-ary einsum kept as a single graph node.
-    /// Contraction path is optimized at execution time from actual input shapes.
-    NaryEinsum {
-        subscripts: EinsumSubscripts,
-    },
     Concatenate {
         axis: usize,
         n_inputs: usize,
@@ -181,44 +132,6 @@ pub enum StdTensorOp {
     ReduceMin {
         axes: Vec<usize>,
     },
-
-    // Linalg
-    Cholesky,
-    Lu,
-    FullPivLu,
-    Solve {
-        transpose_a: bool,
-    },
-    FullPivLuSolve {
-        transpose_a: bool,
-    },
-    /// Singular value decomposition.
-    ///
-    /// `eps` regularizes the AD rule for repeated or nearly repeated singular
-    /// values and singular values near zero. It is not a primal decomposition
-    /// backend parameter.
-    Svd {
-        eps: f64,
-    },
-    Qr,
-    /// Hermitian eigenvalue decomposition.
-    ///
-    /// `eps` regularizes the eigenvector AD rule for repeated or nearly
-    /// repeated eigenvalues. It is not a primal decomposition backend
-    /// parameter.
-    Eigh {
-        eps: f64,
-    },
-    Eig {
-        input_dtype: DType,
-    },
-    TriangularSolve {
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    },
-    ValidateNonsingular,
 
     /// Out-of-tree extension carrier.
     ///
@@ -345,11 +258,6 @@ impl PartialEq for StdTensorOp {
             | (Self::Pow, Self::Pow)
             | (Self::Expm1, Self::Expm1)
             | (Self::Log1p, Self::Log1p)
-            | (Self::Cholesky, Self::Cholesky)
-            | (Self::Lu, Self::Lu)
-            | (Self::FullPivLu, Self::FullPivLu)
-            | (Self::Qr, Self::Qr)
-            | (Self::ValidateNonsingular, Self::ValidateNonsingular)
             | (Self::DynamicUpdateSlice, Self::DynamicUpdateSlice) => true,
             (Self::DotGeneral { config: a }, Self::DotGeneral { config: b }) => a == b,
             (Self::Transpose { perm: a }, Self::Transpose { perm: b }) => a == b,
@@ -428,7 +336,6 @@ impl PartialEq for StdTensorOp {
                 a == b
             }
             (Self::Pad(a), Self::Pad(b)) => a == b,
-            (Self::NaryEinsum { subscripts: a }, Self::NaryEinsum { subscripts: b }) => a == b,
             (
                 Self::Concatenate {
                     axis: a,
@@ -442,27 +349,6 @@ impl PartialEq for StdTensorOp {
             (Self::ShapeOf { axis: a }, Self::ShapeOf { axis: b })
             | (Self::DynamicTruncate { axis: a }, Self::DynamicTruncate { axis: b })
             | (Self::PadToMatch { axis: a }, Self::PadToMatch { axis: b }) => a == b,
-            (Self::Svd { eps: a }, Self::Svd { eps: b })
-            | (Self::Eigh { eps: a }, Self::Eigh { eps: b }) => a.to_bits() == b.to_bits(),
-            (Self::Eig { input_dtype: a }, Self::Eig { input_dtype: b }) => a == b,
-            (Self::Solve { transpose_a: a }, Self::Solve { transpose_a: b })
-            | (Self::FullPivLuSolve { transpose_a: a }, Self::FullPivLuSolve { transpose_a: b }) => {
-                a == b
-            }
-            (
-                Self::TriangularSolve {
-                    left_side: lsa,
-                    lower: la,
-                    transpose_a: ta,
-                    unit_diagonal: ua,
-                },
-                Self::TriangularSolve {
-                    left_side: lsb,
-                    lower: lb,
-                    transpose_a: tb,
-                    unit_diagonal: ub,
-                },
-            ) => lsa == lsb && la == lb && ta == tb && ua == ub,
             (Self::Extension(a), Self::Extension(b)) => ext_op_eq(a.as_ref(), b.as_ref()),
             _ => unreachable!("discriminant mismatch should be caught earlier"),
         }
@@ -496,22 +382,6 @@ impl Hash for StdTensorOp {
             | Self::Pow
             | Self::Expm1
             | Self::Log1p => {}
-            Self::Svd { eps } => {
-                hash_f64(*eps, state);
-            }
-            Self::Qr | Self::Cholesky | Self::Lu | Self::FullPivLu => {}
-            Self::Solve { transpose_a } => {
-                transpose_a.hash(state);
-            }
-            Self::FullPivLuSolve { transpose_a } => {
-                transpose_a.hash(state);
-            }
-            Self::Eig { input_dtype } => {
-                input_dtype.hash(state);
-            }
-            Self::Eigh { eps } => {
-                hash_f64(*eps, state);
-            }
             Self::DotGeneral { config } => {
                 config.hash(state);
             }
@@ -559,9 +429,6 @@ impl Hash for StdTensorOp {
             Self::DynamicSlice { slice_sizes } => slice_sizes.hash(state),
             Self::DynamicUpdateSlice => {}
             Self::Pad(config) => config.hash(state),
-            Self::NaryEinsum { subscripts } => {
-                subscripts.hash(state);
-            }
             Self::Concatenate { axis, n_inputs } => {
                 axis.hash(state);
                 n_inputs.hash(state);
@@ -573,26 +440,9 @@ impl Hash for StdTensorOp {
             Self::ReduceProd { axes } | Self::ReduceMax { axes } | Self::ReduceMin { axes } => {
                 axes.hash(state);
             }
-            Self::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            } => {
-                left_side.hash(state);
-                lower.hash(state);
-                transpose_a.hash(state);
-                unit_diagonal.hash(state);
-            }
-            Self::ValidateNonsingular => {}
             Self::Extension(op) => hash_extension(op.as_ref(), state),
         }
     }
-}
-
-fn hash_f64<H: Hasher>(value: f64, state: &mut H) {
-    let bits = if value == 0.0 { 0 } else { value.to_bits() };
-    bits.hash(state);
 }
 
 fn n_inputs_from_dim_exprs(min_inputs: usize, exprs: &[&[DimExpr]]) -> usize {
@@ -638,7 +488,6 @@ impl GraphOp for StdTensorOp {
             Self::Div | Self::Maximum | Self::Minimum | Self::Pow | Self::DynamicSlice { .. } => 2,
             Self::Constant { .. } => 0,
             Self::Scatter(_) | Self::DynamicUpdateSlice => 3,
-            Self::NaryEinsum { subscripts } => subscripts.n_inputs(),
             Self::Concatenate { n_inputs, .. } => *n_inputs,
             Self::Abs
             | Self::Sign
@@ -653,15 +502,6 @@ impl GraphOp for StdTensorOp {
             | Self::Log1p => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
-            Self::Cholesky
-            | Self::Lu
-            | Self::FullPivLu
-            | Self::Svd { .. }
-            | Self::Qr
-            | Self::Eigh { .. }
-            | Self::Eig { .. }
-            | Self::ValidateNonsingular => 1,
-            Self::TriangularSolve { .. } | Self::Solve { .. } | Self::FullPivLuSolve { .. } => 2,
             Self::Extension(op) => ExtensionOp::n_inputs(op.as_ref()),
         }
     }
@@ -708,7 +548,6 @@ impl GraphOp for StdTensorOp {
             | Self::DynamicSlice { .. }
             | Self::DynamicUpdateSlice
             | Self::Pad(_)
-            | Self::NaryEinsum { .. }
             | Self::Reverse { .. }
             | Self::ShapeOf { .. }
             | Self::DynamicTruncate { .. }
@@ -716,23 +555,13 @@ impl GraphOp for StdTensorOp {
             | Self::ReduceProd { .. }
             | Self::ReduceMax { .. }
             | Self::ReduceMin { .. } => 1,
-            Self::Cholesky
-            | Self::TriangularSolve { .. }
-            | Self::Solve { .. }
-            | Self::FullPivLuSolve { .. }
-            | Self::ValidateNonsingular => 1,
-            Self::Lu => 4,
-            Self::FullPivLu => 5,
-            Self::Svd { .. } => 3,  // U, S, Vt
-            Self::Qr => 2,          // Q, R
-            Self::Eigh { .. } => 2, // eigenvalues, eigenvectors
-            Self::Eig { .. } => 2,  // eigenvalues, eigenvectors
             Self::Concatenate { .. } => 1,
             Self::Extension(op) => ExtensionOp::n_outputs(op.as_ref()),
         }
     }
 }
 
+#[cfg(feature = "autodiff")]
 impl PrimitiveOp for StdTensorOp {
     type ADContext = crate::ad::context::ShapeGuardContext;
 

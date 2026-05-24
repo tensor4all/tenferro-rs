@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 //! Integration tests for iterative AD with `eval()` mid-loop (issue #654).
 //!
 //! Verifies that:

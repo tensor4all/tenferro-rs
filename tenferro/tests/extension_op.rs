@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 //! Smoke tests for the Stage 6 `ExtensionOp` mechanism.
 //!
 //! Exercises two end-to-end paths using only the public `tenferro` and
@@ -24,12 +26,15 @@ use chainrules_core::ADRuleResult;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro::extension::{apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait};
+use tenferro::extension::{
+    apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionExecutionContext,
+    ExtensionRuntime,
+};
 use tenferro::{CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor};
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
-use tenferro_tensor::{DType, TypedTensor};
+use tenferro_tensor::{DType, TensorBackend, TypedTensor};
 
 // ----------------------------------------------------------------------
 // Test-only AD rule registration guard. Integration tests may share a process,
@@ -383,6 +388,39 @@ fn f64_slice(tensor: &Tensor) -> &[f64] {
     }
 }
 
+#[derive(Debug)]
+struct TestRuntime {
+    family_id: &'static str,
+}
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for TestRuntime {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOp,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        op.eager_execute(inputs)
+    }
+}
+
+fn register_test_runtime<B: TensorBackend + 'static>(
+    executor: &mut GraphExecutor<B>,
+    family_id: &'static str,
+) {
+    executor
+        .register_extension(|extension_executor| {
+            extension_executor
+                .registry_mut()
+                .register(Arc::new(TestRuntime { family_id }))
+        })
+        .expect("register test extension runtime");
+}
+
 // ----------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------
@@ -397,6 +435,7 @@ fn scale_by_2_forward_roundtrip() {
     let y = outputs.into_iter().next().unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
+    register_test_runtime(&mut engine, "tenferro-tests.scale_by_2.v1");
     let result = y.run_with(&mut engine).unwrap();
 
     assert_eq!(result.shape(), &[3]);
@@ -597,6 +636,7 @@ fn swap_forward_roundtrip() {
     let out_second = iter.next().unwrap();
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
+    register_test_runtime(&mut engine, "tenferro-tests.swap.v1");
     let t0 = out_first.run_with(&mut engine).unwrap().clone();
     let t1 = out_second.run_with(&mut engine).unwrap().clone();
 

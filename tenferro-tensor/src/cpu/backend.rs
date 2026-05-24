@@ -1421,7 +1421,7 @@ pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTe
     match typed.buffer {
         Buffer::Host(data) => T::pool_release(pool, data),
         Buffer::Backend(_) => {}
-        #[cfg(feature = "cubecl")]
+        #[cfg(feature = "cuda")]
         Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
@@ -1446,5 +1446,37 @@ pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate:
 impl Default for CpuBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_session_profile_helpers_cover_current_profile_mode() {
+        let state = cpu_session_profile_state();
+        state
+            .lock()
+            .expect("CPU session profile mutex poisoned")
+            .clear();
+
+        let profiling_enabled = cpu_session_profile_enabled();
+        let _ = cpu_session_profile_print_every();
+
+        let value = profile_cpu_session_section("test.profile_section", || 7);
+        assert_eq!(value, 7);
+        record_cpu_session_profile("test.manual_record", Duration::from_nanos(1));
+
+        let entries = state.lock().expect("CPU session profile mutex poisoned");
+        if profiling_enabled {
+            assert!(entries.contains_key("test.profile_section"));
+            assert!(entries.contains_key("test.manual_record"));
+        } else {
+            assert!(entries.is_empty());
+        }
+        drop(entries);
+
+        maybe_print_cpu_session_profile();
     }
 }

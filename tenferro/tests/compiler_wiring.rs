@@ -2,7 +2,6 @@ use computegraph::compile::{CompiledProgram, Instruction};
 use num_complex::Complex64;
 use tenferro::compiler::compile_std_to_exec;
 use tenferro::exec::ExecOp;
-use tenferro::parse_einsum_subscripts;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
@@ -60,16 +59,6 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
         ),
         make_instr(StdTensorOp::Tril { k: -1 }, vec![2], vec![9]),
         make_instr(StdTensorOp::Mul, vec![0, 1], vec![10]),
-        make_instr(
-            StdTensorOp::TriangularSolve {
-                left_side: true,
-                lower: true,
-                transpose_a: false,
-                unit_diagonal: false,
-            },
-            vec![0, 1],
-            vec![11],
-        ),
         make_instr(StdTensorOp::Triu { k: 1 }, vec![2], vec![12]),
     ]);
 
@@ -107,46 +96,7 @@ fn compile_std_to_exec_wires_remaining_simple_ops() {
     ));
     assert!(matches!(exec.instructions[6].op, ExecOp::Tril { k: -1 }));
     assert!(matches!(exec.instructions[7].op, ExecOp::Multiply));
-    assert!(matches!(
-        exec.instructions[8].op,
-        ExecOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: false,
-        }
-    ));
-    assert!(matches!(exec.instructions[9].op, ExecOp::Triu { k: 1 }));
-}
-
-#[test]
-fn compile_std_to_exec_wires_nary_einsum_with_shape_and_dtype() {
-    let program = CompiledProgram {
-        instructions: vec![make_instr(
-            StdTensorOp::NaryEinsum {
-                subscripts: parse_einsum_subscripts("ij,jk->ik").unwrap(),
-            },
-            vec![0, 1],
-            vec![2],
-        )],
-        input_slots: vec![0, 1],
-        output_slots: vec![2],
-        n_slots: 3,
-    };
-
-    let exec = compile_std_to_exec(
-        &program,
-        &[DType::F32, DType::F32],
-        &[dim_shape(&[2, 3]), dim_shape(&[3, 4])],
-    );
-
-    assert!(matches!(
-        exec.instructions[0].op,
-        ExecOp::NaryEinsum { ref subscripts }
-            if subscripts == &parse_einsum_subscripts("ij,jk->ik").unwrap()
-    ));
-    assert_eq!(exec.instructions[0].dtype, DType::F32);
-    assert_eq!(exec.instructions[0].output_shapes, vec![dim_shape(&[2, 4])]);
+    assert!(matches!(exec.instructions[8].op, ExecOp::Triu { k: 1 }));
 }
 
 #[test]
@@ -323,70 +273,4 @@ fn compile_std_to_exec_wires_constant_and_convert_ops() {
     ));
     assert_eq!(exec.instructions[2].dtype, DType::C64);
     assert_eq!(exec.instructions[2].output_shapes, vec![dim_shape(&[2])]);
-}
-
-#[test]
-fn compile_std_to_exec_lowers_linalg_variants_directly() {
-    let program = CompiledProgram {
-        instructions: vec![
-            make_instr(StdTensorOp::Svd { eps: 1.0e-8 }, vec![0], vec![2, 3, 4]),
-            make_instr(StdTensorOp::Qr, vec![0], vec![5, 6]),
-            make_instr(StdTensorOp::Lu, vec![0], vec![7, 8, 9, 10]),
-            make_instr(StdTensorOp::Eigh { eps: 1.0e-6 }, vec![1], vec![11, 12]),
-            make_instr(
-                StdTensorOp::Eig {
-                    input_dtype: DType::F32,
-                },
-                vec![1],
-                vec![13, 14],
-            ),
-            make_instr(StdTensorOp::ValidateNonsingular, vec![1], vec![15]),
-        ],
-        input_slots: vec![0, 1],
-        output_slots: vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        n_slots: 16,
-    };
-
-    let exec = compile_std_to_exec(
-        &program,
-        &[DType::F64, DType::F32],
-        &[dim_shape(&[3, 2]), dim_shape(&[2, 2])],
-    );
-
-    assert!(matches!(exec.instructions[0].op, ExecOp::Svd));
-    assert_eq!(
-        exec.instructions[0].output_shapes,
-        vec![dim_shape(&[3, 2]), dim_shape(&[2]), dim_shape(&[2, 2])]
-    );
-    assert!(matches!(exec.instructions[1].op, ExecOp::Qr));
-    assert_eq!(
-        exec.instructions[1].output_shapes,
-        vec![dim_shape(&[3, 2]), dim_shape(&[2, 2])]
-    );
-    assert!(matches!(exec.instructions[2].op, ExecOp::Lu));
-    assert_eq!(
-        exec.instructions[2].output_shapes,
-        vec![
-            dim_shape(&[3, 3]),
-            dim_shape(&[3, 2]),
-            dim_shape(&[2, 2]),
-            Vec::new()
-        ]
-    );
-    assert!(matches!(exec.instructions[3].op, ExecOp::Eigh));
-    assert_eq!(
-        exec.instructions[3].output_shapes,
-        vec![dim_shape(&[2]), dim_shape(&[2, 2])]
-    );
-    assert!(matches!(exec.instructions[4].op, ExecOp::Eig));
-    assert_eq!(exec.instructions[4].dtype, DType::C32);
-    assert_eq!(
-        exec.instructions[4].output_shapes,
-        vec![dim_shape(&[2]), dim_shape(&[2, 2])]
-    );
-    assert!(matches!(
-        exec.instructions[5].op,
-        ExecOp::ValidateNonsingular
-    ));
-    assert_eq!(exec.instructions[5].output_shapes, vec![dim_shape(&[2, 2])]);
 }

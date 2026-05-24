@@ -1,5 +1,5 @@
-// Run with: cargo test --features cubecl -- --ignored
-#![cfg(feature = "cubecl")]
+// Run with: cargo test --features cuda -- --ignored
+#![cfg(feature = "cuda")]
 
 mod support;
 use support::RunTraced;

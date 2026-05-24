@@ -77,7 +77,7 @@ operations.
 | Need | No-AD concrete path | Eager path | Traced path |
 | --- | --- | --- | --- |
 | Everyday tensor ops | `Tensor` methods; selected `TypedTensor<T>` wrappers | `EagerTensor` methods | `TracedTensor` methods |
-| Einsum | `typed_tensor::einsum` or `tensor::einsum` | `eager_tensor::einsum` | `traced_tensor::einsum` |
+| Einsum | Internal to `tenferro-einsum` runtime execution | `tenferro_einsum::eager_tensor::einsum` | `tenferro_einsum::einsum` plus `register_runtime` |
 | Linear algebra | `Tensor` methods; selected `TypedTensor<T>` methods | `EagerTensor` methods | `traced_tensor` helpers |
 | Automatic differentiation | Not applicable | Scalar-loss `backward()` on tracked values | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |

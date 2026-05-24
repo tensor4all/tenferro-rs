@@ -5,9 +5,9 @@ use tenferro::exec::{
 use tenferro::segment::{eval_exec_segmented, segment_exec_program, Segment};
 use tenferro::DType;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -20,6 +20,15 @@ fn scalar_extents(
     vec![Vec::new(); n_outputs]
 }
 
+fn matmul_config() -> DotGeneralConfig {
+    DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    }
+}
+
 fn cpu_parity_program() -> ExecProgram {
     ExecProgram {
         instructions: vec![
@@ -30,7 +39,7 @@ fn cpu_parity_program() -> ExecProgram {
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
                 output_extents: scalar_extents(1),
-                last_use: vec![false, true],
+                last_use: vec![false, false],
             },
             ExecInstruction {
                 op: ExecOp::Exp,
@@ -39,7 +48,7 @@ fn cpu_parity_program() -> ExecProgram {
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
                 output_extents: scalar_extents(1),
-                last_use: vec![true],
+                last_use: vec![false],
             },
             ExecInstruction {
                 op: ExecOp::ShapeOf { axis: 0 },
@@ -69,22 +78,13 @@ fn cpu_parity_program() -> ExecProgram {
                 last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::Cholesky,
-                input_slots: vec![0],
+                op: ExecOp::DotGeneral(matmul_config()),
+                input_slots: vec![0, 1],
                 output_slots: vec![9],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
                 output_extents: scalar_extents(1),
-                last_use: vec![false],
-            },
-            ExecInstruction {
-                op: ExecOp::ValidateNonsingular,
-                input_slots: vec![9],
-                output_slots: vec![10],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new()],
-                output_extents: scalar_extents(1),
-                last_use: vec![true],
+                last_use: vec![true, true],
             },
             ExecInstruction {
                 op: ExecOp::PadToMatch { axis: 0 },
@@ -107,19 +107,10 @@ fn cpu_parity_program() -> ExecProgram {
                 output_extents: scalar_extents(1),
                 last_use: vec![],
             },
-            ExecInstruction {
-                op: ExecOp::Qr,
-                input_slots: vec![0],
-                output_slots: vec![13, 14],
-                dtype: DType::F64,
-                output_shapes: vec![Vec::new(); 2],
-                output_extents: scalar_extents(2),
-                last_use: vec![true],
-            },
         ],
         input_slots: vec![0, 1, 2, 3],
-        output_slots: vec![8, 10, 11, 12, 13, 14],
-        n_slots: 15,
+        output_slots: vec![8, 9, 11, 12],
+        n_slots: 13,
     }
 }
 
@@ -151,10 +142,10 @@ fn segment_classification_program() -> ExecProgram {
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
                 output_extents: scalar_extents(1),
-                last_use: vec![false],
+                last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::ValidateNonsingular,
+                op: ExecOp::ShapeOf { axis: 0 },
                 input_slots: vec![3],
                 output_slots: vec![4],
                 dtype: DType::F64,
@@ -163,18 +154,18 @@ fn segment_classification_program() -> ExecProgram {
                 last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::Qr,
-                input_slots: vec![0],
-                output_slots: vec![5, 6],
+                op: ExecOp::DotGeneral(matmul_config()),
+                input_slots: vec![0, 1],
+                output_slots: vec![5],
                 dtype: DType::F64,
-                output_shapes: vec![Vec::new(); 2],
-                output_extents: scalar_extents(2),
-                last_use: vec![true],
+                output_shapes: vec![Vec::new()],
+                output_extents: scalar_extents(1),
+                last_use: vec![true, true],
             },
         ],
         input_slots: vec![0, 1],
-        output_slots: vec![4, 5, 6],
-        n_slots: 7,
+        output_slots: vec![4, 5],
+        n_slots: 6,
     }
 }
 
@@ -212,24 +203,24 @@ fn segment_exec_program_groups_fusible_and_boundary_ops() {
             assert_eq!(instructions.len(), 2);
             assert_eq!(input_slots, &vec![0, 1]);
             assert_eq!(output_slots, &vec![3]);
-            assert_eq!(last_use, &vec![false, true]);
+            assert_eq!(last_use, &vec![false, false]);
         }
         other => panic!("expected fused segment, got {other:?}"),
     }
     assert!(matches!(
         &segments[1],
         Segment::Host(ExecInstruction {
-            op: ExecOp::ValidateNonsingular,
+            op: ExecOp::ShapeOf { axis: 0 },
             ..
         })
     ));
     assert!(matches!(
         &segments[2],
         Segment::Ffi(ExecInstruction {
-            op: ExecOp::Qr,
+            op: ExecOp::DotGeneral(_),
             output_slots,
             ..
-        }) if output_slots.len() == 2
+        }) if output_slots.len() == 1
     ));
 }
 
@@ -252,13 +243,13 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cpu() {
     assert_tensor_vec_eq(&segmented, &segmented_via_alias);
 }
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 fn gpu_host_boundary_program() -> ExecProgram {
     ExecProgram {
         instructions: vec![
             ExecInstruction {
-                op: ExecOp::Cholesky,
-                input_slots: vec![0],
+                op: ExecOp::DotGeneral(matmul_config()),
+                input_slots: vec![0, 0],
                 output_slots: vec![3],
                 dtype: DType::F64,
                 output_shapes: vec![Vec::new()],
@@ -266,7 +257,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
                 last_use: vec![true],
             },
             ExecInstruction {
-                op: ExecOp::ValidateNonsingular,
+                op: ExecOp::ShapeOf { axis: 0 },
                 input_slots: vec![3],
                 output_slots: vec![4],
                 dtype: DType::F64,
@@ -338,7 +329,7 @@ fn gpu_host_boundary_program() -> ExecProgram {
     }
 }
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 fn gpu_host_boundary_inputs() -> Vec<Tensor> {
     vec![
         f64_tensor(vec![2, 2], vec![5.0, 1.0, 1.0, 4.0]),
@@ -347,35 +338,7 @@ fn gpu_host_boundary_inputs() -> Vec<Tensor> {
     ]
 }
 
-#[cfg(feature = "cubecl")]
-fn gpu_nary_einsum_program() -> ExecProgram {
-    ExecProgram {
-        instructions: vec![ExecInstruction {
-            op: ExecOp::NaryEinsum {
-                subscripts: tenferro::parse_einsum_subscripts("ij,jk->ik").unwrap(),
-            },
-            input_slots: vec![0, 1],
-            output_slots: vec![2],
-            dtype: DType::F64,
-            output_shapes: vec![Vec::new()],
-            output_extents: scalar_extents(1),
-            last_use: vec![true, true],
-        }],
-        input_slots: vec![0, 1],
-        output_slots: vec![2],
-        n_slots: 3,
-    }
-}
-
-#[cfg(feature = "cubecl")]
-fn gpu_nary_einsum_inputs() -> Vec<Tensor> {
-    vec![
-        f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-        f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-    ]
-}
-
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 fn upload_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
     tensors
         .iter()
@@ -383,7 +346,7 @@ fn upload_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
         .collect()
 }
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 fn download_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
     tensors
         .iter()
@@ -391,7 +354,7 @@ fn download_all(backend: &CubeclBackend, tensors: &[Tensor]) -> Vec<Tensor> {
         .collect()
 }
 
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 #[test]
 fn segmented_dispatch_matches_unsegmented_dispatch_on_cubecl_host_boundaries() {
     let program = gpu_host_boundary_program();
@@ -409,30 +372,6 @@ fn segmented_dispatch_matches_unsegmented_dispatch_on_cubecl_host_boundaries() {
     let segmented_host = download_all(&gpu_segmented, &segmented);
 
     assert_tensor_vec_eq(&unsegmented_host, &segmented_host);
-}
-
-#[cfg(feature = "cubecl")]
-#[test]
-fn segmented_dispatch_recurses_through_nary_einsum_on_cubecl() {
-    let program = gpu_nary_einsum_program();
-    let host_inputs = gpu_nary_einsum_inputs();
-
-    let mut gpu_unsegmented = CubeclBackend::new(0).unwrap();
-    let unsegmented_inputs = upload_all(&gpu_unsegmented, &host_inputs);
-    let unsegmented =
-        eval_exec_ir_unsegmented(&mut gpu_unsegmented, &program, unsegmented_inputs).unwrap();
-    let unsegmented_host = download_all(&gpu_unsegmented, &unsegmented);
-
-    let mut gpu_segmented = CubeclBackend::new(0).unwrap();
-    let segmented_inputs = upload_all(&gpu_segmented, &host_inputs);
-    let segmented = eval_exec_segmented(&mut gpu_segmented, &program, segmented_inputs).unwrap();
-    let segmented_host = download_all(&gpu_segmented, &segmented);
-
-    assert_tensor_vec_eq(&unsegmented_host, &segmented_host);
-    assert_tensor_eq(
-        &segmented_host[0],
-        &f64_tensor(vec![2, 2], vec![22.0, 28.0, 49.0, 64.0]),
-    );
 }
 
 #[allow(dead_code)]

@@ -24,7 +24,9 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+//! let mut executor = GraphExecutor::new(CpuBackend::new());
+//! executor.register_extension(tenferro_fft::register_runtime).unwrap();
+//! let out = executor.run(&program).unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -33,20 +35,30 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+#[cfg(feature = "autodiff")]
 use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
+#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
+#[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+#[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{FftNum, FftPlanner};
 use tenferro::extension::{
-    apply, register_extension_rule, ExtensionAdRuleTrait, ExtensionOpTrait, ExtensionRegistryError,
+    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
+    ExtensionRuntimeRegistryError,
 };
+#[cfg(feature = "autodiff")]
+use tenferro::extension::{register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError};
 use tenferro::TracedTensor;
+#[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ShapeGuardContext, SymDim};
-use tenferro_tensor::{DType, Tensor, TypedTensor};
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::SymDim;
+use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 
 const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 
@@ -232,22 +244,30 @@ impl ExtensionOpTrait for FftOp {
         }
 
         let output = match (self.kind, inputs[0]) {
-            (FftKind::C2C { forward }, Tensor::C64(input)) => Tensor::C64(TypedTensor::from_vec_col_major(
-                output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
-                execute_c2c(input, self.axis, self.n, forward, self.norm)?,
-            )),
-            (FftKind::C2C { forward }, Tensor::C32(input)) => Tensor::C32(TypedTensor::from_vec_col_major(
-                output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
-                execute_c2c(input, self.axis, self.n, forward, self.norm)?,
-            )),
-            (FftKind::R2C { onesided }, Tensor::F64(input)) => Tensor::C64(TypedTensor::from_vec_col_major(
-                output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
-                execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
-            )),
-            (FftKind::R2C { onesided }, Tensor::F32(input)) => Tensor::C32(TypedTensor::from_vec_col_major(
-                output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
-                execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
-            )),
+            (FftKind::C2C { forward }, Tensor::C64(input)) => {
+                Tensor::C64(TypedTensor::from_vec_col_major(
+                    output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
+                    execute_c2c(input, self.axis, self.n, forward, self.norm)?,
+                ))
+            }
+            (FftKind::C2C { forward }, Tensor::C32(input)) => {
+                Tensor::C32(TypedTensor::from_vec_col_major(
+                    output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
+                    execute_c2c(input, self.axis, self.n, forward, self.norm)?,
+                ))
+            }
+            (FftKind::R2C { onesided }, Tensor::F64(input)) => {
+                Tensor::C64(TypedTensor::from_vec_col_major(
+                    output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
+                    execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
+                ))
+            }
+            (FftKind::R2C { onesided }, Tensor::F32(input)) => {
+                Tensor::C32(TypedTensor::from_vec_col_major(
+                    output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
+                    execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
+                ))
+            }
             (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
                 output_shape_c2r(input.shape.as_slice(), self.axis, self.n)?,
                 execute_c2r(input, self.axis, self.n, self.norm)?,
@@ -272,9 +292,11 @@ impl ExtensionOpTrait for FftOp {
     }
 }
 
+#[cfg(feature = "autodiff")]
 #[derive(Debug)]
 struct FftAdRule;
 
+#[cfg(feature = "autodiff")]
 impl ExtensionAdRuleTrait for FftAdRule {
     fn family_id(&self) -> &'static str {
         FFT_FAMILY_ID
@@ -345,23 +367,38 @@ impl ExtensionAdRuleTrait for FftAdRule {
     }
 }
 
-/// Register the FFT extension AD rule.
-///
-/// Calling this function more than once in a process is harmless. The public
-/// wrapper functions call it automatically before building traced graphs.
-///
-/// # Examples
-///
-/// ```
-/// tenferro_fft::register_fft().unwrap();
-/// tenferro_fft::register_fft().unwrap();
-/// ```
-pub fn register_fft() -> Result<(), ExtensionRegistryError> {
+#[cfg(feature = "autodiff")]
+fn register_fft() -> Result<(), ExtensionRegistryError> {
     match register_extension_rule(Arc::new(FftAdRule)) {
         Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => {}
         Err(err) => return Err(err),
     }
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct FftRuntime;
+
+impl<B: TensorBackend + 'static> ExtensionRuntime<B> for FftRuntime {
+    fn family_id(&self) -> &'static str {
+        FFT_FAMILY_ID
+    }
+
+    fn execute(
+        &self,
+        op: &dyn ExtensionOpTrait,
+        inputs: &[&Tensor],
+        _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        op.eager_execute(inputs)
+    }
+}
+
+/// Register the FFT runtime on a graph executor.
+pub fn register_runtime<B: TensorBackend + 'static>(
+    executor: &mut ExtensionExecutor<B>,
+) -> Result<(), ExtensionRuntimeRegistryError> {
+    executor.registry_mut().register(Arc::new(FftRuntime))
 }
 
 /// Build a one-dimensional FFT along `axis`.
@@ -381,7 +418,9 @@ pub fn register_fft() -> Result<(), ExtensionRegistryError> {
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// let mut executor = GraphExecutor::new(CpuBackend::new());
+/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
+/// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
@@ -407,7 +446,9 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// let mut executor = GraphExecutor::new(CpuBackend::new());
+/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
+/// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
 pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
@@ -436,7 +477,9 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// let mut executor = GraphExecutor::new(CpuBackend::new());
+/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
+/// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
@@ -469,7 +512,9 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+/// let mut executor = GraphExecutor::new(CpuBackend::new());
+/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
+/// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 pub fn irfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
@@ -488,6 +533,7 @@ fn apply_unary_fft(
     axis: isize,
     norm: FftNorm,
 ) -> TracedTensor {
+    #[cfg(feature = "autodiff")]
     register_fft().expect("register tenferro-fft extension");
     validate_n(n);
     let axis = normalize_axis(axis, input.rank);
@@ -527,6 +573,7 @@ fn expected_dtype_for(kind: FftKind) -> DType {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn fft_payload<'a>(op: &'a dyn ExtensionOpTrait, rule: ADRuleKind) -> ADRuleResult<&'a FftOp> {
     op.as_any()
         .downcast_ref::<FftOp>()

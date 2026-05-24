@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 //! AD tests over placeholder-input graphs.
 //!
 //! Demonstrates that `grad` built over an `input_concrete_shape` placeholder

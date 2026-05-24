@@ -21,21 +21,33 @@
 //!   Frontends carry them directly as `Arc<dyn ExtensionOp>`.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
+#[cfg(feature = "autodiff")]
 use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
+#[cfg(feature = "autodiff")]
 use computegraph::fragment::FragmentBuilder;
+#[cfg(feature = "autodiff")]
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::{GraphOp, OpEmitter};
+#[cfg(feature = "autodiff")]
+use computegraph::GraphOp;
+#[cfg(feature = "autodiff")]
+use computegraph::OpEmitter;
 use tenferro_tensor::{DType, Tensor};
 
+#[cfg(feature = "autodiff")]
 use crate::ad::context::ShapeGuardContext;
+#[cfg(feature = "autodiff")]
 use crate::dim_expr::DimExpr;
+#[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
+#[cfg(feature = "autodiff")]
+use std::collections::HashMap;
+#[cfg(feature = "autodiff")]
+use std::sync::{OnceLock, RwLock};
 
 /// The contract every out-of-tree extension primitive must satisfy.
 ///
@@ -182,6 +194,7 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 /// support behind an optional feature. Rule methods receive the concrete
 /// [`ExtensionOp`] payload as a trait object; implementations should downcast
 /// through [`ExtensionOp::as_any`] when they need payload-specific parameters.
+#[cfg(feature = "autodiff")]
 pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
     /// The extension family this rule handles.
     fn family_id(&self) -> &'static str;
@@ -226,11 +239,13 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
 ///     value.is_active()
 /// }
 /// ```
+#[cfg(feature = "autodiff")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdValue {
     value: ValRef<StdTensorOp>,
 }
 
+#[cfg(feature = "autodiff")]
 impl AdValue {
     fn local(local_id: LocalValId) -> Self {
         Self {
@@ -302,6 +317,7 @@ impl AdValue {
 ///     }
 /// }
 /// ```
+#[cfg(feature = "autodiff")]
 pub trait ExtensionChainRule: Debug + Send + Sync + 'static {
     /// The extension family this rule handles.
     fn family_id(&self) -> &'static str;
@@ -322,6 +338,7 @@ pub trait ExtensionChainRule: Debug + Send + Sync + 'static {
 ///
 /// fn accepts_builder(_cx: &mut FruleBuilder<'_>) {}
 /// ```
+#[cfg(feature = "autodiff")]
 pub struct FruleBuilder<'a> {
     family_id: &'static str,
     builder: &'a mut FragmentBuilder<StdTensorOp>,
@@ -332,6 +349,7 @@ pub struct FruleBuilder<'a> {
     output_tangents: Vec<Option<LocalValId>>,
 }
 
+#[cfg(feature = "autodiff")]
 impl<'a> FruleBuilder<'a> {
     fn new(
         family_id: &'static str,
@@ -512,6 +530,7 @@ impl<'a> FruleBuilder<'a> {
 ///
 /// fn accepts_builder(_cx: &mut RRuleBuilder<'_>) {}
 /// ```
+#[cfg(feature = "autodiff")]
 pub struct RRuleBuilder<'a> {
     family_id: &'static str,
     emitter: &'a mut dyn OpEmitter<StdTensorOp>,
@@ -521,6 +540,7 @@ pub struct RRuleBuilder<'a> {
     input_cotangents: Vec<Option<LocalValId>>,
 }
 
+#[cfg(feature = "autodiff")]
 impl<'a> RRuleBuilder<'a> {
     fn new(
         family_id: &'static str,
@@ -686,11 +706,13 @@ impl<'a> RRuleBuilder<'a> {
     }
 }
 
+#[cfg(feature = "autodiff")]
 #[derive(Debug)]
 struct ChainRuleAdapter {
     rule: Arc<dyn ExtensionChainRule>,
 }
 
+#[cfg(feature = "autodiff")]
 impl ExtensionAdRule for ChainRuleAdapter {
     fn family_id(&self) -> &'static str {
         self.rule.family_id()
@@ -733,6 +755,7 @@ impl ExtensionAdRule for ChainRuleAdapter {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn emit_with_builder(
     family_id: &'static str,
     rule: ADRuleKind,
@@ -757,6 +780,7 @@ fn emit_with_builder(
         .collect())
 }
 
+#[cfg(feature = "autodiff")]
 fn emit_with_emitter(
     family_id: &'static str,
     rule: ADRuleKind,
@@ -781,6 +805,7 @@ fn emit_with_emitter(
         .collect())
 }
 
+#[cfg(feature = "autodiff")]
 fn mode_for(inputs: &[AdValue]) -> OpMode {
     let active_mask = inputs.iter().map(AdValue::is_active).collect::<Vec<_>>();
     if active_mask.iter().any(|&active| active) {
@@ -790,11 +815,13 @@ fn mode_for(inputs: &[AdValue]) -> OpMode {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn chain_rule_error(family_id: &'static str, rule: ADRuleKind, message: &str) -> ADRuleError {
     ADRuleError::unsupported(format!("{family_id}: {message}"), rule)
 }
 
 /// Errors returned from extension registries.
+#[cfg(feature = "autodiff")]
 #[derive(Debug, thiserror::Error)]
 pub enum ExtensionRegistryError {
     /// An AD rule with the same `family_id` was already registered.
@@ -806,13 +833,16 @@ pub enum ExtensionRegistryError {
     MalformedFamilyId { family_id: &'static str },
 }
 
+#[cfg(feature = "autodiff")]
 type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
 
+#[cfg(feature = "autodiff")]
 fn rule_registry() -> &'static RwLock<RuleMap> {
     static REG: OnceLock<RwLock<RuleMap>> = OnceLock::new();
     REG.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+#[cfg(feature = "autodiff")]
 fn is_valid_family_id(family_id: &str) -> bool {
     // Required shape: `<crate>.<op>.v<major>` with at least one non-empty
     // `<crate>` chunk, at least one non-empty `<op>` chunk (which may itself
@@ -850,6 +880,7 @@ fn is_valid_family_id(family_id: &str) -> bool {
 /// The rule's `family_id` MUST follow the reserved format
 /// `"<crate-name>.<op-name>.v<major>"`. Registering a rule does not require
 /// registering the primal op first; frontends carry the op payload directly.
+#[cfg(feature = "autodiff")]
 pub fn register_extension_rule(
     rule: Arc<dyn ExtensionAdRule>,
 ) -> Result<(), ExtensionRegistryError> {
@@ -899,6 +930,7 @@ pub fn register_extension_rule(
 ///
 /// let _ = register_extension_chain_rule(Arc::new(IdentityRule));
 /// ```
+#[cfg(feature = "autodiff")]
 pub fn register_extension_chain_rule(
     rule: Arc<dyn ExtensionChainRule>,
 ) -> Result<(), ExtensionRegistryError> {
@@ -906,6 +938,7 @@ pub fn register_extension_chain_rule(
 }
 
 /// Look up an extension AD rule by `family_id`.
+#[cfg(feature = "autodiff")]
 pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
     rule_registry()
         .read()
@@ -915,6 +948,7 @@ pub fn lookup_extension_rule(family_id: &str) -> Option<Arc<dyn ExtensionAdRule>
 }
 
 /// Emit a registered extension linearization rule.
+#[cfg(feature = "autodiff")]
 pub fn linearize_extension_rule(
     op: &dyn ExtensionOp,
     builder: &mut FragmentBuilder<StdTensorOp>,
@@ -933,6 +967,7 @@ pub fn linearize_extension_rule(
 }
 
 /// Emit a registered extension transpose rule.
+#[cfg(feature = "autodiff")]
 pub fn transpose_extension_rule(
     op: &dyn ExtensionOp,
     emitter: &mut dyn OpEmitter<StdTensorOp>,
@@ -951,6 +986,7 @@ pub fn transpose_extension_rule(
 }
 
 /// Returns `true` when an AD rule with `family_id` is currently registered.
+#[cfg(feature = "autodiff")]
 pub fn is_extension_rule_registered(family_id: &str) -> bool {
     lookup_extension_rule(family_id).is_some()
 }

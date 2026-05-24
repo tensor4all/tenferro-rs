@@ -25,6 +25,21 @@ rules from `tensor4all-agent-rules`.
   public contract. If the answer is unclear, keep it `pub(crate)` and expose a
   smaller high-level API instead.
 
+## Standard Extension Boundary
+
+- Standard operation families (`tenferro-einsum`, `tenferro-linalg`,
+  `tenferro-fft`, and future peers) are first-class crates, not modules of the
+  `tenferro` facade.
+- Completion requires the `tenferro` crate to have no normal or dev dependency
+  on standard extension crates. `tenferro` must not expose operation-family
+  facade paths such as `tenferro::einsum`, `tenferro::linalg`, or
+  `tenferro::fft`.
+- Users import operation crates directly and register runtimes explicitly, for
+  example `tenferro_einsum::einsum` plus
+  `executor.register_extension(tenferro_einsum::register_runtime)`.
+- Extension crates depend on the engine/foundation API they need; dependency
+  flow must not require `tenferro` to depend back on them.
+
 ## Oracle Gate
 
 - Do not add or keep an AD `frule` or `rrule` in the mainline without a corresponding oracle family.

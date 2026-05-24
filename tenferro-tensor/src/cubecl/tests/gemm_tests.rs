@@ -1,4 +1,4 @@
-// Run with: cargo test --features cubecl -- --ignored
+// Run with: cargo test --features cuda -- --ignored
 use num_complex::{Complex32, Complex64};
 
 use crate::DotGeneralConfig;

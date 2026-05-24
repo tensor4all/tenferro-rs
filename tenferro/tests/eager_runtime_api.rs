@@ -1,3 +1,5 @@
+#![cfg(feature = "autodiff")]
+
 use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
 #[test]

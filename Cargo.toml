@@ -3,17 +3,19 @@ members = [
     # v2 core (6 crates)
     "tenferro-device",
     "tenferro-tensor",
-    "tenferro-cubecl",
+    "tenferro-gpubackend",
+    "tenferro-runtime",
     "tenferro-extension-macros",
     "tenferro-ops",
     "tenferro-einsum",
+    "tenferro-linalg",
+    "tenferro-fft",
     "tenferro",
 ]
 exclude = [
     # External extension crates depend only on the public `tenferro` facade
     # where possible, are NOT core workspace members, and run their own tests
     # standalone.
-    "tenferro-fft",
     "ext/tropical",
 ]
 default-members = [
@@ -60,7 +62,7 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 cubecl = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96", features = ["cuda"] }
 cubecl-cuda = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
 cubecl-runtime = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
-tenferro-cubecl = { path = "tenferro-cubecl" }
+tenferro-gpubackend = { path = "tenferro-gpubackend" }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc" }

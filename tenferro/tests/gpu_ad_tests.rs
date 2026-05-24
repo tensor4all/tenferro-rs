@@ -1,9 +1,8 @@
-#![cfg(feature = "cubecl")]
+#![cfg(feature = "cuda")]
 
 mod support;
-use support::{einsum, RunTraced};
-use tenferro::traced_tensor::svd;
-use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use support::RunTraced;
+use tenferro::{CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::Buffer;
 
@@ -56,6 +55,18 @@ fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape(upload_tensor(backend.runtime(), tensor).unwrap())
 }
 
+fn matmul(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+    lhs.dot_general(
+        rhs,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+    )
+}
+
 #[test]
 fn test_gpu_matmul_vjp() {
     let a_host = f64_tensor(
@@ -92,7 +103,7 @@ fn test_gpu_matmul_vjp() {
     let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone());
     let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone());
     let mut cpu_engine = GraphExecutor::new(CpuBackend::new());
-    let y_cpu = einsum(&mut cpu_engine, &[&a_cpu, &b_cpu], "ij,jk->ik").unwrap();
+    let y_cpu = matmul(&a_cpu, &b_cpu);
     let mut grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu);
     let mut grad_b_cpu = y_cpu.vjp(&b_cpu, &cotangent_cpu);
     let cpu_grad_a = eval_cpu_tensor(&mut cpu_engine, &mut grad_a_cpu);
@@ -103,7 +114,7 @@ fn test_gpu_matmul_vjp() {
     let b_gpu = upload_traced(&gpu_backend, &b_host);
     let cotangent_gpu = upload_traced(&gpu_backend, &cotangent_host);
     let mut gpu_engine = GraphExecutor::new(gpu_backend);
-    let y_gpu = einsum(&mut gpu_engine, &[&a_gpu, &b_gpu], "ij,jk->ik").unwrap();
+    let y_gpu = matmul(&a_gpu, &b_gpu);
     let mut grad_a_gpu = y_gpu.vjp(&a_gpu, &cotangent_gpu);
     let mut grad_b_gpu = y_gpu.vjp(&b_gpu, &cotangent_gpu);
     let gpu_grad_a = eval_gpu_tensor(&mut gpu_engine, &mut grad_a_gpu);
@@ -111,34 +122,4 @@ fn test_gpu_matmul_vjp() {
 
     assert_f64_tensor_close(&gpu_grad_a, &cpu_grad_a, 1.0e-10, 1.0e-10);
     assert_f64_tensor_close(&gpu_grad_b, &cpu_grad_b, 1.0e-10, 1.0e-10);
-}
-
-#[test]
-fn test_gpu_svd_vjp() {
-    let a_host = f64_tensor(
-        vec![4, 3],
-        vec![
-            4.0, 0.0, 0.0, 0.3, //
-            0.2, 3.0, 0.0, -0.1, //
-            0.1, -0.2, 1.5, 0.5,
-        ],
-    );
-    let cotangent_host = f64_tensor(vec![3], vec![1.0, -0.5, 0.25]);
-
-    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone());
-    let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone());
-    let mut cpu_engine = GraphExecutor::new(CpuBackend::new());
-    let (_u_cpu, s_cpu, _vh_cpu) = svd(&a_cpu);
-    let mut grad_cpu = s_cpu.vjp(&a_cpu, &cotangent_cpu);
-    let cpu_grad = eval_cpu_tensor(&mut cpu_engine, &mut grad_cpu);
-
-    let gpu_backend = CubeclBackend::new(0).unwrap();
-    let a_gpu = upload_traced(&gpu_backend, &a_host);
-    let cotangent_gpu = upload_traced(&gpu_backend, &cotangent_host);
-    let mut gpu_engine = GraphExecutor::new(gpu_backend);
-    let (_u_gpu, s_gpu, _vh_gpu) = svd(&a_gpu);
-    let mut grad_gpu = s_gpu.vjp(&a_gpu, &cotangent_gpu);
-    let gpu_grad = eval_gpu_tensor(&mut gpu_engine, &mut grad_gpu);
-
-    assert_f64_tensor_close(&gpu_grad, &cpu_grad, 1.0e-5, 1.0e-6);
 }

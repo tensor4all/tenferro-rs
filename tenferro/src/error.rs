@@ -43,6 +43,7 @@ pub enum Error {
     TensorRuntime(#[from] tenferro_tensor::Error),
 
     /// Automatic differentiation rule emission failed.
+    #[cfg(feature = "autodiff")]
     #[error(transparent)]
     ADRule(#[from] chainrules_core::ADRuleError),
 
@@ -105,6 +106,7 @@ pub enum Error {
 pub struct ContextId(usize);
 
 impl ContextId {
+    #[cfg(feature = "autodiff")]
     pub(crate) fn from_ptr<T>(ptr: *const T) -> Self {
         Self(ptr as usize)
     }

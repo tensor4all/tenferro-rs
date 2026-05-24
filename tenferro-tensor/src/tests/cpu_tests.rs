@@ -3342,6 +3342,27 @@ fn test_backend_default_and_buffer_pool_len() {
 }
 
 #[test]
+fn test_backend_buffer_pool_controls_report_and_update_limits() {
+    let ctx = Arc::new(CpuContext::with_threads(1));
+    let mut backend = CpuBackend::from_context_with_buffer_pool_limit(ctx, 64);
+
+    assert_eq!(backend.num_threads(), 1);
+    assert_eq!(backend.buffer_pool_limit_bytes(), 64);
+    assert_eq!(backend.buffer_pool_len(), 0);
+    let stats = backend.buffer_pool_stats();
+    assert_eq!(stats.buffers, 0);
+    assert_eq!(stats.capacity_bytes, 0);
+    let cache_stats = backend.buffer_pool_cache_stats();
+    assert_eq!(cache_stats.entries, 0);
+    assert_eq!(cache_stats.retained_bytes, 0);
+
+    backend.set_buffer_pool_limit_bytes(0);
+    assert_eq!(backend.buffer_pool_limit_bytes(), 0);
+    backend.reset_buffer_pool();
+    assert_eq!(backend.buffer_pool_len(), 0);
+}
+
+#[test]
 fn test_backend_mul_neg_conj_dispatch() {
     let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, -2.0]));
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));

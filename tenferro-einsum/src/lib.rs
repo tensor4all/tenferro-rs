@@ -10,8 +10,8 @@
 //!   `"i->ii"` embeds a vector on a diagonal
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
-//! - **v2 builder**: [`build_einsum_fragment`] lowers einsum into a compute
-//!   graph fragment using `DotGeneral`, `ReduceSum`, `Transpose`, etc.
+//! - **Extension runtime**: traced einsum lowers to a registered tenferro
+//!   extension runtime, keeping core op definitions small.
 //!
 //! # Examples
 //!
@@ -37,25 +37,31 @@
 //! assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 //! ```
 
-pub mod builder;
+mod builder;
+mod cache;
 mod eager;
-pub mod planning;
-pub mod syntax;
+#[cfg(feature = "autodiff")]
+pub mod eager_tensor;
+mod extension;
+mod optimize;
+mod planning;
+mod subscripts;
+mod syntax;
+mod traced;
+#[cfg(test)]
 mod typed_eager;
 pub(crate) mod util;
 
-// Re-exports for convenience
-pub use builder::build_einsum_fragment;
-pub use eager::{
-    clear_eager_einsum_cache, eager_einsum, eager_einsum_cache_capacity, eager_einsum_cache_stats,
-    eager_einsum_owned, eager_einsum_owned_subscripts, eager_einsum_read_subscripts,
-    eager_einsum_subscripts, set_eager_einsum_cache_capacity, DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
-};
+pub use cache::EINSUM_EXTENSION_FAMILY_ID;
+pub use extension::register_runtime;
+pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
+pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
-pub use typed_eager::typed_eager_einsum;
-pub use util::{build_size_dict, compute_output_shape};
+pub use traced::{einsum, einsum_subscripts, einsum_subscripts_with, einsum_with};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_eager_tests;

@@ -26,8 +26,9 @@ one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
 Most broad concrete operations are methods on `Tensor`. `TypedTensor<T>` is the
-first layer to consider when you want compile-time dtype safety, typed
-host-side data, or typed linalg/einsum wrappers.
+first layer to consider when you want compile-time dtype safety or typed
+host-side data. Einsum is provided by the separate `tenferro-einsum` standard
+extension.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -130,22 +131,9 @@ assert_eq!(col_sum.shape(), &[3]);
 
 ## Einsum
 
-```rust
-use tenferro::tensor::einsum;
-use tenferro::{CpuBackend, Tensor};
-
-let mut ctx = CpuBackend::new();
-
-// Column-major buffers: `a` has columns [1, 2], [3, 4], [5, 6].
-let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::from_vec_col_major(vec![3, 4], vec![
-    1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0,
-    7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-]);
-
-let c = einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
-assert_eq!(c.shape(), &[2, 4]);
-```
+Use `tenferro_einsum::eager_tensor::einsum` when working with `EagerTensor`.
+For traced graph execution, use `tenferro_einsum::einsum` and register
+`tenferro_einsum::register_runtime` on the `GraphExecutor`.
 
 ## Extracting data
 

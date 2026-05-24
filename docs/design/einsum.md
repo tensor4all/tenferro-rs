@@ -1,24 +1,27 @@
 # Einsum Design
 
-tenferro has three current facade einsum surfaces:
+Einsum is a standard extension crate, not part of the `tenferro` facade.
+The public user-facing paths live under `tenferro_einsum`, for example
+`tenferro_einsum::einsum` for traced graph construction and
+`tenferro_einsum::eager_tensor::einsum` for immediate eager execution.
 
-- `tenferro::traced_tensor::{einsum, einsum_with}` builds lazy traced graphs over
-  `TracedTensor`.
-- `tenferro::eager_tensor::einsum` executes immediately over `EagerTensor`
-  values and records AD metadata when inputs require gradients.
-- `tenferro::tensor::{einsum, einsum_owned}` executes immediately over concrete
-  `Tensor` values and is used by runtime N-ary execution.
+`tenferro` must not expose einsum facade paths such as `tenferro::einsum`,
+`tenferro::traced_tensor::einsum`, `tenferro::eager_tensor::einsum`,
+`tenferro::tensor::einsum`, or `tenferro::typed_tensor::einsum`. Programs that
+use traced einsum must explicitly register the extension runtime with their
+executor.
 
 The implementation is split between:
 
-- `tenferro/src/einsum.rs` for the user-facing traced facade, contraction
-  strategy selection, symbolic-shape handling, and graph cache integration,
-- `tenferro/src/exec.rs` for runtime `NaryEinsum` execution,
+- `tenferro-einsum/src/traced.rs` for the user-facing traced API,
+  contraction strategy selection, symbolic-shape handling, and graph cache
+  integration,
+- `tenferro-einsum/src/extension.rs` for runtime extension execution,
 - `tenferro-einsum/src/syntax/` for subscript and nested-order parsing,
 - `tenferro-einsum/src/planning/` for contraction tree planning and per-step
   lowering plans,
 - `tenferro-einsum/src/builder.rs` for graph-fragment lowering,
-- `tenferro-einsum/src/eager.rs` for concrete eager execution.
+- `tenferro-einsum/src/eager_tensor.rs` for eager tensor execution.
 
 Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 `tenferro-prims`, or the old nine-function einsum API are not current.
@@ -27,11 +30,11 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 
 ## Public Traced API
 
-The facade crate exposes lazy traced einsum:
+The extension crate exposes lazy traced einsum:
 
 ```rust
-use tenferro::traced_tensor::einsum;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_einsum::einsum;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -40,6 +43,7 @@ let mut compiler = GraphCompiler::new();
 let c = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let program = compiler.compile(&c).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
@@ -56,25 +60,27 @@ assert_eq!(result.shape(), &[2, 2]);
 
 `EinsumOptimize::default()` is time-optimized automatic planning.
 
-## Concrete Tensor API
+## Eager Tensor API
 
-`tenferro::tensor` exposes immediate execution over `Tensor` values:
+`tenferro_einsum::eager_tensor` exposes immediate execution over `EagerTensor`
+values:
 
 ```rust
-use tenferro::tensor::einsum;
-use tenferro::{CpuBackend, Tensor, TensorBackend};
+use tenferro::{EagerRuntime, Tensor};
+use tenferro_einsum::eager_tensor::einsum;
 
-let mut ctx = CpuBackend::new();
+let ctx = EagerRuntime::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let c = einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
+let a = ctx.constant_from(a);
+let b = ctx.constant_from(b);
+let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
 
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
-`einsum_owned` consumes inputs and lets the backend reclaim eligible
-buffers after their last use. Downstream runtime code should use these N-ary
-entrypoints rather than depending on binary lowering internals.
+Runtime-owned concrete execution is internal to the extension runtime. It is
+not exposed through `tenferro`.
 
 ## Subscripts And Repeated Labels
 
@@ -107,16 +113,17 @@ diagonalization explicitly.
 
 ## Static And Symbolic Shapes
 
-The traced facade chooses the lowering mode from input shape availability:
+The traced extension API chooses the lowering mode from input shape availability:
 
 | Inputs | Build-time behavior | Runtime behavior |
 | --- | --- | --- |
 | All concrete shapes | optimize the contraction tree at graph build time and lower into ordinary graph ops where possible | execute the lowered graph |
-| Any symbolic shape | emit one `NaryEinsum` op | optimize from actual input shapes at runtime |
+| Any symbolic shape | emit one einsum extension op | optimize from actual input shapes at runtime |
 
-`GraphCompiler` caches concrete-shape contraction trees. `GraphExecutor`
-caches runtime contraction trees by `(subscripts, input shapes)` so repeated
-symbolic-shape runs with the same concrete shapes amortize planning cost.
+`tenferro_einsum` caches concrete-shape contraction trees in the extension
+cache. Runtime contraction trees are keyed by `(subscripts, input shapes)` so
+repeated symbolic-shape runs with the same concrete shapes amortize planning
+cost.
 
 ## Planning
 
@@ -158,7 +165,7 @@ when a compiled program is evaluated with `CubeclBackend` from
 
 Current GPU status:
 
-- CUDA uses CubeCL/CubeCL-CUDA under the `cubecl` feature.
+- CUDA uses CubeCL/CubeCL-CUDA under the public `cuda` feature.
 - cuTENSOR/cuBLAS paths cover selected contractions and GEMM-like operations.
 - ROCm is a stub and not a supported execution path.
 - Complex CubeCL expansion is blocked on upstream CubeCL support and is not part
@@ -167,10 +174,9 @@ Current GPU status:
 
 ## AD
 
-Graph-level AD rules for einsum are sourced from `tenferro-ops/src/ad/` through
-the primitive operations produced by einsum lowering. New linalg-specific AD
-rules and oracle families are separate work; this document only describes the
-einsum lowering surface.
+Graph-level AD rules for einsum live in `tenferro-einsum` and are registered as
+extension AD rules. Primitive operations emitted by lowering still use the core
+AD rules from `tenferro-ops/src/ad/`.
 
 ## Tests
 
@@ -178,8 +184,7 @@ Primary local checks for this surface are:
 
 ```bash
 cargo test -p tenferro-einsum
-cargo test -p tenferro --test ad
-cargo test -p tenferro --doc
+cargo test -p tenferro-einsum --doc
 ```
 
 GPU-specific execution tests require CUDA and are ignored by default; see

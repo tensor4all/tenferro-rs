@@ -3,7 +3,7 @@
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
 mod support;
-use support::{einsum, RunTraced};
+use support::RunTraced;
 use tenferro::traced::TracedTensor;
 use tenferro::GraphExecutor;
 use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TypedTensor};
@@ -163,55 +163,32 @@ fn test_batched_gemm() {
     assert_eq!(data, &[23.0, 34.0, 31.0, 46.0, 271.0, 298.0, 311.0, 342.0]);
 }
 
-#[test]
-fn test_batched_gemm_via_einsum() {
-    // Same as above but via einsum notation: "ijk,jlk->ilk"
-    // where i=M, j=K, l=N, k=batch
-    let a = f64_tensor(
-        vec![2, 2, 2],
-        vec![1.0, 2.0, 3.0, 4.0, 9.0, 10.0, 11.0, 12.0],
-    );
-    let b = f64_tensor(
-        vec![2, 2, 2],
-        vec![5.0, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
-    );
-
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta = TracedTensor::from_tensor_concrete_shape(a);
-    let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let tc = einsum(&mut engine, &[&ta, &tb], "ijk,jlk->ilk").unwrap();
-
-    let result = tc.run_with(&mut engine).unwrap();
-    let data = get_f64_data(&result);
-    // Same result as above, potentially in a different layout due to einsum
-    // reordering. The einsum output indices are "ilk" so shape is [i=2, l=2, k=2].
-    // col-major: i fastest, then l, then k.
-    // batch 0 (k=0): C[i,l] = [[23,31],[34,46]]
-    //   col-major: [23, 34, 31, 46]
-    // batch 1 (k=1): C[i,l] = [[271,311],[298,342]]
-    //   col-major: [271, 298, 311, 342]
-    // full: [23, 34, 31, 46, 271, 298, 311, 342]
-    assert_eq!(data, &[23.0, 34.0, 31.0, 46.0, 271.0, 298.0, 311.0, 342.0]);
-}
-
 // ============================================================================
 // Strided input tests
 // ============================================================================
 
 #[test]
-fn test_strided_input_via_einsum() {
-    // Multiply A^T * B where A is transposed via einsum.
+fn test_strided_input_via_transpose_and_dot_general() {
+    // Multiply A^T * B where A is transposed by the graph.
     // A[3,2] with data = [[1,4],[2,5],[3,6]] col-major: [1,2,3,4,5,6]
     // The transpose "ji->ij" makes A^T[2,3].
     // Then A^T[2,3] * B[3,2] -> C[2,2].
     let a = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    // A^T * B via einsum: "ji,jk->ik"
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let ta = TracedTensor::from_tensor_concrete_shape(a);
     let tb = TracedTensor::from_tensor_concrete_shape(b);
-    let tc = einsum(&mut engine, &[&ta, &tb], "ji,jk->ik").unwrap();
+    let ta_t = ta.transpose(&[1, 0]);
+    let tc = ta_t.dot_general(
+        &tb,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
+    );
 
     let result = tc.run_with(&mut engine).unwrap();
     let data = get_f64_data(&result);
@@ -248,31 +225,3 @@ fn test_vector_dot_product() {
 }
 
 // ============================================================================
-#[test]
-fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
-    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
-    let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
-
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let ta1 = TracedTensor::from_tensor_concrete_shape(a.clone());
-    let tb1 = TracedTensor::from_tensor_concrete_shape(b.clone());
-    let tc1 = TracedTensor::from_tensor_concrete_shape(c.clone());
-    let out1 = einsum(&mut engine, &[&ta1, &tb1, &tc1], "ij,jk,kl->il").unwrap();
-
-    let result1 = out1.run_with(&mut engine).unwrap();
-    assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
-
-    let pooled_after_first = engine.buffer_pool_len();
-    assert!(pooled_after_first > 0);
-
-    let ta2 = TracedTensor::from_tensor_concrete_shape(a);
-    let tb2 = TracedTensor::from_tensor_concrete_shape(b);
-    let tc2 = TracedTensor::from_tensor_concrete_shape(c);
-    let out2 = einsum(&mut engine, &[&ta2, &tb2, &tc2], "ij,jk,kl->il").unwrap();
-
-    let result2 = out2.run_with(&mut engine).unwrap();
-    assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
-    let pooled_after_second = engine.buffer_pool_len();
-    assert!(pooled_after_second < pooled_after_first * 2);
-}

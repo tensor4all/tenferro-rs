@@ -65,13 +65,13 @@
 //!
 //! # Running GPU tests
 //!
-//! All GPU tests are marked `#[ignore]` so that `cargo test --features cubecl`
+//! All GPU tests are marked `#[ignore]` so that `cargo test --features cuda`
 //! passes on machines without a GPU. To actually run them:
 //!
 //! ```sh
 //! CUBECL_DEBUG_LOG=0 \
 //! CUDA_PATH=/usr/local/cuda-12.0 \
-//! cargo test -p tenferro-tensor --features cubecl -- --ignored
+//! cargo test -p tenferro-tensor --features cuda -- --ignored
 //! ```
 
 use std::cell::OnceCell;
@@ -85,8 +85,8 @@ use cubecl::prelude::{
 use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
-use tenferro_cubecl::reduce::{self as cubecl_reduce, ReduceStrategy};
-use tenferro_cubecl::{diagonal, elementwise, indexing, structural};
+use tenferro_gpubackend::reduce::{self as cubecl_reduce, ReduceStrategy};
+use tenferro_gpubackend::{diagonal, elementwise, indexing, structural};
 
 use crate::backend::TensorBackend;
 use crate::config::{
@@ -701,7 +701,7 @@ impl CubeclBackend {
             &ComputeClient<CudaRuntime>,
             TensorBinding<CudaRuntime>,
             TensorBinding<CudaRuntime>,
-        ) -> tenferro_cubecl::Result<()>,
+        ) -> tenferro_gpubackend::Result<()>,
     ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + Clone,

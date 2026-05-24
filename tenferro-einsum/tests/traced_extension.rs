@@ -1,0 +1,84 @@
+use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+
+#[test]
+fn traced_einsum_executes_through_registered_extension_runtime() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut compiler = GraphCompiler::new();
+
+    let c = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let program = compiler.compile(&c).unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    let out = executor.run(&program).unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
+}
+
+#[test]
+fn runtime_registration_is_idempotent() {
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+
+    assert_eq!(executor.extension_executor().registry().len(), 1);
+}
+
+#[test]
+fn runtime_einsum_plan_cache_is_extension_owned() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let y = TracedTensor::input_symbolic_shape(DType::F64, 1);
+    let mut compiler = GraphCompiler::new();
+
+    let dot = tenferro_einsum::einsum(&mut compiler, &[&x, &y], "i,i->").unwrap();
+    let program = compiler
+        .compile_with_input_specs(&dot, &[(&x, DType::F64, &[3]), (&y, DType::F64, &[3])])
+        .unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    let x_value = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+    let y_value = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
+    let out = executor
+        .run_with_inputs(&program, &[(&x, &x_value), (&y, &y_value)])
+        .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
+    assert_eq!(executor.cache_stats().extensions.entries, 1);
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn traced_einsum_grad_uses_extension_ad_rule() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let mut compiler = GraphCompiler::new();
+
+    let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let grad_a = y.reduce_sum(&[0, 1]).grad(&a).unwrap();
+    let program = compiler.compile(&grad_a).unwrap();
+
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_einsum::register_runtime)
+        .unwrap();
+    let out = executor.run(&program).unwrap();
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
+    );
+}

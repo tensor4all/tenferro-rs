@@ -7,15 +7,18 @@ authors.workspace = true
 publish.workspace = true
 
 [features]
-default = ["cpu-faer"]
+default = ["autodiff", "cpu-faer"]
+autodiff = ["chainrules-core"]
 cpu-faer = ["tenferro-tensor/cpu-faer"]
 cpu-blas = ["tenferro-tensor/cpu-blas"]
-cubecl = ["tenferro-tensor/cubecl"]
+gpu = ["tenferro-tensor/gpu"]
+cuda = ["gpu", "tenferro-tensor/cuda"]
+rocm = ["gpu", "tenferro-tensor/rocm"]
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-extension-macros = { path = "../tenferro-extension-macros" }
 computegraph.workspace = true
-chainrules-core.workspace = true
+chainrules-core = { workspace = true, optional = true }
 num-complex.workspace = true
 thiserror.workspace = true

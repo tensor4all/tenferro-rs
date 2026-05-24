@@ -1,5 +1,5 @@
 use tenferro_tensor::cpu::CpuBackend;
-#[cfg(feature = "cubecl")]
+#[cfg(feature = "cuda")]
 use tenferro_tensor::cubecl::CubeclBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig,
@@ -9,7 +9,7 @@ use tenferro_tensor::{
 
 pub(crate) enum EagerBackend {
     Cpu(CpuBackend),
-    #[cfg(feature = "cubecl")]
+    #[cfg(feature = "cuda")]
     Cuda(CubeclBackend),
 }
 
@@ -18,7 +18,7 @@ impl EagerBackend {
         Self::Cpu(backend)
     }
 
-    #[cfg(feature = "cubecl")]
+    #[cfg(feature = "cuda")]
     pub(crate) fn cuda(backend: CubeclBackend) -> Self {
         Self::Cuda(backend)
     }
@@ -28,7 +28,7 @@ macro_rules! dispatch {
     ($backend:expr, $method:ident($($arg:expr),* $(,)?)) => {
         match $backend {
             EagerBackend::Cpu(backend) => backend.$method($($arg),*),
-            #[cfg(feature = "cubecl")]
+            #[cfg(feature = "cuda")]
             EagerBackend::Cuda(backend) => backend.$method($($arg),*),
         }
     };

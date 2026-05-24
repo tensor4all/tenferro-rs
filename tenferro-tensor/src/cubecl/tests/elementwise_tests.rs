@@ -1,4 +1,4 @@
-// Run with: cargo test --features cubecl -- --ignored
+// Run with: cargo test --features cuda -- --ignored
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, Tensor, TensorBackend};

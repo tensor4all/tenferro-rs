@@ -20,7 +20,7 @@ a supported execution path.
 See also:
 
 - `tenferro-tensor/src/cubecl/` for the implementation,
-- `tenferro-cubecl/` for static CubeCL kernel definitions and kernel-level
+- `tenferro-gpubackend/` for static CubeCL kernel definitions and kernel-level
   validation,
 - `AGENTS.md` for the current GPU status and local test command,
 - [backend-contract.md](../spec/backend-contract.md) for placement rules,
@@ -31,7 +31,7 @@ See also:
 ## Current Module Structure
 
 ```text
-tenferro-cubecl/src/
+tenferro-gpubackend/src/
     elementwise.rs         static elementwise CubeCL kernels
     structural.rs          static structural and conversion CubeCL kernels
     indexing.rs            static slice/gather/scatter/pad CubeCL kernels
@@ -58,7 +58,7 @@ CubeCL CUDA runtime.
 
 ## Kernel Ownership
 
-Static CubeCL kernel definitions live in the internal `tenferro-cubecl` kernel
+Static CubeCL kernel definitions live in the internal `tenferro-gpubackend` kernel
 crate. The tensor backend crate must not keep duplicate static kernels once they
 have been moved. This keeps copied/adapted CubeK-derived code,
 tenferro-specific kernel definitions, and third-party notices in one crate.
@@ -250,7 +250,7 @@ a CUDA machine with:
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-tensor --features cubecl -- --ignored
+  cargo test -p tenferro-tensor --features cuda -- --ignored
 ```
 
 These tests are correctness tests, not benchmarks.

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use computegraph::fragment::{Fragment, FragmentBuilder};
+#[cfg(feature = "autodiff")]
 use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
@@ -10,23 +11,32 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+#[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorBackend, TensorScalar, TypedTensor};
+#[cfg(feature = "autodiff")]
+use tenferro_tensor::TensorBackend;
+#[cfg(feature = "autodiff")]
+use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Tensor, TensorScalar};
+#[cfg(feature = "autodiff")]
 use tidu::{try_differentiate, try_transpose};
 
 use super::error::{Error, Result};
+#[cfg(feature = "autodiff")]
 use super::graph::{GraphCompiler, GraphExecutor};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
-    concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new,
-    metadata_scopes_with_scope, push_metadata_scope, register_scoped_fragment_metadata,
-    register_scoped_metadata_batch, register_scoped_value_metadata, registered_meta,
-    symbolic_input_meta, tensor_meta, tensor_meta_from_tensor, MetadataScope,
+    concrete_tensor_meta, metadata_scopes_for_scope, metadata_scopes_with_new, push_metadata_scope,
+    register_scoped_fragment_metadata, register_scoped_value_metadata, symbolic_input_meta,
+    tensor_meta, MetadataScope,
 };
+#[cfg(feature = "autodiff")]
+use crate::metadata::{registered_meta, tensor_meta_from_tensor};
 use crate::scalar_semantics::round_real_to_i64;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "autodiff")]
 static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -38,6 +48,7 @@ pub(crate) fn next_input_key() -> TensorInputKey {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn next_pass_id() -> u64 {
     NEXT_DIFF_PASS_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -114,6 +125,7 @@ pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Vec<usize> {
         .collect()
 }
 
+#[cfg(feature = "autodiff")]
 fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
     try_concrete_shape(tensor).unwrap_or_else(|| vec![0; tensor.rank])
 }
@@ -300,10 +312,7 @@ impl TracedTensor {
     /// The tensor data is still attached (so plain `eval` works without
     /// bindings), but graph passes see the leaf as shape-symbolic. This is
     /// useful for building a single traced program that should not bake in
-    /// shape-specific optimizations — e.g. mixing a known-shape tensor into
-    /// an einsum with other `input_symbolic_shape` placeholders forces the
-    /// einsum to be kept as a single `NaryEinsum` op rather than
-    /// decomposing at build time.
+    /// shape-specific optimizations.
     ///
     /// # Examples
     ///
@@ -400,10 +409,7 @@ impl TracedTensor {
     /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
     ///
     /// Must be bound via [`GraphExecutor::run_with_inputs`] before
-    /// evaluation. Use this to build shape-agnostic graphs — in particular,
-    /// einsum calls containing at least one `input_symbolic_shape` input are
-    /// kept as a single `NaryEinsum` op so the contraction path can be
-    /// optimized at execution time against the actual bound shapes.
+    /// evaluation. Use this to build shape-agnostic graphs.
     ///
     /// # Examples
     ///
@@ -529,6 +535,14 @@ impl TracedTensor {
         try_concrete_shape(self)
     }
 
+    /// Return the concrete tensor shape, panicking if any dimension is symbolic.
+    ///
+    /// This mirrors the existing traced frontend behavior for composite ops
+    /// that require concrete ranks and sizes at graph construction time.
+    pub fn concrete_shape(&self) -> Vec<usize> {
+        concrete_shape(self)
+    }
+
     /// If this `TracedTensor` is a leaf (single-node input fragment),
     /// return its input key. Computed tensors return `None`.
     pub fn input_key(&self) -> Option<TensorInputKey> {
@@ -538,6 +552,7 @@ impl TracedTensor {
         }
     }
 
+    #[cfg(feature = "autodiff")]
     pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
         if self.rank != 0 {
             return Err(Error::NonScalarGrad {
@@ -566,6 +581,7 @@ impl TracedTensor {
     /// # let loss = x.scale_real(2.0);
     /// let maybe_dx = loss.try_grad(&x).unwrap();
     /// ```
+    #[cfg(feature = "autodiff")]
     pub fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
         if self.rank != 0 {
             return Err(Error::NonScalarGrad {
@@ -597,6 +613,7 @@ impl TracedTensor {
     /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(executor.run(&program).unwrap().shape(), &[] as &[usize]);
     /// ```
+    #[cfg(feature = "autodiff")]
     pub fn checkpoint<B: TensorBackend>(
         &mut self,
         compiler: &mut GraphCompiler,
@@ -660,6 +677,7 @@ impl TracedTensor {
         Ok(())
     }
 
+    #[cfg(feature = "autodiff")]
     pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
         self.try_jvp(wrt, tangent)
             .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
@@ -667,6 +685,7 @@ impl TracedTensor {
 
     /// Like [`jvp`](Self::jvp) but returns `None` when the output does not
     /// depend on `wrt` (i.e. the tangent is structurally zero).
+    #[cfg(feature = "autodiff")]
     pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
         self.try_jvp_result(wrt, tangent)
             .unwrap_or_else(|err| panic!("{err}"))
@@ -676,6 +695,7 @@ impl TracedTensor {
     ///
     /// This returns an error when a primitive or extension cannot emit its
     /// linearization rule.
+    #[cfg(feature = "autodiff")]
     pub fn try_jvp_result(
         &self,
         wrt: &TracedTensor,
@@ -761,6 +781,7 @@ impl TracedTensor {
         }))
     }
 
+    #[cfg(feature = "autodiff")]
     pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
         match self.try_vjp_result(wrt, cotangent) {
             Ok(Some(vjp)) => vjp,
@@ -774,6 +795,7 @@ impl TracedTensor {
     /// This returns `Ok(None)` when the cotangent for `wrt` is structurally
     /// inactive, and returns an error when a primitive or extension is missing
     /// the required AD rule.
+    #[cfg(feature = "autodiff")]
     pub fn try_vjp_result(
         &self,
         wrt: &TracedTensor,
@@ -947,6 +969,18 @@ impl TracedTensor {
         let (lhs, rhs) = broadcast_binary(self, other);
         apply_binary(
             StdTensorOp::Div,
+            &lhs,
+            &rhs,
+            lhs.rank,
+            lhs.shape_hint.clone(),
+        )
+    }
+
+    /// Elementwise comparison with NumPy-style broadcasting.
+    pub fn compare(&self, other: &TracedTensor, dir: CompareDir) -> TracedTensor {
+        let (lhs, rhs) = broadcast_binary(self, other);
+        apply_binary(
+            StdTensorOp::Compare(dir),
             &lhs,
             &rhs,
             lhs.rank,
@@ -2106,56 +2140,6 @@ fn apply_binary_with_output_dtype(
     }
 }
 
-pub(crate) fn apply_multi_output(
-    op: StdTensorOp,
-    input: &TracedTensor,
-    output_shapes: Vec<Vec<SymDim>>,
-) -> Vec<TracedTensor> {
-    let mut builder = FragmentBuilder::new();
-    builder.add_parent(input.fragment.clone());
-    let input_ref = ValRef::External(input.fragment.vals()[input.val].key.clone());
-    let outputs = builder.add_op(op, vec![input_ref], OpMode::Primal);
-    builder.set_outputs(outputs.clone());
-    let fragment = Arc::new(builder.build());
-    assert_eq!(
-        outputs.len(),
-        output_shapes.len(),
-        "apply_multi_output: output count must match output_shapes"
-    );
-    let metadata_scope = Arc::new(register_scoped_metadata_batch(
-        outputs
-            .iter()
-            .zip(output_shapes.iter())
-            .map(|(&val, shape)| {
-                (
-                    fragment.vals()[val].key.clone(),
-                    tensor_meta(input.dtype, shape.clone()),
-                )
-            }),
-    ));
-
-    outputs
-        .iter()
-        .zip(output_shapes)
-        .map(|(&val, shape)| TracedTensor {
-            id: next_traced_id(),
-            rank: shape.len(),
-            dtype: input.dtype,
-            fragment: fragment.clone(),
-            val,
-            data: None,
-            shape_hint: Some(shape),
-            inputs_map: input.inputs_map.clone(),
-            extra_roots: input.extra_roots.clone(),
-            checkpoint_chain: input.checkpoint_chain.clone(),
-            metadata_scopes: metadata_scopes_with_scope(
-                Arc::clone(&metadata_scope),
-                [input.metadata_scopes.as_slice()],
-            ),
-        })
-        .collect()
-}
-
 fn register_single_output_metadata(
     fragment: &Fragment<StdTensorOp>,
     output: LocalValId,
@@ -2181,6 +2165,7 @@ impl TracedTensor {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
     match &tt.fragment.vals()[tt.val].key {
         GlobalValKey::Input(key) => key.clone(),
@@ -2188,6 +2173,7 @@ fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
     match &fragment.vals()[local_id].key {
         GlobalValKey::Input(key) => key.clone(),
@@ -2195,6 +2181,7 @@ fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> T
     }
 }
 
+#[cfg(feature = "autodiff")]
 fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
     match dtype {
         DType::F32 => Tensor::F32(TypedTensor::ones(shape)),
