@@ -740,7 +740,7 @@ fn cotangent_scalar(
         let aligned_cotangent = match output.tensor.dtype {
             DType::C32 | DType::C64 => aligned_cotangent.conj(),
             DType::F32 | DType::F64 => aligned_cotangent,
-            DType::I64 => continue,
+            DType::I32 | DType::I64 | DType::Bool => continue,
         };
         let axes: Vec<usize> = (0..output.tensor.rank).collect();
         scalar_terms.push((&output.tensor * &aligned_cotangent).reduce_sum(&axes));
@@ -872,7 +872,15 @@ fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let tensor = match dtype {
         DType::F32 => Tensor::F32(TypedTensor::<f32>::zeros(shape)),
         DType::F64 => Tensor::F64(TypedTensor::<f64>::zeros(shape)),
+        DType::I32 => Tensor::I32(TypedTensor::<i32>::zeros(shape)),
         DType::I64 => Tensor::I64(TypedTensor::<i64>::zeros(shape)),
+        DType::Bool => {
+            let n_elements = shape.iter().product();
+            Tensor::Bool(TypedTensor::from_vec_col_major(
+                shape,
+                vec![false; n_elements],
+            ))
+        }
         DType::C32 => Tensor::C32(TypedTensor::<Complex32>::zeros(shape)),
         DType::C64 => Tensor::C64(TypedTensor::<Complex64>::zeros(shape)),
     };
