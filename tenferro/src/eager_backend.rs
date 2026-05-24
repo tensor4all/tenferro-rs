@@ -7,7 +7,7 @@ use tenferro_tensor::{
     TensorRead,
 };
 
-pub(crate) enum EagerBackend {
+pub enum EagerBackend {
     Cpu(CpuBackend),
     #[cfg(feature = "cuda")]
     Cuda(CubeclBackend),

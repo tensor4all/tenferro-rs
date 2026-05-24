@@ -10,6 +10,7 @@ use tenferro_tensor::{
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
+use tenferro_runtime::extension_runtime::ExtensionExecutor;
 
 enum PromotedTensor<'a> {
     Borrowed(&'a Tensor),
@@ -90,18 +91,48 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        // Per spec Section 8 the eager path MUST NOT open a backend exec
-        // session for extension ops; the extension owns its execution
-        // model. Route errors through the standard tensor error channel
-        // so callers see consistent error types.
-        return ext.eager_execute(inputs).map_err(|err| {
-            Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
-                op: "extension",
-                message: format!("family_id={:?}: {err}", ext.family_id()),
-            })
-        });
+        return ext
+            .eager_execute(inputs)
+            .map_err(|err| extension_error(ext.as_ref(), err));
     }
 
+    exec_standard_op_on_tensors(op, inputs, backend)
+}
+
+pub(crate) fn exec_op_on_tensors_with_extension_executor<B: TensorBackend + 'static>(
+    op: &StdTensorOp,
+    inputs: &[&Tensor],
+    backend: &mut B,
+    extension_executor: Option<&mut ExtensionExecutor<B>>,
+) -> Result<Vec<Tensor>> {
+    if let StdTensorOp::Extension(ext) = op {
+        let outputs = match extension_executor {
+            Some(extension_executor) if extension_executor.registry().contains(ext.family_id()) => {
+                extension_executor.execute(backend, ext.as_ref(), inputs)
+            }
+            _ => ext.eager_execute(inputs),
+        };
+        return outputs.map_err(|err| extension_error(ext.as_ref(), err));
+    }
+
+    exec_standard_op_on_tensors(op, inputs, backend)
+}
+
+fn extension_error(
+    ext: &dyn tenferro_ops::ext_op::ExtensionOp,
+    err: tenferro_tensor::Error,
+) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
+        op: "extension",
+        message: format!("family_id={:?}: {err}", ext.family_id()),
+    })
+}
+
+fn exec_standard_op_on_tensors<B: TensorBackend>(
+    op: &StdTensorOp,
+    inputs: &[&Tensor],
+    backend: &mut B,
+) -> Result<Vec<Tensor>> {
     backend.with_exec_session(|exec| {
         let result = match op {
             StdTensorOp::Add => {

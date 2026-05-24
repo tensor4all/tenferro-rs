@@ -35,7 +35,6 @@ use crate::checkpoint::CheckpointNode;
 #[cfg(feature = "autodiff")]
 use crate::eager::{record_eager_outputs, EagerTensor};
 #[cfg(feature = "autodiff")]
-use crate::eager_exec::exec_op_on_tensors;
 #[cfg(feature = "autodiff")]
 use crate::error::{Error, Result};
 use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
@@ -229,10 +228,11 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
 
 /// Apply an extension op to eager tensors.
 ///
-/// The forward pass delegates to [`ExtensionOp::eager_execute`] through the
-/// usual eager execution path, then records the same `StdTensorOp::Extension`
-/// node used by traced graphs. Eager backward therefore uses registered
-/// [`ExtensionAdRuleTrait`] rules through the same AD source of truth.
+/// The forward pass delegates through the owning [`EagerRuntime`]'s extension
+/// executor when a runtime is registered, then records the same
+/// `StdTensorOp::Extension` node used by traced graphs. Eager backward
+/// therefore uses registered [`ExtensionAdRuleTrait`] rules through the same AD
+/// source of truth and, for registered runtimes, the same runtime cache owner.
 #[cfg(feature = "autodiff")]
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let Some(first) = inputs.first() else {
@@ -261,10 +261,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 
     let op = StdTensorOp::Extension(op);
     let concrete_inputs: Vec<&Tensor> = inputs.iter().map(|tensor| tensor.data.as_ref()).collect();
-    let outputs = {
-        let mut backend = ctx.backend.lock().unwrap();
-        exec_op_on_tensors(&op, &concrete_inputs, &mut *backend)?
-    };
+    let outputs = ctx.exec_outputs(&op, &concrete_inputs)?;
     if outputs.len() != op.n_outputs() {
         return Err(Error::Internal(format!(
             "expected {} eager outputs for {:?}, got {}",

@@ -161,6 +161,13 @@ Elementwise, structural, indexing, and reduction kernels should launch enough
 parallel work items to cover the output or update domain. Single-thread launch
 is not an acceptable correctness fallback for new or modified kernels.
 
+Reduction `Auto` strategy may use one unit per keepdims output element only
+when the reduce-axis length is bounded by the hardware plane width. Larger
+reduce axes must use a parallel plane/subgroup reduction strategy, or return an
+unsupported-strategy error when the runtime cannot provide plane operations.
+The explicit `Unit` strategy remains available as a requested serial strategy,
+but `Auto` must not silently route unbounded reduce-axis work to one worker.
+
 Scatter uses a two-phase launch: first a parallel copy initializes `out` from
 `operand`, then a parallel update kernel covers the scatter update domain.
 Overlapping add-scatter updates use CubeCL atomic add for supported real scalar

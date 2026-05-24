@@ -1,13 +1,10 @@
 use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TensorRead, TensorView};
 
 use super::{
-    binary_contract, clear_eager_einsum_cache, eager_einsum, eager_einsum_cache_capacity,
-    eager_einsum_cache_stats, eager_einsum_exec_read, set_eager_einsum_cache_capacity,
-    try_eager_einsum_binary_read_fast, LabeledTensor, TensorValue,
-    DEFAULT_EAGER_EINSUM_CACHE_CAPACITY,
+    binary_contract, eager_einsum_exec_read, try_eager_einsum_binary_read_fast, LabeledTensor,
+    TensorValue,
 };
 use crate::{ContractionTree, Subscripts};
-use std::num::NonZeroUsize;
 
 #[test]
 fn tensor_value_view_paths_materialize_and_read() {
@@ -128,29 +125,4 @@ fn binary_read_fast_path_rejects_non_fast_shapes_and_labels() {
     let duplicate_labels = Subscripts::parse("ii,jk->ik").unwrap();
     let inputs = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     assert!(try_eager_einsum_binary_read_fast(&mut ctx, &inputs, &duplicate_labels).is_none());
-}
-
-#[test]
-fn eager_einsum_cache_is_bounded_and_reports_stats() {
-    clear_eager_einsum_cache();
-    set_eager_einsum_cache_capacity(NonZeroUsize::new(1).unwrap());
-    let mut ctx = CpuBackend::new();
-
-    for mid in [3, 4] {
-        let a = Tensor::from_vec_col_major(vec![2, mid], vec![1.0_f64; 2 * mid]);
-        let b = Tensor::from_vec_col_major(vec![mid, 3], vec![1.0_f64; mid * 3]);
-        let c = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
-        let out = eager_einsum(&mut ctx, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
-        assert_eq!(out.shape(), &[2, 2]);
-    }
-
-    assert_eq!(eager_einsum_cache_capacity().get(), 1);
-    let stats = eager_einsum_cache_stats();
-    assert_eq!(stats.entries, 1);
-    assert!(stats.retained_bytes > 0);
-
-    clear_eager_einsum_cache();
-    set_eager_einsum_cache_capacity(
-        NonZeroUsize::new(DEFAULT_EAGER_EINSUM_CACHE_CAPACITY).unwrap(),
-    );
 }

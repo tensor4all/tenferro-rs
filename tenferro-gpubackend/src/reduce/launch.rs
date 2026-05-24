@@ -15,7 +15,7 @@
 // Tenferro changes: narrowed to tenferro reduction ops, current CubeCL fork,
 // single-axis keepdims output, and explicit tenferro column-major bindings.
 
-use cubecl::prelude::*;
+use cubecl::{features::Plane, prelude::*};
 
 use super::{
     kernels,
@@ -43,6 +43,23 @@ pub enum ReduceStrategy {
     Auto,
     /// Use one worker per keepdims output element.
     Unit,
+    /// Use one hardware plane/subgroup per keepdims output element.
+    Plane,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedReduceStrategy {
+    Unit,
+    Plane,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedReduceLaunch {
+    kind: ResolvedReduceStrategy,
+    cube_count: CubeCount,
+    cube_dim: CubeDim,
+    axis: usize,
+    output_len: usize,
 }
 
 fn validate_launch<R: Runtime>(
@@ -80,19 +97,111 @@ fn validate_reduce_problem(
 fn launch_with_unit_settings<R: Runtime>(
     client: &ComputeClient<R>,
     problem: ReduceProblem,
-    strategy: ReduceStrategy,
-) -> (CubeCount, CubeDim, usize, usize) {
-    match strategy {
-        ReduceStrategy::Auto | ReduceStrategy::Unit => {
-            let settings = unit_launch_settings(client, problem);
-            let _has_idle_units = settings.blueprint.idle_units;
-            (
-                settings.cube_count,
-                settings.cube_dim,
-                problem.axis,
-                problem.reduce_count,
-            )
+) -> ResolvedReduceLaunch {
+    let settings = unit_launch_settings(client, problem);
+    let _has_idle_units = settings.blueprint.idle_units;
+    ResolvedReduceLaunch {
+        kind: ResolvedReduceStrategy::Unit,
+        cube_count: settings.cube_count,
+        cube_dim: settings.cube_dim,
+        axis: problem.axis,
+        output_len: problem.reduce_count,
+    }
+}
+
+fn launch_with_plane_settings<R: Runtime>(
+    client: &ComputeClient<R>,
+    problem: ReduceProblem,
+) -> Result<ResolvedReduceLaunch> {
+    let plane_width = client.properties().hardware.plane_size_max.max(1);
+    validate_plane_strategy(
+        problem,
+        plane_width,
+        client.features().plane.contains(Plane::Ops),
+    )?;
+
+    let cubes = u32::try_from(problem.reduce_count.max(1)).map_err(|_| {
+        CubeclKernelError::InvalidStrategy {
+            reason: format!(
+                "reduction output element count {} exceeds static CubeCL launch limit",
+                problem.reduce_count
+            ),
         }
+    })?;
+    Ok(ResolvedReduceLaunch {
+        kind: ResolvedReduceStrategy::Plane,
+        cube_count: CubeCount::Static(cubes, 1, 1),
+        cube_dim: CubeDim::new_1d(plane_width),
+        axis: problem.axis,
+        output_len: problem.reduce_count,
+    })
+}
+
+fn validate_plane_strategy(
+    problem: ReduceProblem,
+    plane_width: u32,
+    has_plane_ops: bool,
+) -> Result<()> {
+    if !has_plane_ops {
+        return Err(CubeclKernelError::InvalidStrategy {
+            reason: "plane reduction requires backend plane operations".to_owned(),
+        });
+    }
+    if problem.reduce_len < plane_width as usize {
+        return Err(CubeclKernelError::InvalidStrategy {
+            reason: format!(
+                "plane reduction requires reduce axis length {} to be at least plane width {}",
+                problem.reduce_len, plane_width
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn auto_reduce_strategy<R: Runtime>(
+    client: &ComputeClient<R>,
+    problem: ReduceProblem,
+) -> Result<ResolvedReduceStrategy> {
+    let unit_axis_limit = client.properties().hardware.plane_size_max.max(1) as usize;
+    auto_reduce_strategy_for_capabilities(
+        problem.reduce_len,
+        unit_axis_limit,
+        client.features().plane.contains(Plane::Ops),
+    )
+}
+
+fn auto_reduce_strategy_for_capabilities(
+    reduce_len: usize,
+    unit_axis_limit: usize,
+    has_plane_ops: bool,
+) -> Result<ResolvedReduceStrategy> {
+    if reduce_len <= unit_axis_limit {
+        return Ok(ResolvedReduceStrategy::Unit);
+    }
+    if has_plane_ops {
+        Ok(ResolvedReduceStrategy::Plane)
+    } else {
+        Err(CubeclKernelError::InvalidStrategy {
+            reason: format!(
+                "Auto reduction cannot reduce axis length {} without plane operations",
+                reduce_len
+            ),
+        })
+    }
+}
+
+fn resolve_launch_settings<R: Runtime>(
+    client: &ComputeClient<R>,
+    problem: ReduceProblem,
+    strategy: ReduceStrategy,
+) -> Result<ResolvedReduceLaunch> {
+    match strategy {
+        ReduceStrategy::Unit => Ok(launch_with_unit_settings(client, problem)),
+        ReduceStrategy::Plane => launch_with_plane_settings(client, problem),
+        ReduceStrategy::Auto => match auto_reduce_strategy(client, problem)? {
+            ResolvedReduceStrategy::Unit => Ok(launch_with_unit_settings(client, problem)),
+            ResolvedReduceStrategy::Plane => launch_with_plane_settings(client, problem),
+        },
     }
 }
 
@@ -119,24 +228,36 @@ pub fn launch_sum_float<R: Runtime, F: Float + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_sum_float::launch_unchecked::<F, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_float::launch_unchecked::<F, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_sum_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -165,24 +286,36 @@ pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_sum_int::launch_unchecked::<I, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_int::launch_unchecked::<I, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_sum_int_plane::launch_unchecked::<I, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -212,24 +345,36 @@ pub fn launch_sum_complex<R: Runtime, C: Complex + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_sum_complex::launch_unchecked::<C, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_sum_complex::launch_unchecked::<C, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_sum_complex_plane::launch_unchecked::<C, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -258,24 +403,36 @@ pub fn launch_prod_float<R: Runtime, F: Float + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_prod_float::launch_unchecked::<F, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_float::launch_unchecked::<F, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_prod_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -304,24 +461,36 @@ pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_prod_int::launch_unchecked::<I, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_int::launch_unchecked::<I, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_prod_int_plane::launch_unchecked::<I, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -351,24 +520,36 @@ pub fn launch_prod_complex<R: Runtime, C: Complex + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_prod_complex::launch_unchecked::<C, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_prod_complex::launch_unchecked::<C, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_prod_complex_plane::launch_unchecked::<C, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -397,24 +578,36 @@ pub fn launch_max_float<R: Runtime, F: Float + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_max_float::launch_unchecked::<F, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_max_float::launch_unchecked::<F, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_max_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())
@@ -443,24 +636,36 @@ pub fn launch_min_float<R: Runtime, F: Float + CubeElement>(
     strategy: ReduceStrategy,
 ) -> Result<()> {
     let problem = validate_launch(&input, &output, axis)?;
-    let (cube_count, cube_dim, axis, output_len) =
-        launch_with_unit_settings(client, problem, strategy);
+    let launch = resolve_launch_settings(client, problem, strategy)?;
 
     unsafe {
         // SAFETY: `validate_launch` produced a `ReduceProblem` proving input
         // and keepdims output shapes are compatible and the reduce axis is
-        // non-empty. `launch_with_unit_settings` derives the launched output
+        // non-empty. `resolve_launch_settings` derives the launched output
         // domain from that validated problem; the reduction kernel uses
         // `output_len == problem.reduce_count` to guard output indexing.
-        kernels::reduce_min_float::launch_unchecked::<F, R>(
-            client,
-            cube_count,
-            cube_dim,
-            input.into_tensor_arg(),
-            output.into_tensor_arg(),
-            axis,
-            output_len,
-        );
+        match launch.kind {
+            ResolvedReduceStrategy::Unit => kernels::reduce_min_float::launch_unchecked::<F, R>(
+                client,
+                launch.cube_count,
+                launch.cube_dim,
+                input.into_tensor_arg(),
+                output.into_tensor_arg(),
+                launch.axis,
+                launch.output_len,
+            ),
+            ResolvedReduceStrategy::Plane => {
+                kernels::reduce_min_float_plane::launch_unchecked::<F, R>(
+                    client,
+                    launch.cube_count,
+                    launch.cube_dim,
+                    input.into_tensor_arg(),
+                    output.into_tensor_arg(),
+                    launch.axis,
+                    launch.output_len,
+                )
+            }
+        }
     }
 
     Ok(())

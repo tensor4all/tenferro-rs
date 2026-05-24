@@ -47,21 +47,22 @@ meaning of the operation there: axes, normalization mode, algorithm choice, and
 similar values. Do not hide unbounded plan caches, vendor handles, or mutable
 global state inside the payload semantics.
 
-There is no monolithic core runtime owner for extension state, and the current
-`EagerRuntime`, `GraphCompiler`, and `GraphExecutor` do not provide a public
-slot where an extension can store arbitrary runtime cache entries. If an
-extension needs a cache, the extension crate should own an explicit runtime or
-cache object, for example `FftRuntime` or `FftPlanCache`, and expose
-clear/stat/capacity controls on that object. First-class extension cache slots
-are tracked in [issue #878](https://github.com/tensor4all/tenferro-rs/issues/878).
+There is no monolithic process-global owner for arbitrary extension state.
+`EagerRuntime`, `GraphCompiler`, and `GraphExecutor` own explicit generic
+extension cache stores. Extension runtimes put entries in those stores with
+`ExtensionCacheKey`, so retained plans are tied to the compiler, eager context,
+or executor that uses them.
 
 An op payload may hold an `Arc` to such an extension-owned cache object only
 when the cache is a performance detail and is not part of semantic equality.
 Two extension ops that compare equal must remain interchangeable even if their
 caches are empty, warm, or independently owned.
 
-Compiled extension execution delegates to the extension's `eager_execute`, so
-eager and traced execution use the same extension-owned cache path.
+For einsum, `GraphCompiler` owns parse and static-plan caches, while
+`GraphExecutor` and `EagerRuntime` own runtime contraction-plan caches through
+their extension executors. These caches default to bounded LRU capacity 256 and
+expose capacity, clear, entry count, and retained-byte stats through the owning
+runtime.
 
 Avoid hidden process-global or thread-local caches in extension crates. If a
 cache lives longer than one call, make the owner explicit and bounded, and give

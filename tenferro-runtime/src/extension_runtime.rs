@@ -208,7 +208,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
             return Err(tenferro_tensor::Error::InvalidConfig {
                 op: "extension",
                 message: format!(
-                    "missing runtime for family_id {:?}; register the extension on this GraphExecutor, for example `executor.register_extension(<extension_crate>::register_runtime)`",
+                    "missing runtime for family_id {:?}; register the extension on this runtime owner, for example `executor.register_extension(<extension_crate>::register_runtime)` or `eager_runtime.register_extension(<extension_crate>::register_runtime)`",
                     op.family_id()
                 ),
             });

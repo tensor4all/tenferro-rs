@@ -87,8 +87,9 @@ assert_eq!(c.shape, vec![2, 2]);
 ## Cache Management
 
 Einsum uses the shared extension cache infrastructure from
-`tenferro-runtime`, re-exported by `tenferro`. Runtime caches live on
-`GraphExecutor`; compile-time extension caches live on `GraphCompiler`.
+`tenferro-runtime`, re-exported by `tenferro`. Compile-time extension caches
+live on `GraphCompiler`; runtime contraction-plan caches live on
+`GraphExecutor` and `EagerRuntime`.
 
 Use `tenferro_einsum::EINSUM_EXTENSION_FAMILY_ID` with
 `ExtensionCacheSelector` when you need to inspect or clear only einsum cache
