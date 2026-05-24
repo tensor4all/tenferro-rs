@@ -1,4 +1,42 @@
-use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use num_complex::{Complex32, Complex64};
+use tenferro::{
+    CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
+
+fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
+    let n_elements = shape.iter().product();
+    let tensor = match dtype {
+        DType::F32 => Tensor::F32(TypedTensor::from_vec_col_major(
+            shape,
+            vec![1.0_f32; n_elements],
+        )),
+        DType::F64 => Tensor::F64(TypedTensor::from_vec_col_major(
+            shape,
+            vec![1.0_f64; n_elements],
+        )),
+        DType::I32 => Tensor::I32(TypedTensor::from_vec_col_major(
+            shape,
+            vec![1_i32; n_elements],
+        )),
+        DType::I64 => Tensor::I64(TypedTensor::from_vec_col_major(
+            shape,
+            vec![1_i64; n_elements],
+        )),
+        DType::Bool => Tensor::Bool(TypedTensor::from_vec_col_major(
+            shape,
+            vec![true; n_elements],
+        )),
+        DType::C32 => Tensor::C32(TypedTensor::from_vec_col_major(
+            shape,
+            vec![Complex32::new(1.0, 0.5); n_elements],
+        )),
+        DType::C64 => Tensor::C64(TypedTensor::from_vec_col_major(
+            shape,
+            vec![Complex64::new(1.0, 0.5); n_elements],
+        )),
+    };
+    TracedTensor::from_tensor_concrete_shape(tensor)
+}
 
 #[test]
 fn svd_executes_after_runtime_registration() {
@@ -94,4 +132,58 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
     let (eigh_values, eigh_vectors) = tenferro_linalg::eigh(&square);
     assert_eq!(eigh_values.concrete_shape(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape(), vec![3, 3, 2]);
+}
+
+#[test]
+fn traced_metadata_promotes_linalg_dtypes_broadly() {
+    let promotion_cases = [
+        (DType::Bool, DType::I32, DType::I32),
+        (DType::I32, DType::I64, DType::I64),
+        (DType::I32, DType::F32, DType::F64),
+        (DType::I64, DType::C32, DType::C64),
+        (DType::F32, DType::F64, DType::F64),
+        (DType::F32, DType::C32, DType::C32),
+        (DType::F32, DType::C64, DType::C64),
+        (DType::F64, DType::C32, DType::C64),
+        (DType::C32, DType::C64, DType::C64),
+    ];
+
+    for (a_dtype, b_dtype, expected_dtype) in promotion_cases {
+        let a = traced_with_dtype(a_dtype, vec![2, 2]);
+        let b = traced_with_dtype(b_dtype, vec![2, 1]);
+        let solved = tenferro_linalg::solve(&a, &b);
+        assert_eq!(solved.dtype, expected_dtype);
+        assert_eq!(solved.concrete_shape(), vec![2, 1]);
+    }
+
+    let triangular = tenferro_linalg::triangular_solve(
+        &traced_with_dtype(DType::Bool, vec![2, 2]),
+        &traced_with_dtype(DType::F32, vec![2, 1]),
+        true,
+        false,
+        true,
+        true,
+    );
+    assert_eq!(triangular.dtype, DType::F32);
+    assert_eq!(triangular.concrete_shape(), vec![2, 1]);
+}
+
+#[test]
+fn traced_metadata_covers_eig_output_dtype_rules() {
+    for (input_dtype, expected_dtype) in [
+        (DType::F64, DType::C64),
+        (DType::C64, DType::C64),
+        (DType::F32, DType::C32),
+        (DType::C32, DType::C32),
+        (DType::I32, DType::C64),
+        (DType::I64, DType::C64),
+        (DType::Bool, DType::C64),
+    ] {
+        let a = traced_with_dtype(input_dtype, vec![2, 2]);
+        let (values, vectors) = tenferro_linalg::eig(&a);
+        assert_eq!(values.dtype, expected_dtype);
+        assert_eq!(vectors.dtype, expected_dtype);
+        assert_eq!(values.concrete_shape(), vec![2]);
+        assert_eq!(vectors.concrete_shape(), vec![2, 2]);
+    }
 }

@@ -563,6 +563,400 @@ fn dynamic_strided_tensor_view_mut_multi_slice_returns_option() {
 }
 
 #[test]
+fn strided_tensor_view_validation_covers_error_edges() {
+    let data = [1_i32, 2, 3];
+
+    let empty = TypedStridedTensorView::new(&[0, 3], &[1, 0], 3, &data).unwrap();
+    assert_eq!(empty.n_elements(), 0);
+    assert_eq!(
+        empty.materialize_col_major().unwrap().as_slice(),
+        &[] as &[i32]
+    );
+    assert_eq!(empty.get(&[0, 0]), None);
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[0], &[1], 4, &data),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[2], &[1, 1], 0, &data),
+        Err(Error::RankMismatch { .. })
+    ));
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[2], &[-1], 0, &data[..1]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[2], &[2], 0, &data[..1]),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let view = TypedStridedTensorView::new(&[3], &[1], 0, &data).unwrap();
+    assert_eq!(view.try_get(&[1]), Some(&2));
+    assert_eq!(view.try_linear_offset(&[0, 0]), None);
+    assert_eq!(view.try_linear_offset(&[3]), None);
+
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[usize::MAX, 2], &[1, 1], 0, &[]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[3], &[isize::MAX], 0, &[]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::new(&[2, 2], &[isize::MAX, 1], 0, &[]),
+        Err(Error::InvalidConfig { .. })
+    ));
+}
+
+#[test]
+fn strided_tensor_view_slice_permute_and_reshape_cover_boundaries() {
+    let data = [1_i32, 2, 3, 4, 5, 6];
+    let view = TypedStridedTensorView::new(&[2, 3], &[3, 1], 0, &data).unwrap();
+
+    assert!(matches!(
+        view.try_permute_axes(&[0]),
+        Err(Error::RankMismatch { .. })
+    ));
+    assert!(matches!(
+        view.try_permute_axes(&[2, 0]),
+        Err(Error::AxisOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        view.try_permute_axes(&[0, 0]),
+        Err(Error::DuplicateAxis { .. })
+    ));
+
+    assert!(matches!(
+        view.try_slice(&[StridedSliceSpec::all()]),
+        Err(Error::RankMismatch { .. })
+    ));
+    assert!(matches!(
+        view.try_slice_axis(2, StridedSliceSpec::all()),
+        Err(Error::AxisOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 0)]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(-4, None, 1)]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        view.try_slice(&[
+            StridedSliceSpec::all(),
+            StridedSliceSpec::new(0, Some(4), 1)
+        ]),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let empty = view
+        .try_slice_axis(1, StridedSliceSpec::new(2, Some(1), 1))
+        .unwrap();
+    assert_eq!(empty.shape(), &[2, 0]);
+    assert_eq!(
+        empty.materialize_col_major().unwrap().as_slice(),
+        &[] as &[i32]
+    );
+
+    assert!(matches!(
+        view.try_reshape(&[5]),
+        Err(Error::InvalidConfig { .. })
+    ));
+    assert!(matches!(
+        TypedStridedTensorView::<i32>::from_col_major(&[isize::MAX as usize, 2, 2], &[]),
+        Err(Error::InvalidConfig { .. })
+    ));
+
+    let scalar = TypedStridedTensorView::from_col_major(&[], &data[..1]).unwrap();
+    assert_eq!(scalar.shape(), &[] as &[usize]);
+    assert_eq!(scalar.strides(), &[] as &[isize]);
+    assert_eq!(scalar.get(&[]), Some(&1));
+
+    let singleton_axis = TypedStridedTensorView::new(&[1, 3], &[99, 1], 0, &data).unwrap();
+    assert_eq!(singleton_axis.try_reshape(&[3]).unwrap().strides(), &[1]);
+}
+
+#[test]
+fn strided_tensor_view_mut_multi_slice_covers_empty_reverse_and_conservative_cases() {
+    let mut data = [0_i32, 1, 2, 3, 4, 5];
+    let mut view = TypedStridedTensorViewMut::new(&[6], &[1], 0, &mut data).unwrap();
+    {
+        let (mut high, mut low) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(4, Some(6), 1)],
+                &[StridedSliceSpec::new(1, Some(3), 1)],
+            )
+            .unwrap();
+        *high.get_mut(&[0]).unwrap() = 40;
+        *low.get_mut(&[1]).unwrap() = 20;
+    }
+    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3, 40, 5]);
+
+    let mut data = [0_i32, 1, 2, 3];
+    let mut view = TypedStridedTensorViewMut::new(&[4], &[1], 0, &mut data).unwrap();
+    {
+        let (empty, mut right) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(0, Some(0), 1)],
+                &[StridedSliceSpec::new(2, Some(4), 1)],
+            )
+            .unwrap();
+        assert_eq!(empty.n_elements(), 0);
+        *right.get_mut(&[0]).unwrap() = 20;
+    }
+    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 3]);
+
+    let mut data = [0_i32, 1, 2, 3];
+    let mut view = TypedStridedTensorViewMut::new(&[4], &[1], 0, &mut data).unwrap();
+    {
+        let (mut left, empty) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(0, Some(2), 1)],
+                &[StridedSliceSpec::new(4, Some(4), 1)],
+            )
+            .unwrap();
+        assert_eq!(empty.n_elements(), 0);
+        *left.get_mut(&[1]).unwrap() = 10;
+    }
+    assert_eq!(view.as_physical_slice(), &[0, 10, 2, 3]);
+
+    let mut data = [0_i32, 1, 2, 3];
+    let mut view = TypedStridedTensorViewMut::new(&[4], &[1], 0, &mut data).unwrap();
+    let (empty_left, empty_right) = view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(0), 1)],
+            &[StridedSliceSpec::new(4, Some(4), 1)],
+        )
+        .unwrap();
+    assert_eq!(empty_left.n_elements(), 0);
+    assert_eq!(empty_right.n_elements(), 0);
+
+    let mut data = [0_i32, 1, 2, 3, 4, 5];
+    let mut view = TypedStridedTensorViewMut::new(&[6], &[1], 0, &mut data).unwrap();
+    {
+        let (mut reversed_high, mut low) = view
+            .try_multi_slice_mut(
+                &[StridedSliceSpec::new(3, Some(6), -1)],
+                &[StridedSliceSpec::new(0, Some(3), 1)],
+            )
+            .unwrap();
+        assert_eq!(reversed_high.get(&[0]), Some(&5));
+        *reversed_high.get_mut(&[2]).unwrap() = 30;
+        *low.get_mut(&[2]).unwrap() = 20;
+    }
+    assert_eq!(view.as_physical_slice(), &[0, 1, 20, 30, 4, 5]);
+
+    let mut data = [0_i32, 1, 2, 3, 4, 5];
+    let mut view = TypedStridedTensorViewMut::new(&[6], &[1], 0, &mut data).unwrap();
+    assert!(view
+        .try_multi_slice_mut(
+            &[StridedSliceSpec::new(0, Some(6), 2)],
+            &[StridedSliceSpec::new(1, Some(6), 2)],
+        )
+        .is_none());
+}
+
+#[test]
+fn dynamic_strided_tensor_view_covers_all_dtype_variants() {
+    macro_rules! assert_read_variant {
+        ($ctor:ident, $ty:ty, $dtype:expr, [$a:expr, $b:expr, $c:expr, $d:expr]) => {{
+            let data: [$ty; 4] = [$a, $b, $c, $d];
+            let view = StridedTensorView::$ctor(&[2, 2], &[2, 1], 0, &data).unwrap();
+            assert_eq!(view.dtype(), $dtype);
+            assert_eq!(view.shape(), &[2, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+            assert_eq!(view.offset(), 0);
+            assert_eq!(
+                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
+                &[$a, $c, $b, $d]
+            );
+        }};
+    }
+
+    assert_read_variant!(f32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0]);
+    assert_read_variant!(f64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0]);
+    assert_read_variant!(i32, i32, DType::I32, [1_i32, 2, 3, 4]);
+    assert_read_variant!(i64, i64, DType::I64, [1_i64, 2, 3, 4]);
+    assert_read_variant!(bool, bool, DType::Bool, [false, true, true, false]);
+    assert_read_variant!(
+        c32,
+        Complex32,
+        DType::C32,
+        [
+            Complex32::new(1.0, 1.0),
+            Complex32::new(2.0, 2.0),
+            Complex32::new(3.0, 3.0),
+            Complex32::new(4.0, 4.0)
+        ]
+    );
+    assert_read_variant!(
+        c64,
+        Complex64,
+        DType::C64,
+        [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0)
+        ]
+    );
+}
+
+#[test]
+fn dynamic_strided_tensor_view_mut_covers_all_dtype_variants() {
+    macro_rules! assert_mut_variant {
+        (
+            $ctor:ident,
+            $variant:ident,
+            $ty:ty,
+            $dtype:expr,
+            [$a:expr, $b:expr, $c:expr, $d:expr],
+            $replacement:expr
+        ) => {{
+            let mut data: [$ty; 4] = [$a, $b, $c, $d];
+            let mut view = StridedTensorViewMut::$ctor(&[2, 2], &[2, 1], 0, &mut data).unwrap();
+            assert_eq!(view.dtype(), $dtype);
+            assert_eq!(view.shape(), &[2, 2]);
+            assert_eq!(view.strides(), &[2, 1]);
+            assert_eq!(view.offset(), 0);
+            match &mut view {
+                StridedTensorViewMut::$variant(typed) => {
+                    *typed.try_get_mut(&[1, 1]).unwrap() = $replacement;
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                view.as_read_only()
+                    .to_tensor()
+                    .unwrap()
+                    .as_slice::<$ty>()
+                    .unwrap(),
+                &[$a, $c, $b, $replacement]
+            );
+            assert_eq!(
+                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
+                &[$a, $c, $b, $replacement]
+            );
+        }};
+    }
+
+    assert_mut_variant!(f32, F32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0], 40.0);
+    assert_mut_variant!(f64, F64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0], 40.0);
+    assert_mut_variant!(i32, I32, i32, DType::I32, [1_i32, 2, 3, 4], 40);
+    assert_mut_variant!(i64, I64, i64, DType::I64, [1_i64, 2, 3, 4], 40);
+    assert_mut_variant!(
+        bool,
+        Bool,
+        bool,
+        DType::Bool,
+        [false, true, true, false],
+        true
+    );
+    assert_mut_variant!(
+        c32,
+        C32,
+        Complex32,
+        DType::C32,
+        [
+            Complex32::new(1.0, 1.0),
+            Complex32::new(2.0, 2.0),
+            Complex32::new(3.0, 3.0),
+            Complex32::new(4.0, 4.0)
+        ],
+        Complex32::new(40.0, -1.0)
+    );
+    assert_mut_variant!(
+        c64,
+        C64,
+        Complex64,
+        DType::C64,
+        [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0)
+        ],
+        Complex64::new(40.0, -1.0)
+    );
+}
+
+#[test]
+fn dynamic_strided_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
+    macro_rules! assert_dynamic_multi_slice {
+        (
+            $ctor:ident,
+            $variant:ident,
+            $ty:ty,
+            [$a:expr, $b:expr, $c:expr, $d:expr],
+            $left:expr,
+            $right:expr
+        ) => {{
+            let mut data: [$ty; 4] = [$a, $b, $c, $d];
+            let mut view = StridedTensorViewMut::$ctor(&[4], &[1], 0, &mut data).unwrap();
+            {
+                let (mut lhs, mut rhs) = view
+                    .try_multi_slice_mut(
+                        &[StridedSliceSpec::new(0, Some(2), 1)],
+                        &[StridedSliceSpec::new(2, Some(4), 1)],
+                    )
+                    .unwrap();
+                match &mut lhs {
+                    StridedTensorViewMut::$variant(typed) => {
+                        *typed.get_mut(&[1]).unwrap() = $left;
+                    }
+                    _ => unreachable!(),
+                }
+                match &mut rhs {
+                    StridedTensorViewMut::$variant(typed) => {
+                        *typed.get_mut(&[0]).unwrap() = $right;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            assert_eq!(
+                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
+                &[$a, $left, $right, $d]
+            );
+        }};
+    }
+
+    assert_dynamic_multi_slice!(f32, F32, f32, [1.0_f32, 2.0, 3.0, 4.0], 20.0, 30.0);
+    assert_dynamic_multi_slice!(f64, F64, f64, [1.0_f64, 2.0, 3.0, 4.0], 20.0, 30.0);
+    assert_dynamic_multi_slice!(i32, I32, i32, [1_i32, 2, 3, 4], 20, 30);
+    assert_dynamic_multi_slice!(i64, I64, i64, [1_i64, 2, 3, 4], 20, 30);
+    assert_dynamic_multi_slice!(bool, Bool, bool, [false, false, false, true], true, true);
+    assert_dynamic_multi_slice!(
+        c32,
+        C32,
+        Complex32,
+        [
+            Complex32::new(1.0, 1.0),
+            Complex32::new(2.0, 2.0),
+            Complex32::new(3.0, 3.0),
+            Complex32::new(4.0, 4.0)
+        ],
+        Complex32::new(20.0, -1.0),
+        Complex32::new(30.0, -1.0)
+    );
+    assert_dynamic_multi_slice!(
+        c64,
+        C64,
+        Complex64,
+        [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0)
+        ],
+        Complex64::new(20.0, -1.0),
+        Complex64::new(30.0, -1.0)
+    );
+}
+
+#[test]
 fn tensor_read_wraps_owned_tensor_or_borrowed_view() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
     let read_tensor = TensorRead::from_tensor(&tensor);
