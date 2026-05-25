@@ -1,6 +1,6 @@
 use tenferro::{
     eager_tensor, traced_tensor, CompareDir, CpuBackend, EagerRuntime, EagerTensor, GraphCompiler,
-    GraphExecutor, Tensor, TracedTensor,
+    GraphExecutor, Tensor, TracedTensor, TypedTensor,
 };
 
 #[test]
@@ -152,4 +152,49 @@ fn tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = tenferro::tensor::rsqrt(&x, &mut backend).unwrap();
     let _ = tenferro::tensor::expm1(&x, &mut backend).unwrap();
     let _ = tenferro::tensor::log1p(&x, &mut backend).unwrap();
+}
+
+#[test]
+fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
+    let mut backend = CpuBackend::new();
+    let lhs = TypedTensor::<f64>::from_vec_row_major(vec![3, 1], vec![1.0, 2.0, 3.0]);
+    let rhs = TypedTensor::<f64>::from_vec_row_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]);
+
+    let out = tenferro::typed_tensor::add(&lhs, &rhs, &mut backend).unwrap();
+
+    assert_eq!(out.shape, vec![3, 4]);
+    assert_eq!(
+        out.try_into_vec_row_major().unwrap().1,
+        vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
+    );
+}
+
+#[test]
+fn typed_tensor_module_exposes_initial_elementwise_free_functions() {
+    let mut backend = CpuBackend::new();
+    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
+    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+    let cond = tenferro::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+
+    let _ = tenferro::typed_tensor::sub(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::mul(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::div(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::pow(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::maximum(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::minimum(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::clamp(&x, &y, &x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::neg(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::abs(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::sign(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::conj(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::exp(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::log(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::sin(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::cos(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::tanh(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::sqrt(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::rsqrt(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::expm1(&x, &mut backend).unwrap();
+    let _ = tenferro::typed_tensor::log1p(&x, &mut backend).unwrap();
 }
