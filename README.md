@@ -82,6 +82,7 @@ normal tenferro stack.
 That runtime owns execution state, extension caches, and optional gradient
 slots. Use untracked eager tensors for immediate forward execution, and tracked
 variables when you need scalar-loss reverse-mode `backward()`.
+Forward-mode AD (`jvp`) is part of traced execution, not `EagerTensor`.
 
 ```rust
 use tenferro::{EagerRuntime, EagerTensor, Tensor};
@@ -173,8 +174,8 @@ standard operation crate and register its runtime on the `GraphExecutor`.
 | Goal | Start with |
 | --- | --- |
 | ndarray-like CPU tensor computation | `Tensor` or `TypedTensor<T>` with `CpuBackend` |
-| Immediate execution plus optional scalar-loss `backward()` | `EagerTensor` with `EagerRuntime` |
-| Graph reuse, transform AD, symbolic inputs, or repeated compile/run | `TracedTensor`, `GraphCompiler`, and `GraphExecutor` |
+| Immediate execution plus scalar-loss reverse-mode `backward()` | `EagerTensor` with `EagerRuntime` |
+| Graph reuse, forward-mode / transform AD (`jvp`, `vjp`, `grad`), symbolic inputs, or repeated compile/run | `TracedTensor`, `GraphCompiler`, and `GraphExecutor` |
 | CUDA execution | The same tensor layer plus explicit upload/download on the CUDA backend |
 | Standard linalg, einsum, or FFT | `tenferro-linalg`, `tenferro-einsum`, or `tenferro-fft` |
 
