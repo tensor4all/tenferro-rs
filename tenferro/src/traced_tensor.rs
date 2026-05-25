@@ -38,11 +38,7 @@ macro_rules! unary_fn {
         /// ```rust
         /// # use tenferro::TracedTensor;
         /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
-        #[doc = concat!(
-                    "let y = tenferro::traced_tensor::",
-                    stringify!($name),
-                    "(&x);"
-                )]
+        #[doc = concat!("let y = tenferro::traced_tensor::", stringify!($name), "(&x);")]
         /// ```
         pub fn $name(input: &TracedTensor) -> TracedTensor {
             input.$method()
@@ -60,11 +56,7 @@ macro_rules! binary_method_fn {
         /// # use tenferro::TracedTensor;
         /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
         /// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
-        #[doc = concat!(
-                    "let z = tenferro::traced_tensor::",
-                    stringify!($name),
-                    "(&x, &y);"
-                )]
+        #[doc = concat!("let z = tenferro::traced_tensor::", stringify!($name), "(&x, &y);")]
         /// ```
         pub fn $name(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
             lhs.$method(rhs)

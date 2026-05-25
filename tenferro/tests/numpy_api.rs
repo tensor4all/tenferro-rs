@@ -1,4 +1,7 @@
-use tenferro::{traced_tensor, CompareDir, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{
+    eager_tensor, traced_tensor, CompareDir, CpuBackend, EagerRuntime, EagerTensor, GraphCompiler,
+    GraphExecutor, Tensor, TracedTensor,
+};
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
@@ -45,4 +48,63 @@ fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = traced_tensor::rsqrt(&x);
     let _ = traced_tensor::expm1(&x);
     let _ = traced_tensor::log1p(&x);
+}
+
+#[test]
+fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
+    let ctx = EagerRuntime::new();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]),
+        ctx,
+    );
+
+    let out = eager_tensor::add(&lhs, &rhs).unwrap();
+
+    assert_eq!(out.data().shape(), &[3, 4]);
+    assert_eq!(
+        out.data()
+            .clone()
+            .try_into_vec_row_major::<f64>()
+            .unwrap()
+            .1,
+        vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
+    );
+}
+
+#[test]
+fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
+    let ctx = EagerRuntime::new();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]),
+        ctx.clone(),
+    );
+    let y =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
+    let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+
+    let _ = eager_tensor::sub(&x, &y).unwrap();
+    let _ = eager_tensor::mul(&x, &y).unwrap();
+    let _ = eager_tensor::div(&x, &y).unwrap();
+    let _ = eager_tensor::pow(&x, &y).unwrap();
+    let _ = eager_tensor::maximum(&x, &y).unwrap();
+    let _ = eager_tensor::minimum(&x, &y).unwrap();
+    let _ = eager_tensor::where_select(&cond, &x, &y).unwrap();
+    let _ = eager_tensor::clamp(&x, &y, &x).unwrap();
+    let _ = eager_tensor::neg(&x).unwrap();
+    let _ = eager_tensor::abs(&x).unwrap();
+    let _ = eager_tensor::sign(&x).unwrap();
+    let _ = eager_tensor::conj(&x).unwrap();
+    let _ = eager_tensor::exp(&x).unwrap();
+    let _ = eager_tensor::log(&x).unwrap();
+    let _ = eager_tensor::sin(&x).unwrap();
+    let _ = eager_tensor::cos(&x).unwrap();
+    let _ = eager_tensor::tanh(&x).unwrap();
+    let _ = eager_tensor::sqrt(&x).unwrap();
+    let _ = eager_tensor::rsqrt(&x).unwrap();
+    let _ = eager_tensor::expm1(&x).unwrap();
+    let _ = eager_tensor::log1p(&x).unwrap();
 }
