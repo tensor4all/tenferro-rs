@@ -85,7 +85,7 @@ def parse_crate_deps(
     deps = data.get("dependencies", {})
     internal = []
     for dep_key, dep_val in deps.items():
-        # dep_key is the dependency name (e.g. "tenferro-device")
+        # dep_key is the dependency name (e.g. "tenferro-internal-device")
         if dep_key in all_crate_names:
             internal.append(dep_key)
         elif isinstance(dep_val, dict) and dep_val.get("package", dep_key) in all_crate_names:

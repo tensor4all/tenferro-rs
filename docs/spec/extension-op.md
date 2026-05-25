@@ -37,7 +37,7 @@ This spec extends the three normative contracts that already exist in
 - [`ad-contract.md`](ad-contract.md) owns the `PrimitiveOp` trait. This
   document extends it by specifying how an `ExtensionOp` participates in
   AD **without** itself implementing `PrimitiveOp`: the dispatcher in
-  `tenferro-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
+  `tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
   registered rule for `op.family_id()`. The rule emits tangents and
   cotangents expressed in the core `StdTensorOp` vocabulary, or in other
   registered extension families. The ad-contract closure rule (emit only
@@ -97,7 +97,7 @@ The `ExtensionOp` trait is the Rust trait that every extension
 implementation MUST satisfy. The core op enum carries one extension variant:
 
 ```rust
-// In tenferro-ops/src/std_tensor_op.rs:
+// In tenferro-internal-ops/src/std_tensor_op.rs:
 pub enum StdTensorOp {
     // ... existing variants ...
     Extension(std::sync::Arc<dyn ExtensionOp>),
@@ -164,7 +164,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
     ///
     /// Returned vector length MUST equal `self.n_outputs()`. Shapes use
     /// graph-global `SymDim` (symbolic dimensions), consistent with
-    /// `TensorMeta::shape` in `tenferro-ops/src/ad/context.rs`. Input
+    /// `TensorMeta::shape` in `tenferro-internal-ops/src/ad/context.rs`. Input
     /// metadata is given as slices of `SymDim` / `DType`; see Section 7
     /// for the detailed invariants.
     fn infer_output_meta(
@@ -364,7 +364,7 @@ but different families are not accidentally unified by the op interner.
 For `FusedTropicalDotGeneral` in `tenferro-ext-tropical`:
 
 - `family_id = "tenferro-ext-tropical.fused_dot_general.v1"`
-- payload = `DotGeneralConfig` (from `tenferro-tensor`)
+- payload = `DotGeneralConfig` (from `tenferro-internal-tensor`)
 - `payload_hash` hashes the four `Vec<usize>` fields of `DotGeneralConfig`
   in the order they are declared, via `DotGeneralConfig: Hash`
 - `payload_eq` downcasts `other` to the concrete type and defers to
@@ -398,10 +398,10 @@ default choice is to add `Any` via a method-based helper to keep
 Every `ExtensionOp` MUST declare fixed `n_inputs` and `n_outputs` values
 whose return is independent of runtime input sizes. This aligns with the
 `StdTensorOp` arity dispatcher in
-`tenferro-ops/src/std_tensor_op.rs` (e.g. `n_inputs` for `DotGeneral` is
+`tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `n_inputs` for `DotGeneral` is
 always `2`).
 
-The dispatcher integration in `tenferro-ops/src/ad/mod.rs` MUST treat
+The dispatcher integration in `tenferro-internal-ops/src/ad/mod.rs` MUST treat
 `StdTensorOp::Extension(op)` as having `op.n_inputs()` inputs and
 `op.n_outputs()` outputs. Validation:
 
@@ -467,7 +467,7 @@ extension.
 - Each `(dtype, shape)` pair gives the inferred dtype and symbolic shape
   for the corresponding output slot.
 - Shapes are expressed as `Vec<SymDim>` to match
-  `TensorMeta::shape` (see `tenferro-ops/src/ad/context.rs:49-109`).
+  `TensorMeta::shape` (see `tenferro-internal-ops/src/ad/context.rs:49-109`).
   Concrete and symbolic inputs use the same representation:
   `SymDim::from(usize)` for concrete extents, symbolic placeholders for
   unknown-at-build-time dimensions.
@@ -723,7 +723,7 @@ the `PrimitiveOp` closure invariant at the `StdTensorOp` carrier level.
 
 Extension AD rules MUST use `ctx.shape_of(val)`, `ctx.dtype_of(val)`,
 and `ctx.metadata_of(val)` to query input metadata, exactly like the
-core AD rules (see `tenferro-ops/src/ad/linalg.rs` for a reference
+core AD rules (see `tenferro-internal-ops/src/ad/linalg.rs` for a reference
 implementation). They MUST NOT reach around the context to fetch
 metadata from elsewhere.
 
@@ -1020,7 +1020,7 @@ both within the spec's flexibility:
   equivalent **indicator-mask**
   construction (the same `Compare(Eq) + Mul + ReduceSum + Div` pattern
   used by the core `ReduceMax` / `ReduceMin` AD rule in
-  `tenferro-ops/src/ad/contraction.rs`). The two are two expressions
+  `tenferro-internal-ops/src/ad/contraction.rs`). The two are two expressions
   of the same subgradient; only the indicator form is expressible in
   the current core op vocabulary.
 

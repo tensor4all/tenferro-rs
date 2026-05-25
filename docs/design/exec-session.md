@@ -63,7 +63,7 @@ directly, with no Rayon pool entry per op.
 ### CubeCL/CUDA
 
 `CubeclBackend` is the current CUDA GPU backend. It uses CubeCL/CubeCL-CUDA and
-runtime-loaded CUDA libraries from `tenferro-tensor/src/cubecl/`.
+runtime-loaded CUDA libraries from `tenferro-internal-tensor/src/cubecl/`.
 
 Today `CubeclBackend` does not define a separate exec-session struct. It uses
 the default `TensorBackend::with_exec_session` adapter, so each `TensorExec`

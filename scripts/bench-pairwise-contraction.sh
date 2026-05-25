@@ -124,7 +124,7 @@ log "  threads:          RAYON=1 VECLIB=1 OPENBLAS=1 OMP=1 MKL=1 JULIA=1"
 
 if [[ "$KIND" == "rust" || "$KIND" == "both" ]]; then
   log ""
-  log "== Rust tenferro-tensor =="
+  log "== Rust tenferro-internal-tensor =="
   criterion_args=(
     --warm-up-time "$WARM_UP_TIME"
     --measurement-time "$MEASUREMENT_TIME"
@@ -134,7 +134,7 @@ if [[ "$KIND" == "rust" || "$KIND" == "both" ]]; then
     criterion_args+=("${CRITERION_EXTRA_ARGS[@]}")
   fi
   run_one_thread \
-    cargo bench -p tenferro-tensor --bench pairwise_contraction -- \
+    cargo bench -p tenferro-internal-tensor --bench pairwise_contraction -- \
     "${criterion_args[@]}"
 fi
 

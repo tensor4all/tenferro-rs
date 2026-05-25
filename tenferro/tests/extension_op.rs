@@ -3,7 +3,7 @@
 //! Smoke tests for the Stage 6 `ExtensionOp` mechanism.
 //!
 //! Exercises two end-to-end paths using only the public `tenferro` and
-//! `tenferro-ops` facades:
+//! `tenferro-internal-ops` APIs:
 //!
 //! - `TestScaleBy2`: single-input, single-output. Forward computes
 //!   `input * 2.0` via the eager backend; its registered AD rule emits core

@@ -209,10 +209,10 @@ No GPU support currently. The design document (tenferro unified backend) plans:
 
 ### Recommendation
 
-Adopt omeinsum-rs's cuTENSOR integration pattern into **tenferro-device** (vtable,
+Adopt omeinsum-rs's cuTENSOR integration pattern into **tenferro-internal-device** (vtable,
 plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
-- `TensorPrims` trait wraps cuTENSOR's direct-contraction API via tenferro-device vtable.
-- Plan caching for repeated contractions (in tenferro-device).
+- `TensorPrims` trait wraps cuTENSOR's direct-contraction API via tenferro-internal-device vtable.
+- Plan caching for repeated contractions (in tenferro-internal-device).
 - Dispatch priority: GPU TensorPrims > CPU TensorPrims (GEMM) > naive loop.
 
 ## 6. Algebra Extensibility
@@ -334,7 +334,7 @@ Leibniz rule.
    tropical kernels. (→ tenferro-ext-tropical: `TensorPrims<MaxPlus> for CpuBackend`)
 3. **Argmax tracking** — tropical backward pass support. (→ tenferro-ext-tropical)
 4. **cuTENSOR integration** — direct contraction without reshape-to-GEMM,
-   plan caching. (→ Contract extended op on GPU + tenferro-device)
+   plan caching. (→ Contract extended op on GPU + tenferro-internal-device)
 5. **TreeSA optimizer** — simulated annealing for better contraction orders
    (in addition to greedy). (→ tenferro-einsum)
 6. **Column-major + batch-last layout** — both codebases now use batch-last

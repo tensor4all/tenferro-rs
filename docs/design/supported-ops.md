@@ -6,9 +6,9 @@ explicitly. The public user docs still focus on the `tenferro` facade crate.
 
 ---
 
-## `tenferro-tensor`
+## `tenferro-internal-tensor`
 
-`tenferro-tensor` owns dense tensor storage, dtype dispatch, backend traits, CPU
+`tenferro-internal-tensor` owns dense tensor storage, dtype dispatch, backend traits, CPU
 execution, and the internal CUDA backend integration. Public user docs should
 call this the CUDA backend through the `tenferro::cuda` facade; this
 implementation-facing page also names the CubeCL layer that backs it.
@@ -56,7 +56,7 @@ The public facade exposes this backend as `tenferro::cuda::CudaBackend` behind
 the `cuda` feature. Internally, that feature enables `cubecl::CubeclBackend`,
 backed by CubeCL/CubeCL-CUDA and runtime-loaded
 cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
-`tenferro-gpubackend` crate.
+`tenferro-internal-gpubackend` crate.
 
 Implemented GPU coverage is broad. The user-facing
 [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains the current
@@ -83,9 +83,9 @@ numeric/linalg gaps, and selected complex analytic or ordering operations.
 `eig` is not provided by cuSOLVER and permanently returns `BackendFailure` on
 CubeCL. ROCm is only a feature stub.
 
-## `tenferro-ops`
+## `tenferro-internal-ops`
 
-`tenferro-ops` owns the graph operation vocabulary and graph-level AD rules.
+`tenferro-internal-ops` owns the graph operation vocabulary and graph-level AD rules.
 
 - `StdTensorOp` is the mainline operation vocabulary.
 - `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` are the semantic
@@ -95,9 +95,9 @@ CubeCL. ROCm is only a feature stub.
 - Non-mainline semiring/algebra graph surfaces remain transitional and should
   not be extended by new work.
 
-## `tenferro-runtime`
+## `tenferro-internal-runtime`
 
-`tenferro-runtime` owns operation-agnostic runtime infrastructure:
+`tenferro-internal-runtime` owns operation-agnostic runtime infrastructure:
 
 - `ExtensionRegistry` and `ExtensionExecutor` for backend-parametric extension
   runtime registration,
@@ -141,7 +141,7 @@ functions such as `svd`, `qr`, `cholesky`, `solve`, `triangular_solve`, `lu`,
 eager `EagerTensor` surface when `autodiff` is enabled.
 
 The crate owns the linalg extension payload, runtime registration, and linalg
-AD rules where implemented. Backend kernels remain in `tenferro-tensor`.
+AD rules where implemented. Backend kernels remain in `tenferro-internal-tensor`.
 
 ## `tenferro-fft`
 
@@ -171,9 +171,9 @@ program uses operations supported by that backend and tensors are placed
 explicitly by the execution pipeline or caller. Unsupported GPU ops return
 errors rather than silently falling back to CPU.
 
-## `tenferro-device`
+## `tenferro-internal-device`
 
-`tenferro-device` owns shared device and error infrastructure:
+`tenferro-internal-device` owns shared device and error infrastructure:
 
 - logical memory spaces,
 - compute device metadata,
@@ -183,7 +183,7 @@ errors rather than silently falling back to CPU.
 ## AD Support Notes
 
 Current mainline AD coverage is intentionally narrower than primal execution.
-Core primitive rules live in `tenferro-ops/src/ad/`; extension-specific rules
+Core primitive rules live in `tenferro-internal-ops/src/ad/`; extension-specific rules
 live in the owning extension crate. Rules must have corresponding
 oracle/finite-difference coverage before being treated as supported mainline AD.
 

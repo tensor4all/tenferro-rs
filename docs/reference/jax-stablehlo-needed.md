@@ -102,7 +102,7 @@ either composites or `custom_call`-backed operations:
 
 ### Tensor/view layer
 
-Current `tenferro-tensor` already has the view/metadata operations that JAX
+Current `tenferro-internal-tensor` already has the view/metadata operations that JAX
 usually treats as tensor primitives:
 
 - `reshape`

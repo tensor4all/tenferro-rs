@@ -100,7 +100,7 @@ Mooncake (AD)                      chainrules / chainrules-core [exists]
 and use the same `Tape<V>` / `TrackedValue<V>` AD engine. Dense and
 Block sparse share the AD engine without modification.
 
-### Device abstraction (tenferro-device)
+### Device abstraction (tenferro-internal-device)
 
 Type-independent. Works for any tensor storage.
 
@@ -136,7 +136,7 @@ block-sparse-einsum (separate crate)
     +-- uses: chainrules-core (Differentiable, ReverseRule for AD)
     +-- uses: tidu (Tape, TrackedValue for AD engine)
     +-- uses: tenferro-prims (batched_gemm for individual dense blocks)
-    +-- uses: tenferro-device (device abstraction)
+    +-- uses: tenferro-internal-device (device abstraction)
     |
     +-- owns: block iteration logic, non-zero block selection,
               output block structure determination
@@ -198,7 +198,7 @@ backend for an ITensor-like Rust ecosystem:
 1. **Dense layer**: tenferro-einsum + tenferro-linalg (exists/planned)
 2. **Block sparse / Diagonal / Graded**: separate crate groups that
    reuse chainrules (AD), tenferro-prims (block-level GEMM), and
-   tenferro-device, but implement their own einsum/linalg algorithms
+   tenferro-internal-device, but implement their own einsum/linalg algorithms
 3. **Named Index layer**: sits above tenferro, wrapping `Tensor<T>`
    with named dimensions — no tenferro changes needed
 4. **AD**: already generic (`V: Differentiable`) — shared across all

@@ -16,14 +16,14 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
 
 ## Added Benchmarks
 
-- `tenferro-tensor/benches/pairwise_contraction.rs`
+- `tenferro-internal-tensor/benches/pairwise_contraction.rs`
   - Measures `first_site`, `env_bra`, `tmp_ket`, and `site_update`.
   - Compares normal per-call execution with cached GEMM analysis.
-- `tenferro-tensor/benches/cpu_install_overhead.rs`
+- `tenferro-internal-tensor/benches/cpu_install_overhead.rs`
   - Measures `CpuContext::install` and the surrounding buffer-pool wrapper.
     Current `install` runs inline; older results in this note measured a
     tenferro-owned Rayon pool entry.
-- `tenferro-tensor/benches/openblas_direct_overhead.rs`
+- `tenferro-internal-tensor/benches/openblas_direct_overhead.rs`
   - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
   - Requires the `cpu-blas` feature and is intended for `src-openblas` runs.
 - `scripts/bench-itensors-pairwise-contraction.jl`
@@ -70,7 +70,7 @@ VECLIB_MAXIMUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-tensor --bench cpu_install_overhead -- \
+cargo bench -p tenferro-internal-tensor --bench cpu_install_overhead -- \
   --warm-up-time 0.5 \
   --measurement-time 1 \
   --sample-size 20
@@ -84,7 +84,7 @@ VECLIB_MAXIMUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-tensor \
+cargo bench -p tenferro-internal-tensor \
   --no-default-features \
   --features src-openblas \
   --bench pairwise_contraction -- \
@@ -101,7 +101,7 @@ VECLIB_MAXIMUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-tensor \
+cargo bench -p tenferro-internal-tensor \
   --no-default-features \
   --features src-openblas \
   --bench openblas_direct_overhead -- \
@@ -401,15 +401,15 @@ entry point without making normal eager contractions context-dependent.
 ## Verification Performed
 
 - `cargo fmt --all -- --check`
-- `cargo bench -p tenferro-tensor --bench pairwise_contraction --no-run`
-- `cargo bench -p tenferro-tensor --bench cpu_install_overhead --no-run`
-- `cargo bench -p tenferro-tensor --no-default-features --features src-openblas --bench pairwise_contraction -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-tensor --no-default-features --features src-openblas --bench dot_general_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-tensor --no-default-features --features src-openblas --bench openblas_direct_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 20`
-- `cargo bench -p tenferro-tensor --no-default-features --features src-openblas --bench pairwise_contraction --no-run`
-- `cargo test -p tenferro-tensor --release dot_general -- --nocapture`
-- `cargo test -p tenferro-tensor --no-default-features --features src-openblas --release dot_general`
-- `cargo test -p tenferro-tensor --no-default-features --features src-openblas --release`
+- `cargo bench -p tenferro-internal-tensor --bench pairwise_contraction --no-run`
+- `cargo bench -p tenferro-internal-tensor --bench cpu_install_overhead --no-run`
+- `cargo bench -p tenferro-internal-tensor --no-default-features --features src-openblas --bench pairwise_contraction -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
+- `cargo bench -p tenferro-internal-tensor --no-default-features --features src-openblas --bench dot_general_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
+- `cargo bench -p tenferro-internal-tensor --no-default-features --features src-openblas --bench openblas_direct_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 20`
+- `cargo bench -p tenferro-internal-tensor --no-default-features --features src-openblas --bench pairwise_contraction --no-run`
+- `cargo test -p tenferro-internal-tensor --release dot_general -- --nocapture`
+- `cargo test -p tenferro-internal-tensor --no-default-features --features src-openblas --release dot_general`
+- `cargo test -p tenferro-internal-tensor --no-default-features --features src-openblas --release`
 - `bash -n scripts/bench-pairwise-contraction.sh`
 - Julia `Pkg.instantiate()` and `Pkg.precompile()`
 - ITensors version check: `0.9.27`

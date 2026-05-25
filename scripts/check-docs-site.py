@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify docs-site completeness for workspace library crates.")
     parser.add_argument("--root-dir", default=".", help="Repository root (default: current directory)")
     parser.add_argument("--doc-root", help="Rustdoc output directory (default: <root>/target/doc)")
-    parser.add_argument("--api-index-md", help="Markdown API index (default: <root>/docs/api_index.md if it exists)")
+    parser.add_argument("--api-index-md", help="Markdown API index (default: <root>/docs/api/index.md if it exists)")
     parser.add_argument("--site-index", help="Rendered API landing page HTML (default: <root>/target/docs-site/api/index.html if it exists)")
     parser.add_argument("--quiet", action="store_true", help="Suppress success output")
     return parser.parse_args()
@@ -48,7 +48,8 @@ def load_workspace_libs(root: pathlib.Path) -> list[tuple[str, str, str]]:
         if "lib" not in manifest and not (member_path / "src" / "lib.rs").exists():
             continue
         package_name = manifest["package"]["name"]
-        crates.append((member, package_name, package_name.replace("-", "_")))
+        lib_name = manifest.get("lib", {}).get("name", package_name.replace("-", "_"))
+        crates.append((member, package_name, lib_name))
     return crates
 
 
@@ -81,7 +82,7 @@ def main() -> int:
         return snippet_check.returncode
 
     doc_root = pathlib.Path(args.doc_root) if args.doc_root else root / "target" / "doc"
-    api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api_index.md"
+    api_index_md = pathlib.Path(args.api_index_md) if args.api_index_md else root / "docs" / "api" / "index.md"
     site_index = pathlib.Path(args.site_index) if args.site_index else root / "target" / "docs-site" / "api" / "index.html"
 
     crates = load_workspace_libs(root)

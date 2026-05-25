@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OUT_DIR="${1:-$ROOT_DIR/target/docs-site}"
 API_DIR="$OUT_DIR/api"
 DOC_ROOT="$ROOT_DIR/target/doc"
-API_INDEX_MD="$ROOT_DIR/docs/api_index.md"
+API_INDEX_MD="$ROOT_DIR/docs/api/index.md"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$API_DIR"
@@ -43,7 +43,7 @@ for member in members:
     if "lib" not in manifest and not (root / member / "src" / "lib.rs").exists():
         continue
     package = manifest["package"]["name"]
-    doc_dir = package.replace("-", "_")
+    doc_dir = manifest.get("lib", {}).get("name", package.replace("-", "_"))
     print(f'<li><a href="{html.escape(doc_dir)}/index.html">{html.escape(package)}</a></li>')
 print("</ul>")
 PY
@@ -71,7 +71,7 @@ for member in members:
     if "lib" not in manifest and not (root / member / "src" / "lib.rs").exists():
         continue
     package = manifest["package"]["name"]
-    doc_dir = package.replace("-", "_")
+    doc_dir = manifest.get("lib", {}).get("name", package.replace("-", "_"))
     print(
         f'<li><a href="{html.escape(doc_dir)}/index.html">{html.escape(package)}</a>'
         f' <code>{html.escape(member)}</code></li>'

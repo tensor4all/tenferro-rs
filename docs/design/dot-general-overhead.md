@@ -1,7 +1,7 @@
 # Dot-General Fixed Overhead
 
 This note records the current interpretation of the
-`tenferro-tensor/benches/dot_general_overhead.rs` benchmark. It is a
+`tenferro-internal-tensor/benches/dot_general_overhead.rs` benchmark. It is a
 developer-facing performance note for small, repeated contractions such as MPS
 inner products.
 
@@ -77,5 +77,5 @@ VECLIB_MAXIMUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-tensor --bench dot_general_overhead
+cargo bench -p tenferro-internal-tensor --bench dot_general_overhead
 ```

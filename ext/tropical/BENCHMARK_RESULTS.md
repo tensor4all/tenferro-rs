@@ -23,7 +23,7 @@ Branch   : codex-stage-8-bench (base 0de5c94 on refactor_ad_v3)
 All benches ran single-threaded (Criterion default). The tropical crate
 is a standalone cargo workspace excluded from the core `tenferro-rs`
 workspace, so the bench binary links through the public `tenferro`
-facade plus `tenferro-ops` for the `ExtensionOp` surface — the same
+facade plus `tenferro-internal-ops` for the `ExtensionOp` surface — the same
 composition and fused-extension boundaries imposed on end users.
 
 ## Bench method
@@ -155,7 +155,7 @@ A sketch (non-binding) consistent with the existing `StdTensorOp` enum
 conventions and with the fused `ExtensionOp` semantics:
 
 ```rust
-// In tenferro-ops/src/std_tensor_op.rs:
+// In tenferro-internal-ops/src/std_tensor_op.rs:
 enum StdTensorOp {
     // ... existing variants ...
 

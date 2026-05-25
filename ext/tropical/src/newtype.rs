@@ -6,7 +6,7 @@
 //!
 //! # Current reachability
 //!
-//! The `tenferro-tensor` public facade's `TensorScalar` trait is **sealed**
+//! The `tenferro-internal-tensor` public facade's `TensorScalar` trait is **sealed**
 //! (implemented only for `f32`, `f64`, `Complex32`, `Complex64`). This means
 //! `TypedTensor<MaxPlus<T>>` cannot currently flow through the `Tensor`
 //! enum, `TensorBackend` ops, or the `TracedTensor` / `Engine` pipeline

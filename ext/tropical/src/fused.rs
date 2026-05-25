@@ -40,7 +40,7 @@
 //! does not include an `ArgMax` op, so this implementation uses the
 //! mathematically equivalent **indicator-mask** approach — the same construction used by
 //! the core `ReduceMax` / `ReduceMin` AD rule
-//! (`tenferro-ops/src/ad/contraction.rs::linearize_reduce_chooser`) —
+//! (`tenferro-internal-ops/src/ad/contraction.rs::linearize_reduce_chooser`) —
 //! which produces the same (subgradient) gradient as the argmax-based
 //! formulation, modulo how ties are split. Argmax-based Scatter and
 //! indicator-based `Compare(Eq) + Mul + ReduceSum + Div` are two

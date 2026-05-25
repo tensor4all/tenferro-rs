@@ -1,4 +1,4 @@
-# tenferro-device
+# tenferro-internal-device
 
 Device abstraction and shared error types for the tenferro workspace.
 
@@ -6,7 +6,7 @@ Device abstraction and shared error types for the tenferro workspace.
 
 ## Position in Workspace Architecture
 
-`tenferro-device` is a **shared foundation crate** depended upon by every other
+`tenferro-internal-device` is a **shared foundation crate** depended upon by every other
 tenferro crate. It has no tensor or algebra dependency — only `thiserror`. Its
 role is to:
 
@@ -132,7 +132,7 @@ let err = Error::InvalidArgument("bad index".into());
 assert!(err.to_string().contains("bad index"));
 ```
 
-### Relationship with `tenferro-tensor::effective_compute_devices`
+### Relationship with `tenferro-internal-tensor::effective_compute_devices`
 
 `Tensor<T>` carries an optional `preferred_compute_device: Option<ComputeDevice>`
 field. When resolving which device to use for an operation:
@@ -166,7 +166,7 @@ with explicit transfer required to cross boundaries.
 ### 2. StrideError(String) instead of #[from] StridedError
 
 Using `#[from] strided_view::StridedError` would add `strided-view` as a
-dependency of `tenferro-device`, pulling it into every downstream crate even
+dependency of `tenferro-internal-device`, pulling it into every downstream crate even
 when only error types are needed. A plain `StrideError(String)` avoids this
 coupling: callers that use `strided-view` convert errors at the boundary with
 `.map_err(|e| Error::StrideError(e.to_string()))`.

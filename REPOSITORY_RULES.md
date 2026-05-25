@@ -49,7 +49,7 @@ rules from `tensor4all-agent-rules`.
 
 ## Rule Source Of Truth
 
-- `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` (in `tenferro-ops/src/ad/`)
+- `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` (in `tenferro-internal-ops/src/ad/`)
   are the semantic source of truth for AD rules.
 - These are graph-level rules that emit ops into a `FragmentBuilder`.
   `tidu::differentiate` calls `linearize`; `tidu::transpose` calls `transpose_rule`.
@@ -57,7 +57,7 @@ rules from `tensor4all-agent-rules`.
   primal op. Some ops are supported by first applying `linearize` and then
   transposing the emitted linear primitive graph. Before filing or closing an
   AD support issue, check the machine-readable AD support manifest in
-  `tenferro-ops/src/ad/support.rs`; `SupportedViaLinearize` means a missing
+  `tenferro-internal-ops/src/ad/support.rs`; `SupportedViaLinearize` means a missing
   direct transpose arm is intentional.
 - Reference JAX's implementations (`jax/_src/lax/lax.py`, `jax/_src/lax/linalg.py`)
   when implementing new AD rules.
@@ -261,7 +261,7 @@ rules from `tensor4all-agent-rules`.
 ### User-Facing Docs
 
 - User docs target PyTorch/JAX users who interact with the `tenferro` facade crate.
-- All imports must use `use tenferro::{...}` — never reference internal crates (`tenferro-tensor`, `tenferro-ops`, `computegraph`, etc.) in user-facing docs.
+- All imports must use `use tenferro::{...}` — never reference internal crates (`tenferro-internal-tensor`, `tenferro-internal-ops`, `computegraph`, etc.) in user-facing docs.
 - Do NOT expose internal jargon (Fragment, StableHLO, ExecOp, ValRef, etc.) in user-facing pages.
 - Provide PyTorch/JAX equivalents when introducing tenferro concepts.
 

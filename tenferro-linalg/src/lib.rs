@@ -1,7 +1,7 @@
 //! Linear algebra extension operations for tenferro.
 //!
 //! This crate owns the graph-facing linalg op payloads and runtime
-//! registration. Backend kernels remain in `tenferro-tensor`.
+//! registration. Backend kernels remain in `tenferro-internal-tensor`.
 
 #[cfg(feature = "autodiff")]
 mod ad;

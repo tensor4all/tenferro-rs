@@ -13,9 +13,9 @@ For contributors, internal crate APIs are also available in the
 - [tenferro](../rustdoc/tenferro/index.html): user-facing facade for eager
   tensors, traced tensors, AD, graph compilation/execution, extension
   registration, and backend selection
-- [tenferro-tensor](../rustdoc/tenferro_tensor/index.html): dense runtime
+- [tenferro-internal-tensor](../rustdoc/tenferro_tensor/index.html): dense runtime
   tensors, backend traits, CPU backend, and internal CUDA backend integration
-- [tenferro-runtime](../rustdoc/tenferro_runtime/index.html): extension runtime
+- [tenferro-internal-runtime](../rustdoc/tenferro_runtime/index.html): extension runtime
   registration and extension cache storage
 - [tenferro-einsum](../rustdoc/tenferro_einsum/index.html): subscripts,
   contraction planning, traced/eager einsum APIs, extension runtime, and AD rule
@@ -23,30 +23,30 @@ For contributors, internal crate APIs are also available in the
   algebra APIs, extension runtime, and AD rules where implemented
 - [tenferro-fft](../rustdoc/tenferro_fft/index.html): FFT extension runtime and
   public FFT APIs
-- [tenferro-ops](../rustdoc/tenferro_ops/index.html): graph op vocabulary and
+- [tenferro-internal-ops](../rustdoc/tenferro_ops/index.html): graph op vocabulary and
   AD rule implementations
-- [tenferro-device](../rustdoc/tenferro_device/index.html): shared device and
+- [tenferro-internal-device](../rustdoc/tenferro_device/index.html): shared device and
   error infrastructure
-- [tenferro-gpubackend](../rustdoc/tenferro_gpubackend/index.html): internal CubeCL
+- [tenferro-internal-gpubackend](../rustdoc/tenferro_gpubackend/index.html): internal CubeCL
   kernel crate used by the CUDA backend
-- [tenferro-extension-macros](../rustdoc/tenferro_extension_macros/index.html):
+- [tenferro-internal-extension-macros](../rustdoc/tenferro_extension_macros/index.html):
   procedural macros for extension-op registration
 
 ## Architecture Summary
 
 ```text
-tenferro-device
+tenferro-internal-device
     |
-tenferro-tensor   -- dense runtime tensors, TensorBackend, CpuBackend
+tenferro-internal-tensor   -- dense runtime tensors, TensorBackend, CpuBackend
     |
-tenferro-runtime  -- extension runtime registration + extension caches
+tenferro-internal-runtime  -- extension runtime registration + extension caches
     |
 tenferro          -- TracedTensor, GraphCompiler, GraphExecutor, public APIs
 
-tenferro-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
+tenferro-internal-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
 tenferro-einsum   -- standard einsum extension
 tenferro-linalg   -- standard linalg extension
 tenferro-fft      -- standard FFT extension
-tenferro-gpubackend              -- internal CUDA kernel definitions
-tenferro-extension-macros    -- extension-op registration macros
+tenferro-internal-gpubackend              -- internal CUDA kernel definitions
+tenferro-internal-extension-macros    -- extension-op registration macros
 ```
