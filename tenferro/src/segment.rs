@@ -433,8 +433,6 @@ fn map_exec_op_to_elementwise_fusion(op: &ExecOp) -> Option<ElementwiseFusionOp>
         ExecOp::Abs => Some(ElementwiseFusionOp::Abs),
         ExecOp::Maximum => Some(ElementwiseFusionOp::Maximum),
         ExecOp::Minimum => Some(ElementwiseFusionOp::Minimum),
-        ExecOp::Compare(dir) => Some(ElementwiseFusionOp::Compare(dir.clone())),
-        ExecOp::Select => Some(ElementwiseFusionOp::Select),
         ExecOp::Clamp => Some(ElementwiseFusionOp::Clamp),
         ExecOp::Exp => Some(ElementwiseFusionOp::Exp),
         ExecOp::Log => Some(ElementwiseFusionOp::Log),

@@ -1,6 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::ElementwiseFusionPlan;
-use crate::config::CompareDir;
 use crate::{ElementwiseFusionInst, ElementwiseFusionOp, TensorBackend};
 
 use super::{
@@ -315,39 +314,4 @@ fn test_fused_empty_tensor() {
         .expect("fusion should handle empty tensors");
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].shape(), &[0]);
-}
-
-/// Compare produces 0/1 output.
-fn compare_plan() -> ElementwiseFusionPlan {
-    ElementwiseFusionPlan {
-        dtype: crate::DType::F64,
-        n_inputs: 2,
-        outputs: vec![2],
-        ops: vec![ElementwiseFusionInst {
-            op: ElementwiseFusionOp::Compare(CompareDir::Gt),
-            inputs: vec![0, 1],
-        }],
-    }
-}
-
-#[test]
-#[ignore]
-fn test_fused_compare() {
-    let a = tensor_f64(vec![4], vec![1.0, 5.0, 3.0, 2.0]);
-    let b = tensor_f64(vec![4], vec![2.0, 3.0, 3.0, 4.0]);
-
-    let mut cpu = cpu_backend();
-    let expected = cpu.compare(&a, &b, &CompareDir::Gt).unwrap();
-
-    let mut gpu = gpu_backend();
-    let gpu_a = upload(&gpu, &a);
-    let gpu_b = upload(&gpu, &b);
-
-    let plan = compare_plan();
-    let result = gpu
-        .execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan)
-        .unwrap()
-        .expect("fusion should succeed for compare");
-    let actual = download(&gpu, &result[0]);
-    assert_tensor_close(&actual, &expected, 1e-12);
 }

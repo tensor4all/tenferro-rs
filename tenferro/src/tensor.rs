@@ -135,7 +135,7 @@ pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Resu
 
 /// Elementwise comparison with NumPy-style broadcasting.
 ///
-/// Current concrete comparison follows the primitive numeric-mask dtype policy.
+/// The result is a bool tensor.
 ///
 /// # Examples
 ///
@@ -145,6 +145,7 @@ pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Resu
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
 /// let z = tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+/// assert_eq!(z.as_slice::<bool>().unwrap(), &[true, false]);
 /// ```
 pub fn compare(
     lhs: &Tensor,
@@ -153,8 +154,6 @@ pub fn compare(
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    // TODO: Migrate public compare to bool output when primitive dtype inference
-    // and backend compare kernels are updated together.
     backend.with_exec_session(|exec| exec.compare(&lhs, &rhs, &dir))
 }
 

@@ -210,6 +210,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
     let s_shape = s.concrete_shape();
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape);
     let mask = abs_s.compare(&threshold, CompareDir::Gt);
+    let mask = mask.convert(s.dtype);
     let ones = ones_like(&s);
     let denom = &s + &(&ones + &(-&mask));
     let s_inv = &mask / &denom;
@@ -399,7 +400,7 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> TracedTens
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {
     let mask = abs.compare(&zero_scalar(abs.dtype), CompareDir::Gt);
-    mask.reduce_sum(axes)
+    mask.convert(abs.dtype).reduce_sum(axes)
 }
 
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> TracedTensor {

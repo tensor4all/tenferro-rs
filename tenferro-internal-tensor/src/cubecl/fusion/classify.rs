@@ -91,8 +91,6 @@ impl FusionElement for f32 {
                 | ElementwiseFusionOp::Abs
                 | ElementwiseFusionOp::Maximum
                 | ElementwiseFusionOp::Minimum
-                | ElementwiseFusionOp::Compare(_)
-                | ElementwiseFusionOp::Select
                 | ElementwiseFusionOp::Clamp
                 | ElementwiseFusionOp::Exp
                 | ElementwiseFusionOp::Log

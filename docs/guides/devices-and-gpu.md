@@ -109,7 +109,7 @@ Legend:
 | `neg` | `F32`, `F64`, `C32`, `C64` | Integer and `Bool` negation are not implemented |
 | `conj` | `F32`, `F64`, `C32`, `C64` | Real floating dtypes are identity; integer and `Bool` inputs are not implemented |
 | `abs`, `sign` | `F32`, `F64` | Complex, integer, and `Bool` inputs are not implemented |
-| `maximum`, `minimum`, `compare`, `select`, `clamp` | `F32`, `F64` | Complex ordering is not defined; `compare` returns a numeric 0/1 tensor |
+| `maximum`, `minimum`, `compare`, `select`, `clamp` | `F32`, `F64` | Complex ordering is not defined; `compare` returns a `Bool` tensor and `select` takes a `Bool` predicate |
 | `exp`, `log`, `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p` | `F32`, `F64` | Complex analytic kernels are not implemented |
 | `pow` | `F32`, `F64` | Same dtype inputs only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |

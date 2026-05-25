@@ -56,6 +56,20 @@ fn get_i64(t: &Tensor, idx: &[usize]) -> i64 {
     }
 }
 
+fn get_i32(t: &Tensor, idx: &[usize]) -> i32 {
+    match t {
+        Tensor::I32(inner) => *inner.get(idx),
+        _ => panic!("expected I32 tensor"),
+    }
+}
+
+fn get_bool(t: &Tensor, idx: &[usize]) -> bool {
+    match t {
+        Tensor::Bool(inner) => *inner.get(idx),
+        _ => panic!("expected Bool tensor"),
+    }
+}
+
 fn assert_f64_close(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() < 1.0e-12,
@@ -1708,9 +1722,9 @@ fn test_tier2_elementwise_ops_real() {
         vec![3],
         vec![2.0, 5.0, 3.0],
     ));
-    let pred = Tensor::F64(TypedTensor::from_vec_col_major(
+    let pred = Tensor::Bool(TypedTensor::from_vec_col_major(
         vec![3],
-        vec![0.0, -1.0, 2.0],
+        vec![false, true, true],
     ));
     let on_true = Tensor::F64(TypedTensor::from_vec_col_major(
         vec![3],
@@ -1756,29 +1770,29 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&minimum, &[2]), 3.0);
 
     let eq = backend.compare(&lhs, &rhs, &CompareDir::Eq).unwrap();
-    assert_eq!(get_f64(&eq, &[0]), 0.0);
-    assert_eq!(get_f64(&eq, &[1]), 0.0);
-    assert_eq!(get_f64(&eq, &[2]), 0.0);
+    assert!(!get_bool(&eq, &[0]));
+    assert!(!get_bool(&eq, &[1]));
+    assert!(!get_bool(&eq, &[2]));
 
     let lt = backend.compare(&lhs, &rhs, &CompareDir::Lt).unwrap();
-    assert_eq!(get_f64(&lt, &[0]), 0.0);
-    assert_eq!(get_f64(&lt, &[1]), 1.0);
-    assert_eq!(get_f64(&lt, &[2]), 0.0);
+    assert!(!get_bool(&lt, &[0]));
+    assert!(get_bool(&lt, &[1]));
+    assert!(!get_bool(&lt, &[2]));
 
     let le = backend.compare(&lhs, &rhs, &CompareDir::Le).unwrap();
-    assert_eq!(get_f64(&le, &[0]), 0.0);
-    assert_eq!(get_f64(&le, &[1]), 1.0);
-    assert_eq!(get_f64(&le, &[2]), 0.0);
+    assert!(!get_bool(&le, &[0]));
+    assert!(get_bool(&le, &[1]));
+    assert!(!get_bool(&le, &[2]));
 
     let gt = backend.compare(&lhs, &rhs, &CompareDir::Gt).unwrap();
-    assert_eq!(get_f64(&gt, &[0]), 1.0);
-    assert_eq!(get_f64(&gt, &[1]), 0.0);
-    assert_eq!(get_f64(&gt, &[2]), 1.0);
+    assert!(get_bool(&gt, &[0]));
+    assert!(!get_bool(&gt, &[1]));
+    assert!(get_bool(&gt, &[2]));
 
     let ge = backend.compare(&lhs, &rhs, &CompareDir::Ge).unwrap();
-    assert_eq!(get_f64(&ge, &[0]), 1.0);
-    assert_eq!(get_f64(&ge, &[1]), 0.0);
-    assert_eq!(get_f64(&ge, &[2]), 1.0);
+    assert!(get_bool(&ge, &[0]));
+    assert!(!get_bool(&ge, &[1]));
+    assert!(get_bool(&ge, &[2]));
 
     let select = backend.select(&pred, &on_true, &on_false).unwrap();
     assert_eq!(get_f64(&select, &[0]), 1.0);
@@ -1828,7 +1842,7 @@ fn test_tier2_elementwise_ops_complex() {
 fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![8.0f32, -2.0]));
     let rhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![2.0f32, 5.0]));
-    let pred_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![0.0f32, 1.0]));
+    let pred_bool = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![false, true]));
     let lower_f32 = Tensor::F32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![-1.0f32, -1.0],
@@ -1856,10 +1870,10 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     assert_eq!(get_f32(&min_out, &[1]), -2.0);
 
     let cmp_out = compare(&lhs_f32, &rhs_f32, &CompareDir::Gt).unwrap();
-    assert_eq!(get_f32(&cmp_out, &[0]), 1.0);
-    assert_eq!(get_f32(&cmp_out, &[1]), 0.0);
+    assert!(get_bool(&cmp_out, &[0]));
+    assert!(!get_bool(&cmp_out, &[1]));
 
-    let select_out = select(&pred_f32, &lhs_f32, &rhs_f32).unwrap();
+    let select_out = select(&pred_bool, &lhs_f32, &rhs_f32).unwrap();
     assert_eq!(get_f32(&select_out, &[0]), 2.0);
     assert_eq!(get_f32(&select_out, &[1]), -2.0);
 
@@ -1878,10 +1892,6 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let rhs_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex32::new(1.0, 0.0), Complex32::new(0.0, 2.0)],
-    ));
-    let pred_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
-        vec![2],
-        vec![Complex32::new(0.0, 0.0), Complex32::new(1.0, 0.0)],
     ));
     let lower_c32 = Tensor::C32(TypedTensor::from_vec_col_major(
         vec![2],
@@ -1906,9 +1916,9 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     assert_eq!(get_c32(&min_c32, &[1]), Complex32::new(1.0, 0.0));
 
     let cmp_c32 = compare(&lhs_c32, &rhs_c32, &CompareDir::Eq).unwrap();
-    assert_eq!(get_c32(&cmp_c32, &[0]), Complex32::new(0.0, 0.0));
+    assert!(!get_bool(&cmp_c32, &[0]));
 
-    let select_c32 = select(&pred_c32, &lhs_c32, &rhs_c32).unwrap();
+    let select_c32 = select(&pred_bool, &lhs_c32, &rhs_c32).unwrap();
     assert_eq!(get_c32(&select_c32, &[0]), Complex32::new(1.0, 0.0));
     assert_eq!(get_c32(&select_c32, &[1]), Complex32::new(1.0, 0.0));
 
@@ -1952,10 +1962,16 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     let lhs_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.5f64, -3.0]));
     let rhs_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0f64, 4.0]));
     let scalar_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0f64]));
-    let pred_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0f64, 1.0]));
+    let pred_bool = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![false, true]));
     let lower_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![0.0f64, -2.0]));
     let upper_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![2.0f64, 3.0]));
     let short_f64 = Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0f64]));
+    let lhs_i32 = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![1i32, 3]));
+    let rhs_i32 = Tensor::I32(TypedTensor::from_vec_col_major(vec![2], vec![2i32, 3]));
+    let lhs_i64 = Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![5i64, -1]));
+    let rhs_i64 = Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![2i64, -1]));
+    let lhs_bool = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, false]));
+    let rhs_bool = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![false, false]));
 
     let add_out = add(&lhs_f64, &rhs_f64).unwrap();
     assert_eq!(get_f64(&add_out, &[0]), 3.5);
@@ -1982,12 +1998,43 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     assert_eq!(get_f64(&conj_out, &[1]), -3.0);
 
     let compare_out = compare(&lhs_f64, &rhs_f64, &CompareDir::Lt).unwrap();
-    assert_eq!(get_f64(&compare_out, &[0]), 1.0);
-    assert_eq!(get_f64(&compare_out, &[1]), 1.0);
+    assert!(get_bool(&compare_out, &[0]));
+    assert!(get_bool(&compare_out, &[1]));
 
-    let select_out = select(&pred_f64, &lhs_f64, &rhs_f64).unwrap();
+    let select_out = select(&pred_bool, &lhs_f64, &rhs_f64).unwrap();
     assert_eq!(get_f64(&select_out, &[0]), 2.0);
     assert_eq!(get_f64(&select_out, &[1]), -3.0);
+
+    assert!(get_bool(
+        &compare(&lhs_i32, &rhs_i32, &CompareDir::Lt).unwrap(),
+        &[0]
+    ));
+    assert!(get_bool(
+        &compare(&lhs_i32, &rhs_i32, &CompareDir::Le).unwrap(),
+        &[1]
+    ));
+    assert!(get_bool(
+        &compare(&lhs_i64, &rhs_i64, &CompareDir::Gt).unwrap(),
+        &[0]
+    ));
+    assert!(get_bool(
+        &compare(&lhs_i64, &rhs_i64, &CompareDir::Ge).unwrap(),
+        &[1]
+    ));
+    assert!(get_bool(
+        &compare(&lhs_bool, &rhs_bool, &CompareDir::Eq).unwrap(),
+        &[1]
+    ));
+
+    let select_i32 = select(&pred_bool, &lhs_i32, &rhs_i32).unwrap();
+    assert_eq!(get_i32(&select_i32, &[0]), 2);
+    assert_eq!(get_i32(&select_i32, &[1]), 3);
+    let select_i64 = select(&pred_bool, &lhs_i64, &rhs_i64).unwrap();
+    assert_eq!(get_i64(&select_i64, &[0]), 2);
+    assert_eq!(get_i64(&select_i64, &[1]), -1);
+    let select_bool = select(&pred_bool, &lhs_bool, &rhs_bool).unwrap();
+    assert!(!get_bool(&select_bool, &[0]));
+    assert!(!get_bool(&select_bool, &[1]));
 
     let clamp_out = clamp(&lhs_f64, &lower_f64, &upper_f64).unwrap();
     assert_eq!(get_f64(&clamp_out, &[0]), 1.5);
@@ -2000,10 +2047,6 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     let rhs_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 2.0)],
-    ));
-    let pred_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
     ));
     let lower_c64 = Tensor::C64(TypedTensor::from_vec_col_major(
         vec![2],
@@ -2052,12 +2095,12 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     let compare_le = compare(&lhs_c64, &rhs_c64, &CompareDir::Le).unwrap();
     let compare_gt = compare(&lhs_c64, &rhs_c64, &CompareDir::Gt).unwrap();
     let compare_ge = compare(&lhs_c64, &rhs_c64, &CompareDir::Ge).unwrap();
-    assert_c64_close(get_c64(&compare_lt, &[0]), Complex64::new(0.0, 0.0));
-    assert_c64_close(get_c64(&compare_le, &[0]), Complex64::new(0.0, 0.0));
-    assert_c64_close(get_c64(&compare_gt, &[0]), Complex64::new(1.0, 0.0));
-    assert_c64_close(get_c64(&compare_ge, &[0]), Complex64::new(1.0, 0.0));
+    assert!(!get_bool(&compare_lt, &[0]));
+    assert!(!get_bool(&compare_le, &[0]));
+    assert!(get_bool(&compare_gt, &[0]));
+    assert!(get_bool(&compare_ge, &[0]));
 
-    let select_c64 = select(&pred_c64, &lhs_c64, &rhs_c64).unwrap();
+    let select_c64 = select(&pred_bool, &lhs_c64, &rhs_c64).unwrap();
     assert_c64_close(get_c64(&select_c64, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&select_c64, &[1]), Complex64::new(1.0, 0.0));
 
@@ -2089,10 +2132,7 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     ));
     assert!(matches!(
         select(&lhs_f32, &lhs_f32, &rhs_f64),
-        Err(crate::Error::BackendFailure {
-            op: "select",
-            message,
-        }) if message == "dtype mismatch"
+        Err(crate::Error::DTypeMismatch { op: "select", .. })
     ));
     assert!(matches!(
         clamp(&lhs_f32, &lhs_f32, &rhs_f64),
@@ -2127,11 +2167,11 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
         Err(crate::Error::ShapeMismatch { op: "compare", .. })
     ));
     assert!(matches!(
-        select(&pred_f64, &short_f64, &rhs_f64),
+        select(&pred_bool, &short_f64, &rhs_f64),
         Err(crate::Error::ShapeMismatch { op: "select", .. })
     ));
     assert!(matches!(
-        select(&pred_f64, &rhs_f64, &short_f64),
+        select(&pred_bool, &rhs_f64, &short_f64),
         Err(crate::Error::ShapeMismatch { op: "select", .. })
     ));
     assert!(matches!(
@@ -4346,12 +4386,10 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
         get_c64(&minimum(&a, &b).unwrap(), &[0]),
         Complex64::new(0.0, 2.0),
     );
+    assert!(get_bool(&compare(&a, &b, &CompareDir::Ge).unwrap(), &[0]));
+    let pred = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]));
     assert_c64_close(
-        get_c64(&compare(&a, &b, &CompareDir::Ge).unwrap(), &[0]),
-        Complex64::new(1.0, 0.0),
-    );
-    assert_c64_close(
-        get_c64(&select(&a, &a, &b).unwrap(), &[1]),
+        get_c64(&select(&pred, &a, &b).unwrap(), &[1]),
         Complex64::new(1.0, 0.0),
     );
     assert_c64_close(

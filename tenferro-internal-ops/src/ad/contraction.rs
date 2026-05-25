@@ -1,7 +1,7 @@
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro_tensor::{CompareDir, DotGeneralConfig};
+use tenferro_tensor::{CompareDir, DType, DotGeneralConfig};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{conjugate_primal_if_complex, conjugate_primal_if_dtype_complex};
@@ -169,9 +169,11 @@ pub fn linearize_reduce_chooser(
         ValRef::External(primal_in[0].clone()),
         ValRef::Local(answer_broadcast),
     );
+    let input_dtype = ctx.dtype_of(&ValRef::External(primal_in[0].clone()));
+    let numeric_indicators = numeric_indicators(builder, indicators, input_dtype);
     let weighted_tangent = builder.add_op(
         StdTensorOp::Mul,
-        vec![ValRef::Local(indicators), ValRef::Local(dx)],
+        vec![ValRef::Local(numeric_indicators), ValRef::Local(dx)],
         OpMode::Linear {
             active_mask: vec![false, true],
         },
@@ -185,7 +187,7 @@ pub fn linearize_reduce_chooser(
             active_mask: vec![true],
         },
     )[0];
-    let counts = reduction_location_counts(builder, indicators, axes);
+    let counts = reduction_location_counts(builder, numeric_indicators, axes);
     let out = builder.add_op(
         StdTensorOp::Div,
         vec![ValRef::Local(tangent_sum), ValRef::Local(counts)],
@@ -427,7 +429,9 @@ pub fn transpose_reduce_chooser(
                 inputs[0].clone(),
                 ValRef::Local(answer_broadcast),
             );
-            let counts = reduction_location_counts(emitter, indicators, axes);
+            let input_dtype = ctx.dtype_of(&inputs[0]);
+            let numeric_indicators = numeric_indicators(emitter, indicators, input_dtype);
+            let counts = reduction_location_counts(emitter, numeric_indicators, axes);
             let counts_broadcast = broadcast_reduction_output(
                 emitter,
                 ValRef::Local(counts),
@@ -437,10 +441,12 @@ pub fn transpose_reduce_chooser(
             );
             let weights = emitter.add_op(
                 StdTensorOp::Div,
-                vec![ValRef::Local(indicators), ValRef::Local(counts_broadcast)],
+                vec![
+                    ValRef::Local(numeric_indicators),
+                    ValRef::Local(counts_broadcast),
+                ],
                 OpMode::Primal,
             )[0];
-            let input_dtype = ctx.dtype_of(&inputs[0]);
             let weights_conj =
                 conjugate_primal_if_dtype_complex(emitter, ValRef::Local(weights), input_dtype);
             let out = emitter.add_op(
@@ -558,6 +564,21 @@ fn reduction_location_counts(
     emitter.add_op(
         StdTensorOp::ReduceSum {
             axes: axes.to_vec(),
+        },
+        vec![ValRef::Local(indicators)],
+        OpMode::Primal,
+    )[0]
+}
+
+fn numeric_indicators(
+    emitter: &mut impl OpEmitter<StdTensorOp>,
+    indicators: LocalValId,
+    dtype: DType,
+) -> LocalValId {
+    emitter.add_op(
+        StdTensorOp::Convert {
+            from: DType::Bool,
+            to: dtype,
         },
         vec![ValRef::Local(indicators)],
         OpMode::Primal,

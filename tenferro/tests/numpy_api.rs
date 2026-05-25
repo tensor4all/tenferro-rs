@@ -1,6 +1,6 @@
 use tenferro::{
-    traced_tensor, CompareDir, CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
-    TypedTensor,
+    traced_tensor, CompareDir, CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor,
+    TracedTensor, TypedTensor,
 };
 
 #[cfg(feature = "autodiff")]
@@ -51,6 +51,30 @@ fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = traced_tensor::rsqrt(&x);
     let _ = traced_tensor::expm1(&x);
     let _ = traced_tensor::log1p(&x);
+}
+
+#[test]
+fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
+    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+    let cond = traced_tensor::compare(&x, &y, CompareDir::Gt);
+    assert_eq!(cond.dtype, DType::Bool);
+
+    let selected = traced_tensor::where_select(&cond, &x, &y);
+
+    let mut compiler = GraphCompiler::new();
+    let cond_program = compiler.compile(&cond).unwrap();
+    let selected_program = compiler.compile(&selected).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let cond_out = executor.run(&cond_program).unwrap();
+    let selected_out = executor.run(&selected_program).unwrap();
+
+    assert_eq!(cond_out.dtype(), DType::Bool);
+    assert_eq!(cond_out.as_slice::<bool>().unwrap(), &[true, false]);
+    assert_eq!(
+        selected_out.try_into_vec_col_major::<f64>().unwrap().1,
+        vec![2.0, 8.0]
+    );
 }
 
 #[cfg(feature = "autodiff")]
@@ -114,6 +138,33 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = eager_tensor::log1p(&x).unwrap();
 }
 
+#[cfg(feature = "autodiff")]
+#[test]
+fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
+    let ctx = EagerRuntime::new();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]),
+        ctx.clone(),
+    );
+    let y =
+        EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
+
+    let cond = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+    let selected = eager_tensor::where_select(&cond, &x, &y).unwrap();
+
+    assert_eq!(cond.data().dtype(), DType::Bool);
+    assert_eq!(cond.data().as_slice::<bool>().unwrap(), &[true, false]);
+    assert_eq!(
+        selected
+            .data()
+            .clone()
+            .try_into_vec_col_major::<f64>()
+            .unwrap()
+            .1,
+        vec![2.0, 8.0]
+    );
+}
+
 #[test]
 fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let mut backend = CpuBackend::new();
@@ -160,6 +211,23 @@ fn tensor_module_exposes_initial_elementwise_free_functions() {
 }
 
 #[test]
+fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
+    let mut backend = CpuBackend::new();
+    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
+    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+
+    let cond = tenferro::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+    let selected = tenferro::tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+
+    assert_eq!(cond.dtype(), DType::Bool);
+    assert_eq!(cond.as_slice::<bool>().unwrap(), &[true, false]);
+    assert_eq!(
+        selected.try_into_vec_col_major::<f64>().unwrap().1,
+        vec![2.0, 8.0]
+    );
+}
+
+#[test]
 fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let mut backend = CpuBackend::new();
     let lhs = TypedTensor::<f64>::from_vec_row_major(vec![3, 1], vec![1.0, 2.0, 3.0]);
@@ -202,4 +270,18 @@ fn typed_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = tenferro::typed_tensor::rsqrt(&x, &mut backend).unwrap();
     let _ = tenferro::typed_tensor::expm1(&x, &mut backend).unwrap();
     let _ = tenferro::typed_tensor::log1p(&x, &mut backend).unwrap();
+}
+
+#[test]
+fn typed_tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
+    let mut backend = CpuBackend::new();
+    let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
+    let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
+
+    let cond: TypedTensor<bool> =
+        tenferro::typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+    let selected = tenferro::typed_tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+
+    assert_eq!(cond.host_data(), &[true, false]);
+    assert_eq!(selected.try_into_vec_col_major().unwrap().1, vec![2.0, 8.0]);
 }

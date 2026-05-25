@@ -137,8 +137,8 @@ pub fn pow_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn compare_float<F: Float>(
-    out: &mut Array<F>,
+pub fn compare_float_bool<F: Float>(
+    out: &mut Array<bool>,
     lhs: &Array<F>,
     rhs: &Array<F>,
     #[comptime] mode: usize,
@@ -154,19 +154,19 @@ pub fn compare_float<F: Float>(
             COMPARE_GE => x >= y,
             _ => false,
         };
-        out[ABSOLUTE_POS] = if pred { F::new(1.0) } else { F::new(0.0) };
+        out[ABSOLUTE_POS] = pred;
     }
 }
 
 #[cube(launch_unchecked)]
-pub fn select_float<F: Float>(
+pub fn select_bool_float<F: Float>(
     out: &mut Array<F>,
-    pred: &Array<F>,
+    pred: &Array<bool>,
     on_true: &Array<F>,
     on_false: &Array<F>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] != F::new(0.0) {
+        out[ABSOLUTE_POS] = if pred[ABSOLUTE_POS] {
             on_true[ABSOLUTE_POS]
         } else {
             on_false[ABSOLUTE_POS]

@@ -1,7 +1,7 @@
 use cubecl::ir::{
-    Arithmetic, BinaryOperator, Branch, Builtin, ClampOperator, Comparison, ConstantValue,
-    ElemType, If, IndexAssignOperator, IndexOperator, Instruction, ManagedVariable, Metadata,
-    Operator, Select, Type, UnaryOperator, Variable,
+    Arithmetic, BinaryOperator, Branch, Builtin, ClampOperator, Comparison, ElemType, If,
+    IndexAssignOperator, IndexOperator, Instruction, ManagedVariable, Metadata, Operator, Type,
+    UnaryOperator, Variable,
 };
 use cubecl::prelude::{
     AddressType, CubeDim, CubeElement, CubePrimitive, KernelBuilder, KernelDefinition,
@@ -130,16 +130,6 @@ where
         ElementwiseFusionOp::Minimum => {
             emit_binary_arithmetic(scope, &inputs[0], &inputs[1], Arithmetic::Min)
         }
-        ElementwiseFusionOp::Compare(dir) => {
-            let pred =
-                emit_bool_binary(scope, inputs[0].clone(), inputs[1].clone(), compare_op(dir));
-            emit_numeric_select::<T>(scope, pred, true)
-        }
-        ElementwiseFusionOp::Select => {
-            let zero = numeric_constant::<T>(scope, 0.0);
-            let pred = emit_bool_binary(scope, inputs[0].clone(), zero, Comparison::NotEqual);
-            emit_select(scope, pred, inputs[1].clone(), inputs[2].clone())
-        }
         ElementwiseFusionOp::Clamp => emit_clamp(scope, &inputs[0], &inputs[1], &inputs[2]),
         ElementwiseFusionOp::Exp => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Exp),
         ElementwiseFusionOp::Log => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Log),
@@ -156,39 +146,6 @@ where
         ElementwiseFusionOp::Expm1 => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Expm1),
         ElementwiseFusionOp::Log1p => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Log1p),
     }
-}
-
-fn compare_op(dir: &crate::CompareDir) -> fn(BinaryOperator) -> Comparison {
-    match dir {
-        crate::CompareDir::Eq => Comparison::Equal,
-        crate::CompareDir::Lt => Comparison::Lower,
-        crate::CompareDir::Le => Comparison::LowerEqual,
-        crate::CompareDir::Gt => Comparison::Greater,
-        crate::CompareDir::Ge => Comparison::GreaterEqual,
-    }
-}
-
-fn emit_numeric_select<T>(
-    scope: &mut cubecl::prelude::Scope,
-    pred: ManagedVariable,
-    if_true: bool,
-) -> ManagedVariable
-where
-    T: CubeElement + CubePrimitive + Clone,
-{
-    let on_true = numeric_constant::<T>(scope, if if_true { 1.0 } else { 0.0 });
-    let on_false = numeric_constant::<T>(scope, if if_true { 0.0 } else { 1.0 });
-    emit_select(scope, pred, on_true, on_false)
-}
-
-fn numeric_constant<T>(scope: &cubecl::prelude::Scope, value: f64) -> ManagedVariable
-where
-    T: CubeElement + CubePrimitive + Clone,
-{
-    ManagedVariable::Plain(Variable::constant(
-        ConstantValue::Float(value),
-        T::as_type(scope),
-    ))
 }
 
 fn emit_unary_arithmetic(
@@ -225,27 +182,6 @@ fn emit_bool_binary(
     let rhs = rhs.consume();
     let out = scope.create_local(Type::scalar(ElemType::Bool));
     scope.register(Instruction::new(op(BinaryOperator { lhs, rhs }), *out));
-    out
-}
-
-fn emit_select(
-    scope: &mut cubecl::prelude::Scope,
-    pred: ManagedVariable,
-    then_value: ManagedVariable,
-    else_value: ManagedVariable,
-) -> ManagedVariable {
-    let pred = pred.consume();
-    let then_value = then_value.consume();
-    let else_value = else_value.consume();
-    let out = scope.create_local(then_value.ty);
-    scope.register(Instruction::new(
-        Operator::Select(Select {
-            cond: pred,
-            then: then_value,
-            or_else: else_value,
-        }),
-        *out,
-    ));
     out
 }
 

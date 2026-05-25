@@ -196,6 +196,16 @@ pub(crate) fn alloc_output<T: CubeElement + Clone>(
     )
 }
 
+pub(crate) fn alloc_bool_output(rt: &CubeclRuntime, shape: &[usize]) -> TypedTensor<bool> {
+    let len: usize = shape.iter().product();
+    let handle = rt.client().empty(len);
+    typed_from_cubecl(
+        shape.to_vec(),
+        CubeclBuffer::new(handle, len),
+        rt.device_ordinal(),
+    )
+}
+
 pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T>,
     op: &'static str,
@@ -207,6 +217,19 @@ pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
     // `validate_cubecl_buffer_len` proves `buffer.len` equals the dense shape
     // product, so raw linear kernels that index `0..out.len()` cannot observe
     // an array longer than the logical tensor allocation.
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+}
+
+pub(crate) fn bool_tensor_array_arg(
+    tensor: &TypedTensor<bool>,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CudaRuntime>> {
+    let buffer = cubecl_buffer(tensor, op)?;
+    validate_cubecl_buffer_len(tensor, buffer, op)?;
+
+    // SAFETY: CubeCL bool tensors are stored as one-byte predicate buffers by
+    // `memory::upload_bool` and `alloc_bool_output`. The validated buffer
+    // length is the logical element count consumed by raw Array<bool> kernels.
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
 }
 
@@ -438,6 +461,48 @@ where
     Ok(output)
 }
 
+pub(crate) fn launch_compare_bool<T>(
+    rt: &CubeclRuntime,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CudaRuntime>,
+        ArrayArg<CudaRuntime>,
+        ArrayArg<CudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<bool>>
+where
+    T: CubeElement + Clone,
+{
+    validate_raw_binary_shapes(lhs, rhs, out_shape, op)?;
+    let output = alloc_bool_output(rt, out_shape);
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = bool_tensor_array_arg(&output, op)?;
+    let lhs_arg = typed_tensor_array_arg(lhs, op)?;
+    let rhs_arg = typed_tensor_array_arg(rhs, op)?;
+    // SAFETY: Shape validation proves all raw arrays share the dense element
+    // count. Bool output storage uses one byte per element and the kernel
+    // guards with `ABSOLUTE_POS < out.len()`.
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        lhs_arg,
+        rhs_arg,
+    );
+    Ok(output)
+}
+
 pub(crate) fn launch_binary_tensor<TLhs, TRhs, TOut>(
     rt: &CubeclRuntime,
     lhs: &TypedTensor<TLhs>,
@@ -479,6 +544,52 @@ where
         output_arg,
         lhs_arg,
         rhs_arg,
+    );
+    Ok(output)
+}
+
+pub(crate) fn launch_select_bool<T>(
+    rt: &CubeclRuntime,
+    pred: &TypedTensor<bool>,
+    on_true: &TypedTensor<T>,
+    on_false: &TypedTensor<T>,
+    out_shape: &[usize],
+    op: &'static str,
+    launch: impl FnOnce(
+        &ComputeClient<CudaRuntime>,
+        CubeCount,
+        CubeDim,
+        ArrayArg<CudaRuntime>,
+        ArrayArg<CudaRuntime>,
+        ArrayArg<CudaRuntime>,
+        ArrayArg<CudaRuntime>,
+    ),
+) -> crate::Result<TypedTensor<T>>
+where
+    T: CubeElement + Clone,
+{
+    validate_raw_ternary_shapes(pred, on_true, on_false, out_shape, op)?;
+    let output = alloc_output::<T>(rt, out_shape);
+    let len = output.n_elements();
+    if len == 0 {
+        return Ok(output);
+    }
+    let client = rt.client();
+    let output_arg = typed_tensor_array_arg(&output, op)?;
+    let pred_arg = bool_tensor_array_arg(pred, op)?;
+    let true_arg = typed_tensor_array_arg(on_true, op)?;
+    let false_arg = typed_tensor_array_arg(on_false, op)?;
+    // SAFETY: Shape validation proves all raw arrays share the dense element
+    // count. The predicate buffer is a validated one-byte Bool tensor buffer,
+    // matching the Array<bool> kernel view.
+    launch(
+        client,
+        cube_count_for_len(len),
+        cube_dim_1d(),
+        output_arg,
+        pred_arg,
+        true_arg,
+        false_arg,
     );
     Ok(output)
 }
