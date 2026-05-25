@@ -4,6 +4,8 @@ Einsum is a standard extension crate, not part of the `tenferro` facade.
 The public user-facing paths live under `tenferro_einsum`, for example
 `tenferro_einsum::traced_tensor::einsum` for traced graph construction and
 `tenferro_einsum::eager_tensor::einsum` for immediate eager execution.
+The same namespaces expose `tensordot` as NumPy-style contraction sugar over
+axis pairs; it is not a `tenferro-linalg` API.
 
 `tenferro` must not expose einsum facade paths such as `tenferro::einsum`,
 `tenferro::traced_tensor::einsum`, `tenferro::eager_tensor::einsum`,

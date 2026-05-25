@@ -81,7 +81,7 @@ crates.
 | Crate | What it provides |
 | --- | --- |
 | `tenferro-linalg` | SVD, QR, Cholesky, LU, solve, eig/eigh, triangular solve, and related linalg APIs |
-| `tenferro-einsum` | NumPy/JAX-style einsum with contraction planning |
+| `tenferro-einsum` | NumPy/JAX-style einsum with contraction planning and tensordot contraction sugar |
 | `tenferro-fft` | FFT extension operations |
 
 ## EagerTensor Execution

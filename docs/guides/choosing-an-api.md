@@ -78,6 +78,7 @@ operations.
 | --- | --- | --- | --- |
 | Everyday tensor ops | `tenferro::tensor` functions; selected `tenferro::typed_tensor` wrappers | `tenferro::eager_tensor` functions | `tenferro::traced_tensor` functions |
 | Einsum | Internal to `tenferro-einsum` runtime execution | `tenferro_einsum::eager_tensor::einsum` | `tenferro_einsum::traced_tensor::einsum` plus `register_runtime` |
+| Tensordot sugar | Use `matmul` or `dot_general` directly | `tenferro_einsum::eager_tensor::tensordot` | `tenferro_einsum::traced_tensor::tensordot` |
 | Linear algebra | `Tensor` methods; selected `TypedTensor<T>` methods | `tenferro_linalg::eager_tensor` helpers | `tenferro_linalg::traced_tensor` helpers |
 | Automatic differentiation | Not applicable | Scalar-loss `backward()` on tracked values | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
