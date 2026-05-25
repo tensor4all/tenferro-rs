@@ -8,7 +8,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::{Complex32, Complex64};
-use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape};
+use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -136,6 +136,23 @@ pub(crate) fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTen
         )
     });
     (broadcast_to(a, &target), broadcast_to(b, &target))
+}
+
+pub(crate) fn broadcast_ternary(
+    a: &TracedTensor,
+    b: &TracedTensor,
+    c: &TracedTensor,
+) -> (TracedTensor, TracedTensor, TracedTensor) {
+    let a_shape = concrete_shape(a);
+    let b_shape = concrete_shape(b);
+    let c_shape = concrete_shape(c);
+    let target = broadcast_shapes([a_shape.as_slice(), b_shape.as_slice(), c_shape.as_slice()])
+        .unwrap_or_else(|err| panic!("{err}"));
+    (
+        broadcast_to(a, &target),
+        broadcast_to(b, &target),
+        broadcast_to(c, &target),
+    )
 }
 
 fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
@@ -2041,6 +2058,67 @@ pub(crate) fn apply_binary_preserve_input_dtypes(
     apply_binary_with_output_dtype(op, lhs, rhs, out_rank, out_shape_hint, out_dtype)
 }
 
+pub(crate) fn apply_broadcast_binary_op(
+    op: StdTensorOp,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+) -> TracedTensor {
+    let (lhs, rhs) = broadcast_binary(lhs, rhs);
+    apply_binary(op, &lhs, &rhs, lhs.rank, lhs.shape_hint.clone())
+}
+
+pub(crate) fn apply_broadcast_ternary_op(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+) -> TracedTensor {
+    let (first, second, third) = broadcast_ternary(first, second, third);
+    apply_ternary(
+        op,
+        &first,
+        &second,
+        &third,
+        first.rank,
+        first.shape_hint.clone(),
+    )
+}
+
+pub(crate) fn apply_ternary(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+) -> TracedTensor {
+    let out_dtype = crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
+    let first = if first.dtype != out_dtype {
+        first.convert(out_dtype)
+    } else {
+        first.clone()
+    };
+    let second = if second.dtype != out_dtype {
+        second.convert(out_dtype)
+    } else {
+        second.clone()
+    };
+    let third = if third.dtype != out_dtype {
+        third.convert(out_dtype)
+    } else {
+        third.clone()
+    };
+    apply_ternary_with_output_dtype(
+        op,
+        &first,
+        &second,
+        &third,
+        out_rank,
+        out_shape_hint,
+        out_dtype,
+    )
+}
+
 fn apply_binary_with_output_dtype(
     op: StdTensorOp,
     lhs: &TracedTensor,
@@ -2085,6 +2163,72 @@ fn apply_binary_with_output_dtype(
             [
                 lhs.metadata_scopes.as_slice(),
                 rhs.metadata_scopes.as_slice(),
+            ],
+        ),
+    }
+}
+
+fn apply_ternary_with_output_dtype(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    out_dtype: DType,
+) -> TracedTensor {
+    let first_ref = ValRef::External(first.fragment.vals()[first.val].key.clone());
+    let second_ref = ValRef::External(second.fragment.vals()[second.val].key.clone());
+    let third_ref = ValRef::External(third.fragment.vals()[third.val].key.clone());
+
+    let mut builder = FragmentBuilder::new();
+    builder.add_parent(first.fragment.clone());
+    builder.add_parent(second.fragment.clone());
+    builder.add_parent(third.fragment.clone());
+    let outputs = builder.add_op(op, vec![first_ref, second_ref, third_ref], OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+
+    let mut merged = (*first.inputs_map).clone();
+    merged.extend(
+        second
+            .inputs_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+    merged.extend(third.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    let mut extra_roots = first.extra_roots.clone();
+    extra_roots.extend(second.extra_roots.iter().cloned());
+    extra_roots.extend(third.extra_roots.iter().cloned());
+
+    let checkpoint_chain = CheckpointNode::merge_chains(
+        CheckpointNode::merge_chains(
+            first.checkpoint_chain.clone(),
+            second.checkpoint_chain.clone(),
+        ),
+        third.checkpoint_chain.clone(),
+    );
+
+    TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: out_dtype,
+        fragment,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: Arc::new(merged),
+        extra_roots,
+        checkpoint_chain,
+        metadata_scopes: metadata_scopes_with_new(
+            metadata_scope,
+            [
+                first.metadata_scopes.as_slice(),
+                second.metadata_scopes.as_slice(),
+                third.metadata_scopes.as_slice(),
             ],
         ),
     }
