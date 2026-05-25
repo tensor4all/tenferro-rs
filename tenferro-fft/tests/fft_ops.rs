@@ -30,6 +30,14 @@ fn assert_f64_close(actual: &[f64], expected: &[f64]) {
 }
 
 #[test]
+fn traced_tensor_namespace_exposes_fft() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let y = tenferro_fft::traced_tensor::rfft(&x, None, -1, FftNorm::Backward);
+
+    assert_eq!(y.rank, 1);
+}
+
+#[test]
 fn fft_c64_matches_numpy_convention() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],

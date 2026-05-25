@@ -140,6 +140,16 @@ fn symbolic_identity_2d(input: &TracedTensor) -> TracedTensor {
 // ============================================================================
 
 #[test]
+fn traced_tensor_namespace_exposes_einsum() {
+    let mut compiler = GraphCompiler::new();
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+    let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+
+    assert_eq!(y.rank, 2);
+}
+
+#[test]
 fn einsum_identity() {
     // "ij->ij" — identity copy
     // v1 data: col-major [1,2,3,4,5,6] shape [2,3]

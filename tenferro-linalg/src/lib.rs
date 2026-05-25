@@ -9,6 +9,7 @@ mod ad;
 pub mod eager_tensor;
 mod extension;
 mod traced;
+pub mod traced_tensor;
 
 pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};
 pub use traced::{

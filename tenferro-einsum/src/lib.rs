@@ -48,6 +48,7 @@ mod planning;
 mod subscripts;
 mod syntax;
 mod traced;
+pub mod traced_tensor;
 #[cfg(test)]
 mod typed_eager;
 pub(crate) mod util;

@@ -62,6 +62,14 @@ use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 
 const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 
+/// Traced tensor FFT operations.
+///
+/// This module is the canonical traced tensor namespace for the FFT extension
+/// crate. Root-level functions remain available for compatibility.
+pub mod traced_tensor {
+    pub use crate::{fft, ifft, irfft, rfft};
+}
+
 /// FFT normalization convention.
 ///
 /// `Backward` matches NumPy, JAX, and PyTorch defaults: the forward transform
