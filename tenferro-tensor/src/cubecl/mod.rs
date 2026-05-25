@@ -79,7 +79,7 @@ use std::cell::OnceCell;
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
 use cubecl::prelude::{
-    ArrayArg, Complex as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat,
+    ArrayArg, ComplexCore as CubeComplex, CubeElement, CubePrimitive, Float as CubeFloat,
     Numeric as CubeNumeric,
 };
 use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};

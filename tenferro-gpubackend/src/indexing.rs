@@ -64,7 +64,9 @@ pub(crate) fn flat_to_index_batch_index<I: CubePrimitive>(
             indices_rank
         }
     };
-    let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
+    let batch_buf_len = comptime! {
+        if batch_rank == 0 { 1 } else { batch_rank }
+    };
     let mut batch_idx = Array::<usize>::new(batch_buf_len);
     let mut batch_axis = 0usize;
     #[unroll]
@@ -86,7 +88,9 @@ pub(crate) fn flat_to_update_window_index<E: CubePrimitive>(
     #[comptime] update_window_dims: Sequence<usize>,
 ) -> Array<usize> {
     let window_rank = update_window_dims.len();
-    let window_buf_len = if window_rank == 0 { 1 } else { window_rank };
+    let window_buf_len = comptime! {
+        if window_rank == 0 { 1 } else { window_rank }
+    };
     let mut window_idx = Array::<usize>::new(window_buf_len);
     #[unroll]
     for pos in 0..window_rank {
@@ -213,7 +217,9 @@ pub fn gather_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
                 start_indices_rank
             }
         };
-        let batch_buf_len = if batch_rank == 0 { 1 } else { batch_rank };
+        let batch_buf_len = comptime! {
+            if batch_rank == 0 { 1 } else { batch_rank }
+        };
         let mut batch_idx = Array::<usize>::new(batch_buf_len);
         let mut window_offsets = Array::<usize>::new(operand_rank);
         #[unroll]
@@ -377,7 +383,7 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
 }
 
 #[cube(launch_unchecked)]
-pub fn scatter_complex_kernel<E: Complex, F: Float, I: Numeric + CubePrimitive>(
+pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimitive>(
     out_parts: &mut Array<Atomic<F>>,
     operand: &Tensor<E>,
     scatter_indices: &Tensor<I>,

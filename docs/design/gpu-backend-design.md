@@ -70,12 +70,12 @@ concerns rather than reusable static kernels.
 
 ## Dependency Source
 
-The workspace intentionally depends on the `shinaoka/cubecl` fork:
+The workspace intentionally depends on the `tensor4all/cubecl` fork:
 
 ```toml
-cubecl = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96", features = ["cuda"] }
-cubecl-cuda = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
-cubecl-runtime = { git = "https://github.com/shinaoka/cubecl.git", rev = "929c8a96" }
+cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", features = ["cuda"] }
+cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
+cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 ```
 
 Keep this fork dependency until upstream CubeCL has the required support and the

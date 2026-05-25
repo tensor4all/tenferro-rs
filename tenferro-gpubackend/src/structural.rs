@@ -129,7 +129,7 @@ pub fn convert_f64_to_c64_raw(out: &mut Array<f64>, input: &Array<f64>) {
 }
 
 #[cube(launch_unchecked)]
-pub fn convert_complex_to_complex<Out: Complex, In: Complex>(
+pub fn convert_complex_to_complex<Out: ComplexCore, In: ComplexCore>(
     out: &mut Array<Out>,
     input: &Array<In>,
 ) {
