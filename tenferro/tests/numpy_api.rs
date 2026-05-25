@@ -108,3 +108,48 @@ fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = eager_tensor::expm1(&x).unwrap();
     let _ = eager_tensor::log1p(&x).unwrap();
 }
+
+#[test]
+fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_row_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]);
+    let rhs = Tensor::from_vec_row_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]);
+
+    let out = tenferro::tensor::add(&lhs, &rhs, &mut backend).unwrap();
+
+    assert_eq!(out.shape(), &[3, 4]);
+    assert_eq!(
+        out.try_into_vec_row_major::<f64>().unwrap().1,
+        vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]
+    );
+}
+
+#[test]
+fn tensor_module_exposes_initial_elementwise_free_functions() {
+    let mut backend = CpuBackend::new();
+    let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
+    let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
+    let cond = tenferro::tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+
+    let _ = tenferro::tensor::sub(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::mul(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::div(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::pow(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::maximum(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::minimum(&x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::where_select(&cond, &x, &y, &mut backend).unwrap();
+    let _ = tenferro::tensor::clamp(&x, &y, &x, &mut backend).unwrap();
+    let _ = tenferro::tensor::neg(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::abs(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::sign(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::conj(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::exp(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::log(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::sin(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::cos(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::tanh(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::sqrt(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::rsqrt(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::expm1(&x, &mut backend).unwrap();
+    let _ = tenferro::tensor::log1p(&x, &mut backend).unwrap();
+}
