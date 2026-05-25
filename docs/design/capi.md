@@ -13,10 +13,10 @@ tensor lifecycle, einsum, SVD (with AD rules), and DLPack interop.
 Layer 5: tenferro-capi          ← this crate
 Layer 4: tenferro-einsum, tenferro-linalg
 Layer 3: tenferro-prims
-Layer 2: tenferro-tensor
+Layer 2: tenferro-internal-tensor
 ```
 
-Dependencies: `tenferro-device`, `tenferro-tensor`, `tenferro-einsum`,
+Dependencies: `tenferro-internal-device`, `tenferro-internal-tensor`, `tenferro-einsum`,
 `tenferro-linalg`.
 
 Tropical extension: `tenferro-ext-tropical-capi` (separate shared library)

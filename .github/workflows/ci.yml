@@ -47,8 +47,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run inject tests for tenferro-tensor
-        run: cargo test -p tenferro-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
+      - name: Run inject tests for tenferro-internal-tensor
+        run: cargo test -p tenferro-internal-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
 
   coverage:
     name: coverage

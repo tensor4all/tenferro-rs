@@ -18,48 +18,48 @@ required-features = ["cuda"]
 default = ["autodiff", "cpu-faer"]
 autodiff = [
     "chainrules-core",
-    "tenferro-ops/autodiff",
+    "tenferro-internal-ops/autodiff",
     "tidu",
 ]
 cpu-faer = [
-    "tenferro-runtime/cpu-faer",
-    "tenferro-ops/cpu-faer",
-    "tenferro-tensor/cpu-faer",
+    "tenferro-internal-runtime/cpu-faer",
+    "tenferro-internal-ops/cpu-faer",
+    "tenferro-internal-tensor/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-runtime/cpu-blas",
-    "tenferro-ops/cpu-blas",
-    "tenferro-tensor/cpu-blas",
+    "tenferro-internal-runtime/cpu-blas",
+    "tenferro-internal-ops/cpu-blas",
+    "tenferro-internal-tensor/cpu-blas",
 ]
-provider-src = ["cpu-blas", "tenferro-tensor/provider-src"]
-src-openblas = ["provider-src", "tenferro-tensor/src-openblas"]
-src-accelerate = ["provider-src", "tenferro-tensor/src-accelerate"]
+provider-src = ["cpu-blas", "tenferro-internal-tensor/provider-src"]
+src-openblas = ["provider-src", "tenferro-internal-tensor/src-openblas"]
+src-accelerate = ["provider-src", "tenferro-internal-tensor/src-accelerate"]
 src-intel-mkl-dynamic-parallel = [
     "provider-src",
-    "tenferro-tensor/src-intel-mkl-dynamic-parallel",
+    "tenferro-internal-tensor/src-intel-mkl-dynamic-parallel",
 ]
 gpu = [
-    "tenferro-runtime/gpu",
-    "tenferro-ops/gpu",
-    "tenferro-tensor/gpu",
+    "tenferro-internal-runtime/gpu",
+    "tenferro-internal-ops/gpu",
+    "tenferro-internal-tensor/gpu",
 ]
 cuda = [
     "gpu",
-    "tenferro-runtime/cuda",
-    "tenferro-ops/cuda",
-    "tenferro-tensor/cuda",
+    "tenferro-internal-runtime/cuda",
+    "tenferro-internal-ops/cuda",
+    "tenferro-internal-tensor/cuda",
 ]
 rocm = [
     "gpu",
-    "tenferro-runtime/rocm",
-    "tenferro-ops/rocm",
-    "tenferro-tensor/rocm",
+    "tenferro-internal-runtime/rocm",
+    "tenferro-internal-ops/rocm",
+    "tenferro-internal-tensor/rocm",
 ]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
-tenferro-ops = { path = "../tenferro-ops", default-features = false }
+tenferro-internal-runtime = { path = "../tenferro-internal-runtime", default-features = false }
+tenferro-internal-tensor = { path = "../tenferro-internal-tensor", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 computegraph.workspace = true
 chainrules-core = { workspace = true, optional = true }
 tidu = { workspace = true, optional = true }

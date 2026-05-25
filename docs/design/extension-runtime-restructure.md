@@ -15,7 +15,7 @@ separately:
 ## Goals
 
 - Keep `tenferro` small enough to be the runtime/foundation crate.
-- Keep `tenferro-ops` focused on the minimal IR, primitive ops, and extension
+- Keep `tenferro-internal-ops` focused on the minimal IR, primitive ops, and extension
   carrier.
 - Move domain-specific APIs and implementation ownership into extension crates.
 - Make extension crates usable directly, Rust-style, without requiring
@@ -47,7 +47,7 @@ tenferro
   - minimal primitive ops and wrappers
   - backend dispatch infrastructure
 
-tenferro-ops
+tenferro-internal-ops
   Minimal operation IR:
   - primitive StdTensorOp variants
   - StdTensorOp::Extension
@@ -97,9 +97,9 @@ That keeps extension APIs close to the user-facing tensor types and matches
 `tenferro-fft`:
 
 ```text
-tenferro-einsum -> tenferro -> tenferro-ops -> tenferro-tensor
-tenferro-fft    -> tenferro -> tenferro-ops -> tenferro-tensor
-tenferro-linalg -> tenferro -> tenferro-ops -> tenferro-tensor
+tenferro-einsum -> tenferro -> tenferro-internal-ops -> tenferro-internal-tensor
+tenferro-fft    -> tenferro -> tenferro-internal-ops -> tenferro-internal-tensor
+tenferro-linalg -> tenferro -> tenferro-internal-ops -> tenferro-internal-tensor
 ```
 
 `tenferro` must not depend on `tenferro-einsum`, `tenferro-fft`, or
@@ -134,12 +134,12 @@ vendor backends should use vendor feature names: `cuda` now, `rocm` later.
 users should not need to select it directly. Because the current workspace
 contains a visible `tenferro-cubecl` crate, a feature rename alone does not make
 CubeCL invisible to workspace users. Rename the implementation crate to the
-technology-neutral `tenferro-gpubackend` as part of this restructure. That crate
+technology-neutral `tenferro-internal-gpubackend` as part of this restructure. That crate
 can use CubeCL internally today and still leave room for CUDA, ROCm, or a
 non-CubeCL implementation later. Step 1 of the migration should introduce `gpu`
 as the shared capability feature, `cuda` as the first concrete vendor backend,
 and update workspace/package paths from `tenferro-cubecl` to
-`tenferro-gpubackend`.
+`tenferro-internal-gpubackend`.
 
 Feature semantics:
 
@@ -398,13 +398,13 @@ Autodiff-gated pieces:
 Concrete current items to gate or move during implementation:
 
 ```text
-tenferro-ops/src/std_tensor_op.rs
+tenferro-internal-ops/src/std_tensor_op.rs
   impl PrimitiveOp for StdTensorOp
 
-tenferro-ops/src/input_key.rs
+tenferro-internal-ops/src/input_key.rs
   impl ADKey for TensorInputKey
 
-tenferro-ops/src/ext_op.rs
+tenferro-internal-ops/src/ext_op.rs
   ExtensionAdRule, ExtensionChainRule, AdValue,
   FruleBuilder, RRuleBuilder, AD support reporting
 
@@ -426,7 +426,7 @@ these impls and APIs are actually `#[cfg(feature = "autodiff")]` and
 `chainrules-core` and `chainrules` are the Cargo dependency names that need to
 disappear from primal-only builds.
 
-The current `tenferro-ops/src/ext_op.rs` mixes primal extension and extension
+The current `tenferro-internal-ops/src/ext_op.rs` mixes primal extension and extension
 AD. It should be split into an always-available primal module and an
 `autodiff`-gated module, for example:
 
@@ -724,7 +724,7 @@ be promoted to a domain-neutral public API or removed from the extension path.
 `tenferro-einsum` is an implementation crate, not a facade-only crate, so unit
 tests may live there.
 
-Remove from `tenferro-ops`:
+Remove from `tenferro-internal-ops`:
 
 - `StdTensorOp::NaryEinsum`,
 - einsum-specific AD rules,
@@ -796,8 +796,8 @@ Core may keep `dot_general` and minimal primitives used by linalg lowering.
 Concrete phase-1 boundary:
 
 - keep existing linalg backend kernels and low-level backend traits in
-  `tenferro-tensor` until extension backend dispatch is proven,
-- keep direct `StdTensorOp` linalg variants in `tenferro-ops` until the
+  `tenferro-internal-tensor` until extension backend dispatch is proven,
+- keep direct `StdTensorOp` linalg variants in `tenferro-internal-ops` until the
   multi-output extension executor supports mixed dtypes and AD-active output
   masks,
 - move only public wrappers that can be expressed through the generic extension
@@ -872,7 +872,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
    - reserve `rocm` as the future ROCm backend feature, also implying `gpu`,
    - stop requiring users to select implementation-facing `cubecl`,
    - rename the implementation crate from `tenferro-cubecl` to
-     `tenferro-gpubackend` in this restructure,
+     `tenferro-internal-gpubackend` in this restructure,
    - document that domain crates are imported directly rather than re-exported
      from `tenferro`,
    - keep existing defaults initially unless publish constraints require a
@@ -920,7 +920,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
    - eager and compiled execution.
 
 6. Move einsum to `tenferro-einsum`.
-   - remove direct `NaryEinsum` from `tenferro-ops`,
+   - remove direct `NaryEinsum` from `tenferro-internal-ops`,
    - expose `tenferro_einsum::einsum`,
    - move parser/subscripts/path planning/lowering/runtime/cache ownership out
      of `tenferro`,
@@ -937,7 +937,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
 
 7. Revisit linalg.
    - first make linalg work as extensions while backend kernels may still live
-     in `tenferro-tensor`,
+     in `tenferro-internal-tensor`,
    - later decide whether kernel ownership should also move.
 
 8. Update docs and examples.
@@ -951,7 +951,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
   pass default to primal-only?
 - Should a future `tenferro-full` or `tenferro-prelude` crate re-export common
   domain crates, or should all domain crates remain explicit?
-- How much of linalg backend kernel ownership belongs in `tenferro-tensor`
+- How much of linalg backend kernel ownership belongs in `tenferro-internal-tensor`
   versus `tenferro-linalg`?
 - How fine-grained should AD support reporting become for partial multi-output
   rules?

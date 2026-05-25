@@ -221,7 +221,7 @@ python3 scripts/check-docs-site.py
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-tensor --features cuda -- --ignored
+  cargo test -p tenferro-internal-tensor --features cuda -- --ignored
 ```
 
 ### CubeCL Environment Variables
@@ -300,13 +300,13 @@ Layer 3: tenferro-einsum      — Standard extension: einsum syntax, contraction
          tenferro-linalg      — Standard extension: linalg traced/eager APIs, AD rules,
                                 runtime registration
          tenferro-fft         — Standard extension: FFT APIs and runtime registration
-         tenferro-ops         — Core graph op vocabulary (`StdTensorOp`) and primitive AD rules
-Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
+         tenferro-internal-ops         — Core graph op vocabulary (`StdTensorOp`) and primitive AD rules
+Layer 2: tenferro-internal-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
                                 CUDA/ROCm backend stubs, execution kernels
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
          tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
-         tenferro-device       — Device enum, Error/Result types
+         tenferro-internal-device       — Device enum, Error/Result types
 
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
@@ -314,8 +314,8 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 `chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
 of any tensor type. `chainrules` provides engine-independent scalar AD rules,
 and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
-`tenferro-tensor` owns the concrete dense runtime value types and backend
-execution surface. `tenferro-ops/src/ad/` is the semantic source of truth for
+`tenferro-internal-tensor` owns the concrete dense runtime value types and backend
+execution surface. `tenferro-internal-ops/src/ad/` is the semantic source of truth for
 core primitive AD rules. `tenferro` owns traced graph construction, lowering,
 extension registration, and public evaluation APIs.
 
@@ -349,24 +349,24 @@ chainrules (← chainrules-core)
 tidu (← chainrules-core)
     │  Tape<V>, TrackedValue<V>, DualValue<V>
     │
-tenferro-device (← strided-view for StridedError, ← thiserror)
+tenferro-internal-device (← strided-view for StridedError, ← thiserror)
     │
     ↓
-tenferro-tensor
+tenferro-internal-tensor
     (← strided-kernel,
      ← strided-traits,
      ← num-traits)
          │
          ▼
-tenferro-ops
+tenferro-internal-ops
     (← computegraph,
      ← tidu,
-     ← tenferro-tensor)
+     ← tenferro-internal-tensor)
          │
          ▼
 tenferro
-    (← computegraph, ← tidu, ← tenferro-ops, ← tenferro-tensor)
+    (← computegraph, ← tidu, ← tenferro-internal-ops, ← tenferro-internal-tensor)
 
 tenferro-einsum / tenferro-linalg / tenferro-fft
-    (← tenferro, ← tenferro-ops, ← tenferro-tensor as needed)
+    (← tenferro, ← tenferro-internal-ops, ← tenferro-internal-tensor as needed)
 ```

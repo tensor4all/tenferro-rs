@@ -9,17 +9,17 @@ description = "FFT extension operations for tenferro."
 
 [features]
 default = ["autodiff", "cpu-faer"]
-autodiff = ["chainrules-core", "tenferro/autodiff", "tenferro-ops/autodiff"]
-cpu-faer = ["tenferro/cpu-faer", "tenferro-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro/cpu-blas", "tenferro-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
-gpu = ["tenferro/gpu", "tenferro-ops/gpu", "tenferro-tensor/gpu"]
-cuda = ["gpu", "tenferro/cuda", "tenferro-ops/cuda", "tenferro-tensor/cuda"]
-rocm = ["gpu", "tenferro/rocm", "tenferro-ops/rocm", "tenferro-tensor/rocm"]
+autodiff = ["chainrules-core", "tenferro/autodiff", "tenferro-internal-ops/autodiff"]
+cpu-faer = ["tenferro/cpu-faer", "tenferro-internal-ops/cpu-faer", "tenferro-internal-tensor/cpu-faer"]
+cpu-blas = ["tenferro/cpu-blas", "tenferro-internal-ops/cpu-blas", "tenferro-internal-tensor/cpu-blas"]
+gpu = ["tenferro/gpu", "tenferro-internal-ops/gpu", "tenferro-internal-tensor/gpu"]
+cuda = ["gpu", "tenferro/cuda", "tenferro-internal-ops/cuda", "tenferro-internal-tensor/cuda"]
+rocm = ["gpu", "tenferro/rocm", "tenferro-internal-ops/rocm", "tenferro-internal-tensor/rocm"]
 
 [dependencies]
 tenferro = { path = "../tenferro", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
-tenferro-ops = { path = "../tenferro-ops", default-features = false }
+tenferro-internal-tensor = { path = "../tenferro-internal-tensor", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 chainrules-core = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true

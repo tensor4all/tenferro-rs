@@ -11,7 +11,7 @@ description = "External tropical (max-plus / min-plus / max-mul) extensions for 
 # member of the core `tenferro-rs` workspace. The composition-only surface
 # depends only on the public `tenferro` facade (a contract test for "the public
 # facade is sufficient"). The fused `FusedTropicalDotGeneral` `ExtensionOp`
-# additionally depends on `tenferro-ops` and `computegraph` because the
+# additionally depends on `tenferro-internal-ops` and `computegraph` because the
 # `ExtensionOp` trait signatures (`linearize`, `transpose_rule`) are
 # irreducibly generic in types owned by those crates. That is a separate
 # contract test for the `ExtensionOp` substrate.
@@ -20,9 +20,9 @@ description = "External tropical (max-plus / min-plus / max-mul) extensions for 
 [dependencies]
 # Public facade crates:
 tenferro = { path = "../../tenferro" }
-tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-internal-tensor = { path = "../../tenferro-internal-tensor" }
 # `ExtensionOp` implementation surface:
-tenferro-ops = { path = "../../tenferro-ops" }
+tenferro-internal-ops = { path = "../../tenferro-internal-ops" }
 chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs.git", rev = "2d7662140d92f0dd73b2402aefc2272feafc9270", package = "chainrules" }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc" }
 num-traits = "0.2"

@@ -57,7 +57,7 @@ ensure_body_file() {
     printf -- '- `cargo doc --workspace --no-deps`\n'
     printf -- '- `python3 scripts/check-docs-site.py`\n'
     printf '\n## Documentation\n\n'
-    printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api_index.md`, and public rustdoc for consistency.\n'
+    printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api/index.md`, and public rustdoc for consistency.\n'
   } >"$BODY_FILE"
 }
 
@@ -152,7 +152,7 @@ fi
 
 bash scripts/check-repo-settings.sh --quiet
 
-log "docs gate: review README.md, docs/design/**, docs/api_index.md, and public rustdoc before continuing"
+log "docs gate: review README.md, docs/design/**, docs/api/index.md, and public rustdoc before continuing"
 run_required_checks
 
 if [[ -z "$TITLE" ]]; then

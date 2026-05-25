@@ -129,7 +129,7 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
     // `infer_output_meta` wants. Symbolic-shape inputs (shape_hint =
     // None) use per-axis TensorAxis symbolic dims keyed by the input
     // TracedTensor's id so downstream composition still resolves
-    // correctly via tenferro-ops's SymDim API.
+    // correctly via tenferro-internal-ops's SymDim API.
     let input_dtypes: Vec<_> = inputs.iter().map(|t| t.dtype).collect();
     let input_shape_storage: Vec<Vec<SymDim>> = inputs
         .iter()
@@ -233,6 +233,8 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
 /// `StdTensorOp::Extension` node used by traced graphs. Eager backward
 /// therefore uses registered [`ExtensionAdRuleTrait`] rules through the same AD
 /// source of truth and, for registered runtimes, the same runtime cache owner.
+///
+/// [`EagerRuntime`]: crate::EagerRuntime
 #[cfg(feature = "autodiff")]
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let Some(first) = inputs.first() else {

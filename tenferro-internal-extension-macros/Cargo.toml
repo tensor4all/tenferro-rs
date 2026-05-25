@@ -1,0 +1,16 @@
+[package]
+name = "tenferro-internal-extension-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "tenferro_extension_macros"
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn = { workspace = true, features = ["derive"] }

@@ -1,0 +1,27 @@
+[package]
+name = "tenferro-internal-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "tenferro_ops"
+
+[features]
+default = ["autodiff", "cpu-faer"]
+autodiff = ["chainrules-core"]
+cpu-faer = ["tenferro-internal-tensor/cpu-faer"]
+cpu-blas = ["tenferro-internal-tensor/cpu-blas"]
+gpu = ["tenferro-internal-tensor/gpu"]
+cuda = ["gpu", "tenferro-internal-tensor/cuda"]
+rocm = ["gpu", "tenferro-internal-tensor/rocm"]
+
+[dependencies]
+tenferro-internal-tensor = { path = "../tenferro-internal-tensor", default-features = false }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
+computegraph.workspace = true
+chainrules-core = { workspace = true, optional = true }
+num-complex.workspace = true
+thiserror.workspace = true

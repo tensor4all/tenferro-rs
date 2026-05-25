@@ -7,7 +7,7 @@ results and AD-facing APIs. It is not the backend execution contract itself.
 ## Position in the Workspace
 
 ```
-tenferro-tensor
+tenferro-internal-tensor
     structural views
         │
         ├── tenferro-prims

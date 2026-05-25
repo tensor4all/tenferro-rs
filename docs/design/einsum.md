@@ -161,7 +161,7 @@ contiguous block for the underlying tensor backend.
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens
 when a compiled program is evaluated with `CubeclBackend` from
-`tenferro-tensor/src/cubecl/`.
+`tenferro-internal-tensor/src/cubecl/`.
 
 Current GPU status:
 
@@ -176,7 +176,7 @@ Current GPU status:
 
 Graph-level AD rules for einsum live in `tenferro-einsum` and are registered as
 extension AD rules. Primitive operations emitted by lowering still use the core
-AD rules from `tenferro-ops/src/ad/`.
+AD rules from `tenferro-internal-ops/src/ad/`.
 
 ## Tests
 

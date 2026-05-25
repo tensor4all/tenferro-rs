@@ -9,7 +9,7 @@ traced, transform-oriented AD through `TracedTensor` with `grad`, `vjp`,
 `jvp`, and HVP composition. The crate also owns explicit graph construction
 through `GraphCompiler`, backend execution through `GraphExecutor<B>`, and
 selected dense runtime type reexports. Low-level extension runtime dispatch and
-extension cache storage live in `tenferro-runtime` and are reexported here for
+extension cache storage live in `tenferro-internal-runtime` and are reexported here for
 application ergonomics.
 
 Operation families are separate extension crates. `tenferro` must not depend on
@@ -28,8 +28,8 @@ runtime explicitly.
 - `EagerTensor::backward`, `EagerTensor::clear_grad`, `EagerRuntime::clear_grads`
 - `TracedTensor::grad`, `TracedTensor::jvp`, `TracedTensor::vjp`
 - `extension::*` registration and application APIs
-- re-exported extension runtime/cache types from `tenferro-runtime`
-- re-exported dense runtime types from `tenferro-tensor`:
+- re-exported extension runtime/cache types from `tenferro-internal-runtime`
+- re-exported dense runtime types from `tenferro-internal-tensor`:
   `Tensor`, `TypedTensor`, `DType`, `CpuBackend`
 
 ## Eager Example

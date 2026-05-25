@@ -747,8 +747,8 @@ implemented.
 
 | PyTorch Feature | tenferro Crate | Notes |
 |---|---|---|
-| **Tensor type, storage, views** | `tenferro-tensor` | `Tensor<T>`, `DataBuffer<T>`, view ops |
-| **Device enum, errors** | `tenferro-device` | `Device`, `Error`/`Result` |
+| **Tensor type, storage, views** | `tenferro-internal-tensor` | `Tensor<T>`, `DataBuffer<T>`, view ops |
+| **Device enum, errors** | `tenferro-internal-device` | `Device`, `Error`/`Result` |
 | **Algebra dispatch** | `tenferro-algebra` | `HasAlgebra`, `Semiring` (compile-time, not runtime) |
 | **Execution prim families (GEMM, reduce, pointwise)** | `tenferro-prims` | `TensorSemiringCore/FastPath`, `TensorScalarPrims`, `TensorAnalyticPrims` |
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |

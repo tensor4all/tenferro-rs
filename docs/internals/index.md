@@ -26,11 +26,11 @@ Normative specs — trait signatures, op semantics, backend contracts.
 
 | Topic | Location |
 |---|---|
-| Op vocabulary | `tenferro-ops/src/std_tensor_op.rs` |
-| Backend contract | `tenferro-tensor/src/backend.rs` |
-| Execution session | `tenferro-tensor/src/backend.rs` |
-| AD rules | `tenferro-ops/src/ad/` |
+| Op vocabulary | `tenferro-internal-ops/src/std_tensor_op.rs` |
+| Backend contract | `tenferro-internal-tensor/src/backend.rs` |
+| Execution session | `tenferro-internal-tensor/src/backend.rs` |
+| AD rules | `tenferro-internal-ops/src/ad/` |
 | Compilation pipeline | `tenferro/src/compiler.rs` |
-| Buffer pool | `tenferro-tensor/src/buffer_pool.rs` |
-| CPU context | `tenferro-tensor/src/cpu/context.rs` |
+| Buffer pool | `tenferro-internal-tensor/src/buffer_pool.rs` |
+| CPU context | `tenferro-internal-tensor/src/cpu/context.rs` |
 | GPU design (future) | `docs/design/exec-session.md` |
