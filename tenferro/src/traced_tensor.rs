@@ -13,6 +13,20 @@ pub fn convert(input: &TracedTensor, to: DType) -> TracedTensor {
     input.convert(to)
 }
 
+/// Elementwise addition with NumPy-style broadcasting.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro::TracedTensor;
+/// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// # let y = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+/// let z = tenferro::traced_tensor::add(&x, &y);
+/// ```
+pub fn add(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
+    lhs.add(rhs)
+}
+
 /// Matrix multiplication helper for rank-2 traced tensors.
 ///
 /// This contracts the last dimension of `a` with the first dimension of `b`.

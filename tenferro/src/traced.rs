@@ -8,6 +8,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -72,36 +73,6 @@ pub struct TracedTensor {
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
-/// Compute a broadcast output shape following NumPy rules.
-///
-/// Returns `None` when the two shapes are incompatible.
-fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
-    let rank = a.len().max(b.len());
-    let mut result = Vec::with_capacity(rank);
-    for index in 0..rank {
-        let a_dim = if index < rank - a.len() {
-            1
-        } else {
-            a[index - (rank - a.len())]
-        };
-        let b_dim = if index < rank - b.len() {
-            1
-        } else {
-            b[index - (rank - b.len())]
-        };
-        if a_dim == b_dim {
-            result.push(a_dim);
-        } else if a_dim == 1 {
-            result.push(b_dim);
-        } else if b_dim == 1 {
-            result.push(a_dim);
-        } else {
-            return None;
-        }
-    }
-    Some(result)
-}
-
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
     tensor
         .shape_hint
@@ -134,54 +105,31 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
 ///
 /// Expanding singleton axes are first reshaped away so the existing
 /// `BroadcastInDim` transpose rule reduces them correctly during VJP.
-fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
+pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
     let tensor_shape = concrete_shape(tensor);
     if tensor_shape == target_shape {
         return tensor.clone();
     }
 
-    assert!(
-        tensor.rank <= target_shape.len(),
-        "cannot broadcast higher-rank shape {:?} to {:?}",
-        tensor_shape,
-        target_shape
-    );
+    let plan =
+        broadcast_input_plan(&tensor_shape, target_shape).unwrap_or_else(|err| panic!("{err}"));
 
-    let rank_diff = target_shape.len() - tensor.rank;
-    let mut source_shape = Vec::with_capacity(tensor.rank);
-    let mut dims = Vec::with_capacity(tensor.rank);
-    for (src_axis, &src_dim) in tensor_shape.iter().enumerate() {
-        let dst_axis = src_axis + rank_diff;
-        let dst_dim = target_shape[dst_axis];
-        assert!(
-            src_dim == dst_dim || src_dim == 1,
-            "cannot broadcast shape {:?} to {:?}",
-            tensor_shape,
-            target_shape
-        );
-        if src_dim == 1 && dst_dim != 1 {
-            continue;
-        }
-        source_shape.push(src_dim);
-        dims.push(dst_axis);
-    }
-
-    let source = if source_shape == tensor_shape {
+    let source = if plan.source_shape == tensor_shape {
         tensor.clone()
     } else {
-        tensor.reshape(&source_shape)
+        tensor.reshape(&plan.source_shape)
     };
-    source.broadcast_in_dim(target_shape, &dims)
+    source.broadcast_in_dim(target_shape, &plan.dims)
 }
 
 /// Broadcast two tensors to a common shape.
-fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
+pub(crate) fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
     if a.shape_hint == b.shape_hint && a.rank == b.rank {
         return (a.clone(), b.clone());
     }
     let a_shape = concrete_shape(a);
     let b_shape = concrete_shape(b);
-    let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|| {
+    let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|_| {
         panic!(
             "incompatible shapes for broadcast: {:?} and {:?}",
             a_shape, b_shape
