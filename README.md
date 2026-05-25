@@ -18,7 +18,7 @@ This is the closest entry point for users coming from ndarray: create concrete
 tensors, pass a backend context to operations, and get concrete tensors back.
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro::{tensor, CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
     let b = Tensor::from_vec_row_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]);
 
-    let c = a.matmul(&b, &mut backend)?;
+    let c = tensor::matmul(&a, &b, &mut backend)?;
     let (_shape, row_major) = c.try_into_vec_row_major::<f64>()?;
     assert_eq!(row_major, vec![19.0, 22.0, 43.0, 50.0]);
 
@@ -93,7 +93,7 @@ variables when you need scalar-loss reverse-mode `backward()`.
 Forward-mode AD (`jvp`) is part of traced execution, not `EagerTensor`.
 
 ```rust
-use tenferro::{EagerRuntime, EagerTensor, Tensor};
+use tenferro::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new();
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.clone(),
     );
 
-    let product = a.matmul(&b)?;
+    let product = eager_tensor::matmul(&a, &b)?;
     assert_eq!(
         product.data().clone().try_into_vec_row_major::<f64>()?.1,
         vec![19.0, 22.0, 43.0, 50.0]

@@ -10,10 +10,10 @@ traced graph execution.
 
 | Layer | Operation style |
 | --- | --- |
-| `TypedTensor<T>` | Typed storage and selected typed operation wrappers; convert to `Tensor` for the broad dynamic operation surface |
-| `Tensor` | Concrete no-AD operations through an explicit backend |
-| `EagerTensor` | Immediate forward operations; tracked variables also record state for `backward()` |
-| `TracedTensor` | Lazy operations that build a graph for compile/run reuse |
+| `TypedTensor<T>` | Typed storage with `tenferro::typed_tensor` wrappers; convert to `Tensor` for the broad dynamic operation surface |
+| `Tensor` | Concrete no-AD operations through `tenferro::tensor` and an explicit backend |
+| `EagerTensor` | Immediate forward operations through `tenferro::eager_tensor`; tracked variables also record state for `backward()` |
+| `TracedTensor` | Lazy graph-building operations through `tenferro::traced_tensor` |
 
 CUDA is a backend/device choice for supported operations on `Tensor`,
 `EagerTensor`, and `TracedTensor`; it is not a separate tensor layer.
@@ -23,14 +23,14 @@ CUDA is a backend/device choice for supported operations on `Tensor`,
 Use `Tensor` with a backend when you want direct no-AD computation.
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
-let sum = a.add(&b, &mut backend).unwrap();
-let product = a.mul(&b, &mut backend).unwrap();
+let sum = tensor::add(&a, &b, &mut backend).unwrap();
+let product = tensor::mul(&a, &b, &mut backend).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -58,12 +58,12 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
-let sum = &a + &b;
-let product = &a * &b;
+let sum = traced_tensor::add(&a, &b);
+let product = traced_tensor::mul(&a, &b);
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile_many(&[&sum, &product]).unwrap();
@@ -77,11 +77,11 @@ assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ## Elementwise Math Functions
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro::{eager_tensor, EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]));
-let y = x.exp().unwrap();
+let y = eager_tensor::exp(&x).unwrap();
 
 let data = y.data().as_slice::<f64>().unwrap();
 

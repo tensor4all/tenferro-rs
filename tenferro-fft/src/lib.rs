@@ -9,7 +9,7 @@
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-//! use tenferro_fft::{fft, FftNorm};
+//! use tenferro_fft::{traced_tensor::fft, FftNorm};
 //!
 //! let x = TracedTensor::from_vec_col_major(
 //!     vec![4],
@@ -61,6 +61,14 @@ use tenferro_ops::SymDim;
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 
 const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
+
+/// Traced tensor FFT operations.
+///
+/// This module is the canonical traced tensor namespace for the FFT extension
+/// crate. Root-level functions remain available for compatibility.
+pub mod traced_tensor {
+    pub use crate::{fft, ifft, irfft, rfft};
+}
 
 /// FFT normalization convention.
 ///
@@ -411,10 +419,10 @@ pub fn register_runtime<B: TensorBackend + 'static>(
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-/// use tenferro_fft::{fft, FftNorm};
+/// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
-/// let y = fft(&x, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward);
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -444,10 +452,10 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-/// use tenferro_fft::{ifft, FftNorm};
+/// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
-/// let y = ifft(&spectrum, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::ifft(&spectrum, None, -1, FftNorm::Backward);
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -475,10 +483,10 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-/// use tenferro_fft::{rfft, FftNorm};
+/// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = rfft(&x, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::rfft(&x, None, -1, FftNorm::Backward);
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -507,13 +515,13 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-/// use tenferro_fft::{irfft, FftNorm};
+/// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(
 ///     vec![2],
 ///     vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
 /// );
-/// let y = irfft(&spectrum, Some(2), -1, FftNorm::Backward);
+/// let y = traced_tensor::irfft(&spectrum, Some(2), -1, FftNorm::Backward);
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();

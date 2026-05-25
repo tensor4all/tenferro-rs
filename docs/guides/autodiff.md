@@ -51,7 +51,7 @@ let b = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let loss = y.reduce_sum(&[0, 1]);
 let grad_a = loss.grad(&a).unwrap();
 let program = compiler.compile(&grad_a).unwrap();
@@ -81,7 +81,7 @@ let cotangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let ct_a = y.vjp(&a, &cotangent);
 let program = compiler.compile(&ct_a).unwrap();
 
@@ -110,7 +110,7 @@ let tangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 let dy = y.jvp(&a, &tangent);
 let program = compiler.compile(&dy).unwrap();
 

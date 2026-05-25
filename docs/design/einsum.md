@@ -2,7 +2,7 @@
 
 Einsum is a standard extension crate, not part of the `tenferro` facade.
 The public user-facing paths live under `tenferro_einsum`, for example
-`tenferro_einsum::einsum` for traced graph construction and
+`tenferro_einsum::traced_tensor::einsum` for traced graph construction and
 `tenferro_einsum::eager_tensor::einsum` for immediate eager execution.
 
 `tenferro` must not expose einsum facade paths such as `tenferro::einsum`,
@@ -34,7 +34,7 @@ The extension crate exposes lazy traced einsum:
 
 ```rust
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_einsum::einsum;
+use tenferro_einsum::traced_tensor::einsum;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);

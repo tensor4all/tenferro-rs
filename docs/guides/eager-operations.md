@@ -25,7 +25,8 @@ tracked eager tensors. Untracked eager tensors are forward-only. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most broad concrete operations are methods on `Tensor`. `TypedTensor<T>` is the
+Most broad concrete operations are available as `tenferro::tensor` free
+functions, with method wrappers kept for compatibility. `TypedTensor<T>` is the
 first layer to consider when you want compile-time dtype safety or typed
 host-side data. Einsum is provided by the separate `tenferro-einsum` standard
 extension.
@@ -58,15 +59,15 @@ its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 ## Arithmetic
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro::{tensor, CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
 
-let sum = a.add(&b, &mut ctx).unwrap();
-let product = a.mul(&b, &mut ctx).unwrap();
-let negated = a.neg(&mut ctx).unwrap();
+let sum = tensor::add(&a, &b, &mut ctx).unwrap();
+let product = tensor::mul(&a, &b, &mut ctx).unwrap();
+let negated = tensor::neg(&a, &mut ctx).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -132,8 +133,8 @@ assert_eq!(col_sum.shape(), &[3]);
 ## Einsum
 
 Use `tenferro_einsum::eager_tensor::einsum` when working with `EagerTensor`.
-For traced graph execution, use `tenferro_einsum::einsum` and register
-`tenferro_einsum::register_runtime` on the `GraphExecutor`.
+For traced graph execution, use `tenferro_einsum::traced_tensor::einsum` and
+register `tenferro_einsum::register_runtime` on the `GraphExecutor`.
 
 ## Extracting data
 

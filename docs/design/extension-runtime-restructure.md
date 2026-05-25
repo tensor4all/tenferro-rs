@@ -56,7 +56,7 @@ tenferro-internal-ops
 
 tenferro-einsum
   Directly used extension crate:
-  - tenferro_einsum::einsum / einsum_with / integer-label APIs
+  - tenferro_einsum::traced_tensor::einsum / einsum_with / integer-label APIs
   - EinsumExtensionOp
   - parser, optimizer, lowering, eager/runtime implementation
   - extension-owned caches
@@ -81,9 +81,9 @@ Usage should be explicit:
 
 ```rust
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_einsum::einsum;
-use tenferro_fft::{fft, FftNorm};
-use tenferro_linalg::svd;
+use tenferro_einsum::traced_tensor::einsum;
+use tenferro_fft::{traced_tensor::fft, FftNorm};
+use tenferro_linalg::traced_tensor::svd;
 ```
 
 `tenferro` does not need to provide `tenferro::fft` or `tenferro::linalg`.
@@ -711,7 +711,7 @@ Move into `tenferro-einsum`:
 - `EinsumExtensionOp`,
 - `tenferro.einsum` family identity and schema versions,
 - cache IDs and cache semantics,
-- traced API `tenferro_einsum::einsum`,
+- traced API `tenferro_einsum::traced_tensor::einsum`,
 - eager/runtime execution,
 - `autodiff`-gated AD rule.
 
@@ -921,7 +921,7 @@ Start from `origin/main`, not from the current einsum experiment branch.
 
 6. Move einsum to `tenferro-einsum`.
    - remove direct `NaryEinsum` from `tenferro-internal-ops`,
-   - expose `tenferro_einsum::einsum`,
+   - expose `tenferro_einsum::traced_tensor::einsum`,
    - move parser/subscripts/path planning/lowering/runtime/cache ownership out
      of `tenferro`,
    - remove all public `tenferro::einsum` and

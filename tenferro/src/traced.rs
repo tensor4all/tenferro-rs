@@ -8,6 +8,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -72,36 +73,6 @@ pub struct TracedTensor {
     pub(crate) metadata_scopes: Vec<Arc<MetadataScope>>,
 }
 
-/// Compute a broadcast output shape following NumPy rules.
-///
-/// Returns `None` when the two shapes are incompatible.
-fn broadcast_shape(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
-    let rank = a.len().max(b.len());
-    let mut result = Vec::with_capacity(rank);
-    for index in 0..rank {
-        let a_dim = if index < rank - a.len() {
-            1
-        } else {
-            a[index - (rank - a.len())]
-        };
-        let b_dim = if index < rank - b.len() {
-            1
-        } else {
-            b[index - (rank - b.len())]
-        };
-        if a_dim == b_dim {
-            result.push(a_dim);
-        } else if a_dim == 1 {
-            result.push(b_dim);
-        } else if b_dim == 1 {
-            result.push(a_dim);
-        } else {
-            return None;
-        }
-    }
-    Some(result)
-}
-
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
     tensor
         .shape_hint
@@ -134,60 +105,54 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
 ///
 /// Expanding singleton axes are first reshaped away so the existing
 /// `BroadcastInDim` transpose rule reduces them correctly during VJP.
-fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
+pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> TracedTensor {
     let tensor_shape = concrete_shape(tensor);
     if tensor_shape == target_shape {
         return tensor.clone();
     }
 
-    assert!(
-        tensor.rank <= target_shape.len(),
-        "cannot broadcast higher-rank shape {:?} to {:?}",
-        tensor_shape,
-        target_shape
-    );
+    let plan =
+        broadcast_input_plan(&tensor_shape, target_shape).unwrap_or_else(|err| panic!("{err}"));
 
-    let rank_diff = target_shape.len() - tensor.rank;
-    let mut source_shape = Vec::with_capacity(tensor.rank);
-    let mut dims = Vec::with_capacity(tensor.rank);
-    for (src_axis, &src_dim) in tensor_shape.iter().enumerate() {
-        let dst_axis = src_axis + rank_diff;
-        let dst_dim = target_shape[dst_axis];
-        assert!(
-            src_dim == dst_dim || src_dim == 1,
-            "cannot broadcast shape {:?} to {:?}",
-            tensor_shape,
-            target_shape
-        );
-        if src_dim == 1 && dst_dim != 1 {
-            continue;
-        }
-        source_shape.push(src_dim);
-        dims.push(dst_axis);
-    }
-
-    let source = if source_shape == tensor_shape {
+    let source = if plan.source_shape == tensor_shape {
         tensor.clone()
     } else {
-        tensor.reshape(&source_shape)
+        tensor.reshape(&plan.source_shape)
     };
-    source.broadcast_in_dim(target_shape, &dims)
+    source.broadcast_in_dim(target_shape, &plan.dims)
 }
 
 /// Broadcast two tensors to a common shape.
-fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
+pub(crate) fn broadcast_binary(a: &TracedTensor, b: &TracedTensor) -> (TracedTensor, TracedTensor) {
     if a.shape_hint == b.shape_hint && a.rank == b.rank {
         return (a.clone(), b.clone());
     }
     let a_shape = concrete_shape(a);
     let b_shape = concrete_shape(b);
-    let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|| {
+    let target = broadcast_shape(&a_shape, &b_shape).unwrap_or_else(|_| {
         panic!(
             "incompatible shapes for broadcast: {:?} and {:?}",
             a_shape, b_shape
         )
     });
     (broadcast_to(a, &target), broadcast_to(b, &target))
+}
+
+pub(crate) fn broadcast_ternary(
+    a: &TracedTensor,
+    b: &TracedTensor,
+    c: &TracedTensor,
+) -> (TracedTensor, TracedTensor, TracedTensor) {
+    let a_shape = concrete_shape(a);
+    let b_shape = concrete_shape(b);
+    let c_shape = concrete_shape(c);
+    let target = broadcast_shapes([a_shape.as_slice(), b_shape.as_slice(), c_shape.as_slice()])
+        .unwrap_or_else(|err| panic!("{err}"));
+    (
+        broadcast_to(a, &target),
+        broadcast_to(b, &target),
+        broadcast_to(c, &target),
+    )
 }
 
 fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
@@ -2093,6 +2058,67 @@ pub(crate) fn apply_binary_preserve_input_dtypes(
     apply_binary_with_output_dtype(op, lhs, rhs, out_rank, out_shape_hint, out_dtype)
 }
 
+pub(crate) fn apply_broadcast_binary_op(
+    op: StdTensorOp,
+    lhs: &TracedTensor,
+    rhs: &TracedTensor,
+) -> TracedTensor {
+    let (lhs, rhs) = broadcast_binary(lhs, rhs);
+    apply_binary(op, &lhs, &rhs, lhs.rank, lhs.shape_hint.clone())
+}
+
+pub(crate) fn apply_broadcast_ternary_op(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+) -> TracedTensor {
+    let (first, second, third) = broadcast_ternary(first, second, third);
+    apply_ternary(
+        op,
+        &first,
+        &second,
+        &third,
+        first.rank,
+        first.shape_hint.clone(),
+    )
+}
+
+pub(crate) fn apply_ternary(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+) -> TracedTensor {
+    let out_dtype = crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
+    let first = if first.dtype != out_dtype {
+        first.convert(out_dtype)
+    } else {
+        first.clone()
+    };
+    let second = if second.dtype != out_dtype {
+        second.convert(out_dtype)
+    } else {
+        second.clone()
+    };
+    let third = if third.dtype != out_dtype {
+        third.convert(out_dtype)
+    } else {
+        third.clone()
+    };
+    apply_ternary_with_output_dtype(
+        op,
+        &first,
+        &second,
+        &third,
+        out_rank,
+        out_shape_hint,
+        out_dtype,
+    )
+}
+
 fn apply_binary_with_output_dtype(
     op: StdTensorOp,
     lhs: &TracedTensor,
@@ -2137,6 +2163,72 @@ fn apply_binary_with_output_dtype(
             [
                 lhs.metadata_scopes.as_slice(),
                 rhs.metadata_scopes.as_slice(),
+            ],
+        ),
+    }
+}
+
+fn apply_ternary_with_output_dtype(
+    op: StdTensorOp,
+    first: &TracedTensor,
+    second: &TracedTensor,
+    third: &TracedTensor,
+    out_rank: usize,
+    out_shape_hint: Option<Vec<SymDim>>,
+    out_dtype: DType,
+) -> TracedTensor {
+    let first_ref = ValRef::External(first.fragment.vals()[first.val].key.clone());
+    let second_ref = ValRef::External(second.fragment.vals()[second.val].key.clone());
+    let third_ref = ValRef::External(third.fragment.vals()[third.val].key.clone());
+
+    let mut builder = FragmentBuilder::new();
+    builder.add_parent(first.fragment.clone());
+    builder.add_parent(second.fragment.clone());
+    builder.add_parent(third.fragment.clone());
+    let outputs = builder.add_op(op, vec![first_ref, second_ref, third_ref], OpMode::Primal);
+    builder.set_outputs(outputs.clone());
+    let fragment = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(fragment.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+
+    let mut merged = (*first.inputs_map).clone();
+    merged.extend(
+        second
+            .inputs_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+    merged.extend(third.inputs_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    let mut extra_roots = first.extra_roots.clone();
+    extra_roots.extend(second.extra_roots.iter().cloned());
+    extra_roots.extend(third.extra_roots.iter().cloned());
+
+    let checkpoint_chain = CheckpointNode::merge_chains(
+        CheckpointNode::merge_chains(
+            first.checkpoint_chain.clone(),
+            second.checkpoint_chain.clone(),
+        ),
+        third.checkpoint_chain.clone(),
+    );
+
+    TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: out_dtype,
+        fragment,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: Arc::new(merged),
+        extra_roots,
+        checkpoint_chain,
+        metadata_scopes: metadata_scopes_with_new(
+            metadata_scope,
+            [
+                first.metadata_scopes.as_slice(),
+                second.metadata_scopes.as_slice(),
+                third.metadata_scopes.as_slice(),
             ],
         ),
     }

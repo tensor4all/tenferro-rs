@@ -12,6 +12,8 @@
 //!   contraction order via [`ContractionTree`]
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
+//! - **Traced tensor namespace**: graph-building helpers are available under
+//!   `tenferro_einsum::traced_tensor`.
 //!
 //! # Examples
 //!
@@ -48,6 +50,7 @@ mod planning;
 mod subscripts;
 mod syntax;
 mod traced;
+pub mod traced_tensor;
 #[cfg(test)]
 mod typed_eager;
 pub(crate) mod util;

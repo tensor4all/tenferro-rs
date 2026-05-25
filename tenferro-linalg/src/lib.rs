@@ -1,7 +1,8 @@
 //! Linear algebra extension operations for tenferro.
 //!
 //! This crate owns the graph-facing linalg op payloads and runtime
-//! registration. Backend kernels remain in `tenferro-internal-tensor`.
+//! registration. Traced helpers live under `tenferro_linalg::traced_tensor`.
+//! Backend kernels remain in `tenferro-internal-tensor`.
 
 #[cfg(feature = "autodiff")]
 mod ad;
@@ -9,6 +10,7 @@ mod ad;
 pub mod eager_tensor;
 mod extension;
 mod traced;
+pub mod traced_tensor;
 
 pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};
 pub use traced::{

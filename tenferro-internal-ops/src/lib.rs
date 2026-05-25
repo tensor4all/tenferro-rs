@@ -1,7 +1,10 @@
 pub mod ad;
+pub mod axis;
+pub mod broadcast;
 pub mod dim_expr;
 pub mod ext_op;
 pub mod input_key;
+pub mod reduction;
 pub mod shape_extent;
 pub mod std_tensor_op;
 pub mod sym_dim;

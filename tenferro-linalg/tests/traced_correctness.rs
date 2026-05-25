@@ -24,6 +24,14 @@ fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
 }
 
 #[test]
+fn traced_tensor_namespace_exposes_svd() {
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+    let (_u, s, _vt) = tenferro_linalg::traced_tensor::svd(&a);
+
+    assert_eq!(s.rank, 1);
+}
+
+#[test]
 fn svd_traced_tensor_returns_three_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]));
