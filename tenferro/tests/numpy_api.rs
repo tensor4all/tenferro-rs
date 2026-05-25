@@ -1,7 +1,10 @@
 use tenferro::{
-    eager_tensor, traced_tensor, CompareDir, CpuBackend, EagerRuntime, EagerTensor, GraphCompiler,
-    GraphExecutor, Tensor, TracedTensor, TypedTensor,
+    traced_tensor, CompareDir, CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+    TypedTensor,
 };
+
+#[cfg(feature = "autodiff")]
+use tenferro::{eager_tensor, EagerRuntime, EagerTensor};
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
@@ -50,6 +53,7 @@ fn traced_tensor_module_exposes_initial_elementwise_free_functions() {
     let _ = traced_tensor::log1p(&x);
 }
 
+#[cfg(feature = "autodiff")]
 #[test]
 fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     let ctx = EagerRuntime::new();
@@ -75,6 +79,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     );
 }
 
+#[cfg(feature = "autodiff")]
 #[test]
 fn eager_tensor_module_exposes_initial_elementwise_free_functions() {
     let ctx = EagerRuntime::new();
