@@ -2,8 +2,10 @@
 
 `einsum` is a standard extension, not part of `tenferro` core. Add the
 `tenferro-einsum` crate and call traced graph operations explicitly as
-`tenferro_einsum::traced_tensor::einsum`. Compiled execution also requires
-explicit runtime registration.
+`tenferro_einsum::traced_tensor::einsum`. The same extension crate also owns
+`tensordot` contraction sugar; it is not part of the linalg namespace.
+Compiled execution also requires explicit runtime registration for einsum
+extension ops.
 
 ```toml
 [dependencies]
@@ -57,6 +59,25 @@ let diag = tenferro_einsum::eager_tensor::einsum(&[&v], "i->ii").unwrap();
 
 assert_eq!(outer.data().shape(), &[2, 3]);
 assert_eq!(diag.data().shape(), &[3, 3]);
+```
+
+## Tensordot Sugar
+
+Use `tensordot` when the operation is naturally described as "contract these
+axis pairs" instead of by writing explicit labels. `TensorDotAxes::Count(n)`
+contracts the last `n` axes of the left tensor with the first `n` axes of the
+right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
+negative axes.
+
+```rust
+use tenferro::TracedTensor;
+use tenferro_einsum::{traced_tensor, TensorDotAxes};
+
+let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+let rhs = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]);
+let out = traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(1)).unwrap();
+
+assert_eq!(out.rank, 2);
 ```
 
 ## Optimization Controls

@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
-use tenferro_einsum::eager_tensor::{einsum, einsum_subscripts};
-use tenferro_einsum::EinsumSubscripts;
+use tenferro_einsum::eager_tensor::{einsum, einsum_subscripts, tensordot};
+use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
@@ -34,6 +34,100 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
 
     assert_eq!(c.data().shape(), &[2, 2]);
     assert_eq!(f64_data(c.data()), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3, 4], (1..=24).map(f64::from).collect::<Vec<_>>()),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(
+            vec![3, 4, 2],
+            (1..=24).map(|value| f64::from(value) * 0.5).collect(),
+        ),
+        ctx.clone(),
+    );
+
+    let out = tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
+
+    assert_eq!(out.data().shape(), &[2, 2]);
+    assert_eq!(f64_data(out.data()), &[611.0, 650.0, 1475.0, 1586.0]);
+}
+
+#[test]
+fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ctx.clone(),
+    );
+
+    let out = tensordot(
+        &lhs,
+        &rhs,
+        TensorDotAxes::Axes {
+            lhs: &[-1],
+            rhs: &[0],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(out.data().shape(), &[2, 2]);
+    assert_eq!(f64_data(out.data()), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn eager_tensor_tensordot_rejects_shape_mismatch() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]),
+        ctx.clone(),
+    );
+
+    let err = match tensordot(&lhs, &rhs, TensorDotAxes::Count(1)) {
+        Ok(_) => panic!("expected tensordot shape mismatch"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("contracted dimensions differ"));
+}
+
+#[test]
+fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
+    let ctx = test_ctx();
+    let lhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]),
+        ctx.clone(),
+    );
+    let rhs = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]),
+        ctx.clone(),
+    );
+
+    let err = match tensordot(
+        &lhs,
+        &rhs,
+        TensorDotAxes::Axes {
+            lhs: &[2],
+            rhs: &[0],
+        },
+    ) {
+        Ok(_) => panic!("expected explicit tensordot axis bounds error"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("lhs axis 2 out of bounds"));
 }
 
 #[test]

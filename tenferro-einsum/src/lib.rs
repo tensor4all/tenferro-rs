@@ -10,6 +10,9 @@
 //!   `"i->ii"` embeds a vector on a diagonal
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
+//! - **Tensordot sugar**: NumPy-style axis-pair contraction helpers in the
+//!   traced and eager tensor namespaces, implemented as contraction sugar
+//!   rather than as linear algebra APIs.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
 //! - **Traced tensor namespace**: graph-building helpers are available under
@@ -49,6 +52,7 @@ mod optimize;
 mod planning;
 mod subscripts;
 mod syntax;
+mod tensordot;
 mod traced;
 pub mod traced_tensor;
 #[cfg(test)]
@@ -62,6 +66,7 @@ pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
+pub use tensordot::TensorDotAxes;
 pub use traced::{einsum, einsum_subscripts, einsum_subscripts_with, einsum_with};
 
 #[cfg(test)]

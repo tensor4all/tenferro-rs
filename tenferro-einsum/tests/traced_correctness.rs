@@ -7,7 +7,9 @@ use num_complex::Complex64;
 use tenferro::error::Result;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_einsum::EinsumOptimize;
-use tenferro_einsum::{ContractionTree, NestedEinsum, Subscripts, EINSUM_EXTENSION_FAMILY_ID};
+use tenferro_einsum::{
+    ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
+};
 use tenferro_tensor::TypedTensor;
 
 // ============================================================================
@@ -147,6 +149,91 @@ fn traced_tensor_namespace_exposes_einsum() {
     let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(y.rank, 2);
+}
+
+#[test]
+fn traced_tensor_namespace_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
+    let lhs = TracedTensor::from_vec_col_major(
+        vec![2, 3, 4],
+        (1..=24).map(f64::from).collect::<Vec<_>>(),
+    );
+    let rhs = TracedTensor::from_vec_col_major(
+        vec![3, 4, 2],
+        (1..=24).map(|value| f64::from(value) * 0.5).collect(),
+    );
+
+    let out =
+        tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(2)).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let result = out.run_with(&mut executor).unwrap();
+
+    assert_eq!(result.shape(), &[2, 2]);
+    assert_close(get_v2(&result, &[0, 0]), 611.0, "tensordot_count[0,0]");
+    assert_close(get_v2(&result, &[1, 0]), 650.0, "tensordot_count[1,0]");
+    assert_close(get_v2(&result, &[0, 1]), 1475.0, "tensordot_count[0,1]");
+    assert_close(get_v2(&result, &[1, 1]), 1586.0, "tensordot_count[1,1]");
+}
+
+#[test]
+fn traced_tensor_namespace_tensordot_explicit_axes_accept_negative_indices() {
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let out = tenferro_einsum::traced_tensor::tensordot(
+        &lhs,
+        &rhs,
+        TensorDotAxes::Axes {
+            lhs: &[-1],
+            rhs: &[0],
+        },
+    )
+    .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let result = out.run_with(&mut executor).unwrap();
+
+    assert_eq!(result.shape(), &[2, 2]);
+    assert_eq!(get_f64_data(&result), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn traced_tensor_namespace_tensordot_rejects_invalid_axes() {
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
+
+    let duplicate = match tenferro_einsum::traced_tensor::tensordot(
+        &lhs,
+        &rhs,
+        TensorDotAxes::Axes {
+            lhs: &[0, 0],
+            rhs: &[0, 1],
+        },
+    ) {
+        Ok(_) => panic!("expected duplicate tensordot axis error"),
+        Err(err) => err,
+    };
+    assert!(duplicate.to_string().contains("duplicate lhs axis"));
+
+    let out_of_bounds =
+        match tenferro_einsum::traced_tensor::tensordot(&lhs, &rhs, TensorDotAxes::Count(3)) {
+            Ok(_) => panic!("expected Count(3) tensordot axis error"),
+            Err(err) => err,
+        };
+    assert!(out_of_bounds.to_string().contains("Count(3)"));
+
+    let explicit_out_of_bounds = match tenferro_einsum::traced_tensor::tensordot(
+        &lhs,
+        &rhs,
+        TensorDotAxes::Axes {
+            lhs: &[2],
+            rhs: &[0],
+        },
+    ) {
+        Ok(_) => panic!("expected explicit tensordot axis bounds error"),
+        Err(err) => err,
+    };
+    assert!(explicit_out_of_bounds
+        .to_string()
+        .contains("lhs axis 2 out of bounds"));
 }
 
 #[test]
