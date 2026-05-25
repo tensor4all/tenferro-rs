@@ -2,6 +2,10 @@
 
 Dense tensor computation in Rust.
 
+Use the `tenferro` facade for tensor values, backends, eager execution, traced
+execution, and AD. Use standard operation crates such as `tenferro-linalg` and
+`tenferro-einsum` for operation families that live outside the core facade.
+
 Start with `Tensor` and `CpuBackend` for ndarray-like CPU work. Move to
 `EagerTensor` when you want immediate execution with optional `backward()`, and
 move to `TracedTensor` when you need graph reuse, transform AD, or repeated
@@ -69,6 +73,10 @@ already in tenferro's native layout.
 Linear algebra, einsum, and FFT are standard tenferro operation crates. They are
 separate dependencies for modularity, but they are maintained as part of the
 normal tenferro stack.
+
+In application code, this usually means importing tensor/runtime types from
+`tenferro` and importing the operation families you use from their standard
+crates.
 
 | Crate | What it provides |
 | --- | --- |
@@ -187,28 +195,6 @@ standard operation crate and register its runtime on the `GraphExecutor`.
 - [Guides](https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html) - tensor layers, execution models, tensor ops, einsum, linalg, autodiff, memory order, and CUDA
 - [API Reference](https://tensor4all.org/tenferro-rs/api/) - rustdoc links for every crate
 - [Internals](https://tensor4all.org/tenferro-rs/internals/) - architecture, specification, contributor pointers
-
-## Crate Layout
-
-Use the `tenferro` crate for application code. It is the public facade for
-concrete tensor values, eager execution, traced execution, autodiff, backend
-selection, and selected runtime reexports.
-
-Operation families such as einsum, linear algebra, and FFT are standard
-operation crates rather than modules inside `tenferro`. Applications import the
-operation crates they use explicitly.
-
-Core runtime infrastructure is split below the facade:
-
-- `tenferro-tensor` owns dense tensors and backend kernels.
-- `tenferro-ops` owns the graph operation vocabulary and core AD rules.
-- `tenferro-runtime` owns extension runtime registration and extension cache
-  storage.
-- `tenferro` owns the public tensor facade, graph construction, eager AD, and
-  selected runtime reexports.
-
-Internal workspace crates are documented through the API reference for
-contributors who need implementation details.
 
 ## Development Model
 
