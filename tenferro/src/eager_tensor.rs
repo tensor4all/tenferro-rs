@@ -132,7 +132,7 @@ pub fn sub(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
 
 /// Elementwise comparison with NumPy-style broadcasting.
 ///
-/// Current eager comparison follows the primitive numeric-mask dtype policy.
+/// The result is a bool tensor.
 ///
 /// # Examples
 ///
@@ -142,6 +142,7 @@ pub fn sub(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]), ctx.clone());
 /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
 /// let z = eager_tensor::compare(&x, &y, CompareDir::Gt).unwrap();
+/// assert_eq!(z.data().as_slice::<bool>().unwrap(), &[true, false]);
 /// ```
 pub fn compare(lhs: &EagerTensor, rhs: &EagerTensor, dir: CompareDir) -> Result<EagerTensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs)?;

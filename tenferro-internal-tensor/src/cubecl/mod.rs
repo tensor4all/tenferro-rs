@@ -105,9 +105,10 @@ mod runtime;
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
     ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
-    launch_binary_tensor, launch_nullary_into, launch_ternary, launch_unary, launch_unary_tensor,
-    launch_unary_tensor_into, ternary_dtype_mismatch, typed_tensor_array_arg,
-    typed_tensor_array_arg_as, typed_tensor_binding,
+    launch_binary_tensor, launch_compare_bool, launch_nullary_into, launch_select_bool,
+    launch_ternary, launch_unary, launch_unary_tensor, launch_unary_tensor_into,
+    ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
+    typed_tensor_binding,
 };
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -1699,14 +1700,14 @@ impl TensorBackend for CubeclBackend {
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
         match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_compare_bool(
                 self.runtime(),
                 lhs,
                 rhs,
                 &lhs.shape,
                 "compare",
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_float::launch_unchecked::<f32, CudaRuntime>(
+                    elementwise::compare_float_bool::launch_unchecked::<f32, CudaRuntime>(
                         client,
                         count,
                         dim,
@@ -1717,15 +1718,15 @@ impl TensorBackend for CubeclBackend {
                     );
                 },
             )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
+            .map(Tensor::Bool),
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_compare_bool(
                 self.runtime(),
                 lhs,
                 rhs,
                 &lhs.shape,
                 "compare",
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::compare_float::launch_unchecked::<f64, CudaRuntime>(
+                    elementwise::compare_float_bool::launch_unchecked::<f64, CudaRuntime>(
                         client,
                         count,
                         dim,
@@ -1736,7 +1737,7 @@ impl TensorBackend for CubeclBackend {
                     );
                 },
             )
-            .map(Tensor::F64),
+            .map(Tensor::Bool),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {
                     op: "compare",
@@ -1754,34 +1755,38 @@ impl TensorBackend for CubeclBackend {
         on_false: &Tensor,
     ) -> crate::Result<Tensor> {
         match (pred, on_true, on_false) {
-            (Tensor::F32(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => launch_ternary(
-                self.runtime(),
-                pred,
-                on_true,
-                on_false,
-                &pred.shape,
-                "select",
-                |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, pred_arg, true_arg, false_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(pred), Tensor::F64(on_true), Tensor::F64(on_false)) => launch_ternary(
-                self.runtime(),
-                pred,
-                on_true,
-                on_false,
-                &pred.shape,
-                "select",
-                |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
-                    elementwise::select_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, pred_arg, true_arg, false_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
+            (Tensor::Bool(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => {
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    &pred.shape,
+                    "select",
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_float::launch_unchecked::<f32, CudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::F32)
+            }
+            (Tensor::Bool(pred), Tensor::F64(on_true), Tensor::F64(on_false)) => {
+                launch_select_bool(
+                    self.runtime(),
+                    pred,
+                    on_true,
+                    on_false,
+                    &pred.shape,
+                    "select",
+                    |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
+                        elementwise::select_bool_float::launch_unchecked::<f64, CudaRuntime>(
+                            client, count, dim, out, pred_arg, true_arg, false_arg,
+                        );
+                    },
+                )
+                .map(Tensor::F64)
+            }
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
             | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
                 Err(crate::Error::BackendFailure {

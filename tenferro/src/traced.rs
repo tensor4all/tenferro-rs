@@ -2030,16 +2030,17 @@ pub(crate) fn apply_binary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
+    let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
+    let out_dtype = crate::shape_infer::infer_output_dtype(&op, &[lhs.dtype, rhs.dtype]);
 
-    // Insert Convert ops when an input dtype differs from the promoted result.
-    let lhs = if lhs.dtype != out_dtype {
-        lhs.convert(out_dtype)
+    // Insert Convert ops when an input dtype differs from the primitive input dtype.
+    let lhs = if lhs.dtype != input_dtype {
+        lhs.convert(input_dtype)
     } else {
         lhs.clone()
     };
-    let rhs = if rhs.dtype != out_dtype {
-        rhs.convert(out_dtype)
+    let rhs = if rhs.dtype != input_dtype {
+        rhs.convert(input_dtype)
     } else {
         rhs.clone()
     };
@@ -2092,21 +2093,43 @@ pub(crate) fn apply_ternary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> TracedTensor {
-    let out_dtype = crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
-    let first = if first.dtype != out_dtype {
-        first.convert(out_dtype)
-    } else {
-        first.clone()
-    };
-    let second = if second.dtype != out_dtype {
-        second.convert(out_dtype)
-    } else {
-        second.clone()
-    };
-    let third = if third.dtype != out_dtype {
-        third.convert(out_dtype)
-    } else {
-        third.clone()
+    let out_dtype =
+        crate::shape_infer::infer_output_dtype(&op, &[first.dtype, second.dtype, third.dtype]);
+    let (first, second, third) = match op {
+        StdTensorOp::Select => {
+            let value_dtype = crate::shape_infer::promote_dtype(second.dtype, third.dtype);
+            let second = if second.dtype != value_dtype {
+                second.convert(value_dtype)
+            } else {
+                second.clone()
+            };
+            let third = if third.dtype != value_dtype {
+                third.convert(value_dtype)
+            } else {
+                third.clone()
+            };
+            (first.clone(), second, third)
+        }
+        _ => {
+            let input_dtype =
+                crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
+            let first = if first.dtype != input_dtype {
+                first.convert(input_dtype)
+            } else {
+                first.clone()
+            };
+            let second = if second.dtype != input_dtype {
+                second.convert(input_dtype)
+            } else {
+                second.clone()
+            };
+            let third = if third.dtype != input_dtype {
+                third.convert(input_dtype)
+            } else {
+                third.clone()
+            };
+            (first, second, third)
+        }
     };
     apply_ternary_with_output_dtype(
         op,

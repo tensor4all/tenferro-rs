@@ -33,8 +33,6 @@ pub enum ElementwiseFusionOp {
     Abs,
     Maximum,
     Minimum,
-    Compare(CompareDir),
-    Select,
     Clamp,
     Exp,
     Log,

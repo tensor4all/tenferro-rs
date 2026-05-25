@@ -134,7 +134,7 @@ pub fn minimum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 
 /// Elementwise comparison with NumPy-style broadcasting.
 ///
-/// Current traced comparison follows the primitive numeric-mask dtype policy.
+/// The result is a bool tensor.
 ///
 /// # Examples
 ///
@@ -143,6 +143,7 @@ pub fn minimum(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
 /// let z = tenferro::traced_tensor::compare(&x, &y, CompareDir::Gt);
+/// assert_eq!(z.dtype, tenferro::DType::Bool);
 /// ```
 pub fn compare(lhs: &TracedTensor, rhs: &TracedTensor, dir: CompareDir) -> TracedTensor {
     crate::traced::apply_broadcast_binary_op(StdTensorOp::Compare(dir), lhs, rhs)

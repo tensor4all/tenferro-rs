@@ -905,7 +905,7 @@ fn eager_pow_maximum_and_minimum_primal() {
 #[test]
 fn eager_select_primal() {
     let condition = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![0.0_f64, -1.0, 2.0]),
+        Tensor::from_vec_col_major(vec![3], vec![false, true, true]),
         test_ctx(),
     );
     let on_true = EagerTensor::from_tensor_in(

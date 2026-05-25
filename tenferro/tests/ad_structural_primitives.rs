@@ -129,7 +129,7 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
 #[test]
 fn eager_select_gradients_match_finite_diff() {
     let ctx = test_ctx();
-    let condition_data = vec![0.0_f64, -1.0, 2.0, 0.0];
+    let condition_data = vec![false, true, true, false];
     let true_data = vec![10.0_f64, 20.0, 30.0, 40.0];
     let false_data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let weights = vec![0.5_f64, -1.0, 2.0, 1.25];
@@ -165,7 +165,7 @@ fn eager_select_gradients_match_finite_diff() {
                 .iter()
                 .zip(values.iter())
                 .zip(false_data.iter())
-                .map(|((&cond, &t), &f)| if cond != 0.0 { t } else { f }),
+                .map(|((&cond, &t), &f)| if cond { t } else { f }),
             &weights,
         )
     };
@@ -175,7 +175,7 @@ fn eager_select_gradients_match_finite_diff() {
                 .iter()
                 .zip(true_data.iter())
                 .zip(values.iter())
-                .map(|((&cond, &t), &f)| if cond != 0.0 { t } else { f }),
+                .map(|((&cond, &t), &f)| if cond { t } else { f }),
             &weights,
         )
     };

@@ -271,7 +271,7 @@ impl EagerTensor {
     /// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
-    /// let condition = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]), ctx.clone());
+    /// let condition = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![false, true]), ctx.clone());
     /// let on_true = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]), ctx.clone());
     /// let on_false = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
     /// let y = EagerTensor::select(&condition, &on_true, &on_false).unwrap();

@@ -207,9 +207,11 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
             StdTensorOp::Convert { to, .. } => vec![exec.convert(inputs[0], *to)?],
             StdTensorOp::Constant { dtype, bytes } => vec![constant_tensor(*dtype, bytes)],
             StdTensorOp::Select => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                let (a, c) = promote_binary(exec, a.tensor(), inputs[2], op)?;
-                vec![exec.select(a.tensor(), b.tensor(), c.tensor())?]
+                let value_dtype =
+                    crate::shape_infer::promote_dtype(inputs[1].dtype(), inputs[2].dtype());
+                let b = promote_to_dtype(exec, inputs[1], value_dtype)?;
+                let c = promote_to_dtype(exec, inputs[2], value_dtype)?;
+                vec![exec.select(inputs[0], b.tensor(), c.tensor())?]
             }
             StdTensorOp::Clamp => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

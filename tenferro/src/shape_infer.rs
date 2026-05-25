@@ -104,18 +104,18 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> DType {
         StdTensorOp::Constant { dtype, .. } => *dtype,
         StdTensorOp::Convert { to, .. } => *to,
         StdTensorOp::Extension(ext) => extension_first_output_dtype(ext.as_ref(), input_dtypes),
+        StdTensorOp::Compare(_) => DType::Bool,
+        StdTensorOp::Select => promote_dtype(input_dtypes[1], input_dtypes[2]),
+        StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
         StdTensorOp::Add
         | StdTensorOp::Mul
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
-        | StdTensorOp::Select
-        | StdTensorOp::Clamp
         | StdTensorOp::DotGeneral { .. }
         | StdTensorOp::Concatenate { .. }
         | StdTensorOp::PadToMatch { .. }
-        | StdTensorOp::DynamicTruncate { .. }
-        | StdTensorOp::Compare(_) => promote_dtype(input_dtypes[0], input_dtypes[1]),
+        | StdTensorOp::DynamicTruncate { .. } => promote_dtype(input_dtypes[0], input_dtypes[1]),
         StdTensorOp::Div | StdTensorOp::Pow => {
             promote_dtype_div_like(input_dtypes[0], input_dtypes[1])
         }

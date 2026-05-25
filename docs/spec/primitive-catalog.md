@@ -342,8 +342,8 @@ See `../reference/stablehlo-primitives.md` for the StableHLO-facing reference an
 | `Sign` | `y[i] = sign(x[i])` | Often used in stabilization logic |
 | `Maximum` | `y[i] = max(x0[i], x1[i])` | Ordered real comparison |
 | `Minimum` | `y[i] = min(x0[i], x1[i])` | Ordered real comparison |
-| `Compare(dir)` | Produce a predicate/mask tensor from an elementwise comparison | `dir` is things like `eq`, `lt`, `le`, `gt`, `ge` |
-| `Select` | `y[i] = pred[i] ? on_true[i] : on_false[i]` | Canonical conditional elementwise choice |
+| `Compare(dir)` | Produce a `Bool` tensor from an elementwise comparison | `dir` is things like `eq`, `lt`, `le`, `gt`, `ge` |
+| `Select` | `y[i] = pred[i] ? on_true[i] : on_false[i]` | `pred` is `Bool`; value inputs determine the output dtype |
 | `Clamp` | `y[i] = min(max(x[i], lower[i]), upper[i])` | Canonical clipping primitive |
 
 ### Analytic elementwise primitives

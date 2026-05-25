@@ -124,7 +124,7 @@ pub fn sub<T: TensorScalar>(
 
 /// Elementwise comparison with NumPy-style broadcasting.
 ///
-/// Current typed comparison follows the primitive numeric-mask dtype policy.
+/// The result is a bool tensor.
 ///
 /// # Examples
 ///
@@ -134,13 +134,14 @@ pub fn sub<T: TensorScalar>(
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
 /// let z = typed_tensor::compare(&x, &y, CompareDir::Gt, &mut backend).unwrap();
+/// assert_eq!(z.host_data(), &[true, false]);
 /// ```
 pub fn compare<T: TensorScalar>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     dir: CompareDir,
     backend: &mut impl TensorBackend,
-) -> Result<TypedTensor<T>> {
+) -> Result<TypedTensor<bool>> {
     let out = crate::tensor::compare(&erase(lhs), &erase(rhs), dir, backend)?;
     try_into_typed_result("compare", out)
 }
@@ -160,7 +161,7 @@ pub fn compare<T: TensorScalar>(
 /// let z = typed_tensor::where_select(&condition, &x, &y, &mut backend).unwrap();
 /// ```
 pub fn where_select<T: TensorScalar>(
-    condition: &TypedTensor<T>,
+    condition: &TypedTensor<bool>,
     on_true: &TypedTensor<T>,
     on_false: &TypedTensor<T>,
     backend: &mut impl TensorBackend,

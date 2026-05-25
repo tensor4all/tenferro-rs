@@ -32,8 +32,10 @@ pub(crate) trait Tier2Elem: Copy + Clone + One + Zero {
     fn sign_elem(self) -> Self;
     fn max_elem(self, other: Self) -> Self;
     fn min_elem(self, other: Self) -> Self;
-    fn compare_elem(self, other: Self, dir: &CompareDir) -> Self;
-    fn is_nonzero(self) -> bool;
+}
+
+pub(crate) trait CompareElem: Copy {
+    fn compare_elem(self, other: Self, dir: &CompareDir) -> bool;
 }
 
 macro_rules! impl_tier2_elem_real {
@@ -66,24 +68,17 @@ macro_rules! impl_tier2_elem_real {
                     other
                 }
             }
+        }
 
-            fn compare_elem(self, other: Self, dir: &CompareDir) -> Self {
-                let pred = match dir {
+        impl CompareElem for $ty {
+            fn compare_elem(self, other: Self, dir: &CompareDir) -> bool {
+                match dir {
                     CompareDir::Eq => self == other,
                     CompareDir::Lt => self < other,
                     CompareDir::Le => self <= other,
                     CompareDir::Gt => self > other,
                     CompareDir::Ge => self >= other,
-                };
-                if pred {
-                    Self::one()
-                } else {
-                    Self::zero()
                 }
-            }
-
-            fn is_nonzero(self) -> bool {
-                self != Self::zero()
             }
         }
     };
@@ -119,24 +114,17 @@ macro_rules! impl_tier2_elem_complex {
                     other
                 }
             }
+        }
 
-            fn compare_elem(self, other: Self, dir: &CompareDir) -> Self {
-                let pred = match dir {
+        impl CompareElem for Complex<$real> {
+            fn compare_elem(self, other: Self, dir: &CompareDir) -> bool {
+                match dir {
                     CompareDir::Eq => self == other,
                     CompareDir::Lt => self.norm_sqr() < other.norm_sqr(),
                     CompareDir::Le => self.norm_sqr() <= other.norm_sqr(),
                     CompareDir::Gt => self.norm_sqr() > other.norm_sqr(),
                     CompareDir::Ge => self.norm_sqr() >= other.norm_sqr(),
-                };
-                if pred {
-                    Self::one()
-                } else {
-                    Self::zero()
                 }
-            }
-
-            fn is_nonzero(self) -> bool {
-                !self.is_zero()
             }
         }
     };
@@ -146,6 +134,26 @@ impl_tier2_elem_real!(f32);
 impl_tier2_elem_real!(f64);
 impl_tier2_elem_complex!(f32);
 impl_tier2_elem_complex!(f64);
+
+macro_rules! impl_compare_elem_ord {
+    ($ty:ty) => {
+        impl CompareElem for $ty {
+            fn compare_elem(self, other: Self, dir: &CompareDir) -> bool {
+                match dir {
+                    CompareDir::Eq => self == other,
+                    CompareDir::Lt => self < other,
+                    CompareDir::Le => self <= other,
+                    CompareDir::Gt => self > other,
+                    CompareDir::Ge => self >= other,
+                }
+            }
+        }
+    };
+}
+
+impl_compare_elem_ord!(i32);
+impl_compare_elem_ord!(i64);
+impl_compare_elem_ord!(bool);
 
 fn complex_scalar_tensor<T>(scalar: T) -> TypedTensor<Complex<T>>
 where
@@ -424,16 +432,25 @@ pub(crate) fn compare_with_pool(
 ) -> crate::Result<Tensor> {
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => {
-            Ok(Tensor::F32(typed_compare_with_pool(buffers, a, b, dir)?))
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         (Tensor::F64(a), Tensor::F64(b)) => {
-            Ok(Tensor::F64(typed_compare_with_pool(buffers, a, b, dir)?))
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::I32(a), Tensor::I32(b)) => {
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::I64(a), Tensor::I64(b)) => {
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::Bool(a), Tensor::Bool(b)) => {
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         (Tensor::C32(a), Tensor::C32(b)) => {
-            Ok(Tensor::C32(typed_compare_with_pool(buffers, a, b, dir)?))
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         (Tensor::C64(a), Tensor::C64(b)) => {
-            Ok(Tensor::C64(typed_compare_with_pool(buffers, a, b, dir)?))
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
             op: "compare",
@@ -453,9 +470,39 @@ pub(crate) fn select_with_pool(
     on_true: &Tensor,
     on_false: &Tensor,
 ) -> crate::Result<Tensor> {
-    dispatch_ternary_result_with_pool!("select", pred, on_true, on_false, |p, t, f| {
-        typed_select_with_pool(buffers, p, t, f)
-    })
+    match (pred, on_true, on_false) {
+        (Tensor::Bool(p), Tensor::F32(t), Tensor::F32(f)) => {
+            Ok(Tensor::F32(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::F64(t), Tensor::F64(f)) => {
+            Ok(Tensor::F64(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::I32(t), Tensor::I32(f)) => {
+            Ok(Tensor::I32(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::I64(t), Tensor::I64(f)) => {
+            Ok(Tensor::I64(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::Bool(t), Tensor::Bool(f)) => {
+            Ok(Tensor::Bool(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::C32(t), Tensor::C32(f)) => {
+            Ok(Tensor::C32(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(p), Tensor::C64(t), Tensor::C64(f)) => {
+            Ok(Tensor::C64(typed_select_with_pool(buffers, p, t, f)?))
+        }
+        (Tensor::Bool(_), _, _) => Err(crate::Error::DTypeMismatch {
+            op: "select",
+            lhs: on_true.dtype(),
+            rhs: on_false.dtype(),
+        }),
+        _ => Err(crate::Error::DTypeMismatch {
+            op: "select",
+            lhs: pred.dtype(),
+            rhs: crate::DType::Bool,
+        }),
+    }
 }
 
 pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
@@ -798,9 +845,9 @@ pub(crate) fn typed_compare<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     dir: &CompareDir,
-) -> crate::Result<TypedTensor<T>>
+) -> crate::Result<TypedTensor<bool>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: CompareElem,
 {
     with_local_pool(|buffers| typed_compare_with_pool(buffers, lhs, rhs, dir))
 }
@@ -810,9 +857,9 @@ pub(crate) fn typed_compare_with_pool<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     dir: &CompareDir,
-) -> crate::Result<TypedTensor<T>>
+) -> crate::Result<TypedTensor<bool>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: CompareElem,
 {
     if lhs.shape != rhs.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -835,12 +882,12 @@ where
 
 pub(crate) fn typed_select_with_pool<T>(
     buffers: &mut BufferPool,
-    pred: &TypedTensor<T>,
+    pred: &TypedTensor<bool>,
     on_true: &TypedTensor<T>,
     on_false: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Tier2Elem + PoolScalar,
+    T: Copy + PoolScalar,
 {
     if pred.shape != on_true.shape {
         return Err(crate::Error::ShapeMismatch {
@@ -863,7 +910,7 @@ where
         &typed_view(pred),
         &typed_view(on_true),
         &typed_view(on_false),
-        |p, t, f| if p.is_nonzero() { t } else { f },
+        |p, t, f| if p { t } else { f },
     )
     .map_err(|err| backend_failure("select", err))?;
     Ok(tensor_from_array(out))

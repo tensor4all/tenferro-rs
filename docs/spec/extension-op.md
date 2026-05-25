@@ -1018,7 +1018,7 @@ both within the spec's flexibility:
   argmax indices. The core op vocabulary intentionally does not
   include an `ArgMax` variant, so the implementation uses the mathematically
   equivalent **indicator-mask**
-  construction (the same `Compare(Eq) + Mul + ReduceSum + Div` pattern
+  construction (the same `Compare(Eq) + Convert + Mul + ReduceSum + Div` pattern
   used by the core `ReduceMax` / `ReduceMin` AD rule in
   `tenferro-internal-ops/src/ad/contraction.rs`). The two are two expressions
   of the same subgradient; only the indicator form is expressible in
