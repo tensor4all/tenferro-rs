@@ -48,10 +48,10 @@ macro_rules! reduce_binary_kernel {
 
 reduce_binary_kernel!(reduce_sum_float, Float, +);
 reduce_binary_kernel!(reduce_sum_int, Int, +);
-reduce_binary_kernel!(reduce_sum_complex, Complex, +);
+reduce_binary_kernel!(reduce_sum_complex, ComplexCore, +);
 reduce_binary_kernel!(reduce_prod_float, Float, *);
 reduce_binary_kernel!(reduce_prod_int, Int, *);
-reduce_binary_kernel!(reduce_prod_complex, Complex, *);
+reduce_binary_kernel!(reduce_prod_complex, ComplexCore, *);
 
 macro_rules! reduce_binary_plane_kernel {
     ($name:ident, $bound:ident, $op:tt, $plane_reduce:ident) => {
@@ -101,10 +101,10 @@ macro_rules! reduce_binary_plane_kernel {
 
 reduce_binary_plane_kernel!(reduce_sum_float_plane, Float, +, plane_sum);
 reduce_binary_plane_kernel!(reduce_sum_int_plane, Int, +, plane_sum);
-reduce_binary_plane_kernel!(reduce_sum_complex_plane, Complex, +, plane_sum);
+reduce_binary_plane_kernel!(reduce_sum_complex_plane, ComplexCore, +, plane_sum);
 reduce_binary_plane_kernel!(reduce_prod_float_plane, Float, *, plane_prod);
 reduce_binary_plane_kernel!(reduce_prod_int_plane, Int, *, plane_prod);
-reduce_binary_plane_kernel!(reduce_prod_complex_plane, Complex, *, plane_prod);
+reduce_binary_plane_kernel!(reduce_prod_complex_plane, ComplexCore, *, plane_prod);
 
 #[cube(launch_unchecked)]
 pub(crate) fn reduce_max_float<F: Float>(

@@ -16,7 +16,7 @@ macro_rules! binary_kernel {
         }
 
         #[cube(launch_unchecked)]
-        pub fn $complex_name<C: Complex>(
+        pub fn $complex_name<C: ComplexCore>(
             out: &mut Array<C>,
             lhs: &Array<C>,
             rhs: &Array<C>,
@@ -50,7 +50,7 @@ macro_rules! unary_both_kernel {
         }
 
         #[cube(launch_unchecked)]
-        pub fn $complex_name<C: Complex>(out: &mut Array<C>, input: &Array<C>) {
+        pub fn $complex_name<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
             if ABSOLUTE_POS < out.len() {
                 let $value = input[ABSOLUTE_POS];
                 out[ABSOLUTE_POS] = $body;
@@ -187,7 +187,7 @@ pub fn clamp_float<F: Float>(
 }
 
 #[cube(launch_unchecked)]
-pub fn conj_complex<C: Complex>(out: &mut Array<C>, input: &Array<C>) {
+pub fn conj_complex<C: ComplexCore>(out: &mut Array<C>, input: &Array<C>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].conj();
     }

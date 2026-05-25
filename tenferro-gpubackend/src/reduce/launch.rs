@@ -337,7 +337,7 @@ pub fn launch_sum_int<R: Runtime, I: Int + CubeElement>(
 /// launch_sum_complex::<R, Complex64>(client, input, output, 0, ReduceStrategy::Auto)
 /// # }
 /// ```
-pub fn launch_sum_complex<R: Runtime, C: Complex + CubeElement>(
+pub fn launch_sum_complex<R: Runtime, C: ComplexCore + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
@@ -512,7 +512,7 @@ pub fn launch_prod_int<R: Runtime, I: Int + CubeElement>(
 /// launch_prod_complex::<R, Complex32>(client, input, output, 0, ReduceStrategy::Auto)
 /// # }
 /// ```
-pub fn launch_prod_complex<R: Runtime, C: Complex + CubeElement>(
+pub fn launch_prod_complex<R: Runtime, C: ComplexCore + CubeElement>(
     client: &ComputeClient<R>,
     input: TensorBinding<R>,
     output: TensorBinding<R>,
