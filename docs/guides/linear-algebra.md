@@ -14,7 +14,7 @@ transform AD pass, or repeated compile/run workflow.
 | `TypedTensor<T>` | Selected typed methods such as `svd`, `qr`, `cholesky`, and `eigh` |
 | `Tensor` | Dynamic dtype methods such as `svd`, `qr`, `cholesky`, `eigh`, and `solve` |
 | `EagerTensor` | Immediate forward execution; tracked variables record scalar-loss gradients where AD rules support the operation |
-| `TracedTensor` | `tenferro::traced_tensor` helpers for graph execution and transform AD |
+| `TracedTensor` | `tenferro_linalg::traced_tensor` helpers for graph execution and transform AD |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 `TracedTensor` paths. It is not a separate linear algebra layer. See
@@ -109,8 +109,8 @@ assert_eq!(eigenvalues, vec![1.0, 3.0]);
 ## Traced Cholesky Factorization
 
 ```rust
-use tenferro::traced_tensor::cholesky;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_linalg::traced_tensor::cholesky;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
 let factor = cholesky(&a);
@@ -118,6 +118,7 @@ let factor = cholesky(&a);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&factor).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_linalg::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 
 assert_eq!(result.shape(), &[2, 2]);
@@ -127,8 +128,8 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ## Traced Solve In A Graph
 
 ```rust
-use tenferro::traced_tensor::solve;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_linalg::traced_tensor::solve;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
 let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]);
@@ -137,6 +138,7 @@ let x = solve(&a, &b);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&x).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
+executor.register_extension(tenferro_linalg::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 
 assert_eq!(result.shape(), &[2, 1]);

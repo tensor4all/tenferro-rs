@@ -63,13 +63,13 @@ physical order.
 ordinary no-AD computation when runtime dtype is useful.
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-let c = a.matmul(&b, &mut backend).unwrap();
+let c = tensor::matmul(&a, &b, &mut backend).unwrap();
 assert_eq!(c.shape(), &[2, 2]);
 ```
 
@@ -78,7 +78,7 @@ project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
 Einsum is provided by the `tenferro-einsum` standard extension. Traced code
-uses `tenferro_einsum::einsum` and registers
+uses `tenferro_einsum::traced_tensor::einsum` and registers
 `tenferro_einsum::register_runtime` on the executor.
 
 ## Eager Execution And Backward
