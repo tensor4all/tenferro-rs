@@ -10,7 +10,7 @@ use crate::exec::{
     initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
     reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
 };
-use tenferro_runtime::extension_runtime::ExtensionExecutor;
+use crate::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{
     ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
 };
@@ -24,9 +24,9 @@ use tenferro_tensor::{
 /// # Examples
 ///
 /// ```
-/// use tenferro::segment::{segment_exec_program, Segment};
-/// use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
-/// use tenferro::DType;
+/// use tenferro_runtime::segment::{segment_exec_program, Segment};
+/// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+/// use tenferro_runtime::DType;
 ///
 /// let program = ExecProgram {
 ///     instructions: vec![
@@ -74,9 +74,9 @@ pub enum Segment {
 /// # Examples
 ///
 /// ```
-/// use tenferro::segment::{segment_exec_program, Segment};
-/// use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
-/// use tenferro::DType;
+/// use tenferro_runtime::segment::{segment_exec_program, Segment};
+/// use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
+/// use tenferro_runtime::DType;
 ///
 /// let program = ExecProgram {
 ///     instructions: vec![
@@ -138,11 +138,11 @@ pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
 /// # Examples
 ///
 /// ```
-/// use tenferro::segment::eval_exec_segmented;
-/// use tenferro::exec::ExecProgram;
-/// use tenferro::CpuBackend;
+/// use tenferro_runtime::segment::eval_exec_segmented;
+/// use tenferro_runtime::exec::ExecProgram;
+/// use tenferro_runtime::CpuBackend;
 ///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
+/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_segmented::<CpuBackend>;
 /// ```
 pub fn eval_exec_segmented<B: TensorBackend + 'static>(

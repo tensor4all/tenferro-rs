@@ -1,14 +1,13 @@
 #![allow(clippy::multiple_bound_locations)]
 
-//! `tenferro`: traced tensor computation with StableHLO-style IR.
+//! Compatibility facade over the direct tenferro crates.
 //!
-//! This crate provides a tracing-based tensor computation framework where
-//! operations are recorded into a StableHLO-compatible intermediate
-//! representation, then compiled and executed on a backend (e.g., CPU).
+//! New code should prefer importing direct crates such as `tenferro_runtime`,
+//! `tenferro_tensor`, `tenferro_gpu`, and the operation extension crates.
 //!
 //! # Examples
 //!
-//! ```
+//! ```rust
 //! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -19,56 +18,7 @@
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
-pub use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-};
-
-mod checkpoint;
-pub mod compiler;
-#[cfg(feature = "autodiff")]
-mod eager;
-#[cfg(feature = "autodiff")]
-mod eager_backend;
-#[cfg(feature = "autodiff")]
-mod eager_emitter;
-pub mod eager_exec;
-#[cfg(feature = "autodiff")]
-pub(crate) mod eager_ops;
-#[cfg(feature = "autodiff")]
-pub(crate) mod eager_ops_elementwise;
-#[cfg(feature = "autodiff")]
-pub mod eager_tensor;
-pub mod error;
-pub mod exec;
-pub mod extension;
-pub mod graph;
-mod metadata;
-mod scalar_semantics;
-pub mod segment;
-pub mod shape_infer;
-mod shape_packing;
-pub mod sym_dim;
-pub mod tensor;
-pub mod traced;
-pub mod traced_tensor;
-pub mod typed_tensor;
-
-#[cfg(feature = "autodiff")]
-pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
-#[cfg(feature = "autodiff")]
-pub use eager_backend::EagerBackend;
-pub use error::ContextId;
-pub use graph::{
-    CpuGraphExecutorCacheStats, GraphCompiler, GraphCompilerCacheStats, GraphExecutor,
-    GraphExecutorCacheStats, GraphProgram, GraphProgramInput,
-};
-pub use sym_dim::SymDim;
-pub use tenferro_tensor::cpu::CpuBackend;
-pub use tenferro_tensor::{
-    CacheStats, DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TypedTensor,
-    TypedTensorView,
-};
-pub use traced::TracedTensor;
+pub use tenferro_runtime::*;
 
 #[cfg(feature = "cuda")]
 /// CUDA GPU backend facade.

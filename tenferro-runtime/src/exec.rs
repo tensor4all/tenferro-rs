@@ -10,8 +10,8 @@ use tenferro_tensor::{
     Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
+use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
-use tenferro_runtime::extension_runtime::ExtensionExecutor;
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
@@ -236,10 +236,10 @@ pub(crate) fn resolve_tensor_shape_exprs(
 /// # Examples
 ///
 /// ```
-/// use tenferro::exec::{eval_exec_ir, ExecProgram};
-/// use tenferro::CpuBackend;
+/// use tenferro_runtime::exec::{eval_exec_ir, ExecProgram};
+/// use tenferro_runtime::CpuBackend;
 ///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
+/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_ir::<CpuBackend>;
 /// ```
 pub fn eval_exec_ir<B: TensorBackend + 'static>(
@@ -257,10 +257,10 @@ pub fn eval_exec_ir<B: TensorBackend + 'static>(
 /// # Examples
 ///
 /// ```
-/// use tenferro::exec::{eval_exec_ir_unsegmented, ExecProgram};
-/// use tenferro::CpuBackend;
+/// use tenferro_runtime::exec::{eval_exec_ir_unsegmented, ExecProgram};
+/// use tenferro_runtime::CpuBackend;
 ///
-/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro::Tensor>) -> tenferro::error::Result<Vec<tenferro::Tensor>> =
+/// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_ir_unsegmented::<CpuBackend>;
 /// ```
 pub fn eval_exec_ir_unsegmented<B: TensorBackend + 'static>(

@@ -1,7 +1,7 @@
 //! Concrete tensor operations.
 //!
-//! The core `tenferro` crate owns the tensor type and backend traits. Extension
-//! crates such as `tenferro-einsum` expose operation-specific eager helpers.
+//! `tenferro-tensor` owns storage and backend traits. This runtime crate
+//! provides backend-parametric helper functions over those tensor types.
 
 use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Error, Result, TensorBackend};
@@ -13,7 +13,7 @@ pub use tenferro_tensor::Tensor;
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CpuBackend, DType, Tensor};
+/// # use tenferro_runtime::{tensor, CpuBackend, DType, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let y = tensor::convert(&x, DType::F32, &mut backend).unwrap();
@@ -27,7 +27,7 @@ pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> R
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
@@ -45,7 +45,7 @@ macro_rules! unary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro::{tensor, CpuBackend, Tensor};
+        /// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
         #[doc = concat!("let y = tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
@@ -63,7 +63,7 @@ macro_rules! binary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro::{tensor, CpuBackend, Tensor};
+        /// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
         /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -121,7 +121,7 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -140,7 +140,7 @@ pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Resu
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CompareDir, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CompareDir, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -164,7 +164,7 @@ pub fn compare(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CompareDir, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CompareDir, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -186,7 +186,7 @@ pub fn where_select(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]);
 /// # let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]);
@@ -210,7 +210,7 @@ pub fn clamp(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{tensor, CpuBackend, Tensor};
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
 /// # let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);

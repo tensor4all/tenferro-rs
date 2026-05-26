@@ -165,7 +165,9 @@ which should move with einsum rather than inside the GPU extraction.
 - Move: `tenferro-internal-runtime/` to `tenferro-runtime/`
 - Move from `tenferro/src`: `graph/`, `compiler/`, `traced.rs`,
   `traced_tensor.rs`, `exec.rs`, `segment.rs`, `eager_exec.rs`,
-  runtime-owned metadata/cache modules.
+  runtime-owned metadata/cache modules, plus the runtime-facing eager,
+  extension, concrete tensor helper, and typed tensor helper modules needed to
+  keep the extracted crate internally coherent before the later AD split.
 - Modify: `Cargo.toml`
 - Modify extension crate dependencies.
 
@@ -174,27 +176,28 @@ which should move with einsum rather than inside the GPU extraction.
 Add or update a doctest/integration test using:
 
 ```rust
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-use tenferro_tensor::CpuBackend;
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 ```
 
 Expected before implementation: compile failure.
 
 **Step 2: Move runtime modules**
 
-Move graph/tracing/execution into `tenferro-runtime`. Add
-`tenferro_runtime::graph_api` for tenferro-owned computegraph authoring types.
+Move graph/tracing/execution into `tenferro-runtime`. Re-export the existing
+graph compiler/executor API directly from `tenferro_runtime`.
 
 **Step 3: Verify**
 
 Run:
 
 ```bash
-cargo check -p tenferro-runtime --no-default-features
-cargo test -p tenferro-runtime --no-default-features
+cargo check -p tenferro-runtime
+cargo test -p tenferro-runtime
 ```
 
-Expected: pass.
+Expected: pass. The `--no-default-features` form remains blocked at this point
+by the existing tensor CPU backend compile-time contract that requires exactly
+one CPU backend feature.
 
 **Step 4: Commit**
 

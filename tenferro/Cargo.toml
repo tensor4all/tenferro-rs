@@ -18,17 +18,18 @@ required-features = ["cuda"]
 default = ["autodiff", "cpu-faer"]
 autodiff = [
     "chainrules-core",
+    "tenferro-runtime/autodiff",
     "tenferro-internal-ops/autodiff",
     "tidu",
 ]
 cpu-faer = [
-    "tenferro-internal-runtime/cpu-faer",
+    "tenferro-runtime/cpu-faer",
     "tenferro-internal-ops/cpu-faer",
     "tenferro-tensor/cpu-faer",
     "tenferro-gpu?/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-internal-runtime/cpu-blas",
+    "tenferro-runtime/cpu-blas",
     "tenferro-internal-ops/cpu-blas",
     "tenferro-tensor/cpu-blas",
     "tenferro-gpu?/cpu-blas",
@@ -41,26 +42,26 @@ src-intel-mkl-dynamic-parallel = [
     "tenferro-tensor/src-intel-mkl-dynamic-parallel",
 ]
 gpu = [
-    "tenferro-internal-runtime/gpu",
+    "tenferro-runtime/gpu",
     "tenferro-internal-ops/gpu",
 ]
 cuda = [
     "gpu",
-    "tenferro-internal-runtime/cuda",
+    "tenferro-runtime/cuda",
     "tenferro-internal-ops/cuda",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
 ]
 rocm = [
     "gpu",
-    "tenferro-internal-runtime/rocm",
+    "tenferro-runtime/rocm",
     "tenferro-internal-ops/rocm",
     "dep:tenferro-gpu",
     "tenferro-gpu/rocm",
 ]
 
 [dependencies]
-tenferro-internal-runtime = { path = "../tenferro-internal-runtime", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }

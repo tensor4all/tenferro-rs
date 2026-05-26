@@ -12,7 +12,7 @@ pub use tenferro_tensor::TypedTensor;
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]);
@@ -34,7 +34,7 @@ macro_rules! unary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+        /// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]);
         #[doc = concat!("let y = typed_tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
@@ -56,7 +56,7 @@ macro_rules! binary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+        /// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
         /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -107,7 +107,7 @@ unary_fn!(log1p, "Elementwise `log(1 + x)`.");
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -129,7 +129,7 @@ pub fn sub<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -153,7 +153,7 @@ pub fn compare<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -180,7 +180,7 @@ pub fn where_select<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]);
 /// # let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]);
@@ -204,7 +204,7 @@ pub fn clamp<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
 /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]);

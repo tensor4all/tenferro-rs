@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::extension_runtime::ExtensionExecutor;
 use computegraph::{GlobalValKey, LocalValId, OpEmitter, OpMode, ValRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::extension_runtime::ExtensionExecutor;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};

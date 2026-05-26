@@ -4,7 +4,7 @@ members = [
     "tenferro-internal-device",
     "tenferro-tensor",
     "tenferro-gpu",
-    "tenferro-internal-runtime",
+    "tenferro-runtime",
     "tenferro-internal-extension-macros",
     "tenferro-internal-ops",
     "tenferro-einsum",

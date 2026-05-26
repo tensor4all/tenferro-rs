@@ -1,9 +1,9 @@
-//! Error types for the tenferro crate.
+//! Error types for the tenferro runtime crate.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro::error::Error;
+//! use tenferro_runtime::error::Error;
 //!
 //! let err = Error::InvalidSubscripts("bad label".into());
 //! assert!(err.to_string().contains("bad label"));
@@ -16,7 +16,7 @@ use tenferro_tensor::DType;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro::error::Error;
+/// use tenferro_runtime::error::Error;
 ///
 /// let err = Error::InvalidSubscripts("rank mismatch".into());
 /// ```

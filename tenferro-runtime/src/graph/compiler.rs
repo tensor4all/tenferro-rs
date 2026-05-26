@@ -19,8 +19,8 @@ use super::program::{GraphProgram, GraphProgramInput};
 use crate::compiler::compile_std_to_exec;
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
+use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::traced::{try_concrete_shape, TracedTensor};
-use tenferro_runtime::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 
 #[derive(Clone)]
 struct InputDescriptor {
@@ -38,7 +38,7 @@ struct InputDescriptor {
 /// # Examples
 ///
 /// ```
-/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let y = &x + &x;
@@ -57,7 +57,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
     /// assert_eq!(compiler.compile_cache_len(), 0);
@@ -76,7 +76,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -92,7 +92,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// let y = x.neg();
@@ -118,7 +118,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{DType, GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     /// let mut compiler = GraphCompiler::new();
@@ -164,7 +164,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
     /// assert_eq!(compiler.compile_cache_len(), 0);
@@ -178,7 +178,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
     /// assert!(compiler.compile_cache_capacity().get() > 0);
@@ -193,7 +193,7 @@ impl GraphCompiler {
     ///
     /// ```
     /// use std::num::NonZeroUsize;
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.set_compile_cache_capacity(NonZeroUsize::new(2).unwrap());
@@ -208,7 +208,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.clear_compile_cache();
@@ -223,7 +223,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.clear_extension_caches();
@@ -238,7 +238,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.clear_caches();
@@ -254,7 +254,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
     /// let stats = compiler.cache_stats();
@@ -272,7 +272,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
     /// assert!(compiler.extension_caches().is_empty());
@@ -286,7 +286,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::GraphCompiler;
+    /// use tenferro_runtime::GraphCompiler;
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.extension_caches_mut().clear();

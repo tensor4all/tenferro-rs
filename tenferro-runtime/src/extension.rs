@@ -1,7 +1,7 @@
 //! Public surface for out-of-tree extension primitives.
 //!
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
-//! `tenferro` facade. External crates implement
+//! runtime crate. External crates implement
 //! [`tenferro_ops::ext_op::ExtensionOp`], optionally register ChainRules-style
 //! AD rules through [`register_extension_chain_rule`], and build traced or
 //! eager graphs containing the extension via [`apply`] / [`apply_eager`].
@@ -11,7 +11,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro::extension::{apply, ExtensionOpTrait};
+//! use tenferro_runtime::extension::{apply, ExtensionOpTrait};
 //!
 //! // Construct an `Arc<dyn ExtensionOpTrait>` and call `apply(op, &[input])`
 //! // to lower it into a `TracedTensor`. AD support is added separately
@@ -58,10 +58,10 @@ pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
 pub use tenferro_ops::ExtensionFamilyId;
 
-pub use tenferro_runtime::extension_cache::{
+pub use crate::extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };
-pub use tenferro_runtime::extension_runtime::{
+pub use crate::extension_runtime::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
 };
@@ -84,8 +84,8 @@ pub use tenferro_runtime::extension_runtime::{
 /// ```rust
 /// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro::extension::{apply, ExtensionOpTrait};
-/// use tenferro::{DType, SymDim, Tensor, TracedTensor};
+/// use tenferro_runtime::extension::{apply, ExtensionOpTrait};
+/// use tenferro_runtime::{DType, SymDim, Tensor, TracedTensor};
 ///
 /// # #[derive(Clone, Debug)]
 /// # struct IdentityExt;

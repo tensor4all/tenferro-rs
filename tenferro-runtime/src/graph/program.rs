@@ -11,7 +11,7 @@ use crate::exec::ExecProgram;
 /// # Examples
 ///
 /// ```
-/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let y = &x + &x;
@@ -35,7 +35,7 @@ impl GraphProgram {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -52,7 +52,7 @@ impl GraphProgram {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -69,7 +69,7 @@ impl GraphProgram {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{DType, GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     /// let mut compiler = GraphCompiler::new();
@@ -89,7 +89,7 @@ impl GraphProgram {
 /// # Examples
 ///
 /// ```
-/// use tenferro::{GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let mut compiler = GraphCompiler::new();
@@ -129,7 +129,7 @@ impl GraphProgramInput {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{DType, GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     /// let mut compiler = GraphCompiler::new();
@@ -148,7 +148,7 @@ impl GraphProgramInput {
     /// # Examples
     ///
     /// ```
-    /// use tenferro::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let mut compiler = GraphCompiler::new();

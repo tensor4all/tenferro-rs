@@ -23,7 +23,7 @@ pub(crate) const DEFAULT_COMPILE_CACHE_CAPACITY: usize = DEFAULT_GRAPH_COMPILE_C
 /// # Examples
 ///
 /// ```
-/// use tenferro::{CacheStats, GraphCompilerCacheStats};
+/// use tenferro_runtime::{CacheStats, GraphCompilerCacheStats};
 ///
 /// let stats = GraphCompilerCacheStats {
 ///     compile: CacheStats::empty(),
@@ -46,7 +46,7 @@ pub struct GraphCompilerCacheStats {
 /// # Examples
 ///
 /// ```
-/// use tenferro::{CacheStats, GraphExecutorCacheStats};
+/// use tenferro_runtime::{CacheStats, GraphExecutorCacheStats};
 ///
 /// let stats = GraphExecutorCacheStats {
 ///     extensions: CacheStats::empty(),
@@ -70,7 +70,7 @@ pub struct GraphExecutorCacheStats {
 /// # Examples
 ///
 /// ```
-/// use tenferro::{CacheStats, CpuGraphExecutorCacheStats, GraphExecutorCacheStats};
+/// use tenferro_runtime::{CacheStats, CpuGraphExecutorCacheStats, GraphExecutorCacheStats};
 ///
 /// let stats = CpuGraphExecutorCacheStats {
 ///     executor: GraphExecutorCacheStats::default(),

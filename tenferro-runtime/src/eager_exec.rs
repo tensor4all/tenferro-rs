@@ -8,9 +8,10 @@ use tenferro_tensor::{
 };
 
 use crate::error::{Error, Result};
+#[cfg(feature = "autodiff")]
+use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
-use tenferro_runtime::extension_runtime::ExtensionExecutor;
 
 enum PromotedTensor<'a> {
     Borrowed(&'a Tensor),
@@ -99,6 +100,7 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
+#[cfg(feature = "autodiff")]
 pub(crate) fn exec_op_on_tensors_with_extension_executor<B: TensorBackend + 'static>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
