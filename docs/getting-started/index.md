@@ -24,11 +24,13 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-fea
 
 Exactly one CPU backend must be enabled: `cpu-faer` or `cpu-blas`. The
 `cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the system
-toolchain, or enable `src-openblas` to build against OpenBLAS:
+toolchain, or enable the provider feature on `tenferro-tensor` to build against
+OpenBLAS:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["src-openblas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor", default-features = false, features = ["src-openblas"] }
 ```
 
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`,

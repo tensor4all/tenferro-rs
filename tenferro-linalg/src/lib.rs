@@ -2,7 +2,7 @@
 //!
 //! This crate owns the graph-facing linalg op payloads and runtime
 //! registration. Traced helpers live under `tenferro_linalg::traced_tensor`.
-//! Backend kernels remain in `tenferro-internal-tensor`.
+//! Backend kernels remain in `tenferro-tensor`.
 
 mod extension;
 mod traced;

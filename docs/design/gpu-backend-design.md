@@ -151,7 +151,7 @@ and no implicit global shape state.
 
 The caller owns validation that the buffer length matches the dense shape
 product before creating `TensorBinding` or raw array arguments. Existing helper
-functions in `tenferro-internal-tensor/src/cubecl/dispatch.rs` are the current source of
+functions in `tenferro-gpu/src/cubecl/dispatch.rs` are the current source of
 truth for this boundary.
 
 ## Launch Configuration Contract
@@ -184,7 +184,7 @@ download results explicitly when host access is needed.
 
 ```rust,ignore
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
-use tenferro_gpu::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 let mut backend = CubeclBackend::new(0)?;
 let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -258,7 +258,7 @@ a CUDA machine with:
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-internal-tensor --features cuda -- --ignored
+  cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
 These tests are correctness tests, not benchmarks.

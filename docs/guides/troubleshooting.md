@@ -25,7 +25,7 @@ backend operation received CPU data. Upload first:
 
 ```rust
 use tenferro_gpu::cubecl::{upload_tensor, CubeclBackend as CudaBackend};
-use tenferro_gpu::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -40,7 +40,7 @@ it before inspecting values:
 
 ```rust
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
-use tenferro_gpu::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);

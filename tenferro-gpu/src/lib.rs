@@ -3,7 +3,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_gpu::Tensor;
+//! use tenferro_tensor::Tensor;
 //!
 //! let _tensor_type = core::any::type_name::<Tensor>();
 //! assert!(_tensor_type.contains("Tensor"));
@@ -22,26 +22,27 @@ pub mod kernels;
 pub use cubecl::{
     device_ptr, download_tensor, gpu_available, upload_tensor, CubeclBackend, CubeclRuntime,
 };
-pub use tenferro_tensor::*;
 
-/// Compatibility re-exports for GPU implementation modules.
-pub mod backend {
+#[cfg(feature = "cuda")]
+use tenferro_tensor::*;
+
+#[cfg(feature = "cuda")]
+pub(crate) mod backend {
     pub use tenferro_tensor::backend::*;
 }
 
-/// Compatibility re-exports for GPU implementation modules.
-pub mod config {
+#[cfg(feature = "cuda")]
+pub(crate) mod config {
     pub use tenferro_tensor::config::*;
 }
 
-/// Compatibility re-exports for GPU implementation modules and tests.
-pub mod cpu {
+#[cfg(all(test, feature = "cuda"))]
+pub(crate) mod cpu {
     pub use tenferro_tensor::cpu::*;
 }
 
-/// Compatibility re-exports for GPU implementation modules.
-pub mod types {
-    #[cfg(feature = "cuda")]
+#[cfg(feature = "cuda")]
+pub(crate) mod types {
     pub use crate::CubeclBuffer;
     pub use tenferro_tensor::types::*;
 }

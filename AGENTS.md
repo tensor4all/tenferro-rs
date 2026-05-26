@@ -221,7 +221,7 @@ python3 scripts/check-docs-site.py
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-internal-tensor --features cuda -- --ignored
+  cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
 ### CubeCL Environment Variables

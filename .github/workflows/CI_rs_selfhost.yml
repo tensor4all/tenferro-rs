@@ -48,10 +48,6 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../target-${{ matrix.backend }}
       CARGO_PROFILE_RELEASE_DEBUG: 0
       RUSTFLAGS: ${{ matrix.rustflags }}
-      # Keep hosted fallback runs within the repository runner timeout. The
-      # dedicated coverage job uses the same cap while still exercising every
-      # oracle replay path enough for per-file coverage enforcement.
-      ORACLE_REPLAY_CASE_LIMIT: "100"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -43,14 +43,15 @@ For contributors, internal crate APIs are also available in the
 tenferro-internal-device
     |
 tenferro-tensor            -- dense runtime tensors, TensorBackend, CpuBackend
+    |\
+    | \-- tenferro-gpu    -- CubeCL/CUDA backend and GPU transfers
     |
-tenferro-gpu               -- CubeCL/CUDA backend and GPU transfers
+tenferro-internal-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
     |
 tenferro-runtime           -- TracedTensor, GraphCompiler, GraphExecutor
-    |
-tenferro-ad                -- EagerRuntime, EagerTensor, traced AD traits
+    |\
+    | \-- tenferro-ad     -- EagerRuntime, EagerTensor, traced AD traits
 
-tenferro-internal-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
 tenferro-einsum   -- standard einsum extension
 tenferro-linalg   -- standard linalg extension
 tenferro-linalg-ad -- linalg AD extension

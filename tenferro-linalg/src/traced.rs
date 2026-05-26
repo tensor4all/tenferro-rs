@@ -11,7 +11,6 @@ pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
 }
 
 pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, TracedTensor) {
-    ensure_ad_rule_registered();
     let mut outputs = apply(
         Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
         &[a],
@@ -29,7 +28,6 @@ pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, 
 }
 
 pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    ensure_ad_rule_registered();
     two_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a]),
         "qr",
@@ -41,7 +39,6 @@ pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 }
 
 pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor) {
-    ensure_ad_rule_registered();
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps })),
@@ -52,7 +49,6 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
 }
 
 pub fn cholesky(a: &TracedTensor) -> TracedTensor {
-    ensure_ad_rule_registered();
     one_output(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a]),
         "cholesky",
@@ -60,7 +56,6 @@ pub fn cholesky(a: &TracedTensor) -> TracedTensor {
 }
 
 pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, TracedTensor) {
-    ensure_ad_rule_registered();
     let mut outputs = apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a]).into_iter();
     match (
         outputs.next(),
@@ -83,7 +78,6 @@ pub fn full_piv_lu(
     TracedTensor,
     TracedTensor,
 ) {
-    ensure_ad_rule_registered();
     let mut outputs =
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a]).into_iter();
     match (
@@ -100,7 +94,6 @@ pub fn full_piv_lu(
 }
 
 pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    ensure_ad_rule_registered();
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
@@ -113,7 +106,6 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
 }
 
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    ensure_ad_rule_registered();
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Solve {
@@ -126,7 +118,6 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
 }
 
 pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
-    ensure_ad_rule_registered();
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLuSolve {
@@ -146,7 +137,6 @@ pub fn triangular_solve(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> TracedTensor {
-    ensure_ad_rule_registered();
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
@@ -264,8 +254,6 @@ fn two_outputs(outputs: Vec<TracedTensor>, name: &str) -> (TracedTensor, TracedT
         _ => unreachable!("{name} must produce exactly two outputs"),
     }
 }
-
-fn ensure_ad_rule_registered() {}
 
 fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
     match dtype {

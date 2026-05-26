@@ -82,7 +82,8 @@ crates.
 
 | Crate | What it provides |
 | --- | --- |
-| `tenferro-linalg` | SVD, QR, Cholesky, LU, solve, eig/eigh, triangular solve, and related linalg APIs |
+| `tenferro-linalg` | Traced SVD, QR, Cholesky, LU, solve, eig/eigh, triangular solve, and related primal linalg APIs |
+| `tenferro-linalg-ad` | Eager linalg helpers and AD registration for linalg extension ops |
 | `tenferro-einsum` | NumPy/JAX-style einsum with contraction planning and tensordot contraction sugar |
 | `tenferro-fft` | FFT extension operations |
 
@@ -119,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
         ctx.clone(),
     );
-    let (_u, singular_values, _vt) = tenferro_linalg::eager_tensor::svd(&diag)?;
+    let (_u, singular_values, _vt) = tenferro_linalg_ad::eager_tensor::svd(&diag)?;
     let mut values = singular_values
         .data()
         .clone()

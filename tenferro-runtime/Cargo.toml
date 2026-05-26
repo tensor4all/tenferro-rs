@@ -12,16 +12,12 @@ name = "tenferro_runtime"
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["tenferro-tensor/cpu-faer", "tenferro-gpu?/cpu-faer"]
-cpu-blas = ["tenferro-tensor/cpu-blas", "tenferro-gpu?/cpu-blas"]
-gpu = []
-cuda = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/cuda"]
-rocm = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/rocm"]
+cpu-faer = ["tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-tensor/cpu-blas"]
 
 [dependencies]
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
-tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true

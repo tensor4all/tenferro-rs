@@ -40,8 +40,28 @@ def check_tensor_has_no_gpu_runtime_deps() -> list[str]:
     return violations
 
 
+def check_runtime_has_no_gpu_backend_deps() -> list[str]:
+    forbidden = ("tenferro-gpu", "tenferro_gpu")
+    paths = [ROOT / "tenferro-runtime" / "Cargo.toml", ROOT / "tenferro-runtime" / "src"]
+    violations: list[str] = []
+    for path in paths:
+        for file_path in iter_files(path):
+            text = file_path.read_text(encoding="utf-8")
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                for token in forbidden:
+                    if token in line:
+                        rel = file_path.relative_to(ROOT)
+                        violations.append(
+                            f"{rel}:{line_no}: forbidden runtime GPU backend token `{token}`"
+                        )
+    return violations
+
+
 def main() -> int:
-    violations = check_tensor_has_no_gpu_runtime_deps()
+    violations = [
+        *check_tensor_has_no_gpu_runtime_deps(),
+        *check_runtime_has_no_gpu_backend_deps(),
+    ]
     if violations:
         print("crate-boundary check failed:", file=sys.stderr)
         for violation in violations:

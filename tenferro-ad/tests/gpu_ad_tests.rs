@@ -35,7 +35,7 @@ fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: 
 }
 
 fn assert_device_backed(tensor: &Tensor) {
-    fn is_cubecl<T>(buffer: &Buffer<T>) -> bool {
+    fn is_cubecl<T: 'static>(buffer: &Buffer<T>) -> bool {
         matches!(buffer, Buffer::Backend(buffer) if buffer.backend_family() == "cubecl")
     }
 
@@ -56,8 +56,8 @@ fn eval_cpu_tensor(engine: &mut GraphExecutor<CpuBackend>, tensor: &mut TracedTe
 
 fn eval_gpu_tensor(engine: &mut GraphExecutor<CubeclBackend>, tensor: &mut TracedTensor) -> Tensor {
     let evaluated = tensor.run_with(engine).unwrap();
-    assert_device_backed(evaluated);
-    download_tensor(engine.backend().runtime(), evaluated).unwrap()
+    assert_device_backed(&evaluated);
+    download_tensor(engine.backend().runtime(), &evaluated).unwrap()
 }
 
 fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {

@@ -35,6 +35,11 @@ pub struct CubeclRuntime {
     cuda_context: CUcontext,
 }
 
+// CUDA primary contexts and CubeCL clients are owned handles. Backend methods
+// set the context current before raw CUDA-library calls, and higher-level eager
+// execution serializes backend access through a mutex.
+unsafe impl Send for CubeclRuntime {}
+
 impl CubeclRuntime {
     /// Initialize the CubeCL CUDA runtime on the given device ordinal.
     ///

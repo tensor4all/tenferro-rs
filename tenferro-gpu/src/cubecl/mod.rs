@@ -1,7 +1,7 @@
 //! CubeCL-based GPU backend for tenferro tensors.
 //!
 //! This module provides GPU acceleration via [CubeCL](https://github.com/tracel-ai/cubecl)
-//! running on NVIDIA CUDA devices. It is gated behind the `cubecl` feature flag and
+//! running on NVIDIA CUDA devices. It is gated behind the `cuda` feature flag and
 //! requires **CUDA 12+** with a compatible NVIDIA GPU.
 //!
 //! # Enabling the feature

@@ -138,7 +138,7 @@ functions such as `svd`, `qr`, `cholesky`, `solve`, `triangular_solve`, `lu`,
 eager `EagerTensor` surface when `autodiff` is enabled.
 
 The crate owns the linalg extension payload, runtime registration, and linalg
-AD rules where implemented. Backend kernels remain in `tenferro-internal-tensor`.
+AD rules where implemented. Backend kernels remain in `tenferro-tensor`.
 
 ## `tenferro-fft`
 

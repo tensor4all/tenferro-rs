@@ -362,7 +362,7 @@ but different families are not accidentally unified by the op interner.
 For `FusedTropicalDotGeneral` in `tenferro-ext-tropical`:
 
 - `family_id = "tenferro-ext-tropical.fused_dot_general.v1"`
-- payload = `DotGeneralConfig` (from `tenferro-internal-tensor`)
+- payload = `DotGeneralConfig` (from `tenferro-tensor`)
 - `payload_hash` hashes the four `Vec<usize>` fields of `DotGeneralConfig`
   in the order they are declared, via `DotGeneralConfig: Hash`
 - `payload_eq` downcasts `other` to the concrete type and defers to

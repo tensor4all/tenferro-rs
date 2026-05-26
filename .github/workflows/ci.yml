@@ -47,8 +47,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run inject tests for tenferro-internal-tensor
-        run: cargo test -p tenferro-internal-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
+      - name: Run inject tests for tenferro-tensor
+        run: cargo test -p tenferro-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
 
   coverage:
     name: coverage
@@ -61,13 +61,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage JSON
-        env:
-          # Cap oracle_replay case iteration under coverage instrumentation.
-          # Without this, the branch's extra AD metadata tracking + llvm-cov
-          # overhead causes shard_0 / shard_1 to run for many minutes, tripping
-          # concurrency-cancel timeouts. A smaller cap still exercises every
-          # op's primal+VJP+JVP path enough for line-coverage thresholds.
-          ORACLE_REPLAY_CASE_LIMIT: "100"
         run: cargo llvm-cov --workspace --release --json --output-path coverage.json
       - name: Enforce per-file coverage thresholds
         run: python3 scripts/check-coverage.py coverage.json

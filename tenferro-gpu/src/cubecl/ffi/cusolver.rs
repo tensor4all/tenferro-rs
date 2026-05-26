@@ -750,6 +750,9 @@ struct CusolverLibrary {
     _version: i32,
 }
 
+unsafe impl Send for CusolverLibrary {}
+unsafe impl Sync for CusolverLibrary {}
+
 impl CusolverLibrary {
     fn load() -> crate::Result<Arc<Self>> {
         let paths = super::library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
@@ -815,6 +818,9 @@ struct CublasLibrary {
     _lib: Library,
     vtable: CublasVtable,
 }
+
+unsafe impl Send for CublasLibrary {}
+unsafe impl Sync for CublasLibrary {}
 
 impl CublasLibrary {
     fn load() -> crate::Result<Arc<Self>> {
@@ -905,6 +911,8 @@ pub(crate) struct CusolverDnHandle {
     lib: Arc<CusolverLibrary>,
     raw: CusolverDnHandleRaw,
 }
+
+unsafe impl Send for CusolverDnHandle {}
 
 impl CusolverDnHandle {
     pub(crate) fn load() -> crate::Result<Self> {
@@ -1602,6 +1610,8 @@ pub(crate) struct CublasHandle {
     lib: Arc<CublasLibrary>,
     raw: CublasHandleRaw,
 }
+
+unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {
     pub(crate) fn load() -> crate::Result<Self> {

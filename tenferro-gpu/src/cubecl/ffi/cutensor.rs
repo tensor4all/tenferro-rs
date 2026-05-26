@@ -200,6 +200,9 @@ struct CutensorLibrary {
     vtable: CutensorVtable,
 }
 
+unsafe impl Send for CutensorLibrary {}
+unsafe impl Sync for CutensorLibrary {}
+
 impl CutensorLibrary {
     fn load() -> crate::Result<Arc<Self>> {
         let paths = super::library_search_paths("TENFERRO_CUTENSOR_PATH", CUTENSOR_DEFAULT_PATHS);
@@ -259,6 +262,8 @@ pub(crate) struct CutensorHandle {
     lib: Arc<CutensorLibrary>,
     raw: CutensorHandleRaw,
 }
+
+unsafe impl Send for CutensorHandle {}
 
 impl CutensorHandle {
     pub(crate) fn load() -> crate::Result<Self> {

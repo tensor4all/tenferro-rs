@@ -1,6 +1,5 @@
-use tenferro_gpu::{
-    download_tensor, upload_tensor, CubeclBackend as CudaBackend, Tensor, TensorBackend,
-};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !tenferro_gpu::gpu_available() {
