@@ -15,6 +15,7 @@ use num_complex::{Complex32, Complex64};
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
 use crate::input_key::TensorInputKey;
+use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -142,6 +143,75 @@ pub enum StdTensorOp {
 }
 
 impl StdTensorOp {
+    /// Return the core primitive catalog kind for this graph operation.
+    ///
+    /// Extension operations do not claim a core primitive kind; they are
+    /// dispatched through their extension family id instead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_core_ops::PrimitiveOpKind;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// assert_eq!(StdTensorOp::Add.primitive_kind(), Some(PrimitiveOpKind::Add));
+    /// ```
+    pub fn primitive_kind(&self) -> Option<PrimitiveOpKind> {
+        Some(match self {
+            StdTensorOp::Add => PrimitiveOpKind::Add,
+            StdTensorOp::Mul => PrimitiveOpKind::Mul,
+            StdTensorOp::Neg => PrimitiveOpKind::Neg,
+            StdTensorOp::Conj => PrimitiveOpKind::Conj,
+            StdTensorOp::DotGeneral { .. } => PrimitiveOpKind::DotGeneral,
+            StdTensorOp::Transpose { .. } => PrimitiveOpKind::Transpose,
+            StdTensorOp::Reshape { .. } => PrimitiveOpKind::Reshape,
+            StdTensorOp::BroadcastInDim { .. } => PrimitiveOpKind::BroadcastInDim,
+            StdTensorOp::Convert { .. } => PrimitiveOpKind::Convert,
+            StdTensorOp::Constant { .. } => PrimitiveOpKind::Constant,
+            StdTensorOp::ReduceSum { .. } => PrimitiveOpKind::ReduceSum,
+            StdTensorOp::Div => PrimitiveOpKind::Div,
+            StdTensorOp::Abs => PrimitiveOpKind::Abs,
+            StdTensorOp::Sign => PrimitiveOpKind::Sign,
+            StdTensorOp::Maximum => PrimitiveOpKind::Maximum,
+            StdTensorOp::Minimum => PrimitiveOpKind::Minimum,
+            StdTensorOp::Compare(_) => PrimitiveOpKind::Compare,
+            StdTensorOp::Select => PrimitiveOpKind::Select,
+            StdTensorOp::Clamp => PrimitiveOpKind::Clamp,
+            StdTensorOp::Exp => PrimitiveOpKind::Exp,
+            StdTensorOp::Log => PrimitiveOpKind::Log,
+            StdTensorOp::Sin => PrimitiveOpKind::Sin,
+            StdTensorOp::Cos => PrimitiveOpKind::Cos,
+            StdTensorOp::Tanh => PrimitiveOpKind::Tanh,
+            StdTensorOp::Sqrt => PrimitiveOpKind::Sqrt,
+            StdTensorOp::Rsqrt => PrimitiveOpKind::Rsqrt,
+            StdTensorOp::Pow => PrimitiveOpKind::Pow,
+            StdTensorOp::Expm1 => PrimitiveOpKind::Expm1,
+            StdTensorOp::Log1p => PrimitiveOpKind::Log1p,
+            StdTensorOp::ExtractDiag { .. } => PrimitiveOpKind::ExtractDiag,
+            StdTensorOp::EmbedDiag { .. } => PrimitiveOpKind::EmbedDiag,
+            StdTensorOp::Tril { .. } => PrimitiveOpKind::Tril,
+            StdTensorOp::Triu { .. } => PrimitiveOpKind::Triu,
+            StdTensorOp::Gather(_) => PrimitiveOpKind::Gather,
+            StdTensorOp::GatherDynamicSliceSizes { .. } => {
+                PrimitiveOpKind::GatherDynamicSliceSizes
+            }
+            StdTensorOp::Scatter(_) => PrimitiveOpKind::Scatter,
+            StdTensorOp::Slice(_) => PrimitiveOpKind::Slice,
+            StdTensorOp::DynamicSlice { .. } => PrimitiveOpKind::DynamicSlice,
+            StdTensorOp::DynamicUpdateSlice => PrimitiveOpKind::DynamicUpdateSlice,
+            StdTensorOp::Pad(_) => PrimitiveOpKind::Pad,
+            StdTensorOp::Concatenate { .. } => PrimitiveOpKind::Concatenate,
+            StdTensorOp::Reverse { .. } => PrimitiveOpKind::Reverse,
+            StdTensorOp::ShapeOf { .. } => PrimitiveOpKind::ShapeOf,
+            StdTensorOp::DynamicTruncate { .. } => PrimitiveOpKind::DynamicTruncate,
+            StdTensorOp::PadToMatch { .. } => PrimitiveOpKind::PadToMatch,
+            StdTensorOp::ReduceProd { .. } => PrimitiveOpKind::ReduceProd,
+            StdTensorOp::ReduceMax { .. } => PrimitiveOpKind::ReduceMax,
+            StdTensorOp::ReduceMin { .. } => PrimitiveOpKind::ReduceMin,
+            StdTensorOp::Extension(_) => return None,
+        })
+    }
+
     /// Create an `f64` scalar constant op.
     ///
     /// # Examples

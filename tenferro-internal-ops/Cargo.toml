@@ -19,6 +19,7 @@ cuda = ["gpu"]
 rocm = ["gpu"]
 
 [dependencies]
+tenferro-core-ops = { path = "../tenferro-core-ops" }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 computegraph.workspace = true
