@@ -23,7 +23,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 ## Concrete Solve
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -38,7 +38,7 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ## Typed Cholesky
 
 ```rust
-use tenferro::{CpuBackend, TypedTensor};
+use tenferro_runtime::{CpuBackend, TypedTensor};
 
 let mut backend = CpuBackend::new();
 let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]);
@@ -60,7 +60,7 @@ the result should remain connected to a scalar-loss `backward()` pass.
 ## Singular value decomposition
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
@@ -77,7 +77,7 @@ assert_eq!(singular_values, vec![1.0, 2.0]);
 ## QR decomposition
 
 ```rust
-use tenferro::{CpuBackend, TypedTensor};
+use tenferro_runtime::{CpuBackend, TypedTensor};
 
 let mut backend = CpuBackend::new();
 let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]);
@@ -92,7 +92,7 @@ assert_eq!(r.host_data(), &[1.0, 0.0, 0.0, 1.0]);
 ## Hermitian eigenvalue decomposition
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let a = ctx.variable_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]));
@@ -109,7 +109,7 @@ assert_eq!(eigenvalues, vec![1.0, 3.0]);
 ## Traced Cholesky Factorization
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_linalg::traced_tensor::cholesky;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -128,7 +128,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ## Traced Solve In A Graph
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_linalg::traced_tensor::solve;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -148,7 +148,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 ## Complete-Pivot LU Solve
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);

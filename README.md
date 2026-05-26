@@ -2,9 +2,11 @@
 
 Dense tensor computation in Rust.
 
-Use the `tenferro` facade for tensor values, backends, eager execution, traced
-execution, and AD. Use standard operation crates such as `tenferro-linalg` and
-`tenferro-einsum` for operation families that live outside the core facade.
+Use explicit crates for each layer: `tenferro-runtime` for tensor helpers,
+backends, traced graphs, and execution; `tenferro-ad` for eager execution and
+automatic differentiation; and standard operation crates such as
+`tenferro-linalg`, `tenferro-einsum`, and `tenferro-fft` for separately owned
+operation families.
 
 Start with `Tensor` and `CpuBackend` for ndarray-like CPU work. Move to
 `EagerTensor` when you want immediate execution with optional `backward()`, and
@@ -18,7 +20,7 @@ This is the closest entry point for users coming from ndarray: create concrete
 tensors, pass a backend context to operations, and get concrete tensors back.
 
 ```rust
-use tenferro::{tensor, CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
@@ -48,7 +50,7 @@ row-major. Use the row-major constructors and exports when that is the data you
 have:
 
 ```rust
-use tenferro::Tensor;
+use tenferro_runtime::Tensor;
 
 let t = Tensor::from_vec_row_major(
     vec![2, 3],
@@ -74,8 +76,8 @@ Linear algebra, einsum, and FFT are standard tenferro operation crates. They are
 separate dependencies for modularity, but they are maintained as part of the
 normal tenferro stack.
 
-In application code, this usually means importing tensor/runtime types from
-`tenferro` and importing the operation families you use from their standard
+In application code, import tensor/runtime types from `tenferro-runtime`,
+AD/eager types from `tenferro-ad`, and operation families from their standard
 crates.
 
 | Crate | What it provides |
@@ -93,7 +95,7 @@ variables when you need scalar-loss reverse-mode `backward()`.
 Forward-mode AD (`jvp`) is part of traced execution, not `EagerTensor`.
 
 ```rust
-use tenferro::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new();
@@ -152,7 +154,7 @@ through a `GraphExecutor`. This is the entry point for graph reuse and
 transform-style AD (`grad`, `vjp`, `jvp`, and HVP by composition).
 
 ```rust
-use tenferro::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = TracedTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);

@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro::{DType, GraphCompiler, GraphProgram, TracedTensor};
 use tenferro_einsum::einsum;
+use tenferro_runtime::{DType, GraphCompiler, GraphProgram, TracedTensor};
 
 const PHYS_DIM: usize = 2;
 const CHI: usize = 32;

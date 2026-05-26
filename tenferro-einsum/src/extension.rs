@@ -16,10 +16,6 @@ use computegraph::types::{GlobalValKey, ValRef};
 use computegraph::types::{LocalValId, OpMode};
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
-use tenferro::extension::{
-    ExtensionCacheKey, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
-};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
@@ -32,6 +28,10 @@ use tenferro_ops::ext_op::{
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+use tenferro_runtime::extension::{
+    ExtensionCacheKey, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime,
+    ExtensionRuntimeRegistryError,
+};
 use tenferro_tensor::{DType, Tensor, TensorBackend};
 
 use crate::builder::build_einsum_fragment;
@@ -598,13 +598,17 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         }
     }
 
-    let program = tenferro::compiler::compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
-    let mut outputs =
-        tenferro::exec::eval_exec_ir_unsegmented(ctx.backend_mut(), &program, program_inputs)
-            .map_err(|err| tenferro_tensor::Error::BackendFailure {
-                op: "einsum_extension",
-                message: err.to_string(),
-            })?;
+    let program =
+        tenferro_runtime::compiler::compile_std_to_exec(&compiled, &input_dtypes, &input_shapes);
+    let mut outputs = tenferro_runtime::exec::eval_exec_ir_unsegmented(
+        ctx.backend_mut(),
+        &program,
+        program_inputs,
+    )
+    .map_err(|err| tenferro_tensor::Error::BackendFailure {
+        op: "einsum_extension",
+        message: err.to_string(),
+    })?;
     if outputs.len() != 1 {
         return Err(tenferro_tensor::Error::BackendFailure {
             op: "einsum_extension",

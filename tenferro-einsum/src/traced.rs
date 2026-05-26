@@ -2,9 +2,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use tenferro::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
-use tenferro::{GraphCompiler, TracedTensor};
 use tenferro_device::{Error as DeviceError, Result as DeviceResult};
+use tenferro_runtime::error::{Error, Result};
+use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
+use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
 
 use crate::cache::{
     einsum_subscripts_retained_bytes, ParsedEinsum, EINSUM_EXTENSION_FAMILY_ID, EINSUM_PARSE_CACHE,
@@ -23,7 +24,7 @@ pub fn einsum(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &str,
-) -> tenferro::error::Result<TracedTensor> {
+) -> Result<TracedTensor> {
     einsum_with(compiler, inputs, subscripts, EinsumOptimize::default())
 }
 
@@ -32,7 +33,7 @@ pub fn einsum_subscripts(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
     subscripts: &EinsumSubscripts,
-) -> tenferro::error::Result<TracedTensor> {
+) -> Result<TracedTensor> {
     einsum_subscripts_with(compiler, inputs, subscripts, EinsumOptimize::default())
 }
 
@@ -42,7 +43,7 @@ pub fn einsum_with(
     inputs: &[&TracedTensor],
     subscripts: &str,
     optimize: EinsumOptimize,
-) -> tenferro::error::Result<TracedTensor> {
+) -> Result<TracedTensor> {
     let parsed = cached_subscripts(compiler.extension_caches_mut(), subscripts)?;
     einsum_subscripts_with(compiler, inputs, &parsed.subscripts, optimize)
 }
@@ -53,18 +54,17 @@ pub fn einsum_subscripts_with(
     inputs: &[&TracedTensor],
     subscripts: &EinsumSubscripts,
     optimize: EinsumOptimize,
-) -> tenferro::error::Result<TracedTensor> {
+) -> Result<TracedTensor> {
     #[cfg(feature = "autodiff")]
-    ensure_einsum_extension_rule_registered()
-        .map_err(|err| tenferro::error::Error::Internal(err.to_string()))?;
+    ensure_einsum_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))?;
 
     if inputs.is_empty() {
-        return Err(tenferro::error::Error::ContractionError(
+        return Err(Error::ContractionError(
             "einsum requires at least one input tensor".into(),
         ));
     }
     if subscripts.inputs.len() != inputs.len() {
-        return Err(tenferro::error::Error::ContractionError(format!(
+        return Err(Error::ContractionError(format!(
             "einsum subscripts expect {} inputs, got {}",
             subscripts.inputs.len(),
             inputs.len()
@@ -94,15 +94,16 @@ pub fn einsum_subscripts_with(
     }
 
     let outputs = extension::apply(Arc::new(op), inputs);
-    outputs.into_iter().next().ok_or_else(|| {
-        tenferro::error::Error::Internal("einsum extension produced no output".into())
-    })
+    outputs
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Internal("einsum extension produced no output".into()))
 }
 
 fn cached_subscripts(
     caches: &mut ExtensionCacheStore,
     notation: &str,
-) -> tenferro::error::Result<Arc<ParsedEinsum>> {
+) -> Result<Arc<ParsedEinsum>> {
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_PARSE_CACHE,
@@ -124,7 +125,7 @@ fn cached_static_tree(
     caches: &mut ExtensionCacheStore,
     key_data: &(EinsumSubscripts, Vec<Vec<usize>>),
     build: impl FnOnce() -> DeviceResult<ContractionTree>,
-) -> tenferro::error::Result<Arc<ContractionTree>> {
+) -> Result<Arc<ContractionTree>> {
     let key = ExtensionCacheKey::new(
         EINSUM_EXTENSION_FAMILY_ID,
         EINSUM_STATIC_PLANS_CACHE,
@@ -146,10 +147,10 @@ fn cached_static_tree(
     Ok(tree)
 }
 
-fn validate_symbolic_optimize(optimize: &EinsumOptimize) -> tenferro::error::Result<()> {
+fn validate_symbolic_optimize(optimize: &EinsumOptimize) -> Result<()> {
     match optimize {
         EinsumOptimize::Auto(opts) if is_default_auto_options(opts) => Ok(()),
-        _ => Err(tenferro::error::Error::ContractionError(
+        _ => Err(Error::ContractionError(
             "symbolic einsum supports only default automatic optimization".into(),
         )),
     }
@@ -171,7 +172,7 @@ fn concrete_shapes(inputs: &[&TracedTensor]) -> Option<Vec<Vec<usize>>> {
 fn infer_symbolic_output_shape(
     subscripts: &EinsumSubscripts,
     inputs: &[&TracedTensor],
-) -> tenferro::error::Result<Vec<tenferro::SymDim>> {
+) -> Result<Vec<SymDim>> {
     let mut label_dims = std::collections::HashMap::new();
     for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
         let shape: Vec<_> = tensor
@@ -183,7 +184,7 @@ fn infer_symbolic_output_shape(
                     .collect()
             });
         if labels.len() != shape.len() {
-            return Err(tenferro::error::Error::ContractionError(format!(
+            return Err(Error::ContractionError(format!(
                 "einsum input rank mismatch: labels={}, shape={}",
                 labels.len(),
                 shape.len()
@@ -198,7 +199,7 @@ fn infer_symbolic_output_shape(
         .iter()
         .map(|label| {
             label_dims.get(label).cloned().ok_or_else(|| {
-                tenferro::error::Error::ContractionError(format!(
+                Error::ContractionError(format!(
                     "einsum output label {label} is missing from inputs"
                 ))
             })
@@ -206,8 +207,8 @@ fn infer_symbolic_output_shape(
         .collect()
 }
 
-fn to_tenferro_error(error: DeviceError) -> tenferro::error::Error {
-    tenferro::error::Error::ContractionError(error.to_string())
+fn to_tenferro_error(error: DeviceError) -> Error {
+    Error::ContractionError(error.to_string())
 }
 
 fn hash_value<T: Hash + ?Sized>(value: &T) -> u64 {

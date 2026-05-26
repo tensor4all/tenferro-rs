@@ -25,7 +25,7 @@ the column-major flat buffer is:
 ```
 
 ```rust
-use tenferro::Tensor;
+use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -46,7 +46,7 @@ row-major order. Use `from_vec_row_major` at the boundary when the input buffer
 is written row by row.
 
 ```rust
-use tenferro::Tensor;
+use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_row_major(
     vec![2, 3],
@@ -79,7 +79,7 @@ linear algebra or contraction kernels.
 Owned export returns the column-major host buffer:
 
 ```rust
-use tenferro::Tensor;
+use tenferro_runtime::Tensor;
 
 let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
 let (shape, data) = tensor.try_into_vec_col_major::<f64>().unwrap();

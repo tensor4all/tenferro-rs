@@ -9,7 +9,7 @@ extension ops.
 
 ```toml
 [dependencies]
-tenferro = { path = "../tenferro" }
+tenferro-runtime = { path = "../tenferro-runtime" }
 tenferro-einsum = { path = "../tenferro-einsum" }
 ```
 
@@ -19,7 +19,7 @@ Use the traced route when einsum should be part of a graph compiled by
 `GraphCompiler` and executed by `GraphExecutor`.
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -48,7 +48,7 @@ With the `autodiff` feature, `tenferro-einsum` also exposes immediate
 `EagerTensor` execution.
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
@@ -70,7 +70,7 @@ right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
 negative axes.
 
 ```rust
-use tenferro::TracedTensor;
+use tenferro_runtime::TracedTensor;
 use tenferro_einsum::{traced_tensor, TensorDotAxes};
 
 let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
@@ -90,7 +90,7 @@ choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.
 
 ```rust
-use tenferro::{GraphCompiler, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_einsum::EinsumOptimize;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);

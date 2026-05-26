@@ -1,5 +1,12 @@
 # Extension Runtime Restructure
 
+**Status:** historical migration note. The current implementation has no root
+`tenferro` facade; runtime APIs live in `tenferro-runtime`, AD APIs in
+`tenferro-ad`, and operation families are imported directly from crates such as
+`tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. See
+[`no-facade-crate-boundaries.md`](no-facade-crate-boundaries.md) for the current
+crate-boundary design.
+
 This note sketches a post-`origin/main` restructure for making tenferro a lean
 tensor graph runtime while moving domain-heavy operation families into
 extension crates. The immediate motivation is einsum, but the design must also

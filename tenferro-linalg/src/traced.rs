@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro::extension::apply;
-use tenferro::{CompareDir, DType, DotGeneralConfig, TracedTensor};
+use tenferro_runtime::extension::apply;
+use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, TracedTensor};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 

@@ -316,4 +316,4 @@ The pass test suite should focus on:
 - fixed-point behavior for `TransposeFolding`
 - preservation of output slots and `output_shapes`
 
-Regression tests live in `tenferro/tests/compiler_passes.rs`.
+Regression tests live with the runtime/compiler crate tests.

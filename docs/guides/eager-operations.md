@@ -10,7 +10,7 @@ accumulation and `backward()`.
 ## Setup
 
 ```rust
-use tenferro::{CpuBackend, Tensor, TypedTensor};
+use tenferro_runtime::{CpuBackend, Tensor, TypedTensor};
 
 let mut ctx = CpuBackend::new();
 ```
@@ -25,7 +25,7 @@ tracked eager tensors. Untracked eager tensors are forward-only. If you share
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most broad concrete operations are available as `tenferro::tensor` free
+Most broad concrete operations are available as `tenferro_runtime::tensor` free
 functions, with method wrappers kept for compatibility. `TypedTensor<T>` is the
 first layer to consider when you want compile-time dtype safety or typed
 host-side data. Einsum is provided by the separate `tenferro-einsum` standard
@@ -40,7 +40,7 @@ status. See [Execution Models](execution-models.md) and
 ## Creating tensors
 
 ```rust
-use tenferro::{Tensor, TypedTensor};
+use tenferro_runtime::{Tensor, TypedTensor};
 
 // Dynamic dtype (`Tensor`)
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -59,7 +59,7 @@ its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 ## Arithmetic
 
 ```rust
-use tenferro::{tensor, CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -77,7 +77,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 ## Linear algebra
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
@@ -112,7 +112,7 @@ assert_eq!(x.shape(), &[3]);
 ## Shape operations
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -139,7 +139,7 @@ register `tenferro_einsum::register_runtime` on the `GraphExecutor`.
 ## Extracting data
 
 ```rust
-use tenferro::Tensor;
+use tenferro_runtime::Tensor;
 
 let t = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let data: &[f64] = t.as_slice::<f64>().unwrap();
@@ -168,7 +168,8 @@ Repeated `backward()` calls add to the existing gradients, and you clear them
 explicitly when you want a fresh pass.
 
 ```rust
-use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_runtime::CpuBackend;
 
 let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());

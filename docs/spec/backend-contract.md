@@ -351,11 +351,11 @@ What is no longer true:
 
 The current implementation is split across:
 
-- `tenferro/src/compiler.rs`
-- `tenferro/src/shape_infer.rs`
-- `tenferro/src/exec.rs`
-- `tenferro/src/segment.rs`
-- `tenferro/src/engine.rs`
+- `tenferro-runtime/src/compiler/mod.rs`
+- `tenferro-runtime/src/shape_infer.rs`
+- `tenferro-runtime/src/exec.rs`
+- `tenferro-runtime/src/segment.rs`
+- `tenferro-runtime/src/graph/executor.rs`
 - `tenferro-internal-tensor/src/backend.rs`
 
 Those files are the source of truth for the live backend contract. This

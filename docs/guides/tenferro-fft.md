@@ -33,7 +33,7 @@ normalization modes are:
 
 ```rust
 use num_complex::Complex64;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_fft::{traced_tensor, FftNorm};
 
 let x = TracedTensor::from_vec_col_major(

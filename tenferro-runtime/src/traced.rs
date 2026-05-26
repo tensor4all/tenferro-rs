@@ -300,7 +300,7 @@ impl TracedTensor {
 
     /// Build a data-less placeholder leaf with a fixed (concrete) shape.
     ///
-    /// Must be bound via [`GraphExecutor::run_with_inputs`] before evaluation.
+    /// Must be bound via [`crate::GraphExecutor::run_with_inputs`] before evaluation.
     /// Use this when you know the exact shape of the input but want to build
     /// the graph once and feed different concrete tensors at execution time.
     ///
@@ -347,7 +347,7 @@ impl TracedTensor {
     /// Build a data-less placeholder leaf with the given rank but fully
     /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
     ///
-    /// Must be bound via [`GraphExecutor::run_with_inputs`] before
+    /// Must be bound via [`crate::GraphExecutor::run_with_inputs`] before
     /// evaluation. Use this to build shape-agnostic graphs.
     ///
     /// # Examples

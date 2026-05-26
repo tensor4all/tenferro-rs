@@ -1,11 +1,11 @@
 # GPU Backend Design
 
-This document is developer-facing. Public user docs should describe the GPU
-surface as the CUDA backend, exposed through `tenferro::cuda::{CudaBackend,
+This document is developer-facing. Public user docs describe the GPU surface as
+the CUDA backend exposed from `tenferro_gpu::cubecl::{CubeclBackend,
 upload_tensor, download_tensor}`. The active implementation behind that public
-surface is the CubeCL backend in `tenferro-internal-tensor/src/cubecl/`, gated by the
-internal `cubecl` feature. It targets NVIDIA CUDA devices through CubeCL and
-CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS.
+surface lives in `tenferro-gpu/src/cubecl/`, gated by the `cuda` feature. It
+targets NVIDIA CUDA devices through CubeCL and CubeCL-CUDA, with CUDA library
+support for cuTENSOR, cuSOLVER, and cuBLAS.
 
 CUDA GPU support is implemented through the feature-gated CubeCL backend across
 the concrete tensor, eager, and traced execution surfaces. Coverage includes
@@ -19,8 +19,8 @@ HIP/ROCm is still a feature stub rather than a supported execution path.
 
 See also:
 
-- `tenferro-internal-tensor/src/cubecl/` for the implementation,
-- `tenferro-internal-gpubackend/` for static CubeCL kernel definitions and kernel-level
+- `tenferro-gpu/src/cubecl/` for the implementation,
+- `tenferro-gpu/src/kernels/` for static CubeCL kernel definitions and kernel-level
   validation,
 - `AGENTS.md` for the current GPU status and local test command,
 - [backend-contract.md](../spec/backend-contract.md) for placement rules,
@@ -31,14 +31,14 @@ See also:
 ## Current Module Structure
 
 ```text
-tenferro-internal-gpubackend/src/
+tenferro-gpu/src/kernels/
     elementwise.rs         static elementwise CubeCL kernels
     structural.rs          static structural and conversion CubeCL kernels
     indexing.rs            static slice/gather/scatter/pad CubeCL kernels
     diagonal.rs            static diagonal and triangular-mask CubeCL kernels
     reduce/                reduction validation, launch helpers, and kernels
 
-tenferro-internal-tensor/src/cubecl/
+tenferro-gpu/src/cubecl/
     mod.rs                 CubeclBackend and TensorBackend implementation
     runtime.rs             CubeCL/CUDA runtime initialization and stream access
     memory.rs              upload_tensor, download_tensor, device pointer bridge
@@ -50,20 +50,19 @@ tenferro-internal-tensor/src/cubecl/
     tests/                 ignored GPU tests
 ```
 
-The internal backend type is `CubeclBackend`; the public facade re-exports it as
-`tenferro::cuda::CudaBackend`. There are no separate in-tree `CudaBackend` and
-`RocmBackend` implementations. CUDA is selected internally by enabling the
-`cubecl` feature, which depends on the workspace-pinned CubeCL fork and the
-CubeCL CUDA runtime.
+The public backend type is `tenferro_gpu::cubecl::CubeclBackend`. There are no
+separate in-tree `CudaBackend` and `RocmBackend` implementations. CUDA is
+selected by enabling the `cuda` feature, which depends on the workspace-pinned
+CubeCL fork and the CubeCL CUDA runtime.
 
 ## Kernel Ownership
 
-Static CubeCL kernel definitions live in the internal `tenferro-internal-gpubackend` kernel
-crate. The tensor backend crate must not keep duplicate static kernels once they
-have been moved. This keeps copied/adapted CubeK-derived code,
-tenferro-specific kernel definitions, and third-party notices in one crate.
+Static CubeCL kernel definitions live under `tenferro-gpu/src/kernels`. The
+tensor backend crate must not keep duplicate static kernels once they have been
+moved. This keeps copied/adapted CubeK-derived code, tenferro-specific kernel
+definitions, and third-party notices in one crate.
 
-`tenferro-internal-tensor/src/cubecl/` still owns tensor values, device placement,
+`tenferro-gpu/src/cubecl/` still owns tensor values, device placement,
 allocation, upload/download, CUDA library FFI, TensorBackend dispatch, and
 runtime-generated fused elementwise code. Those are backend integration
 concerns rather than reusable static kernels.
@@ -184,10 +183,10 @@ API boundaries. Callers upload tensors before GPU backend operations and
 download results explicitly when host access is needed.
 
 ```rust,ignore
-use tenferro::cuda::{download_tensor, upload_tensor, CudaBackend};
-use tenferro::{Tensor, TensorBackend};
+use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::{Tensor, TensorBackend};
 
-let mut backend = CudaBackend::new(0)?;
+let mut backend = CubeclBackend::new(0)?;
 let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 

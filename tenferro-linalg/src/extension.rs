@@ -2,11 +2,11 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use tenferro::extension::{
+use tenferro_ops::SymDim;
+use tenferro_runtime::extension::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
 };
-use tenferro_ops::SymDim;
 use tenferro_tensor::{DType, Tensor, TensorBackend};
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";

@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use tenferro::{CpuBackend, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_einsum::eager_tensor::{einsum, einsum_subscripts, tensordot};
 use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()

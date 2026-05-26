@@ -8,7 +8,7 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 //! use tenferro_fft::{traced_tensor::fft, FftNorm};
 //!
 //! let x = TracedTensor::from_vec_col_major(
@@ -46,11 +46,6 @@ use computegraph::OpEmitter;
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{FftNum, FftPlanner};
-use tenferro::extension::{
-    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
-};
-use tenferro::TracedTensor;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::extension::{
     register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError,
@@ -60,6 +55,11 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
+use tenferro_runtime::extension::{
+    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
+    ExtensionRuntimeRegistryError,
+};
+use tenferro_runtime::TracedTensor;
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 
 const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
@@ -420,7 +420,7 @@ pub fn register_runtime<B: TensorBackend + 'static>(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
@@ -453,7 +453,7 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
@@ -484,7 +484,7 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -516,7 +516,7 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(

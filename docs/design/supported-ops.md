@@ -2,16 +2,15 @@
 
 This page is the implementation-facing inventory for the current workspace. It
 is operational, not aspirational: unsupported families are called out
-explicitly. The public user docs still focus on the `tenferro` facade crate.
+explicitly. Public user docs import the direct public crates instead of a broad
+facade.
 
 ---
 
-## `tenferro-internal-tensor`
+## `tenferro-tensor`
 
-`tenferro-internal-tensor` owns dense tensor storage, dtype dispatch, backend traits, CPU
-execution, and the internal CUDA backend integration. Public user docs should
-call this the CUDA backend through the `tenferro::cuda` facade; this
-implementation-facing page also names the CubeCL layer that backs it.
+`tenferro-tensor` owns dense tensor storage, dtype dispatch, backend traits,
+CPU execution, and backend-parametric concrete tensor kernels.
 
 ### Tensor Values
 
@@ -52,11 +51,10 @@ dense linalg are implemented on CPU for the supported dtype subset of each op.
 
 ### CUDA/CubeCL Status
 
-The public facade exposes this backend as `tenferro::cuda::CudaBackend` behind
-the `cuda` feature. Internally, that feature enables `cubecl::CubeclBackend`,
-backed by CubeCL/CubeCL-CUDA and runtime-loaded
-cuTENSOR, cuSOLVER, and cuBLAS. Static kernels live in the internal
-`tenferro-internal-gpubackend` crate.
+The public GPU crate exposes this backend as
+`tenferro_gpu::cubecl::CubeclBackend` behind the `cuda` feature. It is backed
+by CubeCL/CubeCL-CUDA and runtime-loaded cuTENSOR, cuSOLVER, and cuBLAS.
+Static kernels live in `tenferro-gpu/src/kernels`.
 
 Implemented GPU coverage is broad. The user-facing
 [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains the current

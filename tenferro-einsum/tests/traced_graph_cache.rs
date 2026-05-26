@@ -2,12 +2,14 @@
 
 use std::num::NonZeroUsize;
 
-use tenferro::extension::ExtensionCacheLimits;
-use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_ad::EagerRuntime;
 use tenferro_einsum::{
     eager_tensor::einsum as eager_einsum, einsum, einsum_with, parse_einsum_subscripts,
     ContractionOptimizerOptions, EinsumOptimize,
+};
+use tenferro_runtime::extension::ExtensionCacheLimits;
+use tenferro_runtime::{
+    CpuBackend, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
 };
 
 fn register_runtime(executor: &mut GraphExecutor<CpuBackend>) {
@@ -33,7 +35,7 @@ struct RuntimePlannedMatmul {
     b: TracedTensor,
     a_value: Tensor,
     b_value: Tensor,
-    program: tenferro::GraphProgram,
+    program: GraphProgram,
 }
 
 fn runtime_matmul_values(rows: usize, cols: usize, mid: usize) -> (Tensor, Tensor) {

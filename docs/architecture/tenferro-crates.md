@@ -8,11 +8,12 @@
 
 ## I. Purpose
 
-This document defines the internal crate structure and type design of
-tenferro-rs. The key design driver is that **all computation is
-graph-based**: every operation (einsum, linalg, elementwise) produces nodes in
-a `Fragment<Op>`, and execution is always lazy through
-`materialize_merge -> compile -> eval`.
+This document records the graph-based crate architecture that replaced the
+early eager/tape split. The current workspace has no root `tenferro` facade:
+runtime graph APIs live in `tenferro-runtime`, AD APIs in `tenferro-ad`,
+runtime values in `tenferro-tensor`, GPU execution in `tenferro-gpu`, and
+operation families in crates such as `tenferro-einsum`, `tenferro-linalg`, and
+`tenferro-fft`.
 
 ---
 
@@ -28,8 +29,8 @@ The previous architecture organized around eager execution families and tape-bas
 | `internal/ad-ops` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules live on TensorOp |
 | `internal/ad-linalg` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules in ops/ad/linalg.rs |
 | `internal/ad-surface` | → tidu-rs `differentiate`/`transpose` | External crate |
-| `internal/frontend-core` | → `tenferro` TracedTensor | Lazy, not eager |
-| `internal/runtime` | → `tenferro` graph compiler/executor | |
+| `internal/frontend-core` | → `tenferro-runtime` TracedTensor | Lazy, not eager |
+| `internal/runtime` | → `tenferro-runtime` graph compiler/executor | |
 | `tenferro-dynamic-compute` | deleted | Always graph |
 | `tenferro-internal-tensor-compute` | → `tenferro-internal-ops` | |
 | `tenferro-linalg-prims` | → `tenferro-internal-ops` | No need to separate |
@@ -45,30 +46,36 @@ The previous architecture organized around eager execution families and tape-bas
 | `tenferro-internal-tensor` | `tenferro-internal-tensor` | Simplified |
 | `tenferro-prims` | `tenferro-internal-ops` | Rewritten: single TensorOp enum |
 | `tenferro-einsum` | `tenferro-einsum` | Rewritten: graph builder |
-| `tenferro-linalg` | → `tenferro-internal-ops` + `tenferro` | AD rules → tenferro-internal-ops, LAPACK kernels → tenferro backend |
-| `tenferro` (facade) | `tenferro` | TracedTensor, GraphCompiler, GraphExecutor, backends |
+| `tenferro-linalg` | `tenferro-linalg` + `tenferro-linalg-ad` | Primal extension runtime and explicit AD companion |
+| `tenferro` (facade) | deleted | Direct crates are the public API boundary |
 
-**29 crates → 6 crates** (plus 3 external: computegraph-rs, chainrules-rs,
-tidu-rs).
+The current split is intentionally direct rather than facade-based. See
+`AGENTS.md` and `REPOSITORY_RULES.md` for the authoritative dependency graph.
 
 ---
 
 ## III. Crate Dependency Graph
 
 ```text
+chainrules-core
+    |
+    ├── chainrules
+    └── tidu
+
 tenferro-internal-device
     |
-tenferro-algebra
-    |
-tenferro-internal-tensor ──── tensor runtime crate (data types, kernels, TensorBackend, backends)
+tenferro-tensor
     |
 tenferro-internal-ops ─────── computegraph-rs (GraphOp, Fragment)
-    |                 chainrules-rs   (PrimitiveOp)
     |
-    ├── tenferro-einsum (SemiringOps → Fragment construction)
+tenferro-runtime ──────────── tidu-rs integration points
     |
-tenferro ──────────── tidu-rs (differentiate, transpose)
-    (TracedTensor, GraphCompiler, GraphExecutor, backends)
+    ├── tenferro-ad
+    ├── tenferro-einsum
+    ├── tenferro-linalg
+    ├── tenferro-linalg-ad
+    ├── tenferro-fft
+    └── tenferro-gpu
 ```
 
 ---

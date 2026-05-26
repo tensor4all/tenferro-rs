@@ -3,8 +3,8 @@
 //! This module is the canonical traced tensor namespace for the einsum
 //! extension crate. Root-level re-exports remain available for compatibility.
 
-use tenferro::error::Result;
-use tenferro::TracedTensor;
+use tenferro_runtime::error::Result;
+use tenferro_runtime::TracedTensor;
 
 use crate::TensorDotAxes;
 
@@ -20,7 +20,7 @@ pub use crate::traced::{einsum, einsum_subscripts, einsum_subscripts_with, einsu
 /// # Examples
 ///
 /// ```
-/// use tenferro::TracedTensor;
+/// use tenferro_runtime::TracedTensor;
 /// use tenferro_einsum::{traced_tensor, TensorDotAxes};
 ///
 /// let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);

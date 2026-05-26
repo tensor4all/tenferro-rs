@@ -12,13 +12,6 @@ members = [
     "tenferro-linalg",
     "tenferro-linalg-ad",
     "tenferro-fft",
-    "tenferro",
-]
-exclude = [
-    # External extension crates depend only on the public `tenferro` facade
-    # where possible, are NOT core workspace members, and run their own tests
-    # standalone.
-    "ext/tropical",
 ]
 default-members = [
     "tenferro-tensor",

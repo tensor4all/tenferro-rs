@@ -12,7 +12,7 @@ for JAX-like transforms and compile/run reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro::cuda::CudaBackend` |
+| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::cubecl::CubeclBackend` |
 
 CUDA is not a separate tensor layer. The same concrete, eager, and traced
 surfaces can run supported operations on CUDA tensors when data is explicitly
@@ -38,7 +38,7 @@ LAPACK-oriented workflows, and makes trailing batch axes natural for batched
 linear algebra and contractions.
 
 ```rust
-use tenferro::{Tensor, TypedTensor};
+use tenferro_runtime::{Tensor, TypedTensor};
 
 let typed = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -63,7 +63,7 @@ physical order.
 ordinary no-AD computation when runtime dtype is useful.
 
 ```rust
-use tenferro::{tensor, CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -94,7 +94,7 @@ This is not the forward-mode AD/JVP surface. Use `TracedTensor` for transform
 AD such as `grad`, `vjp`, `jvp`, and HVP via composition.
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]));
@@ -111,7 +111,7 @@ lowers that graph into a reusable program, and a `GraphExecutor<B>` runs the
 program on a backend.
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);

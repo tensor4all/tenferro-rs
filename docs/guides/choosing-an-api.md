@@ -76,7 +76,7 @@ operations.
 
 | Need | No-AD concrete path | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | `tenferro::tensor` functions; selected `tenferro::typed_tensor` wrappers | `tenferro::eager_tensor` functions | `tenferro::traced_tensor` functions |
+| Everyday tensor ops | `tenferro_runtime::tensor` functions; selected `tenferro_runtime::typed_tensor` wrappers | `tenferro_ad::eager_tensor` functions | `tenferro_runtime::traced_tensor` functions |
 | Einsum | Internal to `tenferro-einsum` runtime execution | `tenferro_einsum::eager_tensor::einsum` | `tenferro_einsum::traced_tensor::einsum` plus `register_runtime` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `tenferro_einsum::eager_tensor::tensordot` | `tenferro_einsum::traced_tensor::tensordot` |
 | Linear algebra | `Tensor` methods; selected `TypedTensor<T>` methods | `tenferro_linalg::eager_tensor` helpers | `tenferro_linalg::traced_tensor` helpers |

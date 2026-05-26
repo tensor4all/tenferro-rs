@@ -11,7 +11,7 @@ import sys
 PRIMAL_FORBIDDEN = re.compile(
     r"\b(ExtensionAdRule|autodiff|chainrules|computegraph|eager_tensor|tenferro-ad)\b"
 )
-FACADE_AD_FEATURE = "tenferro/autodiff"
+REMOVED_FACADE_AD_FEATURE = "tenferro" + "/autodiff"
 
 
 def scan_file(repo: Path, path: Path, pattern: re.Pattern[str]) -> list[str]:
@@ -37,7 +37,7 @@ def main() -> int:
         repo / "tenferro-linalg" / "Cargo.toml",
     ]:
         for line_no, line in enumerate(manifest.read_text().splitlines(), start=1):
-            if FACADE_AD_FEATURE in line:
+            if REMOVED_FACADE_AD_FEATURE in line:
                 findings.append(f"{manifest.relative_to(repo)}:{line_no}: {line}")
 
     for finding in findings:

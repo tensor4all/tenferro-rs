@@ -1,4 +1,4 @@
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();

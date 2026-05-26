@@ -25,9 +25,9 @@ and extension model.
 
 ## First CPU Example
 
-<!-- snippet-source: tenferro/examples/cpu_quickstart.rs -->
+<!-- snippet-source: tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();

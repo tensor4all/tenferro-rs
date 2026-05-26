@@ -10,10 +10,10 @@ traced graph execution.
 
 | Layer | Operation style |
 | --- | --- |
-| `TypedTensor<T>` | Typed storage with `tenferro::typed_tensor` wrappers; convert to `Tensor` for the broad dynamic operation surface |
-| `Tensor` | Concrete no-AD operations through `tenferro::tensor` and an explicit backend |
-| `EagerTensor` | Immediate forward operations through `tenferro::eager_tensor`; tracked variables also record state for `backward()` |
-| `TracedTensor` | Lazy graph-building operations through `tenferro::traced_tensor` |
+| `TypedTensor<T>` | Typed storage with `tenferro_runtime::typed_tensor` wrappers; convert to `Tensor` for the broad dynamic operation surface |
+| `Tensor` | Concrete no-AD operations through `tenferro_runtime::tensor` and an explicit backend |
+| `EagerTensor` | Immediate forward operations through `tenferro_ad::eager_tensor`; tracked variables also record state for `backward()` |
+| `TracedTensor` | Lazy graph-building operations through `tenferro_runtime::traced_tensor` |
 
 CUDA is a backend/device choice for supported operations on `Tensor`,
 `EagerTensor`, and `TracedTensor`; it is not a separate tensor layer.
@@ -23,7 +23,7 @@ CUDA is a backend/device choice for supported operations on `Tensor`,
 Use `Tensor` with a backend when you want direct no-AD computation.
 
 ```rust
-use tenferro::{tensor, CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -43,7 +43,7 @@ Use `EagerTensor` when the same immediate computation should stay in an
 gradients.
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
@@ -58,7 +58,7 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
-use tenferro::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
@@ -77,7 +77,7 @@ assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ## Elementwise Math Functions
 
 ```rust
-use tenferro::{eager_tensor, EagerRuntime, Tensor};
+use tenferro_ad::{eager_tensor, EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]));
@@ -93,7 +93,7 @@ assert!((data[2] - 7.38905609893065).abs() < 1e-12);
 ## Reshape And Transpose
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
@@ -112,7 +112,7 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
 ## Explicit Broadcast
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 
 let ctx = EagerRuntime::new();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]));
@@ -125,7 +125,7 @@ assert_eq!(repeated.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0
 ## Reduce Over Axes
 
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
