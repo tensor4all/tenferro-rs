@@ -2,9 +2,8 @@
 //!
 //! This module exposes the Stage 6 `ExtensionOp` mechanism through the
 //! runtime crate. External crates implement
-//! [`tenferro_ops::ext_op::ExtensionOp`], optionally register ChainRules-style
-//! AD rules through [`register_extension_chain_rule`], and build traced or
-//! eager graphs containing the extension via [`apply`] / [`apply_eager`].
+//! [`tenferro_ops::ext_op::ExtensionOp`] and build traced graphs containing
+//! the extension via [`apply`].
 //!
 //! See `docs/spec/extension-op.md` for the normative contract.
 //!
@@ -14,8 +13,7 @@
 //! use tenferro_runtime::extension::{apply, ExtensionOpTrait};
 //!
 //! // Construct an `Arc<dyn ExtensionOpTrait>` and call `apply(op, &[input])`
-//! // to lower it into a `TracedTensor`. AD support is added separately
-//! // with `register_extension_chain_rule`.
+//! // to lower it into a `TracedTensor`.
 //! ```
 
 use std::collections::HashMap;
@@ -23,38 +21,14 @@ use std::sync::Arc;
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{OpMode, ValRef};
-#[cfg(feature = "autodiff")]
-use computegraph::GraphOp;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-#[cfg(feature = "autodiff")]
-use tenferro_tensor::Tensor;
 
 use crate::checkpoint::CheckpointNode;
-#[cfg(feature = "autodiff")]
-use crate::eager::{record_eager_outputs, EagerTensor};
-#[cfg(feature = "autodiff")]
-#[cfg(feature = "autodiff")]
-use crate::error::{Error, Result};
 use crate::metadata::{push_metadata_scope, register_scoped_fragment_metadata};
 use crate::traced::{next_traced_id, TracedTensor};
 
-#[cfg(feature = "autodiff")]
-pub use tenferro_ops::ext_op::{
-    is_extension_rule_registered, lookup_extension_rule, register_extension_chain_rule,
-    register_extension_rule, AdValue, ExtensionAdRule as _ExtensionAdRuleReexport,
-    ExtensionChainRule, ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError, FruleBuilder,
-    RRuleBuilder,
-};
-
-// Re-export under a canonical name (the `_ExtensionOpReexport` alias above
-// exists only so the macro-generated doc-test type bounds can find the
-// trait; downstream callers should use this name).
-#[cfg(feature = "autodiff")]
-pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
-#[cfg(feature = "autodiff")]
-pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::ExtensionOp as ExtensionOpTrait;
 pub use tenferro_ops::ExtensionFamilyId;
 
@@ -224,92 +198,4 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Vec<TracedTe
             }
         })
         .collect()
-}
-
-/// Apply an extension op to eager tensors.
-///
-/// The forward pass delegates through the owning [`EagerRuntime`]'s extension
-/// executor when a runtime is registered, then records the same
-/// `StdTensorOp::Extension` node used by traced graphs. Eager backward
-/// therefore uses registered [`ExtensionAdRuleTrait`] rules through the same AD
-/// source of truth and, for registered runtimes, the same runtime cache owner.
-///
-/// [`EagerRuntime`]: crate::EagerRuntime
-#[cfg(feature = "autodiff")]
-pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
-    let Some(first) = inputs.first() else {
-        return Err(Error::Internal(
-            "extension::apply_eager requires at least one input tensor".to_string(),
-        ));
-    };
-    if inputs.len() != op.n_inputs() {
-        return Err(Error::Internal(format!(
-            "extension::apply_eager: op family {:?} expects {} inputs, got {}",
-            op.family_id(),
-            op.n_inputs(),
-            inputs.len()
-        )));
-    }
-
-    let ctx = Arc::clone(&first.ctx);
-    for tensor in inputs.iter().skip(1) {
-        if !first.same_context(tensor) {
-            return Err(Error::ContextMismatch {
-                lhs: first.ctx_id(),
-                rhs: tensor.ctx_id(),
-            });
-        }
-    }
-
-    let op = StdTensorOp::Extension(op);
-    let concrete_inputs: Vec<&Tensor> = inputs.iter().map(|tensor| tensor.data.as_ref()).collect();
-    let outputs = ctx.exec_outputs(&op, &concrete_inputs)?;
-    if outputs.len() != op.n_outputs() {
-        return Err(Error::Internal(format!(
-            "expected {} eager outputs for {:?}, got {}",
-            op.n_outputs(),
-            op,
-            outputs.len()
-        )));
-    }
-
-    if !inputs.iter().any(|input| input.requires_grad) {
-        return Ok(outputs
-            .into_iter()
-            .map(|output| EagerTensor::new_untracked_result(Arc::clone(&ctx), output))
-            .collect());
-    }
-
-    let outputs: Vec<Arc<Tensor>> = outputs.into_iter().map(Arc::new).collect();
-    let recorded = record_eager_outputs(&op, &outputs, inputs);
-    if recorded.traces.len() != outputs.len() {
-        return Err(Error::Internal(format!(
-            "expected {} eager traces for {:?}, got {}",
-            outputs.len(),
-            op,
-            recorded.traces.len()
-        )));
-    }
-    let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
-    for input in inputs {
-        for scope in &input.metadata_scopes {
-            push_metadata_scope(&mut metadata_scopes, Arc::clone(scope));
-        }
-    }
-
-    Ok(recorded
-        .traces
-        .into_iter()
-        .zip(outputs)
-        .map(|(trace, output)| {
-            EagerTensor::new_result(
-                Arc::clone(&ctx),
-                trace.key,
-                output.as_ref().clone(),
-                trace.requires_grad,
-                trace.node,
-                metadata_scopes.clone(),
-            )
-        })
-        .collect())
 }

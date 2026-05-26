@@ -12,7 +12,8 @@ use std::{env, num::ParseIntError};
 
 use num_complex::{Complex32, Complex64};
 use tenferro::{
-    CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+    CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt,
+    TypedTensor,
 };
 
 use crate::compare::compare_tensor;

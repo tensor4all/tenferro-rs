@@ -1,6 +1,6 @@
 #![cfg(feature = "autodiff")]
 
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt};
 use tenferro_einsum::einsum;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

@@ -5,6 +5,7 @@ members = [
     "tenferro-tensor",
     "tenferro-gpu",
     "tenferro-runtime",
+    "tenferro-ad",
     "tenferro-internal-extension-macros",
     "tenferro-internal-ops",
     "tenferro-einsum",

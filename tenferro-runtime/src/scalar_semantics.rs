@@ -10,7 +10,7 @@ pub(crate) fn round_real_to_i64(value: f64) -> i64 {
     }
 }
 
-pub(crate) fn dynamic_truncate_size(size_tensor: &Tensor, axis_extent: usize) -> Result<usize> {
+pub fn dynamic_truncate_size(size_tensor: &Tensor, axis_extent: usize) -> Result<usize> {
     let value = scalar_size_value(size_tensor)?;
     let rounded = if value.is_finite() {
         value.round()

@@ -644,7 +644,7 @@ fn deferred_zero_for_tangent_key(
     bindings: &HashMap<TensorInputKey, &Tensor>,
     defaults: &HashMap<TensorInputKey, &Tensor>,
 ) -> Option<Tensor> {
-    if matches!(key, TensorInputKey::User { .. }) {
+    if !key.is_tangent() {
         return None;
     }
     let root = tangent_primal_root(key);
@@ -653,11 +653,7 @@ fn deferred_zero_for_tangent_key(
 }
 
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
-    match key {
-        TensorInputKey::User { .. } => key,
-        #[cfg(feature = "autodiff")]
-        TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
-    }
+    key.primal_root()
 }
 
 fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {

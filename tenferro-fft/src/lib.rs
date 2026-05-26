@@ -50,9 +50,11 @@ use tenferro::extension::{
     apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
 };
-#[cfg(feature = "autodiff")]
-use tenferro::extension::{register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError};
 use tenferro::TracedTensor;
+#[cfg(feature = "autodiff")]
+use tenferro_ad::extension::{
+    register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError,
+};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]

@@ -8,7 +8,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::Tensor;
 
 #[derive(Clone)]
-pub(crate) struct CheckpointNode {
+pub struct CheckpointNode {
     pub fragment: Arc<Fragment<StdTensorOp>>,
     pub alias_key: TensorInputKey,
     pub alias_target: GlobalValKey<StdTensorOp>,
@@ -17,8 +17,7 @@ pub(crate) struct CheckpointNode {
 }
 
 impl CheckpointNode {
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn collect_aliases(&self) -> HashMap<TensorInputKey, GlobalValKey<StdTensorOp>> {
+    pub fn collect_aliases(&self) -> HashMap<TensorInputKey, GlobalValKey<StdTensorOp>> {
         let mut aliases = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {
@@ -28,8 +27,7 @@ impl CheckpointNode {
         aliases
     }
 
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn collect_fragments(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
+    pub fn collect_fragments(&self) -> Vec<Arc<Fragment<StdTensorOp>>> {
         let mut fragments = Vec::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {
@@ -39,8 +37,7 @@ impl CheckpointNode {
         fragments
     }
 
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
+    pub fn collect_inputs(&self) -> HashMap<TensorInputKey, Arc<Tensor>> {
         let mut inputs = HashMap::new();
         let mut current: Option<&CheckpointNode> = Some(self);
         while let Some(node) = current {

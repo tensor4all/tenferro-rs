@@ -1,14 +1,12 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
     DType, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
 };
 
 use crate::error::{Error, Result};
-#[cfg(feature = "autodiff")]
 use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
@@ -65,7 +63,6 @@ fn promote_binary<'a>(
     promote_binary_to_dtype(exec, a, b, promoted)
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
     lhs: &Tensor,
     rhs: &Tensor,
@@ -100,7 +97,6 @@ pub fn exec_op_on_tensors<B: TensorBackend>(
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn exec_op_on_tensors_with_extension_executor<B: TensorBackend + 'static>(
     op: &StdTensorOp,
     inputs: &[&Tensor],

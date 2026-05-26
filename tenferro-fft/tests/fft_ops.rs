@@ -1,4 +1,6 @@
 use num_complex::Complex64;
+#[cfg(feature = "autodiff")]
+use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_fft::{fft, ifft, irfft, rfft, FftNorm};
 

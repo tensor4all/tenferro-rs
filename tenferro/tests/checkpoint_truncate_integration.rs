@@ -2,7 +2,9 @@
 
 mod support;
 use support::RunTraced;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt, TypedTensor,
+};
 
 const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;

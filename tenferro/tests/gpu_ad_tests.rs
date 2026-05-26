@@ -2,7 +2,10 @@
 
 mod support;
 use support::RunTraced;
-use tenferro::{CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro::{
+    CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt,
+    TypedTensor,
+};
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::Buffer;
 

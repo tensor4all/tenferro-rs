@@ -1018,7 +1018,7 @@ fn cross_context_add_rejected() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
-    assert!(msg.contains("different eager contexts"), "got: {msg}");
+    assert!(msg.contains("different eager AD contexts"), "got: {msg}");
 }
 
 #[test]
@@ -1037,7 +1037,7 @@ fn cross_context_mul_rejected() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
-    assert!(msg.contains("different eager contexts"), "got: {msg}");
+    assert!(msg.contains("different eager AD contexts"), "got: {msg}");
 }
 
 #[test]
@@ -1056,7 +1056,7 @@ fn cross_context_tracked_tensors_rejected() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
-    assert!(msg.contains("different eager contexts"), "got: {msg}");
+    assert!(msg.contains("different eager AD contexts"), "got: {msg}");
 }
 
 #[test]

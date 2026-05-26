@@ -4,7 +4,8 @@ use tenferro::{
 };
 
 #[cfg(feature = "autodiff")]
-use tenferro::{eager_tensor, EagerRuntime, EagerTensor};
+use tenferro::{EagerRuntime, EagerTensor};
+use tenferro_ad::eager_tensor;
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {

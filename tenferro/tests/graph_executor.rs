@@ -1,5 +1,7 @@
 use tenferro::error::Error;
 use tenferro::exec::{ExecInstruction, ExecOp, ExecProgram};
+#[cfg(feature = "autodiff")]
+use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]

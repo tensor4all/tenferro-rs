@@ -1,5 +1,7 @@
 mod support;
 use support::RunTraced;
+#[cfg(feature = "autodiff")]
+use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

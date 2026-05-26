@@ -17,7 +17,7 @@ use tenferro::compiler::compile_std_to_exec;
 use tenferro::exec::eval_exec_ir;
 use tenferro::shape_infer::{infer_output_dtype, infer_output_extents};
 use tenferro::traced_tensor::matmul;
-use tenferro::{GraphExecutor, TracedTensor};
+use tenferro::{GraphExecutor, TracedTensor, TracedTensorAdExt};
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };

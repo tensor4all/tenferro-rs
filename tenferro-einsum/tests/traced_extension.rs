@@ -1,3 +1,5 @@
+#[cfg(feature = "autodiff")]
+use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]

@@ -447,11 +447,7 @@ fn descriptor_for_input(
 }
 
 fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
-    match key {
-        TensorInputKey::User { .. } => key,
-        #[cfg(feature = "autodiff")]
-        TensorInputKey::Tangent { of, .. } => tangent_primal_root(of),
-    }
+    key.primal_root()
 }
 
 fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {

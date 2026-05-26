@@ -27,11 +27,11 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use num_complex::{Complex32, Complex64};
-use tenferro::extension::{
-    apply, apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionExecutionContext,
-    ExtensionRuntime,
+use tenferro::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
+use tenferro::{
+    CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt,
 };
-use tenferro::{CpuBackend, EagerRuntime, EagerTensor, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ad::extension::{apply_eager, register_extension_rule, ExtensionAdRuleTrait};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -52,7 +52,7 @@ fn register_rule_once(rule: Arc<dyn ExtensionAdRuleTrait>) {
     }
     if let Err(err) = register_extension_rule(rule) {
         match err {
-            tenferro::extension::ExtensionRegistryError::DuplicateRule { .. } => {}
+            tenferro_ad::extension::ExtensionRegistryError::DuplicateRule { .. } => {}
             other => panic!("register_extension_rule failed: {other}"),
         }
     }
@@ -974,7 +974,7 @@ fn extension_carrier_hash_and_eq_are_stable() {
 
 #[test]
 fn duplicate_rule_registration_is_rejected() {
-    use tenferro::extension::ExtensionRegistryError;
+    use tenferro_ad::extension::ExtensionRegistryError;
 
     ensure_scale_by_2_registered();
     let err = register_extension_rule(Arc::new(TestScaleBy2Rule))
@@ -989,7 +989,7 @@ fn duplicate_rule_registration_is_rejected() {
 
 #[test]
 fn malformed_family_id_is_rejected() {
-    use tenferro::extension::ExtensionRegistryError;
+    use tenferro_ad::extension::ExtensionRegistryError;
 
     #[derive(Debug)]
     struct BadRule;

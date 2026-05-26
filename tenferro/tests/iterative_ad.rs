@@ -18,7 +18,7 @@ use support::{run_many_traced_with, RunTraced};
 use computegraph::fragment::Fragment;
 use tenferro::traced::TracedTensor;
 use tenferro::GraphExecutor;
-use tenferro::{CpuBackend, Tensor, TypedTensor};
+use tenferro::{CpuBackend, Tensor, TracedTensorAdExt, TypedTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
 const TOL: f64 = 1e-6;

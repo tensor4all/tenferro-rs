@@ -3,8 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use computegraph::fragment::{Fragment, FragmentBuilder};
-#[cfg(feature = "autodiff")]
-use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::{Complex32, Complex64};
@@ -12,19 +10,9 @@ use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_s
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
-#[cfg(feature = "autodiff")]
-use tenferro_tensor::TensorBackend;
-#[cfg(feature = "autodiff")]
-use tenferro_tensor::TypedTensor;
 use tenferro_tensor::{CompareDir, DType, DotGeneralConfig, Tensor, TensorScalar};
-#[cfg(feature = "autodiff")]
-use tidu::{try_differentiate, try_transpose};
 
 use super::error::{Error, Result};
-#[cfg(feature = "autodiff")]
-use super::graph::{GraphCompiler, GraphExecutor};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
@@ -32,13 +20,9 @@ use crate::metadata::{
     register_scoped_fragment_metadata, register_scoped_value_metadata, symbolic_input_meta,
     tensor_meta, MetadataScope,
 };
-#[cfg(feature = "autodiff")]
-use crate::metadata::{registered_meta, tensor_meta_from_tensor};
 use crate::scalar_semantics::round_real_to_i64;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "autodiff")]
-static NEXT_DIFF_PASS_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
 
 pub type TracedTensorId = u64;
@@ -47,11 +31,6 @@ pub(crate) fn next_input_key() -> TensorInputKey {
     TensorInputKey::User {
         id: NEXT_INPUT_ID.fetch_add(1, Ordering::Relaxed),
     }
-}
-
-#[cfg(feature = "autodiff")]
-fn next_pass_id() -> u64 {
-    NEXT_DIFF_PASS_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub(crate) fn next_traced_id() -> TracedTensorId {
@@ -94,11 +73,6 @@ pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Vec<usize> {
             })
         })
         .collect()
-}
-
-#[cfg(feature = "autodiff")]
-fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
-    try_concrete_shape(tensor).unwrap_or_else(|| vec![0; tensor.rank])
 }
 
 /// Broadcast a traced tensor to `target_shape`.
@@ -515,358 +489,6 @@ impl TracedTensor {
             GlobalValKey::Input(key) => Some(key.clone()),
             _ => None,
         }
-    }
-
-    #[cfg(feature = "autodiff")]
-    pub fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
-        if self.rank != 0 {
-            return Err(Error::NonScalarGrad {
-                shape: error_shape_hint(self),
-            });
-        }
-
-        let ones = ones_tensor(self.dtype, vec![]);
-        let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        self.try_vjp_result(wrt, &seed)?.ok_or_else(|| {
-            Error::Internal(format!(
-                "grad output is inactive for {:?}",
-                leaf_input_key(wrt)
-            ))
-        })
-    }
-
-    /// Like [`grad`](Self::grad) but returns `None` when the scalar output does
-    /// not depend on `wrt`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_runtime::TracedTensor;
-    /// # let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// # let loss = x.scale_real(2.0);
-    /// let maybe_dx = loss.try_grad(&x).unwrap();
-    /// ```
-    #[cfg(feature = "autodiff")]
-    pub fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
-        if self.rank != 0 {
-            return Err(Error::NonScalarGrad {
-                shape: error_shape_hint(self),
-            });
-        }
-
-        let ones = ones_tensor(self.dtype, vec![]);
-        let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        self.try_vjp_result(wrt, &seed)
-    }
-
-    /// Evaluate this tensor and replace its graph with a concrete leaf.
-    ///
-    /// This keeps downstream forward evaluation rooted at the concrete value
-    /// while retaining the original fragment chain for later reverse-mode AD.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
-    /// let mut y = &x * &x;
-    /// y.checkpoint(&mut compiler, &mut executor).unwrap();
-    ///
-    /// let program = compiler.compile(&y).unwrap();
-    /// assert_eq!(executor.run(&program).unwrap().shape(), &[] as &[usize]);
-    /// ```
-    #[cfg(feature = "autodiff")]
-    pub fn checkpoint<B: TensorBackend>(
-        &mut self,
-        compiler: &mut GraphCompiler,
-        executor: &mut GraphExecutor<B>,
-    ) -> Result<()> {
-        let data = if let Some(data) = &self.data {
-            data.clone()
-        } else {
-            let program = compiler.compile(self)?;
-            Arc::new(executor.run(&program)?)
-        };
-        let concrete_shape_hint = Some(data.shape().iter().copied().map(SymDim::from).collect());
-
-        let old_fragment = self.fragment.clone();
-        let old_output_key = old_fragment.vals()[self.val].key.clone();
-        let old_inputs = (*self.inputs_map).clone();
-        let concrete_meta = tensor_meta_from_tensor(data.as_ref());
-
-        let new_key = next_input_key();
-        let mut builder = FragmentBuilder::new();
-        let leaf_val = builder.add_input(new_key.clone());
-        builder.set_outputs(vec![leaf_val]);
-        let new_fragment = Arc::new(builder.build());
-        let new_metadata_scope = register_scoped_value_metadata(
-            new_fragment.vals()[leaf_val].key.clone(),
-            concrete_meta.clone(),
-        );
-        // Dynamic shape ops may have conservative static metadata on their
-        // graph output. A checkpoint has evaluated the concrete tensor, so AD
-        // alias resolution should see the runtime shape on both sides.
-        let old_output_metadata_scope =
-            register_scoped_value_metadata(old_output_key.clone(), concrete_meta);
-
-        let node = CheckpointNode {
-            fragment: old_fragment,
-            alias_key: new_key.clone(),
-            alias_target: old_output_key,
-            old_inputs,
-            prev: self.checkpoint_chain.take(),
-        };
-
-        self.fragment = new_fragment;
-        self.val = leaf_val;
-        self.extra_roots.clear();
-        self.data = Some(data.clone());
-        self.shape_hint = concrete_shape_hint;
-        self.checkpoint_chain = Some(Arc::new(node));
-        push_metadata_scope(&mut self.metadata_scopes, Arc::new(new_metadata_scope));
-        push_metadata_scope(
-            &mut self.metadata_scopes,
-            Arc::new(old_output_metadata_scope),
-        );
-
-        let mut merged = HashMap::new();
-        if let Some(chain) = &self.checkpoint_chain {
-            merged.extend(chain.collect_inputs());
-        }
-        merged.insert(new_key, data);
-        self.inputs_map = Arc::new(merged);
-
-        Ok(())
-    }
-
-    #[cfg(feature = "autodiff")]
-    pub fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
-        self.try_jvp(wrt, tangent)
-            .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
-    }
-
-    /// Like [`jvp`](Self::jvp) but returns `None` when the output does not
-    /// depend on `wrt` (i.e. the tangent is structurally zero).
-    #[cfg(feature = "autodiff")]
-    pub fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
-        self.try_jvp_result(wrt, tangent)
-            .unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    /// Fallible variant of [`try_jvp`](Self::try_jvp).
-    ///
-    /// This returns an error when a primitive or extension cannot emit its
-    /// linearization rule.
-    #[cfg(feature = "autodiff")]
-    pub fn try_jvp_result(
-        &self,
-        wrt: &TracedTensor,
-        tangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>> {
-        let wrt_input_key = leaf_input_key(wrt);
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let aliases = self
-            .checkpoint_chain
-            .as_ref()
-            .map(|chain| chain.collect_aliases())
-            .unwrap_or_default();
-        let checkpoint_fragments = self
-            .checkpoint_chain
-            .as_ref()
-            .map(|chain| chain.collect_fragments())
-            .unwrap_or_default();
-        let mut roots = self.resolve_roots();
-        roots.extend(checkpoint_fragments.iter().cloned());
-        let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        let linear = try_differentiate(
-            &view,
-            std::slice::from_ref(&output_key),
-            std::slice::from_ref(&wrt_input_key),
-            next_pass_id(),
-            &mut ad_ctx,
-            &aliases,
-        )?;
-        let Some(tangent_output) = linear.tangent_outputs[0] else {
-            return Ok(None);
-        };
-        let tangent_input_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
-        let metadata_scope = register_scoped_fragment_metadata(
-            &linear.fragment,
-            vec![(
-                GlobalValKey::Input(tangent_input_key.clone()),
-                tensor_meta_from_tensor(
-                    tangent
-                        .data
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data"))
-                        .as_ref(),
-                ),
-            )],
-        );
-
-        let mut inputs_map = (*self.inputs_map).clone();
-        if let Some(chain) = &self.checkpoint_chain {
-            inputs_map.extend(chain.collect_inputs());
-        }
-        inputs_map.insert(
-            tangent_input_key,
-            tangent
-                .data
-                .clone()
-                .unwrap_or_else(|| panic!("jvp tangent must have concrete tensor data")),
-        );
-
-        let mut extra_roots = vec![self.fragment.clone()];
-        extra_roots.extend(checkpoint_fragments);
-        extra_roots.extend(self.extra_roots.iter().cloned());
-
-        Ok(Some(TracedTensor {
-            id: next_traced_id(),
-            rank: self.rank,
-            dtype: self.dtype,
-            fragment: Arc::new(linear.fragment),
-            val: tangent_output,
-            data: None,
-            shape_hint: self.shape_hint.clone(),
-            inputs_map: Arc::new(inputs_map),
-            extra_roots,
-            checkpoint_chain: self.checkpoint_chain.clone(),
-            metadata_scopes: metadata_scopes_with_new(
-                metadata_scope,
-                [
-                    self.metadata_scopes.as_slice(),
-                    wrt.metadata_scopes.as_slice(),
-                    tangent.metadata_scopes.as_slice(),
-                ],
-            ),
-        }))
-    }
-
-    #[cfg(feature = "autodiff")]
-    pub fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
-        match self.try_vjp_result(wrt, cotangent) {
-            Ok(Some(vjp)) => vjp,
-            Ok(None) => panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)),
-            Err(err) => panic!("{err}"),
-        }
-    }
-
-    /// Fallible reverse-mode product helper.
-    ///
-    /// This returns `Ok(None)` when the cotangent for `wrt` is structurally
-    /// inactive, and returns an error when a primitive or extension is missing
-    /// the required AD rule.
-    #[cfg(feature = "autodiff")]
-    pub fn try_vjp_result(
-        &self,
-        wrt: &TracedTensor,
-        cotangent: &TracedTensor,
-    ) -> Result<Option<TracedTensor>> {
-        let wrt_input_key = leaf_input_key(wrt);
-        let output_key = self.fragment.vals()[self.val].key.clone();
-        let aliases = self
-            .checkpoint_chain
-            .as_ref()
-            .map(|chain| chain.collect_aliases())
-            .unwrap_or_default();
-        let checkpoint_fragments = self
-            .checkpoint_chain
-            .as_ref()
-            .map(|chain| chain.collect_fragments())
-            .unwrap_or_default();
-        let mut roots = self.resolve_roots();
-        roots.extend(checkpoint_fragments.iter().cloned());
-        let view = resolve(roots);
-        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        let linear = try_differentiate(
-            &view,
-            std::slice::from_ref(&output_key),
-            std::slice::from_ref(&wrt_input_key),
-            next_pass_id(),
-            &mut ad_ctx,
-            &aliases,
-        )?;
-        if linear.tangent_outputs[0].is_none() {
-            return Ok(None);
-        }
-        let linear_seed_key = linear_input_key(&linear.fragment, linear.tangent_inputs[0].1);
-        let linear_metadata_scope = register_scoped_fragment_metadata(
-            &linear.fragment,
-            vec![(
-                GlobalValKey::Input(linear_seed_key),
-                registered_meta(&wrt.fragment.vals()[wrt.val].key),
-            )],
-        );
-        ad_ctx.refresh_global_metadata();
-        let transposed = try_transpose(&linear, &mut ad_ctx)?;
-        let cotangent_input_key =
-            linear_input_key(&transposed.fragment, transposed.tangent_inputs[0].1);
-        let transposed_metadata_scope = register_scoped_fragment_metadata(
-            &transposed.fragment,
-            vec![(
-                GlobalValKey::Input(cotangent_input_key.clone()),
-                tensor_meta_from_tensor(
-                    cotangent
-                        .data
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data"))
-                        .as_ref(),
-                ),
-            )],
-        );
-        let linear_fragment = Arc::new(linear.fragment);
-        let Some(cotangent_output) = transposed.tangent_outputs[0] else {
-            return Ok(None);
-        };
-
-        let mut inputs_map = (*self.inputs_map).clone();
-        if let Some(chain) = &self.checkpoint_chain {
-            inputs_map.extend(chain.collect_inputs());
-        }
-        inputs_map.insert(
-            cotangent_input_key.clone(),
-            cotangent
-                .data
-                .clone()
-                .unwrap_or_else(|| panic!("vjp cotangent must have concrete tensor data")),
-        );
-        // Inactive tangent keys are intentionally absent from `inputs_map`.
-        // Graph execution resolves them through deferred-zero synthesis keyed
-        // on the primal binding, avoiding dense zero tensors during VJP graph
-        // construction.
-
-        let mut extra_roots = vec![self.fragment.clone(), linear_fragment];
-        extra_roots.extend(checkpoint_fragments);
-        extra_roots.extend(self.extra_roots.iter().cloned());
-
-        Ok(Some(TracedTensor {
-            id: next_traced_id(),
-            rank: wrt.rank,
-            dtype: wrt.dtype,
-            fragment: Arc::new(transposed.fragment),
-            val: cotangent_output,
-            data: None,
-            shape_hint: wrt.shape_hint.clone(),
-            inputs_map: Arc::new(inputs_map),
-            extra_roots,
-            checkpoint_chain: self.checkpoint_chain.clone(),
-            metadata_scopes: {
-                let mut scopes = metadata_scopes_with_new(
-                    linear_metadata_scope,
-                    [
-                        self.metadata_scopes.as_slice(),
-                        wrt.metadata_scopes.as_slice(),
-                        cotangent.metadata_scopes.as_slice(),
-                    ],
-                );
-                push_metadata_scope(&mut scopes, Arc::new(transposed_metadata_scope));
-                scopes
-            },
-        }))
     }
 
     /// Elementwise addition with NumPy-style broadcasting.
@@ -2279,37 +1901,5 @@ impl TracedTensor {
         roots.push(self.fragment.clone());
         roots.extend(self.extra_roots.iter().cloned());
         roots
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn leaf_input_key(tt: &TracedTensor) -> TensorInputKey {
-    match &tt.fragment.vals()[tt.val].key {
-        GlobalValKey::Input(key) => key.clone(),
-        other => panic!("expected traced leaf input, got {:?}", other),
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn linear_input_key(fragment: &Fragment<StdTensorOp>, local_id: LocalValId) -> TensorInputKey {
-    match &fragment.vals()[local_id].key {
-        GlobalValKey::Input(key) => key.clone(),
-        other => panic!("expected linear fragment input, got {:?}", other),
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Tensor {
-    match dtype {
-        DType::F32 => Tensor::F32(TypedTensor::ones(shape)),
-        DType::F64 => Tensor::F64(TypedTensor::ones(shape)),
-        DType::I32 => Tensor::I32(TypedTensor::ones(shape)),
-        DType::I64 => Tensor::I64(TypedTensor::ones(shape)),
-        DType::Bool => {
-            let len = shape.iter().product();
-            Tensor::Bool(TypedTensor::from_vec_col_major(shape, vec![true; len]))
-        }
-        DType::C32 => Tensor::C32(TypedTensor::ones(shape)),
-        DType::C64 => Tensor::C64(TypedTensor::ones(shape)),
     }
 }

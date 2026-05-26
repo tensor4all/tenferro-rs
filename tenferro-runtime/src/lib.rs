@@ -19,21 +19,10 @@
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
+#[doc(hidden)]
+pub mod ad_support;
 mod checkpoint;
 pub mod compiler;
-#[cfg(feature = "autodiff")]
-mod eager;
-#[cfg(feature = "autodiff")]
-mod eager_backend;
-#[cfg(feature = "autodiff")]
-mod eager_emitter;
-pub mod eager_exec;
-#[cfg(feature = "autodiff")]
-pub(crate) mod eager_ops;
-#[cfg(feature = "autodiff")]
-pub(crate) mod eager_ops_elementwise;
-#[cfg(feature = "autodiff")]
-pub mod eager_tensor;
 pub mod error;
 pub mod exec;
 pub mod extension;
@@ -41,7 +30,8 @@ pub mod extension_cache;
 pub mod extension_runtime;
 pub mod graph;
 mod metadata;
-mod scalar_semantics;
+#[doc(hidden)]
+pub mod scalar_semantics;
 pub mod segment;
 pub mod shape_infer;
 mod shape_packing;
@@ -51,10 +41,6 @@ pub mod traced;
 pub mod traced_tensor;
 pub mod typed_tensor;
 
-#[cfg(feature = "autodiff")]
-pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
-#[cfg(feature = "autodiff")]
-pub use eager_backend::EagerBackend;
 pub use error::{ContextId, Error, Result};
 pub use extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,

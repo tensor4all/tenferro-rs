@@ -10,14 +10,14 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
-#[cfg(feature = "autodiff")]
-use tenferro::extension::{
-    is_extension_rule_registered, register_extension_rule, ExtensionAdRuleTrait,
-    ExtensionRegistryError,
-};
 use tenferro::extension::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
+};
+#[cfg(feature = "autodiff")]
+use tenferro_ad::extension::{
+    is_extension_rule_registered, register_extension_rule, ExtensionAdRuleTrait,
+    ExtensionRegistryError,
 };
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;

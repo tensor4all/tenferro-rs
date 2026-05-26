@@ -8,7 +8,9 @@
 mod support;
 use support::RunTraced;
 use tenferro::traced::TracedTensor;
-use tenferro::{CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};
+use tenferro::{
+    CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensorAdExt, TypedTensor,
+};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

@@ -18,7 +18,16 @@
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
+#[cfg(feature = "autodiff")]
+pub use tenferro_ad::{
+    EagerBackend, EagerRuntime, EagerRuntimeCacheStats, EagerTensor, TracedTensorAdExt,
+};
 pub use tenferro_runtime::*;
+
+#[cfg(feature = "autodiff")]
+pub mod ad {
+    pub use tenferro_ad::*;
+}
 
 #[cfg(feature = "cuda")]
 /// CUDA GPU backend facade.

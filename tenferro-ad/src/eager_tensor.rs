@@ -15,7 +15,7 @@ use crate::CompareDir;
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, DType, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, DType, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
 /// let y = eager_tensor::convert(&x, DType::F32).unwrap();
@@ -29,7 +29,7 @@ pub fn convert(input: &EagerTensor, to: crate::DType) -> Result<EagerTensor> {
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());
 /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]), ctx);
@@ -47,7 +47,7 @@ macro_rules! unary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+        /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
         /// # let ctx = EagerRuntime::new();
         /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]), ctx);
         #[doc = concat!("let y = eager_tensor::", stringify!($name), "(&x).unwrap();")]
@@ -65,7 +65,7 @@ macro_rules! binary_method_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+        /// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
         /// # let ctx = EagerRuntime::new();
         /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]), ctx.clone());
         /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
@@ -119,7 +119,7 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]), ctx.clone());
 /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
@@ -137,7 +137,7 @@ pub fn sub(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]), ctx.clone());
 /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
@@ -156,7 +156,7 @@ pub fn compare(lhs: &EagerTensor, rhs: &EagerTensor, dir: CompareDir) -> Result<
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, CompareDir, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]), ctx.clone());
 /// # let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]), ctx);
@@ -177,7 +177,7 @@ pub fn where_select(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]), ctx.clone());
 /// # let lower = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![0.0_f64]), ctx.clone());
@@ -196,7 +196,7 @@ pub fn clamp(input: &EagerTensor, lower: &EagerTensor, upper: &EagerTensor) -> R
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
+/// # use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
 /// # let ctx = EagerRuntime::new();
 /// # let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]), ctx.clone());
 /// # let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]), ctx);

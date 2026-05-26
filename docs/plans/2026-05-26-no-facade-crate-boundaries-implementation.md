@@ -210,42 +210,50 @@ git commit -m "refactor(runtime): extract traced graph runtime"
 
 **Files:**
 - Create: `tenferro-ad/Cargo.toml`
-- Move AD modules from `tenferro/src/eager*`, `tenferro/src/checkpoint.rs`,
-  and `tenferro-internal-ops/src/ad/**`.
-- Modify: `tenferro-ops`
+- Move AD runtime modules from `tenferro-runtime/src/eager*`.
+- Keep `tenferro-internal-ops/src/ad/**` with `StdTensorOp` because Rust's
+  orphan rules require the `PrimitiveOp` implementation to live with either
+  the trait or the graph-op type. The long-term public boundary is still that
+  user-facing AD runtime APIs live in `tenferro-ad`; ops keeps graph semantics.
+- Modify: `tenferro-internal-ops`
 - Modify: `Cargo.toml`
 
 **Step 1: Write failing AD opt-in check**
 
-Run:
+Add `scripts/check-ad-boundaries.py`, then run:
 
 ```bash
-cargo check -p tenferro-runtime --no-default-features
-rg -n "chainrules|tidu|autodiff" tenferro-runtime/Cargo.toml tenferro-ops/Cargo.toml
+python3 scripts/check-ad-boundaries.py
+rg -n "chainrules|tidu|autodiff|EagerRuntime|EagerTensor|ADRule" tenferro-runtime/Cargo.toml tenferro-runtime/src || true
 ```
 
-Expected before implementation: AD dependencies or features still appear.
+Expected before implementation: AD dependencies or eager AD APIs still appear
+in `tenferro-runtime`.
 
 **Step 2: Move AD ownership**
 
-Move primitive rules, AD extension traits, registries, checkpoint replay, and
-user transforms into `tenferro-ad`.
+Move eager AD runtime, eager op dispatch, traced AD transforms, checkpoint
+replay API, and eager extension AD application into `tenferro-ad`. Keep hidden
+runtime support APIs narrow and explicit under `tenferro_runtime::ad_support`.
 
 **Step 3: Verify**
 
 Run:
 
 ```bash
-cargo check -p tenferro-runtime --no-default-features
+python3 scripts/check-ad-boundaries.py
+cargo test -p tenferro-runtime
 cargo check -p tenferro-ad
+cargo test -p tenferro-ad
+cargo check --workspace
 ```
 
-Expected: pass; runtime and ops do not depend on AD crates.
+Expected: pass; runtime does not depend on AD crates or expose eager AD APIs.
 
 **Step 4: Commit**
 
 ```bash
-git add Cargo.toml tenferro-ad tenferro-runtime tenferro-ops
+git add Cargo.toml tenferro-ad tenferro-runtime tenferro-internal-ops scripts/check-ad-boundaries.py
 git commit -m "refactor(ad): extract automatic differentiation crate"
 ```
 
