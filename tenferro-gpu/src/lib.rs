@@ -3,18 +3,22 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_gpu::cubecl::CubeclRuntime;
+//! use tenferro_gpu::Tensor;
 //!
-//! let _runtime_type = core::any::type_name::<CubeclRuntime>();
-//! assert!(_runtime_type.contains("CubeclRuntime"));
+//! let _tensor_type = core::any::type_name::<Tensor>();
+//! assert!(_tensor_type.contains("Tensor"));
 //! ```
 
+#[cfg(feature = "cuda")]
 use std::any::Any;
 
+#[cfg(feature = "cuda")]
 pub mod cubecl;
+#[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub mod kernels;
 
+#[cfg(feature = "cuda")]
 pub use cubecl::{
     device_ptr, download_tensor, gpu_available, upload_tensor, CubeclBackend, CubeclRuntime,
 };
@@ -37,6 +41,7 @@ pub mod cpu {
 
 /// Compatibility re-exports for GPU implementation modules.
 pub mod types {
+    #[cfg(feature = "cuda")]
     pub use crate::CubeclBuffer;
     pub use tenferro_tensor::types::*;
 }
@@ -51,6 +56,7 @@ pub mod types {
 /// let _name = core::any::type_name::<tenferro_gpu::CubeclBuffer<f64>>();
 /// assert!(_name.contains("CubeclBuffer"));
 /// ```
+#[cfg(feature = "cuda")]
 #[derive(Clone)]
 pub struct CubeclBuffer<T> {
     /// CubeCL server handle that owns the GPU allocation.
@@ -60,6 +66,7 @@ pub struct CubeclBuffer<T> {
     pub(crate) _marker: std::marker::PhantomData<T>,
 }
 
+#[cfg(feature = "cuda")]
 impl<T> std::fmt::Debug for CubeclBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CubeclBuffer")
@@ -69,6 +76,7 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
     }
 }
 
+#[cfg(feature = "cuda")]
 impl<T> CubeclBuffer<T> {
     /// Create a CubeCL buffer wrapper from a handle and element count.
     ///
@@ -87,6 +95,7 @@ impl<T> CubeclBuffer<T> {
     }
 }
 
+#[cfg(feature = "cuda")]
 impl<T: Send + Sync + 'static> BackendBuffer<T> for CubeclBuffer<T> {
     fn backend_family(&self) -> &'static str {
         "cubecl"
