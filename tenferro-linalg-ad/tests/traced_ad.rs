@@ -1,8 +1,6 @@
-#![cfg(feature = "autodiff")]
-
-use tenferro::{
-    CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TracedTensorAdExt, TypedTensor,
-};
+use tenferro_ad::TracedTensorAdExt;
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_tensor::TypedTensor;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
@@ -24,6 +22,7 @@ fn eval(output: &TracedTensor) -> Tensor {
 
 #[test]
 fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
+    tenferro_linalg_ad::register_extension_rule().unwrap();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![9.0, 0.0, 0.0, 0.0, 4.0, 0.0],
@@ -44,6 +43,7 @@ fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
 
 #[test]
 fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
+    tenferro_linalg_ad::register_extension_rule().unwrap();
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]));
@@ -58,6 +58,7 @@ fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
 
 #[test]
 fn svd_values_grad_matches_finite_diff() {
+    tenferro_linalg_ad::register_extension_rule().unwrap();
     let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone()));
 

@@ -4,7 +4,7 @@ use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 
-use crate::extension::{ensure_linalg_extension_rule_registered, LinalgExtensionOp, LinalgOp};
+use tenferro_linalg::ad_support::{LinalgExtensionOp, LinalgOp};
 
 pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
     ensure_ad_rule_registered()?;
@@ -181,5 +181,5 @@ fn two_outputs(outputs: Vec<EagerTensor>, name: &str) -> Result<(EagerTensor, Ea
 }
 
 fn ensure_ad_rule_registered() -> Result<()> {
-    ensure_linalg_extension_rule_registered().map_err(|err| Error::Internal(err.to_string()))
+    crate::register_extension_rule().map_err(|err| Error::Internal(err.to_string()))
 }

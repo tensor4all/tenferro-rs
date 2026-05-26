@@ -1,8 +1,6 @@
-#![cfg(feature = "autodiff")]
-
 use num_complex::Complex64;
 use std::sync::{Arc, OnceLock};
-use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -24,7 +22,7 @@ fn svd_returns_correct_shapes() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
         test_ctx(),
     );
-    let (u, s, vt) = tenferro_linalg::eager_tensor::svd(&a).unwrap();
+    let (u, s, vt) = tenferro_linalg_ad::eager_tensor::svd(&a).unwrap();
 
     assert_eq!(u.data().shape(), &[2, 2]);
     assert_eq!(s.data().shape(), &[2]);
@@ -37,7 +35,7 @@ fn qr_returns_correct_shapes() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
         test_ctx(),
     );
-    let (q, r) = tenferro_linalg::eager_tensor::qr(&a).unwrap();
+    let (q, r) = tenferro_linalg_ad::eager_tensor::qr(&a).unwrap();
 
     assert_eq!(q.data().shape(), &[2, 2]);
     assert_eq!(r.data().shape(), &[2, 2]);
@@ -49,7 +47,7 @@ fn cholesky_of_identity() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]),
         test_ctx(),
     );
-    let l = tenferro_linalg::eager_tensor::cholesky(&a).unwrap();
+    let l = tenferro_linalg_ad::eager_tensor::cholesky(&a).unwrap();
 
     assert_eq!(l.data().shape(), &[2, 2]);
     assert_eq!(f64_data(l.data()), &[1.0, 0.0, 0.0, 1.0]);
@@ -61,7 +59,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
         Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 1.0, 1.0, 0.0]),
         test_ctx(),
     );
-    let (p, l, u, parity) = tenferro_linalg::eager_tensor::lu(&a).unwrap();
+    let (p, l, u, parity) = tenferro_linalg_ad::eager_tensor::lu(&a).unwrap();
 
     assert_eq!(p.data().shape(), &[2, 2]);
     assert_eq!(l.data().shape(), &[2, 2]);
@@ -84,7 +82,7 @@ fn full_piv_lu_solve_returns_expected_solution() {
         Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0]),
         test_ctx(),
     );
-    let x = tenferro_linalg::eager_tensor::full_piv_lu_solve(&a, &b).unwrap();
+    let x = tenferro_linalg_ad::eager_tensor::full_piv_lu_solve(&a, &b).unwrap();
 
     assert_eq!(x.data().shape(), &[2, 1]);
     assert_eq!(f64_data(x.data()), &[4.0, -1.0]);
@@ -100,7 +98,7 @@ fn solve_returns_expected_solution() {
         Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]),
         test_ctx(),
     );
-    let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
+    let x = tenferro_linalg_ad::eager_tensor::solve(&a, &b).unwrap();
 
     assert_eq!(x.data().shape(), &[2, 1]);
     assert_eq!(f64_data(x.data()), &[2.0, 2.0]);
@@ -112,7 +110,7 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]),
         test_ctx(),
     );
-    let (values, vectors) = tenferro_linalg::eager_tensor::eig(&a).unwrap();
+    let (values, vectors) = tenferro_linalg_ad::eager_tensor::eig(&a).unwrap();
 
     assert_eq!(values.data().shape(), &[2]);
     assert_eq!(vectors.data().shape(), &[2, 2]);

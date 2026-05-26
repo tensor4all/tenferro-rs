@@ -46,7 +46,8 @@ pub fn einsum_subscripts(
 /// # Examples
 ///
 /// ```
-/// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+/// use tenferro::Tensor;
+/// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor};
 /// use tenferro_einsum::{eager_tensor, TensorDotAxes};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());

@@ -5,7 +5,7 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_tensor::DType;
 
-use crate::extension::{LinalgExtensionOp, LinalgOp};
+use tenferro_linalg::ad_support::{LinalgExtensionOp, LinalgOp};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;

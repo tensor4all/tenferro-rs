@@ -3,9 +3,8 @@
 use std::num::NonZeroUsize;
 
 use tenferro::extension::ExtensionCacheLimits;
-use tenferro::{
-    CpuBackend, DType, EagerRuntime, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
-};
+use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_einsum::{
     eager_tensor::einsum as eager_einsum, einsum, einsum_with, parse_einsum_subscripts,
     ContractionOptimizerOptions, EinsumOptimize,

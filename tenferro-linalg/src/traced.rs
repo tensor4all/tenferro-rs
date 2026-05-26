@@ -4,8 +4,6 @@ use num_complex::{Complex32, Complex64};
 use tenferro::extension::apply;
 use tenferro::{CompareDir, DType, DotGeneralConfig, TracedTensor};
 
-#[cfg(feature = "autodiff")]
-use crate::extension::ensure_linalg_extension_rule_registered;
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 
 pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
@@ -267,11 +265,7 @@ fn two_outputs(outputs: Vec<TracedTensor>, name: &str) -> (TracedTensor, TracedT
     }
 }
 
-fn ensure_ad_rule_registered() {
-    #[cfg(feature = "autodiff")]
-    ensure_linalg_extension_rule_registered()
-        .unwrap_or_else(|err| panic!("failed to register linalg extension AD rule: {err}"));
-}
+fn ensure_ad_rule_registered() {}
 
 fn scalar_real(dtype: DType, value: f64) -> TracedTensor {
     match dtype {

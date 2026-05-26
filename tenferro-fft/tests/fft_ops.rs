@@ -1,7 +1,7 @@
 use num_complex::Complex64;
-#[cfg(feature = "autodiff")]
-use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+#[cfg(feature = "autodiff")]
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_fft::{fft, ifft, irfft, rfft, FftNorm};
 
 fn run(output: &TracedTensor) -> Tensor {

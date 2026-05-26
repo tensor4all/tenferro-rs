@@ -12,7 +12,6 @@ default = ["autodiff", "cpu-faer"]
 autodiff = [
     "chainrules-core",
     "dep:tenferro-ad",
-    "tenferro/autodiff",
     "tenferro-internal-ops/autodiff",
 ]
 cpu-faer = [

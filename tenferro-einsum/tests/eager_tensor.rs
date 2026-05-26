@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+use tenferro::{CpuBackend, Tensor};
+use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_einsum::eager_tensor::{einsum, einsum_subscripts, tensordot};
 use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
 

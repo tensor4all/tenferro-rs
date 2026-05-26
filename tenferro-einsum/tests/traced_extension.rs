@@ -1,6 +1,6 @@
-#[cfg(feature = "autodiff")]
-use tenferro::TracedTensorAdExt;
 use tenferro::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+#[cfg(feature = "autodiff")]
+use tenferro_ad::TracedTensorAdExt;
 
 #[test]
 fn traced_einsum_executes_through_registered_extension_runtime() {

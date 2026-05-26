@@ -2,34 +2,18 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-#[cfg(feature = "autodiff")]
-use chainrules_core::{ADRuleError, ADRuleKind, ADRuleResult};
-#[cfg(feature = "autodiff")]
-use computegraph::fragment::FragmentBuilder;
-#[cfg(feature = "autodiff")]
-use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-#[cfg(feature = "autodiff")]
-use computegraph::OpEmitter;
 use tenferro::extension::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
     ExtensionRuntimeRegistryError,
 };
-#[cfg(feature = "autodiff")]
-use tenferro_ad::extension::{
-    is_extension_rule_registered, register_extension_rule, ExtensionAdRuleTrait,
-    ExtensionRegistryError,
-};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_tensor::{DType, Tensor, TensorBackend};
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum LinalgOp {
+#[doc(hidden)]
+pub enum LinalgOp {
     Cholesky,
     Lu,
     FullPivLu,
@@ -58,7 +42,7 @@ pub(crate) enum LinalgOp {
 }
 
 impl LinalgOp {
-    pub(crate) fn output_count(self) -> usize {
+    pub fn output_count(self) -> usize {
         match self {
             Self::Cholesky
             | Self::FullPivLuSolve { .. }
@@ -95,16 +79,17 @@ impl LinalgOp {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct LinalgExtensionOp {
+#[doc(hidden)]
+pub struct LinalgExtensionOp {
     op: LinalgOp,
 }
 
 impl LinalgExtensionOp {
-    pub(crate) fn new(op: LinalgOp) -> Self {
+    pub fn new(op: LinalgOp) -> Self {
         Self { op }
     }
 
-    pub(crate) fn op(&self) -> LinalgOp {
+    pub fn op(&self) -> LinalgOp {
         self.op
     }
 }
@@ -223,183 +208,6 @@ pub fn register_runtime<B: TensorBackend + 'static>(
     executor: &mut ExtensionExecutor<B>,
 ) -> Result<(), ExtensionRuntimeRegistryError> {
     executor.registry_mut().register(Arc::new(LinalgRuntime))
-}
-
-#[cfg(feature = "autodiff")]
-pub(crate) fn ensure_linalg_extension_rule_registered() -> Result<(), ExtensionRegistryError> {
-    if is_extension_rule_registered(LINALG_EXTENSION_FAMILY_ID) {
-        return Ok(());
-    }
-    match register_extension_rule(Arc::new(LinalgAdRule)) {
-        Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
-        Err(err) => Err(err),
-    }
-}
-
-#[derive(Debug)]
-#[cfg(feature = "autodiff")]
-struct LinalgAdRule;
-
-#[cfg(feature = "autodiff")]
-impl ExtensionAdRuleTrait for LinalgAdRule {
-    fn family_id(&self) -> &'static str {
-        LINALG_EXTENSION_FAMILY_ID
-    }
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOpTrait,
-        builder: &mut FragmentBuilder<StdTensorOp>,
-        primal_in: &[GlobalValKey<StdTensorOp>],
-        primal_out: &[GlobalValKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValId>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Linearize)?;
-        let tangents = match op.op {
-            LinalgOp::Lu => {
-                crate::ad::linearize_lu(builder, primal_in, primal_out, tangent_in, ctx)
-            }
-            LinalgOp::FullPivLu => {
-                crate::ad::linearize_full_piv_lu(builder, primal_in, primal_out, tangent_in, ctx)
-            }
-            LinalgOp::Solve { transpose_a } => crate::ad::linearize_solve(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                transpose_a,
-                ctx,
-            ),
-            LinalgOp::FullPivLuSolve { transpose_a } => crate::ad::linearize_full_piv_lu_solve(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                transpose_a,
-                ctx,
-            ),
-            LinalgOp::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            } => crate::ad::linearize_triangular_solve(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-                ctx,
-            ),
-            LinalgOp::Cholesky => {
-                crate::ad::linearize_cholesky(builder, primal_in, primal_out, tangent_in, ctx)
-            }
-            LinalgOp::Svd { eps } => {
-                crate::ad::linearize_svd(builder, primal_in, primal_out, tangent_in, eps, ctx)
-            }
-            LinalgOp::Qr => {
-                crate::ad::linearize_qr(builder, primal_in, primal_out, tangent_in, ctx)
-            }
-            LinalgOp::Eigh { eps } => {
-                crate::ad::linearize_eigh(builder, primal_in, primal_out, tangent_in, eps, ctx)
-            }
-            LinalgOp::Eig { input_dtype } => crate::ad::linearize_eig(
-                builder,
-                primal_in,
-                primal_out,
-                tangent_in,
-                input_dtype,
-                ctx,
-            ),
-        };
-        Ok(tangents)
-    }
-
-    fn transpose_rule(
-        &self,
-        op: &dyn ExtensionOpTrait,
-        emitter: &mut dyn OpEmitter<StdTensorOp>,
-        cotangent_out: &[Option<LocalValId>],
-        inputs: &[ValRef<StdTensorOp>],
-        mode: &OpMode,
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
-        let mut emitter = DynEmitter(emitter);
-        let cotangents = match op.op {
-            LinalgOp::TriangularSolve {
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            } => crate::ad::transpose_triangular_solve(
-                &mut emitter,
-                cotangent_out,
-                inputs,
-                mode,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-                ctx,
-            ),
-            LinalgOp::Solve { transpose_a } => crate::ad::transpose_solve(
-                &mut emitter,
-                cotangent_out,
-                inputs,
-                mode,
-                transpose_a,
-                ctx,
-            ),
-            LinalgOp::FullPivLuSolve { transpose_a } => crate::ad::transpose_full_piv_lu_solve(
-                &mut emitter,
-                cotangent_out,
-                inputs,
-                mode,
-                transpose_a,
-                ctx,
-            ),
-            LinalgOp::Cholesky
-            | LinalgOp::Lu
-            | LinalgOp::FullPivLu
-            | LinalgOp::Svd { .. }
-            | LinalgOp::Qr
-            | LinalgOp::Eigh { .. }
-            | LinalgOp::Eig { .. } => vec![None; op.n_inputs()],
-        };
-        Ok(cotangents)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-struct DynEmitter<'a>(&'a mut dyn OpEmitter<StdTensorOp>);
-
-#[cfg(feature = "autodiff")]
-impl OpEmitter<StdTensorOp> for DynEmitter<'_> {
-    fn add_op(
-        &mut self,
-        op: StdTensorOp,
-        inputs: Vec<ValRef<StdTensorOp>>,
-        mode: OpMode,
-    ) -> Vec<LocalValId> {
-        self.0.add_op(op, inputs, mode)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_ad_op<'a>(
-    op: &'a dyn ExtensionOpTrait,
-    kind: ADRuleKind,
-) -> ADRuleResult<&'a LinalgExtensionOp> {
-    op.as_any()
-        .downcast_ref::<LinalgExtensionOp>()
-        .ok_or_else(|| {
-            ADRuleError::unsupported("tenferro-linalg.linalg.v1 payload type mismatch", kind)
-        })
 }
 
 fn execute_linalg<B: TensorBackend>(

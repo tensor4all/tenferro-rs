@@ -1,0 +1,51 @@
+[package]
+name = "tenferro-linalg-ad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Automatic differentiation support for tenferro-linalg extension operations."
+
+[lib]
+name = "tenferro_linalg_ad"
+
+[features]
+default = ["cpu-faer"]
+cpu-faer = [
+    "tenferro-ad/cpu-faer",
+    "tenferro-linalg/cpu-faer",
+    "tenferro-internal-ops/cpu-faer",
+    "tenferro-tensor/cpu-faer",
+]
+cpu-blas = [
+    "tenferro-ad/cpu-blas",
+    "tenferro-linalg/cpu-blas",
+    "tenferro-internal-ops/cpu-blas",
+    "tenferro-tensor/cpu-blas",
+]
+gpu = ["tenferro-ad/gpu", "tenferro-linalg/gpu", "tenferro-internal-ops/gpu"]
+cuda = [
+    "gpu",
+    "tenferro-ad/cuda",
+    "tenferro-linalg/cuda",
+    "tenferro-internal-ops/cuda",
+]
+rocm = [
+    "gpu",
+    "tenferro-ad/rocm",
+    "tenferro-linalg/rocm",
+    "tenferro-internal-ops/rocm",
+]
+
+[dependencies]
+tenferro-ad = { path = "../tenferro-ad", default-features = false }
+tenferro-linalg = { path = "../tenferro-linalg", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false, features = ["autodiff"] }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+chainrules-core.workspace = true
+computegraph.workspace = true
+
+[dev-dependencies]
+tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
+num-complex.workspace = true

@@ -262,40 +262,47 @@ git commit -m "refactor(ad): extract automatic differentiation crate"
 **Files:**
 - Create: `tenferro-linalg-ad/Cargo.toml`
 - Move: linalg AD rules from `tenferro-linalg/src/ad/**`
+- Move: eager AD linalg helpers from `tenferro-linalg/src/eager_tensor.rs`
 - Modify: `tenferro-linalg`, `tenferro-einsum`, `tenferro-fft`
 
 **Step 1: Write failing feature-boundary checks**
 
-Run:
+Add `scripts/check-linalg-ad-boundaries.py`, then run:
 
 ```bash
-rg -n "autodiff|tenferro/autodiff|tenferro-internal-ops/autodiff" tenferro-linalg/Cargo.toml tenferro-einsum/Cargo.toml tenferro-fft/Cargo.toml
+python3 scripts/check-linalg-ad-boundaries.py
 ```
 
-Expected before implementation: matches exist.
+Expected before implementation: linalg AD dependencies and facade AD feature
+coupling still appear.
 
 **Step 2: Move linalg AD**
 
 Keep primal linalg runtime registration in `tenferro-linalg`. Move AD rule
-registration into `tenferro-linalg-ad`.
+registration and `EagerTensor` linalg helpers into `tenferro-linalg-ad`.
+Expose only a hidden `tenferro_linalg::ad_support` payload boundary for the
+companion AD crate.
 
 **Step 3: Verify**
 
 Run:
 
 ```bash
-cargo check -p tenferro-linalg --no-default-features
+cargo check -p tenferro-linalg --no-default-features --features cpu-faer
 cargo check -p tenferro-linalg-ad
-cargo check -p tenferro-einsum --no-default-features
-cargo check -p tenferro-fft --no-default-features
+cargo test -p tenferro-linalg -p tenferro-linalg-ad
+cargo check -p tenferro-einsum --no-default-features --features cpu-faer
+cargo check -p tenferro-fft --no-default-features --features cpu-faer
+python3 scripts/check-linalg-ad-boundaries.py
 ```
 
-Expected: pass.
+Expected: pass. Plain `--no-default-features` remains blocked by the existing
+tensor CPU backend compile-time contract that requires one CPU backend feature.
 
 **Step 4: Commit**
 
 ```bash
-git add Cargo.toml tenferro-linalg tenferro-linalg-ad tenferro-einsum tenferro-fft
+git add Cargo.toml tenferro-linalg tenferro-linalg-ad tenferro-einsum tenferro-fft scripts/check-linalg-ad-boundaries.py
 git commit -m "refactor(linalg): split linalg AD registration"
 ```
 
