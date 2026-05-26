@@ -12,14 +12,14 @@ name = "tenferro_ops"
 [features]
 default = ["autodiff", "cpu-faer"]
 autodiff = ["chainrules-core"]
-cpu-faer = ["tenferro-internal-tensor/cpu-faer"]
-cpu-blas = ["tenferro-internal-tensor/cpu-blas"]
-gpu = ["tenferro-internal-tensor/gpu"]
-cuda = ["gpu", "tenferro-internal-tensor/cuda"]
-rocm = ["gpu", "tenferro-internal-tensor/rocm"]
+cpu-faer = ["tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-tensor/cpu-blas"]
+gpu = ["tenferro-tensor/gpu"]
+cuda = ["gpu", "tenferro-tensor/cuda"]
+rocm = ["gpu", "tenferro-tensor/rocm"]
 
 [dependencies]
-tenferro-internal-tensor = { path = "../tenferro-internal-tensor", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 computegraph.workspace = true
 chainrules-core = { workspace = true, optional = true }

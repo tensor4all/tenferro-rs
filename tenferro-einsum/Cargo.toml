@@ -10,17 +10,17 @@ description = "High-level einsum with N-ary contraction tree optimization for th
 [features]
 default = ["autodiff", "cpu-faer"]
 autodiff = ["chainrules-core", "tenferro/autodiff", "tenferro-internal-ops/autodiff"]
-cpu-faer = ["tenferro/cpu-faer", "tenferro-internal-ops/cpu-faer", "tenferro-internal-tensor/cpu-faer"]
-cpu-blas = ["tenferro/cpu-blas", "tenferro-internal-ops/cpu-blas", "tenferro-internal-tensor/cpu-blas"]
-gpu = ["tenferro-internal-ops/gpu", "tenferro-internal-tensor/gpu"]
-cuda = ["gpu", "tenferro/cuda", "tenferro-internal-ops/cuda", "tenferro-internal-tensor/cuda"]
-rocm = ["gpu", "tenferro/rocm", "tenferro-internal-ops/rocm", "tenferro-internal-tensor/rocm"]
+cpu-faer = ["tenferro/cpu-faer", "tenferro-internal-ops/cpu-faer", "tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro/cpu-blas", "tenferro-internal-ops/cpu-blas", "tenferro-tensor/cpu-blas"]
+gpu = ["tenferro-internal-ops/gpu", "tenferro-tensor/gpu"]
+cuda = ["gpu", "tenferro/cuda", "tenferro-internal-ops/cuda", "tenferro-tensor/cuda"]
+rocm = ["gpu", "tenferro/rocm", "tenferro-internal-ops/rocm", "tenferro-tensor/rocm"]
 
 [dependencies]
 tenferro = { path = "../tenferro", default-features = false }
 tenferro-internal-device = { path = "../tenferro-internal-device" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
-tenferro-internal-tensor = { path = "../tenferro-internal-tensor", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true
 chainrules-core = { workspace = true, optional = true }
 lru.workspace = true

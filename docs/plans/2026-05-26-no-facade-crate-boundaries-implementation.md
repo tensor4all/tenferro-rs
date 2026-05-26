@@ -67,7 +67,7 @@ Add tests in `tenferro-tensor/src/tests/types_tests.rs` proving:
 Run:
 
 ```bash
-cargo test -p tenferro-internal-tensor types_tests::device_model --no-default-features
+cargo test -p tenferro-internal-tensor device_model
 ```
 
 Expected: fail because the new device model does not exist yet.
@@ -88,8 +88,8 @@ to `tenferro-tensor`. Keep `lib.name = "tenferro_tensor"`.
 Run:
 
 ```bash
-cargo test -p tenferro-tensor --no-default-features
-cargo check -p tenferro-tensor --no-default-features
+cargo test -p tenferro-tensor types_tests
+cargo check -p tenferro-tensor
 ```
 
 Expected: pass.

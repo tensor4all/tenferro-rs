@@ -21,45 +21,87 @@ pub use strided_view::{
 ///
 /// let kind = MemoryKind::UnpinnedHost;
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MemoryKind {
     Device,
     PinnedHost,
     UnpinnedHost,
+    Managed,
     Other(String),
 }
 
-/// Concrete compute device description.
+/// Compute device family.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::ComputeDevice;
+/// use tenferro_tensor::DeviceKind;
 ///
-/// let device = ComputeDevice { kind: "cuda".into(), ordinal: 0 };
+/// let kind = DeviceKind::Cpu;
 /// ```
-#[derive(Clone, Debug)]
-pub struct ComputeDevice {
-    pub kind: String,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DeviceKind {
+    Cpu,
+    Gpu(GpuBackendKind),
+    Other(String),
+}
+
+/// GPU backend family used by placement metadata.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::GpuBackendKind;
+///
+/// let kind = GpuBackendKind::Cuda;
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GpuBackendKind {
+    Cuda,
+    Rocm,
+    Other(String),
+}
+
+/// Concrete compute device identifier.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{DeviceId, DeviceKind, GpuBackendKind};
+///
+/// let device = DeviceId {
+///     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+///     ordinal: 0,
+/// };
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceId {
+    pub kind: DeviceKind,
     pub ordinal: usize,
 }
+
+/// Backwards-compatible internal alias during the crate-boundary migration.
+pub type ComputeDevice = DeviceId;
 
 /// Placement metadata for a tensor buffer.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{ComputeDevice, MemoryKind, Placement};
+/// use tenferro_tensor::{DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement};
 ///
 /// let placement = Placement {
 ///     memory_kind: MemoryKind::Device,
-///     resident_device: Some(ComputeDevice { kind: "cuda".into(), ordinal: 0 }),
+///     device: Some(DeviceId {
+///         kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+///         ordinal: 0,
+///     }),
 /// };
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Placement {
     pub memory_kind: MemoryKind,
-    pub resident_device: Option<ComputeDevice>,
+    pub device: Option<DeviceId>,
 }
 
 /// Backend-owned buffer handle.
@@ -937,7 +979,7 @@ fn col_major_to_row_major<T: Clone>(shape: &[usize], data: Vec<T>) -> Vec<T> {
 pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
-        resident_device: None,
+        device: None,
     }
 }
 

@@ -5,7 +5,8 @@ use cubecl_cuda::CudaRuntime;
 use crate::config::CompareDir;
 use crate::cubecl::CubeclRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, Tensor, TypedTensor,
+    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
+    TypedTensor,
 };
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -144,12 +145,17 @@ pub(crate) fn ensure_resident_on_runtime<T>(
             ),
         });
     }
-    match &tensor.placement.resident_device {
-        Some(device) if device.kind == "cuda" && device.ordinal == rt.device_ordinal() => Ok(()),
+    match &tensor.placement.device {
+        Some(device)
+            if device.kind == DeviceKind::Gpu(GpuBackendKind::Cuda)
+                && device.ordinal == rt.device_ordinal() =>
+        {
+            Ok(())
+        }
         Some(device) => Err(crate::Error::BackendFailure {
             op,
             message: format!(
-                "expected GPU tensor resident on cuda:{}, got {}:{}",
+                "expected GPU tensor resident on cuda:{}, got {:?}:{}",
                 rt.device_ordinal(),
                 device.kind,
                 device.ordinal
@@ -158,7 +164,7 @@ pub(crate) fn ensure_resident_on_runtime<T>(
         None => Err(crate::Error::BackendFailure {
             op,
             message: format!(
-                "expected GPU tensor resident on cuda:{}, got missing resident_device metadata",
+                "expected GPU tensor resident on cuda:{}, got missing device metadata",
                 rt.device_ordinal()
             ),
         }),
@@ -175,8 +181,8 @@ pub(crate) fn typed_from_cubecl<T>(
         shape,
         placement: Placement {
             memory_kind: MemoryKind::Device,
-            resident_device: Some(ComputeDevice {
-                kind: "cuda".into(),
+            device: Some(ComputeDevice {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },

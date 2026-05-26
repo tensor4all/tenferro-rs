@@ -2,7 +2,7 @@
 members = [
     # v2 core (6 crates)
     "tenferro-internal-device",
-    "tenferro-internal-tensor",
+    "tenferro-tensor",
     "tenferro-internal-gpubackend",
     "tenferro-internal-runtime",
     "tenferro-internal-extension-macros",
@@ -19,7 +19,7 @@ exclude = [
     "ext/tropical",
 ]
 default-members = [
-    "tenferro-internal-tensor",
+    "tenferro-tensor",
 ]
 resolver = "2"
 

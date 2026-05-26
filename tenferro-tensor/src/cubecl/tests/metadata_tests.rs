@@ -3,7 +3,10 @@ use cubecl::stream_id::StreamId;
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
 };
-use crate::{Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, TypedTensor};
+use crate::{
+    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement,
+    TypedTensor,
+};
 
 #[test]
 fn cubecl_metadata_uses_dense_column_major_strides() {
@@ -75,8 +78,8 @@ fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
         shape,
         placement: Placement {
             memory_kind: MemoryKind::Device,
-            resident_device: Some(ComputeDevice {
-                kind: "cuda".into(),
+            device: Some(ComputeDevice {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },

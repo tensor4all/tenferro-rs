@@ -3,10 +3,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
-    col_major_strides, flat_to_multi, Buffer, BufferHandle, ComputeDevice, ConjElem, DType,
-    MemoryKind, Placement, StridedSliceSpec, StridedTensorView, StridedTensorViewMut, Tensor,
-    TensorRead, TensorScalar, TensorView, TypedStridedTensorView, TypedStridedTensorViewMut,
-    TypedTensor, TypedTensorView,
+    col_major_strides, flat_to_multi, Buffer, BufferHandle, ConjElem, DType, DeviceId, DeviceKind,
+    GpuBackendKind, MemoryKind, Placement, StridedSliceSpec, StridedTensorView,
+    StridedTensorViewMut, Tensor, TensorRead, TensorScalar, TensorView, TypedStridedTensorView,
+    TypedStridedTensorViewMut, TypedTensor, TypedTensorView,
 };
 use crate::Error;
 
@@ -41,6 +41,58 @@ fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
     let mut idx = [0usize; 3];
     flat_to_multi(13, &[2, 3, 4], &mut idx);
     assert_eq!(idx, [1, 0, 2]);
+}
+
+#[test]
+fn device_model_has_typed_hashable_device_ids() {
+    use std::collections::HashSet;
+
+    let cuda0 = DeviceId {
+        kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+        ordinal: 0,
+    };
+    let cuda1 = DeviceId {
+        kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+        ordinal: 1,
+    };
+    let cpu0 = DeviceId {
+        kind: DeviceKind::Cpu,
+        ordinal: 0,
+    };
+
+    let mut devices = HashSet::new();
+    devices.insert(cuda0.clone());
+    devices.insert(cuda1.clone());
+
+    assert!(devices.contains(&cuda0));
+    assert!(devices.contains(&cuda1));
+    assert!(!devices.contains(&cpu0));
+    assert_ne!(cuda0, cpu0);
+}
+
+#[test]
+fn default_placement_is_unpinned_host_without_device() {
+    let tensor = TypedTensor::<f64>::zeros(vec![2]);
+
+    assert_eq!(tensor.placement.memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(tensor.placement.device, None);
+}
+
+#[test]
+fn gpu_placement_is_metadata_only() {
+    let placement = Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal: 0,
+        }),
+    };
+
+    assert_eq!(placement.memory_kind, MemoryKind::Device);
+    assert_eq!(
+        placement.device.as_ref().map(|device| &device.kind),
+        Some(&DeviceKind::Gpu(GpuBackendKind::Cuda))
+    );
 }
 
 #[test]
@@ -258,8 +310,8 @@ fn typed_tensor_panics_cover_length_and_indexing_errors() {
 fn backend_buffers_panic_when_host_access_is_requested() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
-        resident_device: Some(ComputeDevice {
-            kind: "cuda".to_string(),
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
             ordinal: 0,
         }),
     };
@@ -268,10 +320,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         shape: vec![1],
         placement: placement.clone(),
     };
-    assert_eq!(
-        tensor.placement.resident_device.as_ref().unwrap().ordinal,
-        0
-    );
+    assert_eq!(tensor.placement.device.as_ref().unwrap().ordinal, 0);
 
     let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
     assert!(host_data.is_err());

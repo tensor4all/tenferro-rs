@@ -1,7 +1,7 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
-use crate::{DType, Tensor, TensorBackend};
+use crate::{DType, DeviceKind, GpuBackendKind, Tensor, TensorBackend};
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, upload,
@@ -325,10 +325,10 @@ fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
     };
     let resident = tensor
         .placement
-        .resident_device
+        .device
         .as_ref()
         .expect("converted tensor should preserve CUDA resident device");
-    assert_eq!(resident.kind, "cuda");
+    assert_eq!(resident.kind, DeviceKind::Gpu(GpuBackendKind::Cuda));
     assert_eq!(resident.ordinal, gpu.runtime().device_ordinal());
 }
 
@@ -347,7 +347,7 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
         Tensor::F64(tensor) => tensor,
         _ => panic!("expected F64 upload"),
     };
-    gpu_input.placement.resident_device = None;
+    gpu_input.placement.device = None;
 
     let err = gpu.conj(&Tensor::F64(gpu_input)).unwrap_err();
 

@@ -7,7 +7,8 @@ use num_complex::{Complex32, Complex64};
 
 use crate::cubecl::runtime::CubeclRuntime;
 use crate::types::{
-    Buffer, ComputeDevice, CubeclBuffer, MemoryKind, Placement, Tensor, TypedTensor,
+    Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
+    TypedTensor,
 };
 
 /// Upload a host tensor into a CubeCL-managed GPU allocation.
@@ -109,8 +110,8 @@ fn upload_typed<T: CubeElement + Clone>(
         shape: typed.shape.clone(),
         placement: Placement {
             memory_kind: MemoryKind::Device,
-            resident_device: Some(ComputeDevice {
-                kind: "cuda".into(),
+            device: Some(ComputeDevice {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
@@ -175,8 +176,8 @@ fn upload_bool(
         shape: typed.shape.clone(),
         placement: Placement {
             memory_kind: MemoryKind::Device,
-            resident_device: Some(ComputeDevice {
-                kind: "cuda".into(),
+            device: Some(ComputeDevice {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
