@@ -93,9 +93,9 @@ CubeCL. ROCm is only a feature stub.
 - Non-mainline semiring/algebra graph surfaces remain transitional and should
   not be extended by new work.
 
-## `tenferro-internal-runtime`
+## `tenferro-runtime`
 
-`tenferro-internal-runtime` owns operation-agnostic runtime infrastructure:
+`tenferro-runtime` owns operation-agnostic runtime infrastructure:
 
 - `ExtensionRegistry` and `ExtensionExecutor` for backend-parametric extension
   runtime registration,
@@ -103,8 +103,7 @@ CubeCL. ROCm is only a feature stub.
   one runtime call,
 - `ExtensionCacheStore`, `ExtensionCacheKey`, and cache selectors/limits.
 
-`tenferro` reexports these runtime types for application ergonomics, but the
-implementation lives in this crate.
+Applications import these runtime types directly from `tenferro-runtime`.
 
 ## `tenferro-einsum`
 
