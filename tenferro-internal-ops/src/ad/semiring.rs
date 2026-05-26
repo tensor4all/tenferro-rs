@@ -115,7 +115,7 @@ pub fn transpose_add(cotangent_out: &[Option<LocalValId>]) -> Vec<Option<LocalVa
 }
 
 pub fn transpose_mul(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -161,7 +161,7 @@ pub fn transpose_mul(
 }
 
 pub fn transpose_neg(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
 ) -> Vec<Option<LocalValId>> {
     match cotangent_out[0] {
@@ -180,7 +180,7 @@ pub fn transpose_neg(
 }
 
 pub fn transpose_conj(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     ctx: &mut ShapeGuardContext,

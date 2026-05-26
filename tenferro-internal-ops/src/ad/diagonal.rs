@@ -49,7 +49,7 @@ pub fn linearize_embed_diag(
 }
 
 pub fn transpose_extract_diag(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,
@@ -71,7 +71,7 @@ pub fn transpose_extract_diag(
 }
 
 pub fn transpose_embed_diag(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     axis_a: usize,
     axis_b: usize,

@@ -303,7 +303,7 @@ pub fn linearize_reverse(
 }
 
 pub fn transpose_transpose(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     perm: &[usize],
 ) -> Vec<Option<LocalValId>> {
@@ -331,7 +331,7 @@ pub fn transpose_transpose(
 }
 
 pub fn transpose_reshape(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
@@ -368,7 +368,7 @@ pub fn transpose_reshape(
 }
 
 pub fn transpose_broadcast_in_dim(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     shape: &[DimExpr],
     dims: &[usize],
@@ -408,7 +408,7 @@ pub fn transpose_broadcast_in_dim(
 }
 
 pub fn transpose_convert(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     mode: &OpMode,
     from: tenferro_tensor::DType,
@@ -438,7 +438,7 @@ pub fn transpose_convert(
 }
 
 pub fn transpose_tril(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
@@ -458,7 +458,7 @@ pub fn transpose_tril(
 }
 
 pub fn transpose_triu(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     k: i64,
 ) -> Vec<Option<LocalValId>> {
@@ -478,7 +478,7 @@ pub fn transpose_triu(
 }
 
 pub fn transpose_slice(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -560,7 +560,7 @@ pub fn transpose_slice(
 }
 
 pub fn transpose_pad(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -684,7 +684,7 @@ pub fn transpose_pad(
 }
 
 pub fn transpose_reverse(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     mode: &OpMode,
     axes: &[usize],
@@ -709,7 +709,7 @@ pub fn transpose_reverse(
 }
 
 pub fn transpose_concatenate(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,

@@ -6,7 +6,7 @@ use tenferro_tensor::CompareDir;
 use crate::std_tensor_op::StdTensorOp;
 
 fn emit_fixed_unary(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -20,7 +20,7 @@ fn emit_fixed_unary(
 }
 
 fn emit_fixed_binary(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
@@ -35,14 +35,14 @@ fn emit_fixed_binary(
 }
 
 fn emit_fixed_neg(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
     emit_fixed_unary(emitter, StdTensorOp::Neg, input)
 }
 
 fn emit_fixed_div(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -50,7 +50,7 @@ fn emit_fixed_div(
 }
 
 fn emit_fixed_compare(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     dir: CompareDir,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
@@ -59,7 +59,7 @@ fn emit_fixed_compare(
 }
 
 fn emit_linear_mul_fixed(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     fixed: ValRef<StdTensorOp>,
     active: LocalValId,
 ) -> LocalValId {
@@ -73,7 +73,7 @@ fn emit_linear_mul_fixed(
 }
 
 fn emit_linear_select(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     condition: ValRef<StdTensorOp>,
     on_true: LocalValId,
     on_false: LocalValId,
@@ -88,7 +88,7 @@ fn emit_linear_select(
 }
 
 fn emit_zero_from_active(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     active: LocalValId,
 ) -> LocalValId {
     let neg = emitter.add_op(
@@ -108,7 +108,7 @@ fn emit_zero_from_active(
 }
 
 fn select_tangents(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     condition: ValRef<StdTensorOp>,
     on_true: Option<LocalValId>,
     on_false: Option<LocalValId>,
@@ -128,7 +128,7 @@ fn select_tangents(
 }
 
 fn split_cotangent_by_mask(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     condition: ValRef<StdTensorOp>,
     cotangent: LocalValId,
     true_active: bool,
@@ -340,7 +340,7 @@ pub fn linearize_clamp(
 }
 
 pub fn transpose_div(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -379,7 +379,7 @@ pub fn transpose_div(
 }
 
 pub fn transpose_abs(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -401,7 +401,7 @@ pub fn transpose_abs(
 }
 
 pub fn transpose_sign(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     mode: &OpMode,
 ) -> Vec<Option<LocalValId>> {
@@ -415,7 +415,7 @@ pub fn transpose_sign(
 }
 
 pub fn transpose_maximum(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -441,7 +441,7 @@ pub fn transpose_maximum(
 }
 
 pub fn transpose_minimum(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -467,7 +467,7 @@ pub fn transpose_minimum(
 }
 
 pub fn transpose_select(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -487,7 +487,7 @@ pub fn transpose_select(
 }
 
 pub fn transpose_clamp(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,

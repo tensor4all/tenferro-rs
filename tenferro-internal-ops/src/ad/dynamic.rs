@@ -50,7 +50,7 @@ pub fn linearize_dynamic_truncate(
 }
 
 pub fn transpose_dynamic_truncate(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     axis: usize,
@@ -92,7 +92,7 @@ pub fn linearize_pad_to_match(
 }
 
 pub fn transpose_pad_to_match(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
