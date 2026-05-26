@@ -8,15 +8,17 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_ad::TracedTensorAdExt;
+//! use tenferro_ad::AdContext;
 //! use tenferro_runtime::TracedTensor;
 //!
+//! let ad = AdContext::builder().with_core_rules().build().unwrap();
 //! let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
 //! let loss = &x * &x;
-//! let dx = loss.grad(&x).unwrap();
+//! let dx = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(dx.rank, 0);
 //! ```
 
+mod context;
 mod eager;
 mod eager_backend;
 mod eager_emitter;
@@ -28,6 +30,7 @@ pub mod extension;
 mod shape_packing;
 pub mod traced;
 
+pub use context::{AdContext, AdContextBuilder};
 pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
 pub use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics, shape_infer};

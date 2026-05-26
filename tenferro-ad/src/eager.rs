@@ -13,6 +13,7 @@ use computegraph::{GlobalValKey, LocalValId, OpMode, ValRef};
 use tenferro_gpu::cubecl::CubeclBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TypedTensor};
@@ -32,6 +33,8 @@ use crate::metadata::{
 };
 use crate::traced::next_input_key;
 use tenferro_ops::TensorMeta;
+
+use crate::AdContext;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
@@ -150,14 +153,23 @@ pub struct EagerRuntimeCacheStats {
 pub struct EagerRuntime {
     pub(crate) backend: Mutex<EagerBackend>,
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
+    extension_rules: Option<ExtensionRuleSet>,
     grad_slots: Mutex<HashMap<GlobalValKey<StdTensorOp>, WeakGradSlot>>,
 }
 
 impl EagerRuntime {
     fn from_backend(backend: EagerBackend) -> Self {
+        Self::from_backend_with_extension_rules(backend, None)
+    }
+
+    fn from_backend_with_extension_rules(
+        backend: EagerBackend,
+        extension_rules: Option<ExtensionRuleSet>,
+    ) -> Self {
         Self {
             backend: Mutex::new(backend),
             extension_executor: Mutex::new(ExtensionExecutor::new()),
+            extension_rules,
             grad_slots: Mutex::new(HashMap::new()),
         }
     }
@@ -190,6 +202,24 @@ impl EagerRuntime {
         Arc::new(Self::from_backend(EagerBackend::cpu(backend)))
     }
 
+    /// Create a shared CPU eager context with explicit AD extension rules.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{AdContext, CpuBackend, EagerRuntime};
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
+    /// ```
+    pub fn with_cpu_backend_and_ad_context(backend: CpuBackend, ad: &AdContext) -> Arc<Self> {
+        Arc::new(Self::from_backend_with_extension_rules(
+            EagerBackend::cpu(backend),
+            Some(ad.extension_rule_set()),
+        ))
+    }
+
     /// Create a shared eager execution context from a configured CUDA backend.
     ///
     /// # Examples
@@ -198,12 +228,31 @@ impl EagerRuntime {
     /// use tenferro_gpu::cubecl::CubeclBackend;
     /// use tenferro_ad::EagerRuntime;
     ///
-    /// let _ctor: fn(CudaBackend) -> std::sync::Arc<EagerRuntime> =
+    /// let _ctor: fn(CubeclBackend) -> std::sync::Arc<EagerRuntime> =
     ///     EagerRuntime::with_cuda_backend;
     /// ```
     #[cfg(feature = "cuda")]
     pub fn with_cuda_backend(backend: CubeclBackend) -> Arc<Self> {
         Arc::new(Self::from_backend(EagerBackend::cuda(backend)))
+    }
+
+    /// Create a shared CUDA eager context with explicit AD extension rules.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{AdContext, EagerRuntime};
+    /// use tenferro_gpu::cubecl::CubeclBackend;
+    ///
+    /// let _ctor: fn(CubeclBackend, &AdContext) -> std::sync::Arc<EagerRuntime> =
+    ///     EagerRuntime::with_cuda_backend_and_ad_context;
+    /// ```
+    #[cfg(feature = "cuda")]
+    pub fn with_cuda_backend_and_ad_context(backend: CubeclBackend, ad: &AdContext) -> Arc<Self> {
+        Arc::new(Self::from_backend_with_extension_rules(
+            EagerBackend::cuda(backend),
+            Some(ad.extension_rule_set()),
+        ))
     }
 
     /// Return an opaque identifier for this context.
@@ -791,6 +840,9 @@ impl EagerTensor {
             metadata_scopes: self.metadata_scopes.clone(),
         };
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
+        if let Some(extension_rules) = &self.ctx.extension_rules {
+            ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
+        }
         let cotangents = try_backward_dag(&sorted, &self.key, seed, &mut callbacks, &mut ad_ctx)
             .map_err(|err| Error::Internal(err.to_string()))?;
         drop(callbacks);
@@ -1122,3 +1174,6 @@ pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B)
         .exp(&zero)
         .unwrap_or_else(|err| panic!("one_like exp failed: {}", err))
 }
+
+#[cfg(test)]
+mod tests;

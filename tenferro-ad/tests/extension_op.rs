@@ -14,7 +14,7 @@
 //! hand-computed expected values.
 
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::{AdContext, AdContextBuilder, EagerRuntime, EagerTensor};
 mod support;
 use std::any::Any;
 use std::hash::Hasher;
@@ -27,7 +27,9 @@ use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use num_complex::{Complex32, Complex64};
-use tenferro_ad::extension::{apply_eager, register_extension_rule, ExtensionAdRuleTrait};
+use tenferro_ad::extension::{
+    apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionRuleSet,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -695,6 +697,136 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
         x.grad().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 2.0, 2.0, 2.0]
     );
+}
+
+#[test]
+fn ad_context_uses_owned_extension_rules_without_global_fallback() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let scaled = apply(Arc::new(TestScaleBy2), &[&x])
+        .into_iter()
+        .next()
+        .unwrap();
+    let loss = scaled.reduce_sum(&[0]);
+
+    let empty_ad = AdContext::builder().build().unwrap();
+    let err = match empty_ad.grad(&loss, &x) {
+        Ok(_) => panic!("explicit empty rule set should not use global fallback"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("tenferro-tests.scale_by_2.v1"));
+
+    let rules = ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestScaleBy2Rule))
+        .expect("owned scale_by_2 rule registration");
+    let ad = AdContext::builder()
+        .with_core_rules()
+        .with_extension_rules(rules)
+        .build()
+        .unwrap();
+    assert!(ad
+        .extension_rules()
+        .is_rule_registered("tenferro-tests.scale_by_2.v1"));
+
+    let grad = ad
+        .try_grad(&loss, &x)
+        .expect("grad should build")
+        .expect("scale_by_2 is active");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let grad_out = grad.run_with(&mut engine).unwrap();
+    assert_eq!(f64_slice(&grad_out), &[2.0, 2.0]);
+
+    let dx = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0]);
+    let jvp = ad.jvp(&scaled, &x, &dx).expect("jvp should build");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let jvp_out = jvp.run_with(&mut engine).unwrap();
+    assert_eq!(f64_slice(&jvp_out), &[6.0, 10.0]);
+
+    let jvp = ad
+        .try_jvp(&scaled, &x, &dx)
+        .expect("jvp should build")
+        .expect("scale_by_2 output is active");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let jvp_out = jvp.run_with(&mut engine).unwrap();
+    assert_eq!(f64_slice(&jvp_out), &[6.0, 10.0]);
+
+    let dy = TracedTensor::from_vec_col_major(vec![2], vec![7.0_f64, 11.0]);
+    let vjp = ad.vjp(&scaled, &x, &dy).expect("vjp should build");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let vjp_out = vjp.run_with(&mut engine).unwrap();
+    assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);
+
+    let vjp = ad
+        .try_vjp(&scaled, &x, &dy)
+        .expect("vjp should build")
+        .expect("scale_by_2 input is active");
+    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let vjp_out = vjp.run_with(&mut engine).unwrap();
+    assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);
+}
+
+#[test]
+fn ad_context_builder_rejects_duplicate_extension_rule_sets() {
+    let first = ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestScaleBy2Rule))
+        .expect("first rule set");
+    let second = ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestScaleBy2Rule))
+        .expect("second rule set");
+
+    let err = AdContextBuilder::new()
+        .with_core_rules()
+        .with_extension_rules(first)
+        .with_extension_rules(second)
+        .build()
+        .expect_err("duplicate extension rule family should fail");
+    assert!(matches!(
+        err,
+        tenferro_ad::extension::ExtensionRegistryError::DuplicateRule {
+            family_id: "tenferro-tests.scale_by_2.v1"
+        }
+    ));
+}
+
+#[test]
+fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback() {
+    let empty_ad = AdContext::builder().build().unwrap();
+    let empty_ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &empty_ad);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]),
+        empty_ctx,
+    );
+    let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
+        .expect("eager extension apply")
+        .into_iter()
+        .next()
+        .expect("single extension output");
+    let loss = scaled.reduce_sum(&[0]).expect("loss");
+    let err = loss
+        .backward()
+        .expect_err("explicit empty rule set should not use global fallback");
+    assert!(err.to_string().contains("tenferro-tests.scale_by_2.v1"));
+
+    let rules = ExtensionRuleSet::new()
+        .with_rule(Arc::new(TestScaleBy2Rule))
+        .expect("owned scale_by_2 rule registration");
+    let ad = AdContext::builder()
+        .with_core_rules()
+        .with_extension_rules(rules)
+        .build()
+        .unwrap();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let x =
+        EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx);
+    let scaled = apply_eager(Arc::new(TestScaleBy2), &[&x])
+        .expect("eager extension apply")
+        .into_iter()
+        .next()
+        .expect("single extension output");
+    let loss = scaled.reduce_sum(&[0]).expect("loss");
+
+    let _ = loss.backward().expect("eager backward");
+
+    assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 2.0]);
 }
 
 fn assert_probe_identity_eager_backward(probe: Tensor) {

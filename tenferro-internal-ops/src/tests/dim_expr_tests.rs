@@ -149,6 +149,34 @@ fn test_remap_selective() {
 }
 
 #[test]
+fn test_remap_covers_all_variants() {
+    let input = DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    };
+    let other = DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    };
+    let variants = [
+        DimExpr::Const(4),
+        DimExpr::sub(input.clone(), other.clone()),
+        DimExpr::floor_div(input.clone(), DimExpr::Const(2)),
+        DimExpr::min(input.clone(), other.clone()),
+        DimExpr::max(input.clone(), other),
+    ];
+
+    for expr in variants {
+        let remapped = expr.remap(0, 2);
+        if remapped.is_const() {
+            assert_eq!(remapped.max_input_idx(), None);
+        } else {
+            assert_eq!(remapped.max_input_idx(), Some(2));
+        }
+    }
+}
+
+#[test]
 fn test_input_shape() {
     let exprs = DimExpr::input_shape(0, 3);
     assert_eq!(exprs.len(), 3);
@@ -188,4 +216,17 @@ fn test_hash_eq_structural() {
     set.insert(a.clone());
     assert!(set.contains(&b));
     assert!(!set.contains(&c));
+}
+
+#[test]
+fn test_small_helpers_cover_false_and_empty_paths() {
+    assert!(!DimExpr::InputDim {
+        input_idx: 0,
+        axis: 0,
+    }
+    .is_const());
+    assert_eq!(DimExpr::eval_all(&[], &[]), Vec::<usize>::new());
+    assert_eq!(DimExpr::remap_all(&[], 0, 1), Vec::<DimExpr>::new());
+    assert_eq!(DimExpr::max_input_idx_all(&[DimExpr::Const(1)]), None);
+    assert_eq!(DimExpr::from(&DimExpr::Const(9)), DimExpr::Const(9));
 }

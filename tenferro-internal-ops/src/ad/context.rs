@@ -8,6 +8,8 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+#[cfg(feature = "autodiff")]
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use computegraph::fragment::Fragment;
@@ -15,6 +17,10 @@ use computegraph::types::{GlobalValKey, ValRef};
 use tenferro_tensor::DType;
 
 use crate::dim_expr::DimExpr;
+#[cfg(feature = "autodiff")]
+use crate::ext_op::{
+    lookup_extension_rule as lookup_global_extension_rule, ExtensionAdRule, ExtensionRuleSet,
+};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -217,12 +223,14 @@ pub struct ShapeGuard {
 /// let ctx = ShapeGuardContext::default();
 /// assert!(ctx.guards().is_empty());
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ShapeGuardContext {
     guards: Vec<ShapeGuard>,
     metadata: MetadataMap,
     use_global_registry: bool,
     local_keys: Option<Vec<GlobalValKey<StdTensorOp>>>,
+    #[cfg(feature = "autodiff")]
+    extension_rules: Option<ExtensionRuleSet>,
 }
 
 impl ShapeGuardContext {
@@ -255,6 +263,38 @@ impl ShapeGuardContext {
     /// also discard metadata inserted directly into this context.
     pub fn refresh_global_metadata(&mut self) {
         self.use_global_registry = true;
+    }
+
+    /// Use an explicit extension AD rule set for this context.
+    ///
+    /// When an explicit rule set is attached, extension AD lookup does not fall
+    /// back to the process-global compatibility registry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
+    ///
+    /// let ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
+    /// assert!(ctx.lookup_extension_rule("example.missing.v1").is_none());
+    /// ```
+    #[cfg(feature = "autodiff")]
+    pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
+        self.extension_rules = Some(rules);
+        self
+    }
+
+    /// Look up an extension AD rule using this context's ownership policy.
+    ///
+    /// Contexts without an explicit rule set use the process-global registry as
+    /// a temporary compatibility bridge.
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub fn lookup_extension_rule(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
+        match &self.extension_rules {
+            Some(rules) => rules.lookup_rule(family_id),
+            None => lookup_global_extension_rule(family_id),
+        }
     }
 
     /// Returns the guards recorded so far.

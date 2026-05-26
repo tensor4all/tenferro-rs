@@ -836,6 +836,278 @@ pub enum ExtensionRegistryError {
 #[cfg(feature = "autodiff")]
 type RuleMap = HashMap<&'static str, Arc<dyn ExtensionAdRule>>;
 
+/// Explicit, owned set of extension AD rules.
+///
+/// This is the non-global rule container used by higher-level AD contexts.
+/// The process-global registry remains available as a compatibility bridge for
+/// callers that use [`register_extension_rule`].
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Default)]
+pub struct ExtensionRuleSet {
+    rules: Arc<RuleMap>,
+}
+
+#[cfg(feature = "autodiff")]
+impl std::fmt::Debug for ExtensionRuleSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut families: Vec<_> = self.rules.keys().copied().collect();
+        families.sort_unstable();
+        f.debug_struct("ExtensionRuleSet")
+            .field("families", &families)
+            .finish()
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl ExtensionRuleSet {
+    /// Create an empty extension rule set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// let rules = ExtensionRuleSet::new();
+    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one rule to this owned set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chainrules_core::ADRuleResult;
+    /// use computegraph::fragment::FragmentBuilder;
+    /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+    /// use computegraph::OpEmitter;
+    /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
+    /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// #[derive(Debug)]
+    /// struct Rule;
+    ///
+    /// impl ExtensionAdRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.register_rule.v1" }
+    ///     fn linearize(
+    ///         &self,
+    ///         _op: &dyn ExtensionOp,
+    ///         _builder: &mut FragmentBuilder<StdTensorOp>,
+    ///         _primal_in: &[GlobalValKey<StdTensorOp>],
+    ///         _primal_out: &[GlobalValKey<StdTensorOp>],
+    ///         tangent_in: &[Option<LocalValId>],
+    ///         _ctx: &mut ShapeGuardContext,
+    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///         Ok(tangent_in.to_vec())
+    ///     }
+    ///     fn transpose_rule(
+    ///         &self,
+    ///         _op: &dyn ExtensionOp,
+    ///         _emitter: &mut dyn OpEmitter<StdTensorOp>,
+    ///         cotangent_out: &[Option<LocalValId>],
+    ///         _inputs: &[ValRef<StdTensorOp>],
+    ///         _mode: &OpMode,
+    ///         _ctx: &mut ShapeGuardContext,
+    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///         Ok(cotangent_out.to_vec())
+    ///     }
+    /// }
+    ///
+    /// let mut rules = ExtensionRuleSet::new();
+    /// rules.register_rule(Arc::new(Rule)).unwrap();
+    /// assert!(rules.lookup_rule("example.register_rule.v1").is_some());
+    /// ```
+    pub fn register_rule(
+        &mut self,
+        rule: Arc<dyn ExtensionAdRule>,
+    ) -> Result<(), ExtensionRegistryError> {
+        let family_id = rule.family_id();
+        validate_rule_insert(&self.rules, family_id)?;
+        let rules = Arc::make_mut(&mut self.rules);
+        rules.insert(family_id, rule);
+        Ok(())
+    }
+
+    /// Add one ChainRules-style rule to this owned set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chainrules_core::ADRuleResult;
+    /// use tenferro_ops::ext_op::{ExtensionChainRule, ExtensionOp, FruleBuilder, RRuleBuilder};
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// #[derive(Debug)]
+    /// struct Rule;
+    ///
+    /// impl ExtensionChainRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.register_chain_rule.v1" }
+    ///     fn frule(&self, _op: &dyn ExtensionOp, _cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
+    ///         Ok(())
+    ///     }
+    ///     fn rrule(&self, _op: &dyn ExtensionOp, _cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let mut rules = ExtensionRuleSet::new();
+    /// rules.register_chain_rule(Arc::new(Rule)).unwrap();
+    /// assert!(rules.lookup_rule("example.register_chain_rule.v1").is_some());
+    /// ```
+    pub fn register_chain_rule(
+        &mut self,
+        rule: Arc<dyn ExtensionChainRule>,
+    ) -> Result<(), ExtensionRegistryError> {
+        self.register_rule(adapt_chain_rule(rule))
+    }
+
+    /// Return a new rule set containing `rule`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chainrules_core::ADRuleResult;
+    /// use computegraph::fragment::FragmentBuilder;
+    /// use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
+    /// use computegraph::OpEmitter;
+    /// use tenferro_ops::ext_op::{ExtensionAdRule, ExtensionOp};
+    /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// #[derive(Debug)]
+    /// struct Rule;
+    ///
+    /// impl ExtensionAdRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.with_rule.v1" }
+    ///     fn linearize(
+    ///         &self,
+    ///         _op: &dyn ExtensionOp,
+    ///         _builder: &mut FragmentBuilder<StdTensorOp>,
+    ///         _primal_in: &[GlobalValKey<StdTensorOp>],
+    ///         _primal_out: &[GlobalValKey<StdTensorOp>],
+    ///         tangent_in: &[Option<LocalValId>],
+    ///         _ctx: &mut ShapeGuardContext,
+    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///         Ok(tangent_in.to_vec())
+    ///     }
+    ///     fn transpose_rule(
+    ///         &self,
+    ///         _op: &dyn ExtensionOp,
+    ///         _emitter: &mut dyn OpEmitter<StdTensorOp>,
+    ///         cotangent_out: &[Option<LocalValId>],
+    ///         _inputs: &[ValRef<StdTensorOp>],
+    ///         _mode: &OpMode,
+    ///         _ctx: &mut ShapeGuardContext,
+    ///     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+    ///         Ok(cotangent_out.to_vec())
+    ///     }
+    /// }
+    ///
+    /// let rules = ExtensionRuleSet::new().with_rule(Arc::new(Rule)).unwrap();
+    /// assert!(rules.is_rule_registered("example.with_rule.v1"));
+    /// ```
+    pub fn with_rule(
+        mut self,
+        rule: Arc<dyn ExtensionAdRule>,
+    ) -> Result<Self, ExtensionRegistryError> {
+        self.register_rule(rule)?;
+        Ok(self)
+    }
+
+    /// Return a new rule set containing a ChainRules-style `rule`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use chainrules_core::ADRuleResult;
+    /// use tenferro_ops::ext_op::{ExtensionChainRule, ExtensionOp, FruleBuilder, RRuleBuilder};
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// #[derive(Debug)]
+    /// struct Rule;
+    ///
+    /// impl ExtensionChainRule for Rule {
+    ///     fn family_id(&self) -> &'static str { "example.with_chain_rule.v1" }
+    ///     fn frule(&self, _op: &dyn ExtensionOp, _cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
+    ///         Ok(())
+    ///     }
+    ///     fn rrule(&self, _op: &dyn ExtensionOp, _cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let rules = ExtensionRuleSet::new()
+    ///     .with_chain_rule(Arc::new(Rule))
+    ///     .unwrap();
+    /// assert!(rules.is_rule_registered("example.with_chain_rule.v1"));
+    /// ```
+    pub fn with_chain_rule(
+        mut self,
+        rule: Arc<dyn ExtensionChainRule>,
+    ) -> Result<Self, ExtensionRegistryError> {
+        self.register_chain_rule(rule)?;
+        Ok(self)
+    }
+
+    /// Merge another owned rule set into this one.
+    ///
+    /// The merge is atomic: if any rule in `other` is invalid or duplicates an
+    /// existing family, `self` is left unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// let mut rules = ExtensionRuleSet::new();
+    /// rules.merge(ExtensionRuleSet::new()).unwrap();
+    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// ```
+    pub fn merge(&mut self, other: ExtensionRuleSet) -> Result<(), ExtensionRegistryError> {
+        let mut rules = (*self.rules).clone();
+        for rule in other.rules.values() {
+            insert_rule(&mut rules, Arc::clone(rule))?;
+        }
+        self.rules = Arc::new(rules);
+        Ok(())
+    }
+
+    /// Look up a rule in this set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// let rules = ExtensionRuleSet::new();
+    /// assert!(rules.lookup_rule("example.missing.v1").is_none());
+    /// ```
+    pub fn lookup_rule(&self, family_id: &str) -> Option<Arc<dyn ExtensionAdRule>> {
+        self.rules.get(family_id).cloned()
+    }
+
+    /// Return whether `family_id` is present in this set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ExtensionRuleSet;
+    ///
+    /// let rules = ExtensionRuleSet::new();
+    /// assert!(!rules.is_rule_registered("example.missing.v1"));
+    /// ```
+    pub fn is_rule_registered(&self, family_id: &str) -> bool {
+        self.rules.contains_key(family_id)
+    }
+}
+
 #[cfg(feature = "autodiff")]
 fn rule_registry() -> &'static RwLock<RuleMap> {
     static REG: OnceLock<RwLock<RuleMap>> = OnceLock::new();
@@ -875,6 +1147,36 @@ fn is_valid_family_id(family_id: &str) -> bool {
     true
 }
 
+#[cfg(feature = "autodiff")]
+fn insert_rule(
+    rules: &mut RuleMap,
+    rule: Arc<dyn ExtensionAdRule>,
+) -> Result<(), ExtensionRegistryError> {
+    let family_id = rule.family_id();
+    validate_rule_insert(rules, family_id)?;
+    rules.insert(family_id, rule);
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_rule_insert(
+    rules: &RuleMap,
+    family_id: &'static str,
+) -> Result<(), ExtensionRegistryError> {
+    if !is_valid_family_id(family_id) {
+        return Err(ExtensionRegistryError::MalformedFamilyId { family_id });
+    }
+    if rules.contains_key(family_id) {
+        return Err(ExtensionRegistryError::DuplicateRule { family_id });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "autodiff")]
+fn adapt_chain_rule(rule: Arc<dyn ExtensionChainRule>) -> Arc<dyn ExtensionAdRule> {
+    Arc::new(ChainRuleAdapter { rule })
+}
+
 /// Register a new extension AD rule.
 ///
 /// The rule's `family_id` MUST follow the reserved format
@@ -891,11 +1193,7 @@ pub fn register_extension_rule(
     let mut guard = rule_registry()
         .write()
         .expect("extension rule registry RwLock poisoned");
-    if guard.contains_key(family_id) {
-        return Err(ExtensionRegistryError::DuplicateRule { family_id });
-    }
-    guard.insert(family_id, rule);
-    Ok(())
+    insert_rule(&mut guard, rule)
 }
 
 /// Register a ChainRules-style extension AD rule.
@@ -934,7 +1232,7 @@ pub fn register_extension_rule(
 pub fn register_extension_chain_rule(
     rule: Arc<dyn ExtensionChainRule>,
 ) -> Result<(), ExtensionRegistryError> {
-    register_extension_rule(Arc::new(ChainRuleAdapter { rule }))
+    register_extension_rule(adapt_chain_rule(rule))
 }
 
 /// Look up an extension AD rule by `family_id`.
@@ -957,7 +1255,7 @@ pub fn linearize_extension_rule(
     tangent_in: &[Option<LocalValId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    match lookup_extension_rule(op.family_id()) {
+    match ctx.lookup_extension_rule(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
         None => Err(ADRuleError::unsupported(
             op.family_id(),
@@ -976,7 +1274,7 @@ pub fn transpose_extension_rule(
     mode: &OpMode,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValId>>> {
-    match lookup_extension_rule(op.family_id()) {
+    match ctx.lookup_extension_rule(op.family_id()) {
         Some(rule) => rule.transpose_rule(op, emitter, cotangent_out, inputs, mode, ctx),
         None => Err(ADRuleError::unsupported(
             op.family_id(),

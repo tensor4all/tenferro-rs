@@ -1,0 +1,272 @@
+//! Explicit ownership for automatic-differentiation rule sets.
+
+use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
+use tenferro_runtime::{Result, TracedTensor};
+
+/// Explicit automatic-differentiation context.
+///
+/// `AdContext` owns the extension AD rules used by traced AD transforms. It is
+/// the preferred alternative to process-global extension rule registration.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::AdContext;
+///
+/// let ad = AdContext::builder().with_core_rules().build().unwrap();
+/// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+/// ```
+#[derive(Clone, Debug)]
+pub struct AdContext {
+    extension_rules: ExtensionRuleSet,
+}
+
+impl AdContext {
+    /// Start building an explicit AD context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let _builder = AdContext::builder();
+    /// ```
+    pub fn builder() -> AdContextBuilder {
+        AdContextBuilder::default()
+    }
+
+    /// Return the extension rules owned by this context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert!(!ad.extension_rules().is_rule_registered("example.missing.v1"));
+    /// ```
+    pub fn extension_rules(&self) -> &ExtensionRuleSet {
+        &self.extension_rules
+    }
+
+    pub(crate) fn extension_rule_set(&self) -> ExtensionRuleSet {
+        self.extension_rules.clone()
+    }
+
+    /// Gradient of a scalar traced output with respect to a traced input.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().with_core_rules().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let loss = &x * &x;
+    /// let grad = ad.grad(&loss, &x).unwrap();
+    /// assert_eq!(grad.rank, 0);
+    /// ```
+    pub fn grad(&self, output: &TracedTensor, wrt: &TracedTensor) -> Result<TracedTensor> {
+        crate::traced::grad_with_rules(output, wrt, &self.extension_rules)
+    }
+
+    /// Fallible gradient that returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let loss = &x * &x;
+    /// assert!(ad.try_grad(&loss, &x).unwrap().is_some());
+    /// ```
+    pub fn try_grad(
+        &self,
+        output: &TracedTensor,
+        wrt: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
+        crate::traced::try_grad_with_rules(output, wrt, &self.extension_rules)
+    }
+
+    /// Forward-mode Jacobian-vector product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let y = &x * &x;
+    /// let dy = ad.jvp(&y, &x, &dx).unwrap();
+    /// assert_eq!(dy.rank, 0);
+    /// ```
+    pub fn jvp(
+        &self,
+        output: &TracedTensor,
+        wrt: &TracedTensor,
+        tangent: &TracedTensor,
+    ) -> Result<TracedTensor> {
+        crate::traced::jvp_with_rules(output, wrt, tangent, &self.extension_rules)
+    }
+
+    /// Forward-mode Jacobian-vector product that returns `None` for inactive output.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let y = &x * &x;
+    /// assert!(ad.try_jvp(&y, &x, &dx).unwrap().is_some());
+    /// ```
+    pub fn try_jvp(
+        &self,
+        output: &TracedTensor,
+        wrt: &TracedTensor,
+        tangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
+        crate::traced::try_jvp_with_rules(output, wrt, tangent, &self.extension_rules)
+    }
+
+    /// Reverse-mode vector-Jacobian product.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let y = &x * &x;
+    /// let dx = ad.vjp(&y, &x, &dy).unwrap();
+    /// assert_eq!(dx.rank, 0);
+    /// ```
+    pub fn vjp(
+        &self,
+        output: &TracedTensor,
+        wrt: &TracedTensor,
+        cotangent: &TracedTensor,
+    ) -> Result<TracedTensor> {
+        crate::traced::vjp_with_rules(output, wrt, cotangent, &self.extension_rules)
+    }
+
+    /// Reverse-mode vector-Jacobian product that returns `None` for inactive input.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
+    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
+    /// let y = &x * &x;
+    /// assert!(ad.try_vjp(&y, &x, &dy).unwrap().is_some());
+    /// ```
+    pub fn try_vjp(
+        &self,
+        output: &TracedTensor,
+        wrt: &TracedTensor,
+        cotangent: &TracedTensor,
+    ) -> Result<Option<TracedTensor>> {
+        crate::traced::try_vjp_with_rules(output, wrt, cotangent, &self.extension_rules)
+    }
+}
+
+/// Builder for [`AdContext`].
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::AdContextBuilder;
+///
+/// let ad = AdContextBuilder::new().with_core_rules().build().unwrap();
+/// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct AdContextBuilder {
+    extension_rule_sets: Vec<ExtensionRuleSet>,
+}
+
+impl AdContextBuilder {
+    /// Create an empty builder.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContextBuilder;
+    ///
+    /// let _builder = AdContextBuilder::new();
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Include tenferro's built-in tensor primitive rules.
+    ///
+    /// Built-in rules are always available through `tenferro-ad`; this method
+    /// exists to make explicit-context construction read naturally next to
+    /// extension rule registration.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let _ad = AdContext::builder().with_core_rules().build().unwrap();
+    /// ```
+    pub fn with_core_rules(self) -> Self {
+        self
+    }
+
+    /// Include an owned extension rule set.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{AdContext, extension::ExtensionRuleSet};
+    ///
+    /// let _ad = AdContext::builder()
+    ///     .with_extension_rules(ExtensionRuleSet::new())
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
+        self.extension_rule_sets.push(rules);
+        self
+    }
+
+    /// Build the context.
+    ///
+    /// Duplicate extension family registrations are rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert!(ad.extension_rules().lookup_rule("example.missing.v1").is_none());
+    /// ```
+    pub fn build(self) -> std::result::Result<AdContext, ExtensionRegistryError> {
+        let mut extension_rules = ExtensionRuleSet::new();
+        for rules in self.extension_rule_sets {
+            extension_rules.merge(rules)?;
+        }
+        Ok(AdContext { extension_rules })
+    }
+}
