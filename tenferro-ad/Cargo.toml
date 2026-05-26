@@ -24,9 +24,8 @@ cpu-blas = [
     "tenferro-tensor/cpu-blas",
     "tenferro-gpu?/cpu-blas",
 ]
-gpu = []
-cuda = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/cuda"]
-rocm = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/rocm"]
+cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
+rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", default-features = false }

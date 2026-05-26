@@ -13,7 +13,7 @@ transform AD pass, or repeated compile/run workflow.
 | --- | --- |
 | `TypedTensor<T>` | Selected typed methods such as `svd`, `qr`, `cholesky`, and `eigh` |
 | `Tensor` | Dynamic dtype methods such as `svd`, `qr`, `cholesky`, `eigh`, and `solve` |
-| `EagerTensor` | Immediate forward execution; tracked variables record scalar-loss gradients where AD rules support the operation |
+| `EagerTensor` | `tenferro_linalg::eager_tensor` helpers behind `autodiff`; tracked variables record scalar-loss gradients where AD rules support the operation |
 | `TracedTensor` | `tenferro_linalg::traced_tensor` helpers for graph execution and transform AD |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
@@ -56,6 +56,20 @@ or typed tensors for direct no-AD execution, eager tensors when the result
 should be produced immediately under an `EagerRuntime`, and traced helpers when
 the operation belongs in a reusable graph. Use tracked eager tensors only when
 the result should remain connected to a scalar-loss `backward()` pass.
+For linalg eager helpers or linalg AD rules, enable `tenferro-linalg`'s
+`autodiff` feature.
+
+When transform AD must differentiate through linalg extension ops, include the
+owned rule set in an explicit context:
+
+```rust
+use tenferro_ad::AdContext;
+
+let ad = AdContext::builder()
+    .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+    .build()
+    .unwrap();
+```
 
 ## Singular value decomposition
 

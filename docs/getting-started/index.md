@@ -33,9 +33,10 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-fea
 tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor", default-features = false, features = ["src-openblas"] }
 ```
 
-Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`,
-`tenferro-linalg-ad`, `tenferro-fft`, or `tenferro-gpu` when a workflow needs
-those layers. Switch to crates.io once published:
+Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or
+`tenferro-gpu` when a workflow needs those layers. Enable `autodiff` on
+operation crates such as `tenferro-linalg` when extension AD rules are needed.
+Switch to crates.io once published:
 
 ```toml
 [dependencies]

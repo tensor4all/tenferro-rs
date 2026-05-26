@@ -46,7 +46,7 @@ The previous architecture organized around eager execution families and tape-bas
 | `tenferro-internal-tensor` | `tenferro-tensor` | Public dense tensor and CPU backend crate |
 | `tenferro-prims` | `tenferro-internal-ops` | Rewritten: single TensorOp enum |
 | `tenferro-einsum` | `tenferro-einsum` | Rewritten: graph builder |
-| `tenferro-linalg` | `tenferro-linalg` + `tenferro-linalg-ad` | Primal extension runtime and explicit AD companion |
+| `tenferro-linalg` | `tenferro-linalg` | Primal extension runtime plus optional `autodiff` linalg rules |
 | `tenferro` (facade) | deleted | Direct crates are the public API boundary |
 
 The current split is intentionally direct rather than facade-based. See
@@ -75,7 +75,6 @@ tenferro-runtime ──────────── tidu-rs integration points
     ├── tenferro-ad
     ├── tenferro-einsum
     ├── tenferro-linalg
-    ├── tenferro-linalg-ad
     └── tenferro-fft
 ```
 
