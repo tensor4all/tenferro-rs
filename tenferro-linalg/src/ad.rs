@@ -1,19 +1,22 @@
 //! Automatic differentiation support for `tenferro-linalg`.
 //!
-//! This crate is the explicit opt-in AD companion for the primal
-//! `tenferro-linalg` extension runtime.
+//! This module is enabled by the `autodiff` feature. It provides the linalg
+//! extension rule set used by explicit `tenferro_ad::AdContext` values.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_ad::TracedTensorAdExt;
+//! use tenferro_ad::AdContext;
 //! use tenferro_runtime::TracedTensor;
 //!
-//! tenferro_linalg_ad::register_extension_rule().unwrap();
+//! let ad = AdContext::builder()
+//!     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+//!     .build()
+//!     .unwrap();
 //! let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
 //! let (_u, s, _vt) = tenferro_linalg::svd(&x);
 //! let loss = s.reduce_sum(&[0]);
-//! let grad = loss.grad(&x).unwrap();
+//! let grad = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(grad.rank, 2);
 //! ```
 
@@ -25,31 +28,47 @@ use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
 use tenferro_ad::extension::{
     is_extension_rule_registered, register_extension_rule as register_rule, ExtensionAdRuleTrait,
-    ExtensionOpTrait, ExtensionRegistryError,
+    ExtensionOpTrait, ExtensionRegistryError, ExtensionRuleSet,
 };
-use tenferro_linalg::ad_support::{LinalgExtensionOp, LinalgOp};
-use tenferro_linalg::LINALG_EXTENSION_FAMILY_ID;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 
-pub mod eager_tensor;
+use crate::ad_support::{LinalgExtensionOp, LinalgOp};
+use crate::LINALG_EXTENSION_FAMILY_ID;
+
 mod rules;
 
-/// Register the `tenferro-linalg` extension AD rule.
-///
-/// Registration is process-local and idempotent: duplicate registrations are
-/// treated as success.
+/// Return the explicit linalg extension AD rule set.
 ///
 /// # Examples
 ///
 /// ```rust
-/// tenferro_linalg_ad::register_extension_rule().unwrap();
+/// let rules = tenferro_linalg::ad_rules().unwrap();
+/// assert!(rules.is_rule_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
+/// ```
+pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
+    ExtensionRuleSet::new().with_rule(Arc::new(LinalgAdRule))
+}
+
+/// Register the `tenferro-linalg` extension AD rule.
+///
+/// This process-global registration API is retained as a compatibility bridge.
+/// Prefer explicit [`ad_rules`] ownership through `tenferro_ad::AdContext`.
+///
+/// # Examples
+///
+/// ```rust
+/// tenferro_linalg::register_extension_rule().unwrap();
 /// ```
 pub fn register_extension_rule() -> Result<(), ExtensionRegistryError> {
     if is_extension_rule_registered(LINALG_EXTENSION_FAMILY_ID) {
         return Ok(());
     }
-    match register_rule(Arc::new(LinalgAdRule)) {
+    let rules = ad_rules()?;
+    let Some(rule) = rules.lookup_rule(LINALG_EXTENSION_FAMILY_ID) else {
+        return Ok(());
+    };
+    match register_rule(rule) {
         Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
         Err(err) => Err(err),
     }

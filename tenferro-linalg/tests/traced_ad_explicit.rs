@@ -1,4 +1,6 @@
-use tenferro_ad::TracedTensorAdExt;
+#![cfg(feature = "autodiff")]
+
+use tenferro_ad::AdContext;
 use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
@@ -50,9 +52,17 @@ fn assert_finite_tensor(tensor: &Tensor) {
     panic!("expected floating tensor, got {:?}", tensor.dtype());
 }
 
+fn ad_context() -> AdContext {
+    AdContext::builder()
+        .with_core_rules()
+        .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+        .build()
+        .unwrap()
+}
+
 #[test]
 fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
-    tenferro_linalg_ad::register_extension_rule().unwrap();
+    let ad = ad_context();
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![3, 2],
         vec![9.0, 0.0, 0.0, 0.0, 4.0, 0.0],
@@ -64,7 +74,7 @@ fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
 
     let (_u, s, _vt) = tenferro_linalg::svd(&a);
     let y = s.reduce_sum(&[0]);
-    let dy = y.jvp(&a, &da);
+    let dy = ad.jvp(&y, &a, &da).unwrap();
     let out = eval(&dy);
 
     assert_eq!(out.shape(), &[] as &[usize]);
@@ -73,14 +83,14 @@ fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
 
 #[test]
 fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
-    tenferro_linalg_ad::register_extension_rule().unwrap();
+    let ad = ad_context();
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]));
 
     let x = tenferro_linalg::full_piv_lu_solve(&a, &b);
     let loss = x.reduce_sum(&[0, 1]);
-    let grad_b = loss.grad(&b).unwrap();
+    let grad_b = ad.grad(&loss, &b).unwrap();
     let out = eval(&grad_b);
 
     assert_eq!(out.shape(), &[2, 1]);
@@ -88,13 +98,13 @@ fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
 
 #[test]
 fn svd_values_grad_matches_finite_diff() {
-    tenferro_linalg_ad::register_extension_rule().unwrap();
+    let ad = ad_context();
     let data = vec![3.0, 0.1, 0.2, 0.3, 2.0, 0.4];
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone()));
 
     let (_u, s, _vt) = tenferro_linalg::svd(&a);
     let loss = s.reduce_sum(&[0]);
-    let grad = loss.grad(&a).unwrap();
+    let grad = ad.grad(&loss, &a).unwrap();
     let out = eval(&grad);
 
     let actual = get_f64_data(&out);
@@ -122,7 +132,7 @@ fn svd_values_grad_matches_finite_diff() {
 
 #[test]
 fn remaining_linalg_ops_jvp_use_extension_ad_rule() {
-    tenferro_linalg_ad::register_extension_rule().unwrap();
+    let ad = ad_context();
 
     let spd_data = vec![3.0, 0.2, 0.2, 4.0];
     let spd = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], spd_data.clone()));
@@ -138,31 +148,35 @@ fn remaining_linalg_ops_jvp_use_extension_ad_rule() {
     let rhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![1.0, 2.0]));
     let drhs = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![0.4, -0.3]));
 
-    let chol_tangent = reduce_all(&tenferro_linalg::cholesky(&spd)).jvp(&spd, &dspd);
+    let chol_loss = reduce_all(&tenferro_linalg::cholesky(&spd));
+    let chol_tangent = ad.jvp(&chol_loss, &spd, &dspd).unwrap();
 
     let (q, r) = tenferro_linalg::qr(&general);
     let qr_loss = &reduce_all(&q) + &reduce_all(&r);
-    let qr_tangent = qr_loss.jvp(&general, &dgeneral);
+    let qr_tangent = ad.jvp(&qr_loss, &general, &dgeneral).unwrap();
 
     let (eigh_values, _eigh_vectors) = tenferro_linalg::eigh(&spd);
-    let eigh_tangent = reduce_all(&eigh_values).jvp(&spd, &dspd);
+    let eigh_loss = reduce_all(&eigh_values);
+    let eigh_tangent = ad.jvp(&eigh_loss, &spd, &dspd).unwrap();
 
     let (eig_values, _eig_vectors) = tenferro_linalg::eig(&general);
-    let eig_tangent = reduce_all(&eig_values).jvp(&general, &dgeneral);
+    let eig_loss = reduce_all(&eig_values);
+    let eig_tangent = ad.jvp(&eig_loss, &general, &dgeneral).unwrap();
 
-    let solve_tangent = reduce_all(&tenferro_linalg::solve(&general, &rhs)).jvp(&rhs, &drhs);
-    let triangular_tangent = reduce_all(&tenferro_linalg::triangular_solve(
+    let solve_loss = reduce_all(&tenferro_linalg::solve(&general, &rhs));
+    let solve_tangent = ad.jvp(&solve_loss, &rhs, &drhs).unwrap();
+    let triangular_loss = reduce_all(&tenferro_linalg::triangular_solve(
         &general, &rhs, true, true, false, false,
-    ))
-    .jvp(&rhs, &drhs);
+    ));
+    let triangular_tangent = ad.jvp(&triangular_loss, &rhs, &drhs).unwrap();
 
     let (_p, lu_l, lu_u, _parity) = tenferro_linalg::lu(&general);
     let lu_loss = &reduce_all(&lu_l) + &reduce_all(&lu_u);
-    let lu_tangent = lu_loss.jvp(&general, &dgeneral);
+    let lu_tangent = ad.jvp(&lu_loss, &general, &dgeneral).unwrap();
 
     let (_p, full_lu_l, full_lu_u, _q, _full_parity) = tenferro_linalg::full_piv_lu(&general);
     let full_lu_loss = &reduce_all(&full_lu_l) + &reduce_all(&full_lu_u);
-    let full_lu_tangent = full_lu_loss.jvp(&general, &dgeneral);
+    let full_lu_tangent = ad.jvp(&full_lu_loss, &general, &dgeneral).unwrap();
 
     let outputs = [
         &chol_tangent,
@@ -186,19 +200,19 @@ fn remaining_linalg_ops_jvp_use_extension_ad_rule() {
 
 #[test]
 fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
-    tenferro_linalg_ad::register_extension_rule().unwrap();
+    let ad = ad_context();
 
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]));
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![4.0, 8.0]));
 
     let solve_loss = reduce_all(&tenferro_linalg::solve(&a, &b));
-    let solve_grad_b = solve_loss.grad(&b).unwrap();
+    let solve_grad_b = ad.grad(&solve_loss, &b).unwrap();
 
     let triangular_loss = reduce_all(&tenferro_linalg::triangular_solve(
         &a, &b, true, true, false, false,
     ));
-    let triangular_grad_b = triangular_loss.grad(&b).unwrap();
+    let triangular_grad_b = ad.grad(&triangular_loss, &b).unwrap();
 
     let results = eval_many(&[&solve_grad_b, &triangular_grad_b]);
     for result in &results {

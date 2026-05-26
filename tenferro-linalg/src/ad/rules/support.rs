@@ -5,7 +5,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, DotGeneralConfig, PadConfig};
 
-use tenferro_linalg::ad_support::LinalgOp;
+use crate::ad_support::LinalgOp;
 
 use super::{conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex, linalg_std_op};
 
