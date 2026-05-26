@@ -2,12 +2,21 @@
 
 use num_complex::Complex64;
 use std::sync::{Arc, OnceLock};
-use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+use tenferro_ad::{AdContext, CpuBackend, EagerRuntime, EagerTensor, Tensor};
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
     CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()))
         .clone()
+}
+
+fn ad_test_ctx() -> Arc<EagerRuntime> {
+    let ad = AdContext::builder()
+        .with_core_rules()
+        .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+        .build()
+        .unwrap();
+    EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad)
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -16,6 +25,17 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 
 fn c64_data(tensor: &Tensor) -> &[Complex64] {
     tensor.as_slice::<Complex64>().unwrap()
+}
+
+fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let diff = (actual - expected).abs();
+        assert!(
+            diff <= tol,
+            "idx {idx}: expected {expected}, got {actual}, diff {diff}"
+        );
+    }
 }
 
 #[test]
@@ -104,6 +124,34 @@ fn solve_returns_expected_solution() {
 
     assert_eq!(x.data().shape(), &[2, 1]);
     assert_eq!(f64_data(x.data()), &[2.0, 2.0]);
+}
+
+#[test]
+fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
+    let ctx = ad_test_ctx();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(
+            vec![2, 2, 2],
+            vec![2.0_f64, 0.0, 0.0, 4.0, 3.0, 0.0, 0.0, 5.0],
+        ),
+        ctx.clone(),
+    );
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1, 2], vec![4.0_f64, 8.0, 6.0, 10.0]),
+        ctx,
+    );
+
+    let x = tenferro_linalg::eager_tensor::solve(&a, &b).unwrap();
+    let loss = x.reduce_sum(&[0, 1, 2]).unwrap();
+    let _ = loss.backward().unwrap();
+    let grad = a.grad().unwrap();
+
+    assert_eq!(grad.shape(), &[2, 2, 2]);
+    assert_close_slice(
+        f64_data(grad.as_ref()),
+        &[-1.0, -0.5, -1.0, -0.5, -2.0 / 3.0, -0.4, -2.0 / 3.0, -0.4],
+        1.0e-12,
+    );
 }
 
 #[test]
