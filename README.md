@@ -8,6 +8,17 @@ automatic differentiation; and standard operation crates such as
 `tenferro-linalg`, `tenferro-einsum`, and `tenferro-fft` for separately owned
 operation families.
 
+Optional capabilities are selected on the crate that owns the operation family.
+For example, CUDA linalg with extension AD uses concrete backend features rather
+than a public `gpu` feature:
+
+```toml
+[dependencies]
+tenferro-ad = { path = "tenferro-ad", features = ["cuda"] }
+tenferro-gpu = { path = "tenferro-gpu", features = ["cuda"] }
+tenferro-linalg = { path = "tenferro-linalg", features = ["autodiff", "cuda"] }
+```
+
 Start with `Tensor` and `CpuBackend` for ndarray-like CPU work. Move to
 `EagerTensor` when you want immediate execution with optional `backward()`, and
 move to `TracedTensor` when you need graph reuse, transform AD, or repeated

@@ -45,7 +45,10 @@ def main() -> int:
     linalg_manifest = repo / "tenferro-linalg" / "Cargo.toml"
     if not has_line(linalg_manifest, "autodiff = ["):
         findings.append("tenferro-linalg/Cargo.toml is missing the autodiff feature")
-    if not has_line(linalg_manifest, 'tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }'):
+    optional_ad_dep = (
+        'tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }'
+    )
+    if not has_line(linalg_manifest, optional_ad_dep):
         findings.append("tenferro-linalg must keep tenferro-ad optional")
 
     linalg_lib = repo / "tenferro-linalg" / "src" / "lib.rs"
@@ -57,18 +60,32 @@ def main() -> int:
         if needle not in linalg_lib.read_text(encoding="utf-8"):
             findings.append(f"tenferro-linalg/src/lib.rs missing gated item: {needle!r}")
 
-    public_manifests = [
-        repo / "tenferro-ad" / "Cargo.toml",
+    operation_manifests = [
         repo / "tenferro-einsum" / "Cargo.toml",
         repo / "tenferro-fft" / "Cargo.toml",
         repo / "tenferro-linalg" / "Cargo.toml",
     ]
+    for manifest in operation_manifests:
+        text = manifest.read_text(encoding="utf-8")
+        if "autodiff = [" not in text:
+            findings.append(f"{manifest.relative_to(repo)} is missing the public autodiff feature")
+        if "\nad =" in text:
+            findings.append(f"{manifest.relative_to(repo)} must not expose an ad feature alias")
+        for feature in ["cuda = [", "rocm = ["]:
+            if feature not in text:
+                findings.append(f"{manifest.relative_to(repo)} is missing the {feature[:-4]} feature")
+
+    public_manifests = [repo / "tenferro-ad" / "Cargo.toml", *operation_manifests]
     for manifest in public_manifests:
         for line_no, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), start=1):
             if line.startswith("gpu ="):
-                findings.append(f"{manifest.relative_to(repo)}:{line_no}: public gpu feature is forbidden")
+                findings.append(
+                    f"{manifest.relative_to(repo)}:{line_no}: public gpu feature is forbidden"
+                )
             if "tenferro-ad/gpu" in line:
-                findings.append(f"{manifest.relative_to(repo)}:{line_no}: use cuda/rocm, not tenferro-ad/gpu")
+                findings.append(
+                    f"{manifest.relative_to(repo)}:{line_no}: use cuda/rocm, not tenferro-ad/gpu"
+                )
 
     forbidden_refs = ["tenferro-linalg" + "-ad", "tenferro_linalg" + "_ad"]
     for path in iter_text_files(repo):
