@@ -16,8 +16,8 @@ pub use ext_op::ExtensionOp;
 pub use ext_op::{
     is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
     register_extension_chain_rule, register_extension_rule, transpose_extension_rule, AdValue,
-    ExtensionAdRule, ExtensionChainRule, ExtensionOp, ExtensionRegistryError, FruleBuilder,
-    RRuleBuilder,
+    ExtensionAdRule, ExtensionChainRule, ExtensionOp, ExtensionRegistryError, ExtensionRuleSet,
+    FruleBuilder, RRuleBuilder,
 };
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::SymDim;

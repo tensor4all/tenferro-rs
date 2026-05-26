@@ -4,7 +4,7 @@ use computegraph::OpEmitter;
 use tenferro_ops::ad::context::ShapeGuardContext;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
-use tenferro_linalg::ad_support::LinalgOp;
+use crate::ad_support::LinalgOp;
 
 use super::support::*;
 use super::{conjugate_primal_if_dtype_complex, linalg_std_op};

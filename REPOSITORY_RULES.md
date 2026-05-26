@@ -28,8 +28,8 @@ rules from `tensor4all-agent-rules`.
 ## Standard Extension Boundary
 
 - Standard operation families (`tenferro-einsum`, `tenferro-linalg`,
-  `tenferro-linalg-ad`, `tenferro-fft`, and future peers) are first-class
-  crates, not modules of a broad `tenferro` facade.
+  `tenferro-fft`, and future peers) are first-class crates, not modules of a
+  broad `tenferro` facade.
 - The workspace intentionally has no root `tenferro` facade crate. Do not add
   operation-family facade paths such as `tenferro::einsum`,
   `tenferro::linalg`, or `tenferro::fft`; users import operation crates
@@ -37,8 +37,18 @@ rules from `tensor4all-agent-rules`.
 - Users import operation crates directly and register runtimes explicitly, for
   example `tenferro_einsum::einsum` plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
+- Optional capabilities are feature boundaries, not new operation-family
+  crates. Put operation-specific AD support behind an `autodiff` feature in the
+  owning operation crate instead of adding `*-ad` companion crates.
+- User-facing operation crates expose backend features as `cuda` and `rocm`.
+  Do not document or require a public `gpu` feature on those crates; use
+  internal `cfg(any(feature = "cuda", feature = "rocm"))` checks or internal
+  helper features when needed.
 - Extension crates depend on the runtime, tensor, AD, or GPU crate they need;
   dependency flow must not require a facade crate to depend back on them.
+- Extension AD rules should be owned by an explicit `tenferro_ad::AdContext`
+  or rule set. Process-global registration may remain only as a compatibility
+  bridge, not as the primary design for new APIs.
 
 ## Oracle Gate
 

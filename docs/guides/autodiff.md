@@ -14,18 +14,21 @@ For eager forward execution and scalar-loss accumulation semantics, see
 - `jvp` for Jacobian-vector products
 - Higher-order AD via composition, such as `jvp(grad(f))` for HVPs
 
-AD rules are extensible outside the core crate. Extension crates can register
-JVP/VJP rules for their operations; [FFT (extension)](tenferro-fft.md) and
-`tenferro-einsum` are standard extensions built on that mechanism.
+Use `tenferro_ad::AdContext` to own the AD rule set used by a transform. Core
+tensor primitive rules are always available. Extension crates can provide owned
+JVP/VJP rule sets for their operations; `tenferro-linalg` exposes these through
+its `autodiff` feature.
 
 ## Reverse-mode gradient with `grad`
 
 ```rust
+use tenferro_ad::AdContext;
 use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
-let grad = loss.grad(&x).unwrap();
+let ad = AdContext::builder().with_core_rules().build().unwrap();
+let grad = ad.grad(&loss, &x).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&grad).unwrap();
@@ -36,35 +39,33 @@ assert_eq!(result.shape(), &[3]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 ```
 
-## Gradient through einsum
+## Gradient through linalg
 
 ```rust
+use tenferro_ad::AdContext;
 use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
-let a = TracedTensor::from_vec_col_major(
-    vec![2, 3],
-    vec![1.0_f64, -2.0, 0.5, 3.0, 1.25, -0.75],
-);
-let b = TracedTensor::from_vec_col_major(
-    vec![3, 2],
-    vec![2.0_f64, 0.25, -1.5, 4.0, 0.75, -0.5],
-);
-
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
-let loss = y.reduce_sum(&[0, 1]);
-let grad_a = loss.grad(&a).unwrap();
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
+let factor = tenferro_linalg::traced_tensor::cholesky(&a);
+let ad = AdContext::builder()
+    .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+    .build()
+    .unwrap();
+let loss = factor.reduce_sum(&[0, 1]);
+let grad_a = ad.grad(&loss, &a).unwrap();
 let program = compiler.compile(&grad_a).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_einsum::register_runtime).unwrap();
+executor.register_extension(tenferro_linalg::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
-assert_eq!(result.shape(), &[2, 3]);
+assert_eq!(result.shape(), &[2, 2]);
 ```
 
 ## Vector-Jacobian product with `vjp`
 
 ```rust
+use tenferro_ad::AdContext;
 use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -81,12 +82,12 @@ let cotangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
-let ct_a = y.vjp(&a, &cotangent);
+let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
+let ad = AdContext::builder().with_core_rules().build().unwrap();
+let ct_a = ad.vjp(&y, &a, &cotangent).unwrap();
 let program = compiler.compile(&ct_a).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 3]);
 ```
@@ -94,6 +95,7 @@ assert_eq!(result.shape(), &[2, 3]);
 ## Jacobian-vector product with `jvp`
 
 ```rust
+use tenferro_ad::AdContext;
 use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
@@ -110,12 +112,12 @@ let tangent = TracedTensor::from_vec_col_major(
 );
 
 let mut compiler = GraphCompiler::new();
-let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
-let dy = y.jvp(&a, &tangent);
+let y = tenferro_runtime::traced_tensor::matmul(&a, &b);
+let ad = AdContext::builder().with_core_rules().build().unwrap();
+let dy = ad.jvp(&y, &a, &tangent).unwrap();
 let program = compiler.compile(&dy).unwrap();
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_einsum::register_runtime).unwrap();
 let result = executor.run(&program).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
@@ -123,10 +125,11 @@ assert_eq!(result.shape(), &[2, 2]);
 ## Extension AD Rules
 
 External operations can participate in autodiff when the extension crate
-registers the corresponding rules. If an extension does not support a given AD
-path, tenferro reports that path as unsupported rather than silently returning
-an incorrect gradient.
+provides the corresponding rules and the caller includes those rules in an
+`AdContext`. If an extension does not support a given AD path, tenferro reports
+that path as unsupported rather than silently returning an incorrect gradient.
 
-The `tenferro-fft` extension demonstrates this pattern for supported
-complex-to-complex FFT transforms. See [Custom Tensor Operations](custom-operations.md)
-for the extension model.
+The process-global extension-rule registration API is retained as a
+compatibility bridge for older helpers. New code should prefer explicit context
+ownership. See [Custom Tensor Operations](custom-operations.md) for the
+extension model.

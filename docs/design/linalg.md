@@ -1,9 +1,10 @@
 # Linear Algebra
 
-`tenferro-linalg` is the public primal tensor linalg extension of the
-workspace. Its role is to validate contracts, build traced linalg operations,
-and register linalg execution with the runtime. It is not the backend execution
-contract itself, and AD support is intentionally owned by `tenferro-linalg-ad`.
+`tenferro-linalg` is the public tensor linalg extension of the workspace. Its
+role is to validate contracts, build traced and eager linalg operations,
+register linalg execution with the runtime, and provide optional linalg AD
+rules behind the `autodiff` feature. It is not the backend execution contract
+itself.
 
 ## Position in the Workspace
 
@@ -17,11 +18,7 @@ tenferro-runtime
         |
         v
 tenferro-linalg
-    primal linalg extension API and runtime registration
-        |
-        v
-tenferro-linalg-ad
-    explicit AD companion for linalg extension ops
+    linalg extension API, runtime registration, and optional AD rules
 ```
 
 ## Responsibilities
@@ -32,13 +29,14 @@ tenferro-linalg-ad
 - public result structs and ergonomic APIs
 - composite lowering
 - traced extension op payloads and runtime registration
+- optional eager helpers and linalg AD rules behind `autodiff`
 
 `tenferro-linalg` does not own:
 
 - backend-specific kernel interfaces
 - CPU/GPU direct dispatch branches
 - standalone structural view operations
-- AD registration or differentiation formulas
+- mandatory AD dependencies for primal-only users
 
 ## Kernel Basis vs Composite API
 
@@ -84,13 +82,15 @@ This is the column-major counterpart to PyTorch's trailing matrix convention.
 
 ## AD Boundary
 
-AD formulas live in `tenferro-linalg-ad`, not `tenferro-linalg`.
+AD formulas live in `tenferro-linalg` behind the `autodiff` feature.
 
-That split is deliberate:
+That feature boundary is deliberate:
 
-- `tenferro-linalg` stays primal-only and can be used without AD dependencies
-- `tenferro-linalg-ad` depends on both `tenferro-ad` and `tenferro-linalg` to
-  register mathematical differentiation rules over linalg extension ops
+- primal-only users can depend on `tenferro-linalg` without AD dependencies
+- AD users enable `tenferro-linalg/autodiff` and pass the owned rule set into an
+  explicit `tenferro_ad::AdContext`
+- the process-global registration API is retained only as a compatibility
+  bridge
 
 Some public APIs are naturally primal-only, especially structured status/result
 surfaces such as factorization contracts with pivots or `info` metadata.
@@ -101,8 +101,8 @@ The architectural boundary is now active rather than transitional:
 
 - `tenferro-tensor` owns backend-facing structured linalg kernels through
   `TensorBackend`
-- `tenferro-linalg` owns primal extension APIs and runtime registration
-- `tenferro-linalg-ad` owns AD registration and linalg differentiation rules
+- `tenferro-linalg` owns extension APIs, runtime registration, eager helpers,
+  and feature-gated linalg differentiation rules
 
 Current debt is mainly about capability breadth and composite coverage:
 

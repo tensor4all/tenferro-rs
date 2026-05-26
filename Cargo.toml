@@ -10,7 +10,6 @@ members = [
     "tenferro-internal-ops",
     "tenferro-einsum",
     "tenferro-linalg",
-    "tenferro-linalg-ad",
     "tenferro-fft",
 ]
 default-members = [

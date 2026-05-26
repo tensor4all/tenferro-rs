@@ -24,10 +24,8 @@ For contributors, internal crate APIs are also available in the
   transfer helpers
 - [tenferro-einsum](./tenferro_einsum/index.html): subscripts,
   contraction planning, traced/eager einsum APIs, extension runtime, and AD rule
-- [tenferro-linalg](./tenferro_linalg/index.html): linear algebra traced APIs
-  and extension runtime
-- [tenferro-linalg-ad](./tenferro_linalg_ad/index.html): linalg eager APIs and
-  linalg AD registration
+- [tenferro-linalg](./tenferro_linalg/index.html): linear algebra traced APIs,
+  eager helpers, extension runtime, and optional linalg AD rules
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
   public FFT APIs
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph op vocabulary and
@@ -53,8 +51,7 @@ tenferro-runtime           -- TracedTensor, GraphCompiler, GraphExecutor
     | \-- tenferro-ad     -- EagerRuntime, EagerTensor, traced AD traits
 
 tenferro-einsum   -- standard einsum extension
-tenferro-linalg   -- standard linalg extension
-tenferro-linalg-ad -- linalg AD extension
+tenferro-linalg   -- standard linalg extension with optional AD rules
 tenferro-fft      -- standard FFT extension
 tenferro-internal-extension-macros    -- extension-op registration macros
 ```

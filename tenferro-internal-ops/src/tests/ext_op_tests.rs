@@ -18,7 +18,7 @@ use crate::ext_op::{
 };
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{ExtensionFamilyId, SymDim, TensorMeta};
+use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim, TensorMeta};
 use tenferro_tensor::{DType, Tensor};
 
 #[derive(Debug)]
@@ -28,6 +28,11 @@ struct CoverageRule {
 
 #[derive(Clone, Debug)]
 struct NoInlineRuleOp;
+
+#[derive(Clone, Debug)]
+struct FamilyOnlyOp {
+    family: &'static str,
+}
 
 #[derive(Clone, Debug)]
 struct ChainScaleOp;
@@ -48,6 +53,51 @@ impl ExtensionOp for NoInlineRuleOp {
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other.as_any().downcast_ref::<NoInlineRuleOp>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn n_inputs(&self) -> usize {
+        1
+    }
+
+    fn n_outputs(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Vec<(DType, Vec<SymDim>)> {
+        vec![(input_dtypes[0], input_shapes[0].to_vec())]
+    }
+
+    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Ok(vec![inputs[0].clone()])
+    }
+}
+
+impl ExtensionOp for FamilyOnlyOp {
+    fn family_id(&self) -> &'static str {
+        self.family
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write(self.family.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<FamilyOnlyOp>()
+            .is_some_and(|op| op.family == self.family)
     }
 
     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
@@ -360,6 +410,114 @@ fn register_chain_rule_adapts_frule_and_rrule() {
     assert_eq!(fragment.ops().len(), 1);
     assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
     assert_eq!(vjp, vec![Some(fragment.ops()[0].outputs[0])]);
+}
+
+#[test]
+fn owned_rule_set_adapts_chain_rule_without_global_lookup() {
+    let rules = ExtensionRuleSet::new()
+        .with_chain_rule(Arc::new(ChainScaleRule))
+        .expect("owned chain rule registration should succeed");
+
+    let op = ChainScaleOp;
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let dx = builder.add_input(TensorInputKey::User { id: 10_101 });
+    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules.clone());
+    let jvp = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
+        .expect("owned chain frule should adapt to linearize");
+    let fragment = builder.build();
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
+    assert_eq!(jvp, vec![Some(fragment.ops()[0].outputs[0])]);
+
+    let mut emitter = FragmentBuilder::<StdTensorOp>::new();
+    let cot_y = emitter.add_input(TensorInputKey::User { id: 10_102 });
+    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules);
+    let vjp = transpose_extension_rule(
+        &op,
+        &mut emitter,
+        &[Some(cot_y)],
+        &[],
+        &OpMode::Linear {
+            active_mask: vec![true],
+        },
+        &mut ctx,
+    )
+    .expect("owned chain rrule should adapt to transpose_rule");
+    let fragment = emitter.build();
+    assert_eq!(fragment.ops().len(), 1);
+    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
+    assert_eq!(vjp, vec![Some(fragment.ops()[0].outputs[0])]);
+}
+
+#[test]
+fn explicit_empty_rule_set_does_not_fallback_to_global_registry() {
+    let family = "covtest.global_only.v1";
+    register_extension_rule(Arc::new(CoverageRule { family }))
+        .expect("global sentinel rule should register");
+
+    let op = FamilyOnlyOp { family };
+    let mut builder = FragmentBuilder::<StdTensorOp>::new();
+    let dx = builder.add_input(TensorInputKey::User { id: 10_201 });
+    let mut ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
+    let err = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
+        .expect_err("explicit empty rule set must not consult global registry");
+    assert_eq!(err.rule(), ADRuleKind::Linearize);
+    assert!(err.to_string().contains(family));
+}
+
+#[test]
+fn owned_rule_set_merge_is_atomic_on_duplicate_family() {
+    let family_a = "covtest.merge_a.v1";
+    let family_b = "covtest.merge_b.v1";
+    let mut base = ExtensionRuleSet::new()
+        .with_rule(Arc::new(CoverageRule { family: family_a }))
+        .expect("base rule should register");
+    let other = ExtensionRuleSet::new()
+        .with_rule(Arc::new(CoverageRule { family: family_b }))
+        .expect("other rule should register")
+        .with_rule(Arc::new(CoverageRule { family: family_a }))
+        .expect("duplicate is only relative to base");
+
+    let err = base
+        .merge(other)
+        .expect_err("merge should reject duplicate family");
+    assert!(matches!(
+        err,
+        ExtensionRegistryError::DuplicateRule {
+            family_id: "covtest.merge_a.v1"
+        }
+    ));
+    assert!(base.is_rule_registered(family_a));
+    assert!(!base.is_rule_registered(family_b));
+}
+
+#[test]
+fn owned_rule_set_rejects_duplicate_and_malformed_rules() {
+    let family = "covtest.owned_duplicate.v1";
+    let mut rules = ExtensionRuleSet::new()
+        .with_rule(Arc::new(CoverageRule { family }))
+        .expect("first owned rule should register");
+    let duplicate_err = rules
+        .register_rule(Arc::new(CoverageRule { family }))
+        .expect_err("duplicate owned rule should be rejected");
+    assert!(matches!(
+        duplicate_err,
+        ExtensionRegistryError::DuplicateRule {
+            family_id: "covtest.owned_duplicate.v1"
+        }
+    ));
+    assert!(rules.is_rule_registered(family));
+
+    let malformed = "covtest.owned_malformed";
+    let malformed_err = ExtensionRuleSet::new()
+        .with_rule(Arc::new(CoverageRule { family: malformed }))
+        .expect_err("malformed owned rule should be rejected");
+    assert!(matches!(
+        malformed_err,
+        ExtensionRegistryError::MalformedFamilyId {
+            family_id: "covtest.owned_malformed"
+        }
+    ));
 }
 
 #[test]

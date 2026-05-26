@@ -121,13 +121,12 @@ Public feature names should describe capabilities, not implementation details:
 
 ```toml
 [features]
-default = ["cpu-faer", "autodiff"]
+default = ["cpu-faer"]
 autodiff = ["dep:tidu", "dep:chainrules-core", "dep:chainrules"]
 cpu-faer = [...]
 cpu-blas = [...]
-gpu = [...]
-cuda = ["gpu", ...]
-rocm = ["gpu", ...] # planned
+cuda = [...]
+rocm = [...] # planned
 ```
 
 If an `ad` feature exists during migration, rename it to `autodiff` rather than
@@ -135,31 +134,21 @@ keeping both names long term. A temporary `ad = ["autodiff"]` alias is acceptabl
 inside the workspace during transition, but it should not be documented as a
 stable public feature.
 
-`gpu` should be the public capability feature for GPU infrastructure. Concrete
-vendor backends should use vendor feature names: `cuda` now, `rocm` later.
-`cubecl` may remain an internal module or private implementation detail, but
-users should not need to select it directly. Because the current workspace
-contains a visible `tenferro-cubecl` crate, a feature rename alone does not make
-CubeCL invisible to workspace users. Rename the implementation crate to the
-technology-neutral `tenferro-internal-gpubackend` as part of this restructure. That crate
-can use CubeCL internally today and still leave room for CUDA, ROCm, or a
-non-CubeCL implementation later. Step 1 of the migration should introduce `gpu`
-as the shared capability feature, `cuda` as the first concrete vendor backend,
-and update workspace/package paths from `tenferro-cubecl` to
-`tenferro-internal-gpubackend`.
+User-facing crates should expose vendor backend feature names: `cuda` now,
+`rocm` later. Do not document a public `gpu` feature for operation crates or
+AD-facing crates. Internal crates may keep a private `gpu` umbrella when it
+simplifies shared conditional compilation, but users should select the concrete
+backend they intend to build. `cubecl` remains an implementation detail behind
+the CUDA/ROCm-facing crate surface.
 
 Feature semantics:
 
 ```text
-gpu
-  Enables GPU-facing abstractions and extension plumbing. It does not by itself
-  promise a usable vendor backend.
-
 cuda
-  Enables the CUDA backend and implies gpu.
+  Enables the CUDA backend.
 
 rocm
-  Planned. Enables the ROCm backend and implies gpu.
+  Planned. Enables the ROCm backend.
 ```
 
 ## Extension Primal Contract
@@ -873,13 +862,12 @@ Start from `origin/main`, not from the current einsum experiment branch.
 1. Stabilize names and direction.
    - introduce `autodiff` as the stable public AD feature,
    - remove or temporarily alias any existing `ad` feature to `autodiff`,
-   - expose `gpu` as the shared public GPU capability feature,
-   - expose `cuda` as the first concrete vendor backend feature and make it
-     imply `gpu`,
-   - reserve `rocm` as the future ROCm backend feature, also implying `gpu`,
+   - expose `cuda` and `rocm` as the user-facing backend features on operation
+     and AD-facing crates,
+   - keep any shared `gpu` umbrella private to internal crates that need it for
+     conditional compilation,
    - stop requiring users to select implementation-facing `cubecl`,
-   - rename the implementation crate from `tenferro-cubecl` to
-     `tenferro-internal-gpubackend` in this restructure,
+   - keep CubeCL implementation details behind the `tenferro-gpu` crate,
    - document that domain crates are imported directly rather than re-exported
      from `tenferro`,
    - keep existing defaults initially unless publish constraints require a
@@ -950,12 +938,12 @@ Start from `origin/main`, not from the current einsum experiment branch.
 8. Update docs and examples.
    - document extension crate catalog,
    - stop implying all domains live under `tenferro::*`,
-   - explain `autodiff`, `gpu`, `cuda`, and planned `rocm` features.
+   - explain `autodiff`, `cuda`, and planned `rocm` features.
 
 ## Open Questions
 
-- Should `tenferro` default to `autodiff`, or should the crates.io foundation
-  pass default to primal-only?
+- Should any operation crate default to `autodiff`, or should the crates.io
+  foundation pass stay primal-only by default?
 - Should a future `tenferro-full` or `tenferro-prelude` crate re-export common
   domain crates, or should all domain crates remain explicit?
 - How much of linalg backend kernel ownership belongs in `tenferro-internal-tensor`

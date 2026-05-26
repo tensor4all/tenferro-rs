@@ -4,6 +4,10 @@
 //! registration. Traced helpers live under `tenferro_linalg::traced_tensor`.
 //! Backend kernels remain in `tenferro-tensor`.
 
+#[cfg(feature = "autodiff")]
+mod ad;
+#[cfg(feature = "autodiff")]
+pub mod eager_tensor;
 mod extension;
 mod traced;
 pub mod traced_tensor;
@@ -13,6 +17,8 @@ pub mod ad_support {
     pub use crate::extension::{LinalgExtensionOp, LinalgOp};
 }
 
+#[cfg(feature = "autodiff")]
+pub use ad::{ad_rules, register_extension_rule};
 pub use extension::{register_runtime, LINALG_EXTENSION_FAMILY_ID};
 pub use traced::{
     cholesky, det, eig, eigh, eigh_with_eps, eigvals, eigvalsh, full_piv_lu, full_piv_lu_solve,

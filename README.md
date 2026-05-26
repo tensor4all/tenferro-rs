@@ -8,6 +8,17 @@ automatic differentiation; and standard operation crates such as
 `tenferro-linalg`, `tenferro-einsum`, and `tenferro-fft` for separately owned
 operation families.
 
+Optional capabilities are selected on the crate that owns the operation family.
+For example, CUDA linalg with extension AD uses concrete backend features rather
+than a public `gpu` feature:
+
+```toml
+[dependencies]
+tenferro-ad = { path = "tenferro-ad", features = ["cuda"] }
+tenferro-gpu = { path = "tenferro-gpu", features = ["cuda"] }
+tenferro-linalg = { path = "tenferro-linalg", features = ["autodiff", "cuda"] }
+```
+
 Start with `Tensor` and `CpuBackend` for ndarray-like CPU work. Move to
 `EagerTensor` when you want immediate execution with optional `backward()`, and
 move to `TracedTensor` when you need graph reuse, transform AD, or repeated
@@ -82,8 +93,7 @@ crates.
 
 | Crate | What it provides |
 | --- | --- |
-| `tenferro-linalg` | Traced SVD, QR, Cholesky, LU, solve, eig/eigh, triangular solve, and related primal linalg APIs |
-| `tenferro-linalg-ad` | Eager linalg helpers and AD registration for linalg extension ops |
+| `tenferro-linalg` | Traced/eager SVD, QR, Cholesky, LU, solve, eig/eigh, triangular solve, and linalg AD rules behind the `autodiff` feature |
 | `tenferro-einsum` | NumPy/JAX-style einsum with contraction planning and tensordot contraction sugar |
 | `tenferro-fft` | FFT extension operations |
 
@@ -94,6 +104,8 @@ That runtime owns execution state, extension caches, and optional gradient
 slots. Use untracked eager tensors for immediate forward execution, and tracked
 variables when you need scalar-loss reverse-mode `backward()`.
 Forward-mode AD (`jvp`) is part of traced execution, not `EagerTensor`.
+The linalg eager helper below requires `tenferro-linalg` with the `autodiff`
+feature enabled.
 
 ```rust
 use tenferro_ad::{eager_tensor, EagerRuntime, EagerTensor, Tensor};
@@ -120,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]),
         ctx.clone(),
     );
-    let (_u, singular_values, _vt) = tenferro_linalg_ad::eager_tensor::svd(&diag)?;
+    let (_u, singular_values, _vt) = tenferro_linalg::eager_tensor::svd(&diag)?;
     let mut values = singular_values
         .data()
         .clone()

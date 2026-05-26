@@ -325,8 +325,7 @@ owns eager AD and traced AD transforms.
 
 The workspace intentionally has no root `tenferro` facade crate. Standard
 operation families remain separately imported crates such as
-`tenferro_einsum`, `tenferro_linalg`, `tenferro_linalg_ad`, and
-`tenferro_fft`.
+`tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
 
 ## AI Workflow Scripts
 
@@ -377,7 +376,4 @@ tenferro-ad
 
 tenferro-einsum / tenferro-linalg / tenferro-fft
     (← tenferro-runtime, ← tenferro-internal-ops, ← tenferro-tensor as needed)
-
-tenferro-linalg-ad
-    (← tenferro-ad, ← tenferro-linalg, ← tenferro-runtime, ← tenferro-internal-ops)
 ```

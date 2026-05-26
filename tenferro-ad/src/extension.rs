@@ -16,8 +16,8 @@ pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::{
     is_extension_rule_registered, lookup_extension_rule, register_extension_chain_rule,
     register_extension_rule, AdValue, ExtensionAdRule as _ExtensionAdRuleReexport,
-    ExtensionChainRule, ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError, FruleBuilder,
-    RRuleBuilder,
+    ExtensionChainRule, ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError,
+    ExtensionRuleSet, FruleBuilder, RRuleBuilder,
 };
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
