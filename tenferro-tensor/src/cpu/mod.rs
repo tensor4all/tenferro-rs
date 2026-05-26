@@ -35,8 +35,6 @@ pub(crate) fn typed_view<T: Copy>(tensor: &TypedTensor<T>) -> StridedView<'_, T>
             StridedView::new(data, &tensor.shape, &strides, 0).expect("contiguous host tensor")
         }
         Buffer::Backend(_) => todo!("typed_view for backend buffers"),
-        #[cfg(feature = "cuda")]
-        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 

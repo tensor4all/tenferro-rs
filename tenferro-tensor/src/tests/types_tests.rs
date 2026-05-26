@@ -1,4 +1,5 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 
@@ -316,7 +317,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         }),
     };
     let tensor = TypedTensor {
-        buffer: Buffer::Backend(BufferHandle::<f64>::new(7)),
+        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
         shape: vec![1],
         placement: placement.clone(),
     };
@@ -326,7 +327,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
     assert!(host_data.is_err());
 
     let mut mutable_tensor = TypedTensor {
-        buffer: Buffer::Backend(BufferHandle::<f64>::new(8)),
+        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(8))),
         shape: vec![1],
         placement,
     };

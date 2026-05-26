@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 
 use computegraph::fragment::Fragment;
 use computegraph::{GlobalValKey, LocalValId, OpMode, ValRef};
+#[cfg(feature = "cuda")]
+use tenferro_gpu::cubecl::CubeclBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::extension_cache::ExtensionCacheLimits;
 use tenferro_runtime::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
 use tenferro_tensor::cpu::CpuBackend;
-#[cfg(feature = "cuda")]
-use tenferro_tensor::cubecl::CubeclBackend;
 use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TypedTensor};
 use tidu::{
     topo_sort_grad_dag, try_backward_dag, BackwardCallbacks, EagerOutput, EagerValue, GradNode,

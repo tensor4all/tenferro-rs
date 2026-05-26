@@ -76,7 +76,7 @@ pub use traced::TracedTensor;
 /// This module exposes the public CUDA names for tenferro's GPU backend.
 /// See `tenferro/examples/cuda_quickstart.rs` for a checked end-to-end example.
 pub mod cuda {
-    pub use tenferro_tensor::cubecl::{
+    pub use tenferro_gpu::cubecl::{
         download_tensor, gpu_available, upload_tensor, CubeclBackend as CudaBackend,
     };
 }

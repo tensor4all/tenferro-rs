@@ -25,11 +25,13 @@ cpu-faer = [
     "tenferro-internal-runtime/cpu-faer",
     "tenferro-internal-ops/cpu-faer",
     "tenferro-tensor/cpu-faer",
+    "tenferro-gpu?/cpu-faer",
 ]
 cpu-blas = [
     "tenferro-internal-runtime/cpu-blas",
     "tenferro-internal-ops/cpu-blas",
     "tenferro-tensor/cpu-blas",
+    "tenferro-gpu?/cpu-blas",
 ]
 provider-src = ["cpu-blas", "tenferro-tensor/provider-src"]
 src-openblas = ["provider-src", "tenferro-tensor/src-openblas"]
@@ -41,24 +43,26 @@ src-intel-mkl-dynamic-parallel = [
 gpu = [
     "tenferro-internal-runtime/gpu",
     "tenferro-internal-ops/gpu",
-    "tenferro-tensor/gpu",
 ]
 cuda = [
     "gpu",
     "tenferro-internal-runtime/cuda",
     "tenferro-internal-ops/cuda",
-    "tenferro-tensor/cuda",
+    "dep:tenferro-gpu",
+    "tenferro-gpu/cuda",
 ]
 rocm = [
     "gpu",
     "tenferro-internal-runtime/rocm",
     "tenferro-internal-ops/rocm",
-    "tenferro-tensor/rocm",
+    "dep:tenferro-gpu",
+    "tenferro-gpu/rocm",
 ]
 
 [dependencies]
 tenferro-internal-runtime = { path = "../tenferro-internal-runtime", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 computegraph.workspace = true
 chainrules-core = { workspace = true, optional = true }

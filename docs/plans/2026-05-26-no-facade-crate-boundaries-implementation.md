@@ -106,7 +106,6 @@ git commit -m "refactor(tensor): absorb device model into tensor core"
 **Files:**
 - Create: `tenferro-gpu/Cargo.toml`
 - Move: `tenferro-tensor/src/cubecl/**` to `tenferro-gpu/src/**`
-- Move: `tenferro-internal-device/src/cuda/**` to `tenferro-gpu/src/cuda/**`
 - Move/absorb: `tenferro-internal-gpubackend/**` into `tenferro-gpu/src/**`
 - Modify: `Cargo.toml`
 - Modify: `tenferro-tensor/src/types.rs`
@@ -140,8 +139,9 @@ Move CubeCL/CUDA implementation into `tenferro-gpu`, define local
 Run:
 
 ```bash
-cargo check -p tenferro-tensor --no-default-features
+cargo check -p tenferro-tensor
 cargo check -p tenferro-gpu --features cuda
+python3 scripts/check-crate-boundaries.py
 rg -n "cubecl|cudarc|tenferro-gpu|tenferro-internal-gpubackend" tenferro-tensor/Cargo.toml tenferro-tensor/src
 ```
 
@@ -151,9 +151,13 @@ Expected: checks pass; `rg` has no matches in tensor core.
 
 ```bash
 git add Cargo.toml tenferro-tensor tenferro-gpu
-git rm -r tenferro-internal-gpubackend tenferro-internal-device
+git rm -r tenferro-internal-gpubackend
 git commit -m "refactor(gpu): extract CubeCL backend into tenferro-gpu"
 ```
+
+Leave `tenferro-internal-device` for the later direct-crate cleanup commit:
+today it is still the owner of einsum parsing/planning `Error`/`Result` types,
+which should move with einsum rather than inside the GPU extraction.
 
 ### Task 4: Extract Runtime From Facade
 

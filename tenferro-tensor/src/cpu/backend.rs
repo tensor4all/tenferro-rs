@@ -1423,8 +1423,6 @@ pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTe
     match typed.buffer {
         Buffer::Host(data) => T::pool_release(pool, data),
         Buffer::Backend(_) => {}
-        #[cfg(feature = "cuda")]
-        Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 

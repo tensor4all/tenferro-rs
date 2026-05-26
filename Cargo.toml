@@ -3,7 +3,7 @@ members = [
     # v2 core (6 crates)
     "tenferro-internal-device",
     "tenferro-tensor",
-    "tenferro-internal-gpubackend",
+    "tenferro-gpu",
     "tenferro-internal-runtime",
     "tenferro-internal-extension-macros",
     "tenferro-internal-ops",
@@ -62,7 +62,6 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 cubecl = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692", features = ["cuda"] }
 cubecl-cuda = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
 cubecl-runtime = { git = "https://github.com/tensor4all/cubecl.git", rev = "f5e5ec178f9aebca9362b829ffef708f720ff692" }
-tenferro-internal-gpubackend = { path = "tenferro-internal-gpubackend" }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "c20e8912560ef11166418bcea089126ef50443cc" }

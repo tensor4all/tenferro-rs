@@ -1,6 +1,6 @@
-use tenferro_tensor::cpu::CpuBackend;
 #[cfg(feature = "cuda")]
-use tenferro_tensor::cubecl::CubeclBackend;
+use tenferro_gpu::cubecl::CubeclBackend;
+use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig,
     Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorExec,

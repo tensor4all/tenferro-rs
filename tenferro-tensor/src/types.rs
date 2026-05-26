@@ -1,5 +1,8 @@
 use num_complex::{Complex, Complex32, Complex64};
 use num_traits::{One, Zero};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::{DotGeneralConfig, TensorBackend};
 
@@ -113,10 +116,18 @@ pub struct Placement {
 ///
 /// let handle = BufferHandle::<f64>::new(7);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BufferHandle<T> {
     pub id: u64,
     _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> Debug for BufferHandle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BufferHandle")
+            .field("id", &self.id)
+            .finish()
+    }
 }
 
 impl<T> BufferHandle<T> {
@@ -138,6 +149,51 @@ impl<T> BufferHandle<T> {
     }
 }
 
+/// Opaque backend-owned tensor buffer.
+///
+/// Tensor core never inspects backend-native allocations directly. Backend
+/// crates store their own concrete handle types behind this trait and
+/// downcast inside the owning backend only.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use tenferro_tensor::{BackendBuffer, BufferHandle};
+///
+/// let buffer: Arc<dyn BackendBuffer<f64>> = Arc::new(BufferHandle::<f64>::new(7));
+/// assert_eq!(buffer.backend_family(), "opaque");
+/// ```
+pub trait BackendBuffer<T>: Debug + Send + Sync + 'static {
+    /// Stable backend family identifier.
+    fn backend_family(&self) -> &'static str;
+
+    /// Number of logical elements in the backend allocation, when known.
+    fn len(&self) -> usize;
+
+    /// Returns `true` when the backend allocation is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Type-erased access for the backend crate that owns the concrete handle.
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Send + Sync + 'static> BackendBuffer<T> for BufferHandle<T> {
+    fn backend_family(&self) -> &'static str {
+        "opaque"
+    }
+
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Tensor storage.
 ///
 /// # Examples
@@ -150,48 +206,7 @@ impl<T> BufferHandle<T> {
 #[derive(Clone, Debug)]
 pub enum Buffer<T> {
     Host(Vec<T>),
-    Backend(BufferHandle<T>),
-    #[cfg(feature = "cuda")]
-    Cubecl(CubeclBuffer<T>),
-}
-
-/// CubeCL-managed GPU buffer.
-///
-/// This wraps a CubeCL server handle that owns the underlying GPU allocation.
-///
-/// # Examples
-///
-/// ```
-/// let _name = core::any::type_name::<tenferro_tensor::CubeclBuffer<f64>>();
-/// assert!(_name.contains("CubeclBuffer"));
-/// ```
-#[cfg(feature = "cuda")]
-#[derive(Clone, Debug)]
-pub struct CubeclBuffer<T> {
-    /// CubeCL server handle that owns the GPU allocation.
-    pub handle: cubecl::server::Handle,
-    /// Number of elements stored in the allocation.
-    pub len: usize,
-    pub(crate) _marker: std::marker::PhantomData<T>,
-}
-
-#[cfg(feature = "cuda")]
-impl<T> CubeclBuffer<T> {
-    /// Create a CubeCL buffer wrapper from a handle and element count.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let _new = tenferro_tensor::CubeclBuffer::<f64>::new;
-    /// let _ = _new;
-    /// ```
-    pub fn new(handle: cubecl::server::Handle, len: usize) -> Self {
-        Self {
-            handle,
-            len,
-            _marker: std::marker::PhantomData,
-        }
-    }
+    Backend(Arc<dyn BackendBuffer<T>>),
 }
 
 /// Contiguous column-major typed tensor storage.
@@ -1081,11 +1096,6 @@ impl<T: Clone> TypedTensor<T> {
                 op: "try_into_vec_col_major",
                 message: "backend buffers cannot be exported as host Vec".into(),
             }),
-            #[cfg(feature = "cuda")]
-            Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
-                op: "try_into_vec_col_major",
-                message: "GPU buffers cannot be exported as host Vec".into(),
-            }),
         }
     }
 
@@ -1110,11 +1120,6 @@ impl<T: Clone> TypedTensor<T> {
             Buffer::Backend(_) => Err(crate::Error::BackendFailure {
                 op: "try_into_vec_row_major",
                 message: "backend buffers cannot be exported as host Vec".into(),
-            }),
-            #[cfg(feature = "cuda")]
-            Buffer::Cubecl(_) => Err(crate::Error::BackendFailure {
-                op: "try_into_vec_row_major",
-                message: "GPU buffers cannot be exported as host Vec".into(),
             }),
         }
     }
@@ -1147,13 +1152,6 @@ impl<T: Clone> TypedTensor<T> {
         match &self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data called on backend buffer"),
-            #[cfg(feature = "cuda")]
-            Buffer::Cubecl(_) => {
-                panic!(
-                    "Cannot access GPU buffer (Buffer::Cubecl) as host data. \
-                       Use cubecl::download_tensor() to transfer to CPU first."
-                )
-            }
         }
     }
 
@@ -1189,13 +1187,6 @@ impl<T: Clone> TypedTensor<T> {
         match &mut self.buffer {
             Buffer::Host(v) => v,
             Buffer::Backend(_) => panic!("host_data_mut called on backend buffer"),
-            #[cfg(feature = "cuda")]
-            Buffer::Cubecl(_) => {
-                panic!(
-                    "Cannot access GPU buffer (Buffer::Cubecl) as host data. \
-                       Use cubecl::download_tensor() to transfer to CPU first."
-                )
-            }
         }
     }
 

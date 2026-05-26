@@ -3,7 +3,7 @@
 mod support;
 use support::RunTraced;
 use tenferro::{CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
-use tenferro_tensor::cubecl::{download_tensor, upload_tensor, CubeclBackend};
+use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::Buffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -32,12 +32,18 @@ fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: 
 }
 
 fn assert_device_backed(tensor: &Tensor) {
+    fn is_cubecl<T>(buffer: &Buffer<T>) -> bool {
+        matches!(buffer, Buffer::Backend(buffer) if buffer.backend_family() == "cubecl")
+    }
+
     match tensor {
-        Tensor::F32(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
-        Tensor::F64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
-        Tensor::I64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
-        Tensor::C32(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
-        Tensor::C64(inner) => assert!(matches!(&inner.buffer, Buffer::Cubecl(_))),
+        Tensor::F32(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::F64(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::I64(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::C32(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::C64(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::I32(inner) => assert!(is_cubecl(&inner.buffer)),
+        Tensor::Bool(inner) => assert!(is_cubecl(&inner.buffer)),
     }
 }
 

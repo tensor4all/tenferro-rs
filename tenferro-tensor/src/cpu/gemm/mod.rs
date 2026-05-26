@@ -118,8 +118,6 @@ impl<T> TypedTensorRead<T> for TypedTensor<T> {
         match &self.buffer {
             Buffer::Host(v) => Some(v),
             Buffer::Backend(_) => None,
-            #[cfg(feature = "cuda")]
-            Buffer::Cubecl(_) => None,
         }
     }
 }

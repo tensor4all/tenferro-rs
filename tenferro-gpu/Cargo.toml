@@ -1,0 +1,33 @@
+[package]
+name = "tenferro-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "GPU backend implementations for tenferro tensors."
+
+[lib]
+name = "tenferro_gpu"
+
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["tenferro-tensor/cpu-faer"]
+cpu-blas = ["tenferro-tensor/cpu-blas"]
+cpu-reference = []
+cuda = []
+rocm = []
+
+[dependencies]
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+cubecl.workspace = true
+cubecl-cuda.workspace = true
+cubecl-runtime.workspace = true
+cudarc.workspace = true
+libloading.workspace = true
+num-complex.workspace = true
+num-traits.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true

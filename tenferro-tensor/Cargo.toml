@@ -19,16 +19,7 @@ provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
 src-openblas = ["provider-src", "blas-src/openblas"]
 src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
-gpu = []
-cuda = [
-    "gpu",
-    "dep:cubecl",
-    "dep:cubecl-cuda",
-    "dep:cubecl-runtime",
-    "dep:cudarc",
-    "dep:tenferro-internal-gpubackend",
-]
-rocm = ["gpu"]
+
 [dependencies]
 num-traits.workspace = true
 num-complex.workspace = true
@@ -46,11 +37,6 @@ cblas-src = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
 lapack = { workspace = true, optional = true }
 lapack-src = { workspace = true, optional = true }
-cudarc = { workspace = true, optional = true }
-cubecl = { workspace = true, optional = true }
-cubecl-cuda = { workspace = true, optional = true }
-cubecl-runtime = { workspace = true, optional = true }
-tenferro-internal-gpubackend = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

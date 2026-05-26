@@ -14,9 +14,9 @@ name = "tenferro_runtime"
 default = ["cpu-faer"]
 cpu-faer = ["tenferro-tensor/cpu-faer"]
 cpu-blas = ["tenferro-tensor/cpu-blas"]
-gpu = ["tenferro-tensor/gpu"]
-cuda = ["gpu", "tenferro-tensor/cuda"]
-rocm = ["gpu", "tenferro-tensor/rocm"]
+gpu = []
+cuda = ["gpu"]
+rocm = ["gpu"]
 
 [dependencies]
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }

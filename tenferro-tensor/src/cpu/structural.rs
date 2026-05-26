@@ -107,8 +107,6 @@ fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, 
             op: "structural",
             message: "backend buffers are not supported for structural CPU helpers".into(),
         }),
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     }
 }
 
@@ -159,8 +157,6 @@ where
                 message: "backend buffers are not supported for structural CPU helpers".into(),
             })
         }
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     // SAFETY: copy_from_slice initializes every element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
@@ -550,8 +546,6 @@ where
                 message: "backend buffers are not supported for structural CPU helpers".into(),
             })
         }
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
@@ -678,8 +672,6 @@ where
                 message: "backend buffers are not supported for structural CPU helpers".into(),
             })
         }
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     for flat in 0..tensor.n_elements() {
@@ -765,8 +757,6 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
                 message: "backend buffers are not supported for structural CPU helpers".into(),
             })
         }
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => panic!("GPU tensor (Buffer::Cubecl) passed to CPU backend. Use cubecl::download_tensor() to transfer to CPU first."),
     };
 
     for batch_idx in 0..batch_count {
@@ -821,8 +811,6 @@ where
     let data = match &mut out.buffer {
         crate::Buffer::Host(data) => data,
         crate::Buffer::Backend(_) => unreachable!("clone_host_tensor_from_pool returns host data"),
-        #[cfg(feature = "cuda")]
-        crate::Buffer::Cubecl(_) => unreachable!("clone_host_tensor_from_pool returns host data"),
     };
 
     for batch_idx in 0..batch_count {
