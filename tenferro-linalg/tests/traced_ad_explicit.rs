@@ -52,6 +52,17 @@ fn assert_finite_tensor(tensor: &Tensor) {
     panic!("expected floating tensor, got {:?}", tensor.dtype());
 }
 
+fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let diff = (actual - expected).abs();
+        assert!(
+            diff <= tol,
+            "idx {idx}: expected {expected}, got {actual}, diff {diff}"
+        );
+    }
+}
+
 fn ad_context() -> AdContext {
     AdContext::builder()
         .with_core_rules()
@@ -219,6 +230,32 @@ fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
         assert_eq!(result.shape(), &[2, 1]);
         assert_eq!(get_f64_data(result), &[0.5, 0.25]);
     }
+}
+
+#[test]
+fn batched_solve_sum_grad_wrt_matrix_uses_native_batch_layout() {
+    let ad = ad_context();
+
+    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 2, 2],
+        vec![2.0, 0.0, 0.0, 4.0, 3.0, 0.0, 0.0, 5.0],
+    ));
+    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 1, 2],
+        vec![4.0, 8.0, 6.0, 10.0],
+    ));
+
+    let x = tenferro_linalg::solve(&a, &b);
+    let loss = x.reduce_sum(&[0, 1, 2]);
+    let grad_a = ad.grad(&loss, &a).unwrap();
+    let out = eval(&grad_a);
+
+    assert_eq!(out.shape(), &[2, 2, 2]);
+    assert_close_slice(
+        get_f64_data(&out),
+        &[-1.0, -0.5, -1.0, -0.5, -2.0 / 3.0, -0.4, -2.0 / 3.0, -0.4],
+        1.0e-12,
+    );
 }
 
 fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, base: &[f64], index: usize, step: f64) -> f64 {

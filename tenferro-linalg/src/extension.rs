@@ -231,7 +231,8 @@ fn execute_linalg<B: TensorBackend>(
         LinalgOp::Solve { transpose_a } => {
             let a_transposed;
             let a = if transpose_a {
-                a_transposed = backend.transpose(inputs[0], &[1, 0])?;
+                let perm = matrix_transpose_perm(inputs[0])?;
+                a_transposed = backend.transpose(inputs[0], &perm)?;
                 &a_transposed
             } else {
                 inputs[0]
@@ -252,6 +253,19 @@ fn execute_linalg<B: TensorBackend>(
             unit_diagonal,
         )?]),
     }
+}
+
+fn matrix_transpose_perm(input: &Tensor) -> tenferro_tensor::Result<Vec<usize>> {
+    let rank = input.shape().len();
+    if rank < 2 {
+        return Err(tenferro_tensor::Error::InvalidConfig {
+            op: "solve",
+            message: "matrix operand rank must be at least 2".into(),
+        });
+    }
+    let mut perm: Vec<usize> = (0..rank).collect();
+    perm.swap(0, 1);
+    Ok(perm)
 }
 
 fn lu_meta(dtype: DType, shape: &[SymDim]) -> Vec<(DType, Vec<SymDim>)> {
