@@ -21,7 +21,7 @@ JVP/VJP rules for their operations; [FFT (extension)](tenferro-fft.md) and
 ## Reverse-mode gradient with `grad`
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
@@ -39,7 +39,7 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 ## Gradient through einsum
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -65,7 +65,7 @@ assert_eq!(result.shape(), &[2, 3]);
 ## Vector-Jacobian product with `vjp`
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -94,7 +94,7 @@ assert_eq!(result.shape(), &[2, 3]);
 ## Jacobian-vector product with `jvp`
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],

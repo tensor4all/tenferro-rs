@@ -1,9 +1,9 @@
 # Custom Tensor Operations
 
-tenferro covers common dense tensor workflows in the `tenferro` crate. When a
-project needs an operation that is not part of that built-in surface, an
-extension crate can define a custom tensor operation and expose it as a normal
-Rust API.
+tenferro covers common dense tensor workflows through explicit runtime, AD, and
+extension crates. When a project needs an operation that is not part of the
+standard operation set, an extension crate can define a custom tensor operation
+and expose it as a normal Rust API.
 
 Use an extension operation when the implementation needs a specialized kernel,
 an external library, or a domain-specific operation that would be awkward or
@@ -15,7 +15,7 @@ it clearly.
 
 An extension operation is a tensor operation supplied by another crate. The
 extension crate owns the public function names, validates arguments, and
-applies extension op payloads through `tenferro::extension`.
+applies extension op payloads through `tenferro_runtime::extension`.
 
 An extension can participate in the same eager and traced workflows as built-in
 tensor operations when it provides the required metadata and execution hooks.
@@ -70,17 +70,17 @@ users a way to clear it and inspect retained entries.
 
 ## Implementing An Extension Op
 
-Implement `tenferro::extension::ExtensionOpTrait` for the op payload. The
+Implement `tenferro_runtime::extension::ExtensionOpTrait` for the op payload. The
 payload carries operation parameters such as axes, modes, constants, or kernel
 configuration. Tensor-valued parameters should usually be normal inputs, not
 payload fields.
 
 Extension op payloads do not need process-global registration. Construct
-`Arc<dyn ExtensionOpTrait>` and pass it to `tenferro::extension::apply` for
+`Arc<dyn ExtensionOpTrait>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
 For AD, register a rule separately with
-`tenferro::extension::register_extension_chain_rule`. Rule builders expose
+`tenferro_ad::extension::register_extension_rule`. Rule builders expose
 incoming tangents/cotangents and helper methods for emitting tensor
 operations, so extension authors do not need to handle graph IDs directly.
 
@@ -107,4 +107,4 @@ PyTorch or JAX operation.
 
 [FFT (extension)](tenferro-fft.md) is the first extension package following this
 pattern. It provides Fourier transforms as tensor extension operations while
-keeping the core tenferro crate focused on the common dense operation set.
+keeping the runtime and tensor crates focused on the common dense operation set.

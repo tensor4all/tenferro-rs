@@ -1,8 +1,7 @@
 # Einsum + DyadTensor AD Design
 
-This document describes how `tenferro-einsum` and the `tenferro` frontend
-layers integrate with the current `tidu` AD engine and `chainrules` scalar
-rule layer.
+This document describes how `tenferro-einsum` integrates with the current
+`tidu` AD engine, `tenferro-ad`, and the `chainrules` scalar rule layer.
 
 For the core AD contracts, see [autodiff.md](../architecture/ad-pipeline.md). For math
 derivations, see [AD Formula Notes](../AD/index.md).
@@ -69,13 +68,13 @@ The reverse-mode flow is:
 1. build leaves on `Tape<Tensor<T>>`
 2. execute tracked einsum operations
 3. obtain a rank-0 loss tensor
-4. call `tape.pullback(&loss)` or the higher-level `tenferro::backward(...)`
+4. call `tape.pullback(&loss)` or the higher-level `tenferro_ad` query APIs
 
 ### Query APIs
 
 Higher layers that need query-style gradients use:
 
-- `tenferro::grad`
+- `tenferro_ad::TracedTensorAdExt::grad`
 
 These remain monomorphic. They do not mutate `.grad()` / `.hvp()` buffers.
 
@@ -107,7 +106,7 @@ phase; the low-level `tidu::Tape::hvp` path is the source of truth.
 The integration layer should assume the following core rules:
 
 - `retain_graph = false` frees the shared tape after eager reverse queries
-- `tenferro::grad(create_graph = true)` is currently unsupported
+- graph-building higher-order gradient queries are currently unsupported
 - non-scalar outputs require explicit seed cotangents
 - single-element outputs may omit the seed
 
@@ -132,7 +131,7 @@ Integration tests should cover at least:
 
 - tracked einsum producing rank-0 tensor losses
 - backward on homogeneous tensor graphs
-- `tenferro::grad` behavior on supported einsum wrappers
+- `tenferro_ad::TracedTensorAdExt::grad` behavior on supported einsum wrappers
 - HVP on homogeneous tensor graphs with tangent-seeded leaves
 - shape `[1]` tensors continuing to follow normal tensor semantics instead of
   scalar shortcuts

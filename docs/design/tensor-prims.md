@@ -3,7 +3,7 @@
 This file keeps the historical `tensor-prims.md` name, but the current
 implementation no longer has a separate `tenferro-prims` crate or the old
 `TensorPrims` protocol families. Dense tensor execution is owned by
-`tenferro-internal-tensor`.
+`tenferro-tensor`.
 
 The current backend protocol is:
 
@@ -18,7 +18,7 @@ The current backend protocol is:
 ## Layering
 
 ```text
-tenferro / tenferro-internal-ops
+tenferro-runtime / tenferro-internal-ops
     traced graph, shape inference, AD rules, ExecProgram
         │
         ▼
@@ -26,11 +26,11 @@ tenferro-einsum
     Subscripts, ContractionTree, build_einsum_fragment, eager_einsum
         │
         ▼
-tenferro-internal-tensor
+tenferro-tensor
     Tensor, TypedTensor, TensorBackend, TensorExec
         │
         ├── cpu::CpuBackend
-        └── cubecl::CubeclBackend (feature = "cuda")
+        └── tenferro_gpu::CubeclBackend (feature = "cuda")
 ```
 
 There is exactly one dense runtime tensor type family (`Tensor` /
@@ -77,8 +77,8 @@ for multi-threaded execution.
 
 ## CubeCL Backend
 
-`cubecl::CubeclBackend` is the current GPU backend under the `cubecl` feature.
-It targets NVIDIA CUDA through CubeCL/CubeCL-CUDA and uses runtime-loaded
+`tenferro_gpu::CubeclBackend` is the current GPU backend under the `cuda`
+feature. It targets NVIDIA CUDA through CubeCL/CubeCL-CUDA and uses runtime-loaded
 cuTENSOR, cuSOLVER, and cuBLAS where needed.
 
 Important design points:
@@ -103,7 +103,7 @@ elementwise work. Backends opt in by overriding
 `execute_elementwise_fusion`; the default implementation returns `Ok(None)`,
 allowing the segmented execution pipeline to run individual ops.
 
-CubeCL implements this hook through `tenferro-internal-tensor/src/cubecl/fusion/` for
+CubeCL implements this hook through `tenferro-gpu/src/cubecl/fusion/` for
 eligible GPU-resident plans. CPU currently relies on the ordinary op sequence.
 
 ## Einsum And DotGeneral
@@ -128,8 +128,8 @@ path.
 ## Linalg
 
 Linalg is not a separate backend crate today. Dense linalg operations are part
-of `TensorBackend`, with CPU implementations under `tenferro-internal-tensor/src/cpu`
-and CubeCL/CUDA implementations under `tenferro-internal-tensor/src/cubecl/linalg.rs`.
+of `TensorBackend`, with CPU implementations under `tenferro-tensor/src/cpu`
+and CubeCL/CUDA implementations under `tenferro-gpu/src/cubecl/linalg.rs`.
 
 General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
 `CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly

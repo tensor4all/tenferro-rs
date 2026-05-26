@@ -4,12 +4,12 @@
 //! available for converting row-major test data when needed.
 
 use num_complex::Complex64;
-use tenferro::error::Result;
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_einsum::EinsumOptimize;
 use tenferro_einsum::{
     ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
 };
+use tenferro_runtime::error::Result;
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
 // ============================================================================
@@ -64,15 +64,11 @@ fn einsum_with<C: TestEinsumContext>(
 }
 
 trait RunTraced {
-    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>)
-        -> tenferro::error::Result<Tensor>;
+    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> Result<Tensor>;
 }
 
 impl RunTraced for TracedTensor {
-    fn run_with(
-        &self,
-        executor: &mut GraphExecutor<CpuBackend>,
-    ) -> tenferro::error::Result<Tensor> {
+    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> Result<Tensor> {
         if !executor
             .extension_executor()
             .registry()

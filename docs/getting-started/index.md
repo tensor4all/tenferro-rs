@@ -6,12 +6,12 @@ linear algebra, and CUDA execution through the feature-gated CUDA backend.
 
 ## Setup
 
-The `tenferro` crate re-exports everything you need. Use a local checkout
-while the crates are still evolving:
+Start with the runtime crate. Use a local checkout while the crates are still
+evolving:
 
 ```toml
 [dependencies]
-tenferro = { path = "/path/to/tenferro-rs/tenferro" }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime" }
 ```
 
 This uses the default `cpu-faer` backend. To use the LAPACK/BLAS CPU backend,
@@ -19,30 +19,34 @@ disable default features and enable `cpu-blas`:
 
 ```toml
 [dependencies]
-tenferro = { path = "/path/to/tenferro-rs/tenferro", default-features = false, features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
 ```
 
 Exactly one CPU backend must be enabled: `cpu-faer` or `cpu-blas`. The
 `cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the system
-toolchain, or enable `src-openblas` to build against OpenBLAS:
+toolchain, or enable the provider feature on `tenferro-tensor` to build against
+OpenBLAS:
 
 ```toml
 [dependencies]
-tenferro = { path = "/path/to/tenferro-rs/tenferro", default-features = false, features = ["src-openblas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-tensor = { path = "/path/to/tenferro-rs/tenferro-tensor", default-features = false, features = ["src-openblas"] }
 ```
 
-Or switch to crates.io once published:
+Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`,
+`tenferro-linalg-ad`, `tenferro-fft`, or `tenferro-gpu` when a workflow needs
+those layers. Switch to crates.io once published:
 
 ```toml
 [dependencies]
-tenferro = "..."
+tenferro-runtime = "..."
 ```
 
 ## First CPU Program
 
-<!-- snippet-source: tenferro/examples/cpu_quickstart.rs -->
+<!-- snippet-source: tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
-use tenferro::{CpuBackend, Tensor};
+use tenferro_runtime::{CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();

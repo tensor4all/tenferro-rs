@@ -132,7 +132,7 @@ let err = Error::InvalidArgument("bad index".into());
 assert!(err.to_string().contains("bad index"));
 ```
 
-### Relationship with `tenferro-internal-tensor::effective_compute_devices`
+### Relationship with `tenferro-tensor::effective_compute_devices`
 
 `Tensor<T>` carries an optional `preferred_compute_device: Option<ComputeDevice>`
 field. When resolving which device to use for an operation:

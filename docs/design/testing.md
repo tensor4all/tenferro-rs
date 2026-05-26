@@ -26,7 +26,7 @@ must preserve the expected CPU/GPU lowering shape:
 - GPU: `Contract` fast path when available, otherwise the same explicit
   structural/materialization path
 
-`tenferro-prims` and `tenferro-linalg` may also add crate-local microbenchmarks
+`tenferro-tensor` and `tenferro-linalg` may also add crate-local microbenchmarks
 for scalar or linalg-heavy paths, but `../tenferro-einsum-benchmark` remains
 the top-level performance gate for contraction behavior.
 
@@ -42,17 +42,20 @@ the top-level performance gate for contraction behavior.
 - `ComputeDevice` Display formatting
 - Error type construction and display
 
-### tenferro-internal-tensor
+### tenferro-tensor
 
 - `Tensor<T>` creation, shape/strides accessors
 - View operations (permute, reshape, broadcast) — shape correctness
 - `contiguous()` data layout
 - Error cases (shape mismatch, etc.)
 
-### tenferro-prims
+### tenferro-internal-ops / tenferro-tensor
 
-- Each primitive on small tensors (~2x3), compared against hand-computed values
-  - GEMM, reduce, elementwise, trace, anti-trace, permute (copy)
+- Graph op payload, lowering, and shape metadata tests live with
+  `tenferro-internal-ops`.
+- Runtime tensor execution tests live with `tenferro-tensor`.
+  - GEMM, reductions, elementwise ops, trace, anti-trace, and structural ops
+    are checked on small tensors against hand-computed values.
 
 ### tenferro-einsum
 

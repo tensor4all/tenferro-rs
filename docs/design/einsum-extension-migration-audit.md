@@ -1,5 +1,9 @@
 # Einsum Extension Migration Audit
 
+**Status:** historical migration audit. The root `tenferro` facade has since
+been removed; current public einsum APIs are owned by `tenferro-einsum`, and
+runtime graph APIs are owned by `tenferro-runtime`.
+
 This is the working audit table for moving the current einsum experiment into a
 real external extension crate. Implementation should start from `origin/main`,
 but the current branch is the source inventory. The goal is to reuse the

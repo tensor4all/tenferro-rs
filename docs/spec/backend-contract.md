@@ -252,7 +252,7 @@ The engine uses `last_use` metadata to reclaim buffers via
 ### TensorBackend
 
 `TensorBackend` is the full standard-algebra backend surface in
-`tenferro-internal-tensor/src/backend.rs`.
+`tenferro-tensor/src/backend.rs`.
 
 It includes:
 
@@ -351,12 +351,12 @@ What is no longer true:
 
 The current implementation is split across:
 
-- `tenferro/src/compiler.rs`
-- `tenferro/src/shape_infer.rs`
-- `tenferro/src/exec.rs`
-- `tenferro/src/segment.rs`
-- `tenferro/src/engine.rs`
-- `tenferro-internal-tensor/src/backend.rs`
+- `tenferro-runtime/src/compiler/mod.rs`
+- `tenferro-runtime/src/shape_infer.rs`
+- `tenferro-runtime/src/exec.rs`
+- `tenferro-runtime/src/segment.rs`
+- `tenferro-runtime/src/graph/executor.rs`
+- `tenferro-tensor/src/backend.rs`
 
 Those files are the source of truth for the live backend contract. This
 document is intentionally a high-level summary of that code.

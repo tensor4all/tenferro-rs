@@ -6,7 +6,10 @@ JVP, and HVP computations across 171 op families.
 
 ## How it works
 
-Oracle replay tests live in `tenferro/tests/oracle_replay/`. Each test case:
+Oracle replay was historically implemented as an integration-test harness under
+the old root facade crate. The root facade has been removed; the oracle support
+matrix remains useful for tracking AD coverage, while any new replay harness
+should live in the crate that owns the behavior under test. Each test case:
 
 1. Reads a JSONL record containing input tensors, op parameters, and PyTorch reference outputs
 2. Executes the same operation through tenferro
@@ -19,6 +22,6 @@ per-op support matrix (auto-generated).
 
 ## Links
 
-- Test source: `tenferro/tests/oracle_replay/`
+- Test source: historical root-facade oracle replay harness, now removed
 - Oracle database: `third_party/tensor-ad-oracles/`
 - Design spec: [Oracle Replay Design](../superpowers/specs/2026-04-06-oracle-replay-design.md)

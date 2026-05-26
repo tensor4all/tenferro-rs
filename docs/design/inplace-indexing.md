@@ -5,8 +5,8 @@
 Add safe and backend-portable support for partial in-place tensor updates
 (`x[idx] = value`) in tenferro-rs, aligned with the existing layered design:
 
-- `tenferro-internal-tensor`: views/ownership metadata
-- `tenferro-internal-tensor::TensorBackend`: backend execution protocol
+- `tenferro-tensor`: views/ownership metadata
+- `tenferro-tensor::TensorBackend`: backend execution protocol
 - `chainrules` integration: AD safety rules
 
 ## Reference Behavior (PyTorch C++)

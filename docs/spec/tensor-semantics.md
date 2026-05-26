@@ -6,7 +6,7 @@
 
 ---
 
-## I. Principle: tenferro::Tensor is always dense
+## I. Principle: `tenferro_tensor::Tensor` is always dense
 
 `Tensor` is a dense multi-dimensional array. It carries no structural metadata
 (diagonal, symmetric, block-diagonal, sparse, etc.), but it may reside on CPU
@@ -94,8 +94,8 @@ are unnecessary — the compiler handles layout optimization.
 - **No ambiguity**: `Reshape` always operates on contiguous data — there is
   no stride ambiguity at any level (IR, runtime, or tensor).
 
-`TracedTensor` wraps `Tensor` with graph tracking for lazy evaluation
-and AD.
+`tenferro_runtime::TracedTensor` wraps `Tensor` with graph tracking for lazy
+evaluation. AD surfaces that require tracing live in `tenferro_ad`.
 
 `Tensor` is the standard-algebra runtime value shared across CPU and GPU
 backends. Methods such as `placement()`, `resident_device()`, `to_cpu()`, and

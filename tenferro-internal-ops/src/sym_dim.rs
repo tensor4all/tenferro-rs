@@ -111,7 +111,7 @@ impl SymDim {
     ///
     /// Used by traced composition wrappers that build multi-input ops
     /// from `SymDim`-valued target shapes — e.g.
-    /// [`TracedTensor::broadcast_in_dim_sym`](../../tenferro/struct.TracedTensor.html#method.broadcast_in_dim_sym).
+    /// `TracedTensor::broadcast_in_dim_sym`.
     ///
     /// # Examples
     ///

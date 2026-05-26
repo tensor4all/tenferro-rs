@@ -8,11 +8,12 @@
 
 ## I. Purpose
 
-This document defines the internal crate structure and type design of
-tenferro-rs. The key design driver is that **all computation is
-graph-based**: every operation (einsum, linalg, elementwise) produces nodes in
-a `Fragment<Op>`, and execution is always lazy through
-`materialize_merge -> compile -> eval`.
+This document records the graph-based crate architecture that replaced the
+early eager/tape split. The current workspace has no root `tenferro` facade:
+runtime graph APIs live in `tenferro-runtime`, AD APIs in `tenferro-ad`,
+runtime values in `tenferro-tensor`, GPU execution in `tenferro-gpu`, and
+operation families in crates such as `tenferro-einsum`, `tenferro-linalg`, and
+`tenferro-fft`.
 
 ---
 
@@ -28,8 +29,8 @@ The previous architecture organized around eager execution families and tape-bas
 | `internal/ad-ops` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules live on TensorOp |
 | `internal/ad-linalg` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules in ops/ad/linalg.rs |
 | `internal/ad-surface` | → tidu-rs `differentiate`/`transpose` | External crate |
-| `internal/frontend-core` | → `tenferro` TracedTensor | Lazy, not eager |
-| `internal/runtime` | → `tenferro` graph compiler/executor | |
+| `internal/frontend-core` | → `tenferro-runtime` TracedTensor | Lazy, not eager |
+| `internal/runtime` | → `tenferro-runtime` graph compiler/executor | |
 | `tenferro-dynamic-compute` | deleted | Always graph |
 | `tenferro-internal-tensor-compute` | → `tenferro-internal-ops` | |
 | `tenferro-linalg-prims` | → `tenferro-internal-ops` | No need to separate |
@@ -42,33 +43,40 @@ The previous architecture organized around eager execution families and tape-bas
 |---|---|---|
 | `tenferro-internal-device` | `tenferro-internal-device` | Mostly unchanged |
 | `tenferro-algebra` | `tenferro-algebra` | Mostly unchanged |
-| `tenferro-internal-tensor` | `tenferro-internal-tensor` | Simplified |
+| `tenferro-internal-tensor` | `tenferro-tensor` | Public dense tensor and CPU backend crate |
 | `tenferro-prims` | `tenferro-internal-ops` | Rewritten: single TensorOp enum |
 | `tenferro-einsum` | `tenferro-einsum` | Rewritten: graph builder |
-| `tenferro-linalg` | → `tenferro-internal-ops` + `tenferro` | AD rules → tenferro-internal-ops, LAPACK kernels → tenferro backend |
-| `tenferro` (facade) | `tenferro` | TracedTensor, GraphCompiler, GraphExecutor, backends |
+| `tenferro-linalg` | `tenferro-linalg` + `tenferro-linalg-ad` | Primal extension runtime and explicit AD companion |
+| `tenferro` (facade) | deleted | Direct crates are the public API boundary |
 
-**29 crates → 6 crates** (plus 3 external: computegraph-rs, chainrules-rs,
-tidu-rs).
+The current split is intentionally direct rather than facade-based. See
+`AGENTS.md` and `REPOSITORY_RULES.md` for the authoritative dependency graph.
 
 ---
 
 ## III. Crate Dependency Graph
 
 ```text
+chainrules-core
+    |
+    ├── chainrules
+    └── tidu
+
 tenferro-internal-device
     |
-tenferro-algebra
-    |
-tenferro-internal-tensor ──── tensor runtime crate (data types, kernels, TensorBackend, backends)
+tenferro-tensor
+    |\
+    | \-- tenferro-gpu
     |
 tenferro-internal-ops ─────── computegraph-rs (GraphOp, Fragment)
-    |                 chainrules-rs   (PrimitiveOp)
     |
-    ├── tenferro-einsum (SemiringOps → Fragment construction)
+tenferro-runtime ──────────── tidu-rs integration points
     |
-tenferro ──────────── tidu-rs (differentiate, transpose)
-    (TracedTensor, GraphCompiler, GraphExecutor, backends)
+    ├── tenferro-ad
+    ├── tenferro-einsum
+    ├── tenferro-linalg
+    ├── tenferro-linalg-ad
+    └── tenferro-fft
 ```
 
 ---
@@ -248,11 +256,12 @@ depending on the dispatch category.
 
 ### Backend trait
 
-`TensorBackend` (defined in tenferro-internal-tensor) is the single backend trait
+`TensorBackend` (defined in `tenferro-tensor`) is the single backend trait
 that encapsulates standard tensor kernel dispatch. `TensorExec` is the
 session-scoped companion trait used for batches of backend ops inside one
-execution context. `CpuBackend` lives in tenferro-internal-tensor and implements
-`TensorBackend`; the CubeCL GPU backend is feature-gated.
+execution context. `CpuBackend` lives in `tenferro-tensor` and implements
+`TensorBackend`; the CubeCL GPU backend lives in `tenferro-gpu` and is
+feature-gated.
 
 Canonical trait signatures: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
@@ -265,7 +274,7 @@ backends implement `SemiringBackend<Alg>` and follow the analogous
 
 `GraphCompiler` lowers traced outputs into backend-independent
 `GraphProgram`s. `GraphExecutor<B: TensorBackend>` owns backend runtime state
-and executes compiled programs. `TensorBackend` (in tenferro-internal-tensor) is the
+and executes compiled programs. `TensorBackend` (in `tenferro-tensor`) is the
 kernel-level trait that backend authors implement to provide kernels.
 
 See [`spec/backend-contract.md`](../spec/backend-contract.md) for the
@@ -383,15 +392,16 @@ The `Operand` trait has been **removed** from computegraph-rs entirely.
 
 ### TensorBackend -- standard algebra, full op set
 
-`TensorBackend` (defined in tenferro-internal-tensor) covers all ops for standard
-algebra. Operates on `Tensor` (type-erased). `CpuBackend` implements this trait. `CudaBackend` is a partial
-stub (feature-gated).
+`TensorBackend` (defined in `tenferro-tensor`) covers all ops for standard
+algebra. Operates on `Tensor` (type-erased). `CpuBackend` implements this trait.
+`tenferro-gpu::CubeclBackend` implements the same trait when the `cuda`
+feature is enabled.
 
 Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 
 ### SemiringBackend\<Alg: Semiring\> -- custom algebra, semiring ops only
 
-`SemiringBackend<Alg>` (defined in tenferro-internal-tensor) covers semiring ops for
+`SemiringBackend<Alg>` (defined in `tenferro-tensor`) covers semiring ops for
 custom algebra. Operates on `TypedTensor<Alg::Scalar>` (typed). User
 provides only `gemm()` (single GEMM); `batched_gemm`, `add`, `mul`,
 `reduce_sum` have default implementations using strided-kernel + `Semiring`
@@ -404,7 +414,7 @@ Canonical definition: [`spec/backend-contract.md`](../spec/backend-contract.md).
 ### Structural ops -- algebra-independent free functions
 
 `transpose`, `reshape`, `broadcast_in_dim`, `extract_diagonal`,
-`embed_diagonal` are free functions in `tenferro-internal-tensor::cpu::structural`.
+`embed_diagonal` are free functions in `tenferro_tensor::cpu::structural`.
 They are the same for all algebras. For standard algebra, `TensorBackend`
 methods delegate to these. For custom algebra, `eval_semiring_ir` calls them
 directly.
@@ -425,9 +435,9 @@ separate notion for execution. Public memory kinds follow JAX/XLA-style names:
 Provides `SemiringAlgebra` trait, `StandardAlgebra`, scalar type
 constraints.
 
-### tenferro-internal-tensor
+### tenferro-tensor
 
-Tensor runtime crate. No AD-related code. Organized by backend target.
+Tensor runtime crate. No AD-related code and no GPU runtime dependency.
 
 - `types.rs` — `TypedTensor<T>` (contiguous-only, no strides), `Tensor` enum,
   `Buffer<T>`, `DType`, `Placement`, `MemoryKind`, `ComputeDevice`
@@ -443,12 +453,23 @@ Tensor runtime crate. No AD-related code. Organized by backend target.
   - `indexing.rs` — gather, scatter, slice, pad, concatenate, reverse
   - `gemm/` — `faer_gemm.rs` (cpu-faer), `blas_gemm.rs` (cpu-blas)
   - `linalg/` — `faer_linalg.rs` (cpu-faer), `lapack_linalg.rs` (cpu-blas)
-- `cuda/` — CUDA backend (feature-gated)
-- `rocm/` — ROCm backend (feature-gated, future)
 
 **No naive CPU loop fallbacks.** All CPU kernels use strided-kernel (elementwise,
 reduction, structural), faer or BLAS (GEMM), faer or LAPACK (linalg). Exactly
 one of `cpu-faer` or `cpu-blas` must be enabled (`compile_error!` enforced).
+
+### tenferro-gpu
+
+GPU backend implementation crate. It depends on `tenferro-tensor` and exports
+GPU backend/runtime types plus explicit upload/download helpers. It does not
+re-export tensor types as its public API surface.
+
+- `cubecl/` — CubeCL/CUDA backend, runtime, memory transfer, GEMM/linalg FFI,
+  and kernel dispatch when the `cuda` feature is enabled
+- `kernels/` — CubeCL kernel launch helpers
+- `CubeclBackend` — `TensorBackend` implementation for CUDA-capable devices
+
+ROCm remains a feature placeholder.
 
 ### tenferro-internal-ops
 
@@ -465,7 +486,7 @@ The core crate:
 - `impl SemiringOps for StdTensorOp` — maps to flat variants directly
 - `TensorInputKey` + `impl ADKey`
 
-Depends on: computegraph-rs, chainrules-rs, tenferro-internal-tensor.
+Depends on: computegraph-rs, chainrules-rs, `tenferro-tensor`.
 
 ### tenferro-einsum
 
@@ -477,32 +498,40 @@ Graph builder for N-ary einsum:
 
 Depends on: computegraph-rs, tenferro-internal-ops.
 
-### tenferro
+### tenferro-runtime
 
-Top-level facade:
+Traced graph runtime and extension dispatch crate:
 
 - `TracedTensor` (lazy graph-aware wrapper)
 - `GraphCompiler` (compilation cache and static einsum planning cache)
-- `GraphExecutor` (backend dispatch via `TensorBackend` from tenferro-internal-tensor,
-  runtime einsum cache, backend runtime cache)
-- Public API: `einsum()`, `grad()`, `jvp()`, `compile()`, `run()`
-- `compile_std_to_exec()` (`CompiledProgram<StdTensorOp>` → `ExecProgram`)
-- `compile_semiring_to_exec()` (`CompiledProgram<SemiringOp<T>>` → `ExecProgram`)
+- `GraphExecutor` (backend dispatch via `TensorBackend`, runtime extension
+  cache, backend runtime cache)
+- `compile_std_to_exec()` (`CompiledProgram<StdTensorOp>` -> `ExecProgram`)
+- `compile_semiring_to_exec()` (`CompiledProgram<SemiringOp<T>>` -> `ExecProgram`)
 - Optimizing compiler passes on `ExecProgram`
   - `DotDimensionSorter`
   - `TransposeFolding`
   - `DotDecomposer` deferred to issue `#729`
 - `ExecProgram`, `ExecOp`, `ExecInstruction`
 - Generic execution engine: `eval_exec_ir()` — interprets `ExecProgram`,
-  dispatches to `TensorBackend` methods (from tenferro-internal-tensor)
+  dispatches to `TensorBackend` methods
 - Generic semiring execution engine: `eval_semiring_ir()` — interprets
   `ExecProgram`, dispatches to `SemiringBackend<Alg>` plus shared structural
   helpers
-- Standard backend:
-  - `CpuBackend` (in tenferro-internal-tensor) — `ExecProgram` → generic engine →
-    faer/BLAS/LAPACK
 
-Depends on: all of the above + tidu-rs.
+Depends on: computegraph-rs, `tidu-rs` integration points,
+`tenferro-internal-ops`, and `tenferro-tensor`.
+
+### tenferro-ad
+
+Explicit automatic-differentiation crate:
+
+- traced AD extension methods such as `grad()` and `jvp()`
+- eager AD runtime and `EagerTensor`
+- AD metadata helpers used by standard extension companion crates
+
+Depends on: `tenferro-runtime`, `tenferro-internal-ops` with `autodiff`, and
+`tenferro-tensor`.
 
 ---
 

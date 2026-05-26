@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tenferro::error::{Error, Result};
-use tenferro::extension::apply_eager;
-use tenferro::EagerTensor;
+use tenferro_ad::error::{Error, Result};
+use tenferro_ad::extension::apply_eager;
+use tenferro_ad::EagerTensor;
 
 use crate::extension::{
     ensure_einsum_extension_rule_registered, register_runtime, EinsumExtensionOp,
@@ -46,7 +46,8 @@ pub fn einsum_subscripts(
 /// # Examples
 ///
 /// ```
-/// use tenferro::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_tensor::Tensor;
+/// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor};
 /// use tenferro_einsum::{eager_tensor, TensorDotAxes};
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());

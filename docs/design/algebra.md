@@ -56,8 +56,9 @@ are:
 - extension AD must emit only core `StdTensorOp` values, never nested
   `Extension` nodes
 
-Example: `ext/tropical` provides `FusedTropicalDotGeneralOp` as an out-of-tree
-fused max-plus / min-plus dot-general.
+Example: an out-of-tree tropical extension crate can provide a
+`FusedTropicalDotGeneralOp` fused max-plus / min-plus dot-general. The
+temporary in-tree `ext/tropical` proof of concept has been removed.
 
 ### Scalar Newtypes
 
@@ -93,5 +94,5 @@ new core op is justified only when all of the following hold:
   infrastructure
 - the op can be specified in the core primitive catalog and kept AD-closed
 
-Benchmark evidence for tropical matmul lives in
-`ext/tropical/BENCHMARK_RESULTS.md`.
+Benchmark evidence for tropical matmul should live with the extension crate
+that owns the fused operation.

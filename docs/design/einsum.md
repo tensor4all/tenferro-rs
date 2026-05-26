@@ -1,17 +1,15 @@
 # Einsum Design
 
-Einsum is a standard extension crate, not part of the `tenferro` facade.
+Einsum is a standard extension crate, not part of a root facade.
 The public user-facing paths live under `tenferro_einsum`, for example
 `tenferro_einsum::traced_tensor::einsum` for traced graph construction and
 `tenferro_einsum::eager_tensor::einsum` for immediate eager execution.
 The same namespaces expose `tensordot` as NumPy-style contraction sugar over
 axis pairs; it is not a `tenferro-linalg` API.
 
-`tenferro` must not expose einsum facade paths such as `tenferro::einsum`,
-`tenferro::traced_tensor::einsum`, `tenferro::eager_tensor::einsum`,
-`tenferro::tensor::einsum`, or `tenferro::typed_tensor::einsum`. Programs that
-use traced einsum must explicitly register the extension runtime with their
-executor.
+The workspace intentionally has no root `tenferro` crate and no einsum facade
+paths. Programs that use traced einsum must explicitly register the extension
+runtime with their executor.
 
 The implementation is split between:
 
@@ -35,7 +33,7 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 The extension crate exposes lazy traced einsum:
 
 ```rust
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_einsum::traced_tensor::einsum;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -68,7 +66,7 @@ assert_eq!(result.shape(), &[2, 2]);
 values:
 
 ```rust
-use tenferro::{EagerRuntime, Tensor};
+use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_einsum::eager_tensor::einsum;
 
 let ctx = EagerRuntime::new();
@@ -82,7 +80,7 @@ assert_eq!(c.shape(), &[2, 2]);
 ```
 
 Runtime-owned concrete execution is internal to the extension runtime. It is
-not exposed through `tenferro`.
+not exposed through a facade crate.
 
 ## Subscripts And Repeated Labels
 
@@ -163,7 +161,7 @@ contiguous block for the underlying tensor backend.
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens
 when a compiled program is evaluated with `CubeclBackend` from
-`tenferro-internal-tensor/src/cubecl/`.
+`tenferro-gpu/src/cubecl/`.
 
 Current GPU status:
 

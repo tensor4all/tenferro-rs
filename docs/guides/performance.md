@@ -8,7 +8,7 @@ compilation state, and reuse backend execution state.
 tenferro stores dense tensors in column-major order.
 
 ```rust
-use tenferro::TracedTensor;
+use tenferro_runtime::TracedTensor;
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -33,7 +33,7 @@ Use `CpuBackend::with_threads(n)` when you want an execution-specific CPU
 parallelism hint:
 
 ```rust
-use tenferro::{CpuBackend, GraphExecutor};
+use tenferro_runtime::{CpuBackend, GraphExecutor};
 
 let executor = GraphExecutor::new(CpuBackend::with_threads(4));
 assert_eq!(executor.backend().num_threads(), 4);
@@ -73,8 +73,9 @@ or cleared independently.
 
 ```rust
 use std::num::NonZeroUsize;
-use tenferro::extension::ExtensionCacheLimits;
-use tenferro::{CpuBackend, EagerRuntime, GraphCompiler, GraphExecutor};
+use tenferro_runtime::extension::ExtensionCacheLimits;
+use tenferro_ad::EagerRuntime;
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
@@ -104,7 +105,7 @@ For CPU executors, `cpu_cache_stats()` also reports the CPU buffer pool.
 `clear_all_caches()` clears executor-owned caches and the CPU buffer pool.
 
 ```rust
-use tenferro::{CpuBackend, GraphExecutor};
+use tenferro_runtime::{CpuBackend, GraphExecutor};
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.set_buffer_pool_limit_bytes(32 * 1024 * 1024);

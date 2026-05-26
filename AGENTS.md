@@ -221,7 +221,7 @@ python3 scripts/check-docs-site.py
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
-  cargo test -p tenferro-internal-tensor --features cuda -- --ignored
+  cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
 ### CubeCL Environment Variables
@@ -293,16 +293,18 @@ compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
 ### Layered Design
 
 ```
-Layer 4: tenferro             — Public traced frontend: Engine, TracedTensor, lowering, execution,
-                                extension registration, VJP/JVP
-Layer 3: tenferro-einsum      — Standard extension: einsum syntax, contraction planning,
+Layer 4: tenferro-ad          — Eager AD runtime, traced AD extension traits, VJP/JVP/HVP APIs
+Layer 3: tenferro-runtime     — Public traced graph runtime: TracedTensor, lowering, execution,
+                                extension registration and dispatch
+         tenferro-einsum      — Standard extension: einsum syntax, contraction planning,
                                 fragment builder, runtime registration
          tenferro-linalg      — Standard extension: linalg traced/eager APIs, AD rules,
                                 runtime registration
          tenferro-fft         — Standard extension: FFT APIs and runtime registration
          tenferro-internal-ops         — Core graph op vocabulary (`StdTensorOp`) and primitive AD rules
-Layer 2: tenferro-internal-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
-                                CUDA/ROCm backend stubs, execution kernels
+Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
+                                execution kernels
+         tenferro-gpu         — CubeCL/CUDA backend and GPU kernel ownership
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
          tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
@@ -314,15 +316,17 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 `chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
 of any tensor type. `chainrules` provides engine-independent scalar AD rules,
 and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
-`tenferro-internal-tensor` owns the concrete dense runtime value types and backend
-execution surface. `tenferro-internal-ops/src/ad/` is the semantic source of truth for
-core primitive AD rules. `tenferro` owns traced graph construction, lowering,
-extension registration, and public evaluation APIs.
+`tenferro-tensor` owns the concrete dense runtime value types and CPU backend
+execution surface. `tenferro-gpu` owns CubeCL/CUDA backend code.
+`tenferro-internal-ops/src/ad/` is the semantic source of truth for core
+primitive AD rules. `tenferro-runtime` owns traced graph construction,
+lowering, extension registration, and public evaluation APIs. `tenferro-ad`
+owns eager AD and traced AD transforms.
 
-`tenferro` must not depend on standard operation extension crates and must not
-expose facade paths such as `tenferro::einsum`, `tenferro::linalg`, or
-`tenferro::fft`. Standard operation families remain separately imported crates
-such as `tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
+The workspace intentionally has no root `tenferro` facade crate. Standard
+operation families remain separately imported crates such as
+`tenferro_einsum`, `tenferro_linalg`, `tenferro_linalg_ad`, and
+`tenferro_fft`.
 
 ## AI Workflow Scripts
 
@@ -352,7 +356,7 @@ tidu (← chainrules-core)
 tenferro-internal-device (← strided-view for StridedError, ← thiserror)
     │
     ↓
-tenferro-internal-tensor
+tenferro-tensor
     (← strided-kernel,
      ← strided-traits,
      ← num-traits)
@@ -361,12 +365,19 @@ tenferro-internal-tensor
 tenferro-internal-ops
     (← computegraph,
      ← tidu,
-     ← tenferro-internal-tensor)
+     ← tenferro-tensor)
          │
          ▼
-tenferro
-    (← computegraph, ← tidu, ← tenferro-internal-ops, ← tenferro-internal-tensor)
+tenferro-runtime
+    (← computegraph, ← tenferro-internal-ops, ← tenferro-tensor)
+         │
+         ▼
+tenferro-ad
+    (← tidu, ← chainrules-core, ← tenferro-runtime, ← tenferro-internal-ops)
 
 tenferro-einsum / tenferro-linalg / tenferro-fft
-    (← tenferro, ← tenferro-internal-ops, ← tenferro-internal-tensor as needed)
+    (← tenferro-runtime, ← tenferro-internal-ops, ← tenferro-tensor as needed)
+
+tenferro-linalg-ad
+    (← tenferro-ad, ← tenferro-linalg, ← tenferro-runtime, ← tenferro-internal-ops)
 ```

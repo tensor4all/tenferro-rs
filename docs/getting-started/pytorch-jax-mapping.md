@@ -14,7 +14,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Eager forward and gradients | eager ops plus `loss.backward()` | — | `EagerTensor` forward ops, with `backward()` for tracked scalar losses |
 | Transform AD | `torch.autograd.grad(...)` | `jax.grad`, `jax.vjp`, `jax.jvp`, `hvp` via composition | `loss.grad(&x)`, `.vjp()`, `.jvp()`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
-| CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro::cuda::upload_tensor(...)` and `download_tensor(...)` |
+| CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::cubecl::upload_tensor(...)` and `download_tensor(...)` |
 | Matrix contraction | `torch.einsum` | `jnp.einsum` | `tenferro_einsum::traced_tensor::einsum` standard extension |
 
 ## Function mapping
@@ -23,7 +23,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 |---|---|---|---|---|
 | Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
 | Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
-| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `tenferro::tensor::matmul(&a, &b, &mut ctx)` | `tenferro::traced_tensor::matmul(&a, &b)` |
+| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `tenferro_runtime::tensor::matmul(&a, &b, &mut ctx)` | `tenferro_runtime::traced_tensor::matmul(&a, &b)` |
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
@@ -45,7 +45,7 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 tenferro stores dense tensors in column-major order. If you write:
 
 ```rust
-use tenferro::TracedTensor;
+use tenferro_runtime::TracedTensor;
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 ```
 
@@ -60,8 +60,8 @@ physical order.
 
 tenferro follows the PyTorch convention that CPU and CUDA tensors do not move
 between devices implicitly. Upload CPU tensors with
-`tenferro::cuda::upload_tensor` before CUDA backend operations, and download
-with `tenferro::cuda::download_tensor` before inspecting values on the host.
+`tenferro_gpu::cubecl::upload_tensor` before CUDA backend operations, and download
+with `tenferro_gpu::cubecl::download_tensor` before inspecting values on the host.
 
 For eager CUDA execution, operation calls submit work and return CUDA tensor
 handles. The host synchronizes at download/read boundaries or at operations

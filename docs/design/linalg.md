@@ -1,24 +1,27 @@
 # Linear Algebra
 
-`tenferro-linalg` is the public tensor linalg layer of the workspace. Its role
-is to validate contracts, lower composite operations, and expose structured
-results and AD-facing APIs. It is not the backend execution contract itself.
+`tenferro-linalg` is the public primal tensor linalg extension of the
+workspace. Its role is to validate contracts, build traced linalg operations,
+and register linalg execution with the runtime. It is not the backend execution
+contract itself, and AD support is intentionally owned by `tenferro-linalg-ad`.
 
 ## Position in the Workspace
 
-```
-tenferro-internal-tensor
-    structural views
-        │
-        ├── tenferro-prims
-        │      semiring/scalar/analytic execution families
-        │
-        └── tenferro-linalg-prims
-               factorization and solve kernel contracts
-                    │
-                    ▼
-              tenferro-linalg
-              public tensor linalg APIs
+```text
+tenferro-tensor
+    TensorBackend, CPU kernels, linalg execution
+        |
+        v
+tenferro-runtime
+    traced graph runtime and extension dispatch
+        |
+        v
+tenferro-linalg
+    primal linalg extension API and runtime registration
+        |
+        v
+tenferro-linalg-ad
+    explicit AD companion for linalg extension ops
 ```
 
 ## Responsibilities
@@ -28,14 +31,14 @@ tenferro-internal-tensor
 - shape and option validation
 - public result structs and ergonomic APIs
 - composite lowering
-- oracle and tenferro frontend integration
-- stateless AD rules for supported operations
+- traced extension op payloads and runtime registration
 
 `tenferro-linalg` does not own:
 
 - backend-specific kernel interfaces
 - CPU/GPU direct dispatch branches
 - standalone structural view operations
+- AD registration or differentiation formulas
 
 ## Kernel Basis vs Composite API
 
@@ -43,7 +46,7 @@ The public API is larger than the backend kernel basis.
 
 ### Kernel-oriented operations
 
-These lower directly to `tenferro-linalg-prims`:
+These lower directly to `TensorBackend` linalg methods:
 
 - `solve`
 - `solve_triangular`
@@ -56,8 +59,8 @@ These lower directly to `tenferro-linalg-prims`:
 
 ### Composite operations
 
-These remain in `tenferro-linalg` and lower through structural ops, semiring
-prims, scalar/analytic prims, and the kernel basis above:
+These remain in `tenferro-linalg` and lower through structural ops, core tensor
+ops, scalar/analytic ops, and the kernel basis above:
 
 - `matrix_power`
 - `cond`
@@ -81,12 +84,13 @@ This is the column-major counterpart to PyTorch's trailing matrix convention.
 
 ## AD Boundary
 
-AD formulas remain part of `tenferro-linalg`, not `tenferro-linalg-prims`.
+AD formulas live in `tenferro-linalg-ad`, not `tenferro-linalg`.
 
 That split is deliberate:
 
-- `tenferro-linalg-prims` describes execution contracts
-- `tenferro-linalg` owns mathematical differentiation rules over public ops
+- `tenferro-linalg` stays primal-only and can be used without AD dependencies
+- `tenferro-linalg-ad` depends on both `tenferro-ad` and `tenferro-linalg` to
+  register mathematical differentiation rules over linalg extension ops
 
 Some public APIs are naturally primal-only, especially structured status/result
 surfaces such as factorization contracts with pivots or `info` metadata.
@@ -95,9 +99,10 @@ surfaces such as factorization contracts with pivots or `info` metadata.
 
 The architectural boundary is now active rather than transitional:
 
-- `tenferro-linalg` owns public/composite logic and AD formulas
-- `tenferro-prims` owns semiring/scalar/analytic execution
-- `tenferro-linalg-prims` owns backend-facing structured linalg kernels
+- `tenferro-tensor` owns backend-facing structured linalg kernels through
+  `TensorBackend`
+- `tenferro-linalg` owns primal extension APIs and runtime registration
+- `tenferro-linalg-ad` owns AD registration and linalg differentiation rules
 
 Current debt is mainly about capability breadth and composite coverage:
 

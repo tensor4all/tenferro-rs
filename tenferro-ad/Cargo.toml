@@ -1,0 +1,42 @@
+[package]
+name = "tenferro-ad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Automatic differentiation APIs and eager AD runtime for tenferro."
+
+[lib]
+name = "tenferro_ad"
+
+[features]
+default = ["cpu-faer"]
+cpu-faer = [
+    "tenferro-runtime/cpu-faer",
+    "tenferro-internal-ops/cpu-faer",
+    "tenferro-tensor/cpu-faer",
+    "tenferro-gpu?/cpu-faer",
+]
+cpu-blas = [
+    "tenferro-runtime/cpu-blas",
+    "tenferro-internal-ops/cpu-blas",
+    "tenferro-tensor/cpu-blas",
+    "tenferro-gpu?/cpu-blas",
+]
+gpu = []
+cuda = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/cuda"]
+rocm = ["gpu", "dep:tenferro-gpu", "tenferro-gpu/rocm"]
+
+[dependencies]
+tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false, features = ["autodiff"] }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
+chainrules-core.workspace = true
+computegraph.workspace = true
+lru.workspace = true
+num-complex.workspace = true
+num-traits.workspace = true
+thiserror.workspace = true
+tidu.workspace = true

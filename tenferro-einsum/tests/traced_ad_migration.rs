@@ -1,7 +1,8 @@
 #![cfg(feature = "autodiff")]
 
-use tenferro::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_einsum::einsum;
+use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_vec_col_major(shape, data)

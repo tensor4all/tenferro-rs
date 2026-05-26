@@ -177,14 +177,12 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
 
     /// Eager forward execution.
     ///
-    /// Called from `tenferro/src/eager_exec.rs` and
-    /// `tenferro/src/eager_emitter.rs` when the dispatcher encounters an
-    /// `Extension` variant in the eager path. Input tensors are on the
-    /// device the caller already arranged. Returned tensors MUST have
-    /// shapes that match `infer_output_meta` and MUST be placed on a
-    /// device the caller can consume (per `backend-contract.md`'s
-    /// device-transfer policy, there is no implicit cross-device
-    /// transfer).
+    /// Called from the runtime extension dispatcher when the eager path
+    /// encounters an `Extension` variant. Input tensors are on the device
+    /// the caller already arranged. Returned tensors MUST have shapes that
+    /// match `infer_output_meta` and MUST be placed on a device the caller
+    /// can consume (per `backend-contract.md`'s device-transfer policy,
+    /// there is no implicit cross-device transfer).
     fn eager_execute(
         &self,
         inputs: &[&tenferro_tensor::Tensor],
@@ -318,8 +316,8 @@ Example:
 ```
 
 Extension crates MAY use the `ExtensionFamilyId` derive macro re-exported by
-`tenferro::extension` / `tenferro_ops` to generate this string as an inherent
-`FAMILY_ID` constant:
+`tenferro_runtime::extension` / `tenferro_ops` to generate this string as an
+inherent `FAMILY_ID` constant:
 
 ```rust
 use tenferro_ops::ExtensionFamilyId;
@@ -364,7 +362,7 @@ but different families are not accidentally unified by the op interner.
 For `FusedTropicalDotGeneral` in `tenferro-ext-tropical`:
 
 - `family_id = "tenferro-ext-tropical.fused_dot_general.v1"`
-- payload = `DotGeneralConfig` (from `tenferro-internal-tensor`)
+- payload = `DotGeneralConfig` (from `tenferro-tensor`)
 - `payload_hash` hashes the four `Vec<usize>` fields of `DotGeneralConfig`
   in the order they are declared, via `DotGeneralConfig: Hash`
 - `payload_eq` downcasts `other` to the concrete type and defers to
@@ -454,7 +452,7 @@ fn infer_output_meta(
 ```
 
 This method's responsibility mirrors
-`tenferro/src/shape_infer.rs::infer_output_dtype` and
+`tenferro-runtime/src/shape_infer.rs::infer_output_dtype` and
 `infer_output_shapes` for core ops, packaged as a single method per
 extension.
 
@@ -491,8 +489,8 @@ symbolic inputs. Total means:
 
 - An implementer that returns the wrong number of outputs causes
   `compile_std_to_exec` to panic when assigning output slot metadata
-  (the panic already exists for core ops — see
-  `tenferro/src/compiler/mod.rs:61-68`). The same panic applies to
+  (the panic already exists for core ops; see
+  `tenferro-runtime/src/compiler/mod.rs`). The same panic applies to
   extensions.
 - An implementer that panics on valid symbolic inputs surfaces as a
   hard crash in symbolic-shape composition tests. This is a contract violation.
@@ -506,8 +504,8 @@ both, with a normatively-split responsibility.
 
 ### Eager path
 
-The eager path runs through `EagerRuntime` and
-`tenferro/src/eager_exec.rs::exec_op_on_tensors_with_extension_executor`.
+The eager path runs through `EagerRuntime` and the runtime extension
+dispatcher in `tenferro-runtime/src/extension_runtime.rs`.
 When execution is attached to an `EagerRuntime` and a runtime is registered for
 the extension family, the implementation MUST route `StdTensorOp::Extension(op)`
 through that runtime's `ExtensionExecutor`:
@@ -528,8 +526,8 @@ families. Built-in extensions with long-lived caches MUST register a runtime so
 ### Compiled path
 
 The compiled path runs through
-`tenferro/src/compiler/mod.rs::compile_std_to_exec` and
-`tenferro/src/exec.rs`. The compiled path MUST include:
+`tenferro-runtime/src/compiler/mod.rs::compile_std_to_exec` and
+`tenferro-runtime/src/exec.rs`. The compiled path MUST include:
 
 1. An `ExecOp::Extension(Arc<dyn ExtensionOp>)` variant (or an
    equivalent carrier) in the execution IR, mirroring the `StdTensorOp`
@@ -537,10 +535,10 @@ The compiled path runs through
 2. Shape / dtype lowering in `compile_std_to_exec` that calls
    `op.infer_output_meta(...)` to populate
    `ExecInstruction::dtype` and `ExecInstruction::output_shapes`.
-3. An `execute_extension_op` dispatcher in `tenferro/src/exec.rs` that,
+3. An `execute_extension_op` dispatcher in `tenferro-runtime/src/exec.rs` that,
    at runtime, calls the registered `ExtensionExecutor<B>`.
 4. A single-instruction-boundary category for extensions in
-   `tenferro/src/segment.rs` (similar to `DotGeneral` / `NaryEinsum`).
+   `tenferro-runtime/src/segment.rs` (similar to `DotGeneral` / `NaryEinsum`).
    Extensions MUST NOT participate in elementwise fusion planning
    because their fusion semantics are implementer-defined.
 
@@ -583,7 +581,7 @@ Extension op payloads are not registered in a process-global factory registry.
 The frontend carries the concrete payload directly as
 `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`; extension crates should expose
 small public wrapper functions that construct that `Arc` and call
-`tenferro::extension::apply` or `apply_eager`.
+`tenferro_runtime::extension::apply` or `tenferro_ad::extension::apply_eager`.
 
 The removed factory registry (`ExtensionFactory` / `register_extension`) MUST
 NOT be reintroduced as a prerequisite for ordinary graph construction. If a
@@ -811,7 +809,7 @@ these error types / behaviours in the listed scenarios.
 | Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::BackendFailure` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD rules (`frule` / `rrule`, or low-level `linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through `tenferro::Error`. |
+| AD rules (`frule` / `rrule`, or low-level `linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
 | Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
@@ -845,8 +843,10 @@ The legacy semiring pipeline, specifically:
 ...was retired during extension-substrate cleanup (commit `39f1b60` on
 `refactor_ad_v3`), with additional cleanup of ad module renaming (`e1af8e9`),
 compile-path isolation (`d134763`), and docs demotion (`0258531`). Equivalent
-test coverage for tropical moved to the external crate `tenferro-ext-tropical`
-in commits `7317268` and `188a278`.
+test coverage for tropical moved to a temporary `tenferro-ext-tropical` proof
+of concept in commits `7317268` and `188a278`. That in-tree POC was later
+removed during the no-facade crate-boundary cleanup; this section remains a
+historical record of the extension contract it exercised.
 
 ### What `ExtensionOp` is NOT
 
@@ -981,7 +981,7 @@ Registration:
 ```rust
 // In tenferro-ext-tropical/src/lib.rs:
 pub fn register() -> Result<(), RegistrationError> {
-    tenferro::extension::register_extension_chain_rule(
+    tenferro_ad::extension::register_extension_chain_rule(
         Arc::new(FusedTropicalDotGeneralRule),
     )
 }
@@ -1002,11 +1002,12 @@ pub fn register() -> Result<(), RegistrationError> {
 If an external fused op cannot be implemented from this spec, the spec is
 insufficient and MUST be revised.
 
-### Note — reconciliation with the external implementation
+### Historical note — reconciliation with the temporary external implementation
 
-The `tenferro-ext-tropical` implementation (`ext/tropical/src/fused.rs`) lands
-the op shape described above with two deviations from this informative sketch,
-both within the spec's flexibility:
+The former in-tree `tenferro-ext-tropical` proof of concept implemented the op
+shape described above with two deviations from this informative sketch, both
+within the spec's flexibility. That proof of concept is no longer part of the
+workspace:
 
 - **Payload**: the actual `FusedTropicalDotGeneralOp` carries a small
   `TropicalKind { MaxPlus, MinPlus }` enum instead of a
@@ -1073,9 +1074,9 @@ without revisiting this document.
 - 2026-04-20: Implementation — `ExtensionOp` trait, registry,
   `StdTensorOp::Extension` carrier, and full forward / AD / shape-infer
   / compile / eager wiring landed in commit `2c7e26c` on
-  `codex-stage-6` (branched from `efd91a7`). Public `tenferro::extension`
-  facade (including `apply(op, inputs)`) and nine smoke tests landed in
-  commit `be9f985`.
+  `codex-stage-6` (branched from `efd91a7`). The original public
+  `tenferro::extension` facade was later replaced by the no-facade
+  `tenferro_runtime::extension` / `tenferro_ad::extension` surfaces.
 - 2026-04-20: External tropical self-test — `FusedTropicalDotGeneralOp` landed in
   `tenferro-ext-tropical` on branch `codex-stage-7` (branched from
   `c9266f9`). The fused op and public traced wrappers landed in commit

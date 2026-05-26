@@ -1,5 +1,5 @@
 use num_complex::{Complex32, Complex64};
-use tenferro::{
+use tenferro_runtime::{
     CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
 };
 
@@ -113,7 +113,7 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         vec![1.0_f64; 18],
     ));
     let ints = TracedTensor::from_tensor_concrete_shape(Tensor::I64(
-        tenferro::TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]),
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]),
     ));
 
     let (u, s, vt) = tenferro_linalg::svd(&rectangular);

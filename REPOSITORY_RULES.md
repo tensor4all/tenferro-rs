@@ -28,17 +28,17 @@ rules from `tensor4all-agent-rules`.
 ## Standard Extension Boundary
 
 - Standard operation families (`tenferro-einsum`, `tenferro-linalg`,
-  `tenferro-fft`, and future peers) are first-class crates, not modules of the
-  `tenferro` facade.
-- Completion requires the `tenferro` crate to have no normal or dev dependency
-  on standard extension crates. `tenferro` must not expose operation-family
-  facade paths such as `tenferro::einsum`, `tenferro::linalg`, or
-  `tenferro::fft`.
+  `tenferro-linalg-ad`, `tenferro-fft`, and future peers) are first-class
+  crates, not modules of a broad `tenferro` facade.
+- The workspace intentionally has no root `tenferro` facade crate. Do not add
+  operation-family facade paths such as `tenferro::einsum`,
+  `tenferro::linalg`, or `tenferro::fft`; users import operation crates
+  directly.
 - Users import operation crates directly and register runtimes explicitly, for
   example `tenferro_einsum::einsum` plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
-- Extension crates depend on the engine/foundation API they need; dependency
-  flow must not require `tenferro` to depend back on them.
+- Extension crates depend on the runtime, tensor, AD, or GPU crate they need;
+  dependency flow must not require a facade crate to depend back on them.
 
 ## Oracle Gate
 
@@ -253,15 +253,21 @@ rules from `tensor4all-agent-rules`.
 ### Source of Truth
 
 - **Source code** is the source of truth for internal design (op catalog, backend contract, AD rules, compilation pipeline).
-- **Online docs** are user-facing only — how to use the `tenferro` facade crate.
+- **Online docs** are user-facing only — how to use the explicit runtime, AD,
+  tensor, GPU, and standard operation crates.
 - **AGENTS.md** is the entry point for developers and AI agents. It contains pointers to source code locations.
 - Do NOT duplicate source-code-level information in online docs. If it can be learned by reading the source, put a pointer instead of a copy.
 - Development assumes AI agentic coding. Keep machine-readable sources (code + doc comments) authoritative.
 
 ### User-Facing Docs
 
-- User docs target PyTorch/JAX users who interact with the `tenferro` facade crate.
-- All imports must use `use tenferro::{...}` — never reference internal crates (`tenferro-internal-tensor`, `tenferro-internal-ops`, `computegraph`, etc.) in user-facing docs.
+- User docs target PyTorch/JAX users who interact with public direct crates
+  such as `tenferro-runtime`, `tenferro-ad`, `tenferro-gpu`,
+  `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`.
+- Imports must use public direct crates such as `tenferro_runtime`,
+  `tenferro_ad`, `tenferro_gpu`, and standard extension crates. Do not
+  reference internal crates (`tenferro-internal-ops`, `computegraph`, etc.) in
+  user-facing docs.
 - Do NOT expose internal jargon (Fragment, StableHLO, ExecOp, ValRef, etc.) in user-facing pages.
 - Provide PyTorch/JAX equivalents when introducing tenferro concepts.
 

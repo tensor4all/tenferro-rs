@@ -24,8 +24,8 @@ An error like `expected GPU tensor ... use upload_tensor()` means a CUDA
 backend operation received CPU data. Upload first:
 
 ```rust
-use tenferro::cuda::{upload_tensor, CudaBackend};
-use tenferro::{Tensor, TensorBackend};
+use tenferro_gpu::cubecl::{upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -39,8 +39,8 @@ Host access methods read CPU memory. If a tensor lives on CUDA memory, download
 it before inspecting values:
 
 ```rust
-use tenferro::cuda::{download_tensor, upload_tensor, CudaBackend};
-use tenferro::{Tensor, TensorBackend};
+use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 let backend = CudaBackend::new(0).unwrap();
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
@@ -72,7 +72,7 @@ disable defaults and enable one BLAS option:
 
 ```toml
 [dependencies]
-tenferro = { path = "/path/to/tenferro-rs/tenferro", default-features = false, features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
 ```
 
 Do not enable both `cpu-faer` and `cpu-blas`.

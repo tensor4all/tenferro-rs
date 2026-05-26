@@ -14,10 +14,10 @@ supported execution path yet.
 
 | Boundary | What happens |
 | --- | --- |
-| CPU tensor to CUDA backend | Upload first with `tenferro::cuda::upload_tensor` |
+| CPU tensor to CUDA backend | Upload first with `tenferro_gpu::cubecl::upload_tensor` |
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
 | CUDA tensor to CPU backend | Programming error or explicit failure; download first |
-| CUDA tensor to host inspection | Download with `tenferro::cuda::download_tensor` |
+| CUDA tensor to host inspection | Download with `tenferro_gpu::cubecl::download_tensor` |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
 
 Keep tensors on CUDA across a CUDA workload. Download only when the host needs
@@ -38,25 +38,26 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 ## CUDA Quickstart
 
-<!-- snippet-source: tenferro/examples/cuda_quickstart.rs -->
+<!-- snippet-source: tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
-use tenferro::cuda::{download_tensor, upload_tensor, CudaBackend};
-use tenferro::{Tensor, TensorBackend};
+use tenferro_gpu::{download_tensor, upload_tensor, CubeclBackend as CudaBackend};
+use tenferro_tensor::{Tensor, TensorBackend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if !tenferro_gpu::gpu_available() {
+        return Ok(());
+    }
+
     let mut backend = CudaBackend::new(0)?;
+    let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
 
-    let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-    let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
-
-    let gpu_a = upload_tensor(backend.runtime(), &a)?;
-    let gpu_b = upload_tensor(backend.runtime(), &b)?;
+    let gpu_a = upload_tensor(backend.runtime(), &cpu_a)?;
+    let gpu_b = upload_tensor(backend.runtime(), &cpu_b)?;
     let gpu_c = backend.add(&gpu_a, &gpu_b)?;
-    let c = download_tensor(backend.runtime(), &gpu_c)?;
+    let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
-    assert_eq!(c.shape(), &[3]);
-    assert_eq!(c.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
-
+    assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())
 }
 ```
@@ -65,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Compile-check the example without requiring a GPU:
 
 ```bash
-cargo check -p tenferro --features cuda --example cuda_quickstart
+cargo check -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
 Run it on a configured CUDA machine:
@@ -73,7 +74,7 @@ Run it on a configured CUDA machine:
 ```bash
 CUDA_PATH=/usr/local/cuda-12.0 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:$LD_LIBRARY_PATH \
-  cargo run -p tenferro --features cuda --example cuda_quickstart
+  cargo run -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
 The example downloads the result back to CPU and asserts the expected values.

@@ -1,4 +1,6 @@
-use tenferro::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{
+    CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
@@ -17,7 +19,7 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
-    let mut compiler = tenferro::GraphCompiler::new();
+    let mut compiler = GraphCompiler::new();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     engine
         .register_extension(tenferro_einsum::register_runtime)

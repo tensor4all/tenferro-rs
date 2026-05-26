@@ -2,7 +2,7 @@
 
 This document describes the current binary step used inside an N-ary einsum
 contraction tree. It is implemented through `tenferro-einsum` planning and the
-`TensorBackend::dot_general` execution surface in `tenferro-internal-tensor`.
+`TensorBackend::dot_general` execution surface in `tenferro-tensor`.
 
 See [einsum.md](./einsum.md) for the N-ary API and
 [tensor-prims.md](./tensor-prims.md) for the current tensor backend protocol.

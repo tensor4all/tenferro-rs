@@ -40,7 +40,7 @@ Status labels in the matrix use:
 
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
-| Structural (`tenferro-internal-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `view`, `permute`, `broadcast`, and `diagonal` are zero-copy tensor views, while `reshape` now follows PyTorch-style view-or-copy semantics; AD coverage is not yet documented as a first-class family surface |
+| Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `view`, `permute`, `broadcast`, and `diagonal` are zero-copy tensor views, while `reshape` now follows PyTorch-style view-or-copy semantics; AD coverage is not yet documented as a first-class family surface |
 | Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the prim surface, and semiring execution now routes directly through the family contracts; the remaining gap is GPU capability breadth, not legacy layering |
 | Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
@@ -63,7 +63,7 @@ Status labels in the matrix use:
 
 ### Structural family
 
-Owned by `tenferro-internal-tensor`:
+Owned by `tenferro-tensor`:
 
 - `permute`, `transpose`, `reshape`, `view`, `expand`
 - `diagonal`, `select`, `narrow`
@@ -153,9 +153,9 @@ and execution. The remaining gap is breadth, not existence:
 - GPU pointwise/reduction custom kernels are still absent
 - GPU capability is still narrower than the CPU implementation set
 
-### 2. Structural reorder now lives in `tenferro-internal-tensor`
+### 2. Structural reorder now lives in `tenferro-tensor`
 
-The current design keeps `permute` in `tenferro-internal-tensor` as a view and uses
+The current design keeps `permute` in `tenferro-tensor` as a view and uses
 `MakeContiguous` as the execution boundary. The old materializing `Permute`
 primitive has now been removed from `tenferro-prims`, which aligns the public
 substrate with the intended semiring-core design.
