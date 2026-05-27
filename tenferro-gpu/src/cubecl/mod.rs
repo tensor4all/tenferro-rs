@@ -2,7 +2,7 @@
 //!
 //! This module provides GPU acceleration via [CubeCL](https://github.com/tracel-ai/cubecl)
 //! running on NVIDIA CUDA devices. It is gated behind the `cuda` feature flag and
-//! requires **CUDA 12+** with a compatible NVIDIA GPU.
+//! requires **CUDA 12.8+** with a compatible NVIDIA GPU.
 //!
 //! # Enabling the feature
 //!
@@ -18,14 +18,14 @@
 //! # Prerequisites
 //!
 //! - NVIDIA GPU with CUDA compute capability ≥ 7.0
-//! - CUDA Toolkit 12.x installed (provides NVRTC for JIT kernel compilation)
+//! - CUDA Toolkit 12.8 or newer installed (provides NVRTC for JIT kernel compilation)
 //! - cuTENSOR shared library available on `LD_LIBRARY_PATH`
 //!
 //! ## Environment variables
 //!
 //! | Variable | Purpose |
 //! |----------|---------|
-//! | `CUDA_PATH` | CUDA toolkit root (e.g. `/usr/local/cuda-12.0`) |
+//! | `CUDA_PATH` | CUDA toolkit root (e.g. `/usr/local/cuda-12.8`) |
 //! | `CUBECL_DEBUG_LOG` | Set to `0` to suppress verbose JIT logs |
 //! | `TENFERRO_CUTENSOR_PATH` | Override cuTENSOR library search path |
 //!
@@ -68,7 +68,7 @@
 //!
 //! ```sh
 //! CUBECL_DEBUG_LOG=0 \
-//! CUDA_PATH=/usr/local/cuda-12.0 \
+//! CUDA_PATH=/usr/local/cuda-12.8 \
 //! cargo test -p tenferro-gpu --features cuda -- --ignored
 //! ```
 

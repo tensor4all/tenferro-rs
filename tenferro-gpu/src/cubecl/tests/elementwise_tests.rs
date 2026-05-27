@@ -9,7 +9,7 @@ use super::{
 };
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_log1p_small_x_f32_precision() {
     if !gpu_available() {
         eprintln!("skipping test_log1p_small_x_f32_precision — no CUDA device found");
@@ -38,7 +38,7 @@ fn test_log1p_small_x_f32_precision() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_expm1_small_x_f32_precision() {
     if !gpu_available() {
         eprintln!("skipping test_expm1_small_x_f32_precision — no CUDA device found");
@@ -307,7 +307,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
     if !gpu_available() {
         eprintln!(
@@ -334,7 +334,7 @@ fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
     if !gpu_available() {
         eprintln!(

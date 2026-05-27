@@ -256,8 +256,8 @@ a CUDA machine with:
 
 ```sh
 CUBECL_DEBUG_LOG=0 \
-CUDA_PATH=/usr/local/cuda-12.0 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+CUDA_PATH=/usr/local/cuda-12.8 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 

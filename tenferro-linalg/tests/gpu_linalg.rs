@@ -473,7 +473,7 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_gpu_eig_returns_unsupported_error() {
     if !gpu_available() {
         eprintln!("skipping test_gpu_eig_returns_unsupported_error — no CUDA device found");

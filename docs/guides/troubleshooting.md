@@ -6,8 +6,8 @@ If a CUDA run fails while loading cuTENSOR, cuSOLVER, or cuBLAS, first check
 that the CUDA runtime libraries are on the dynamic-linker path:
 
 ```bash
-CUDA_PATH=/usr/local/cuda-12.0
-LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:$LD_LIBRARY_PATH
+CUDA_PATH=/usr/local/cuda-12.8
+LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
 ```
 
 For non-standard installs, set the exact library paths:
