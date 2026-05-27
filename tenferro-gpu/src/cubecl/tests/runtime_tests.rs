@@ -17,7 +17,7 @@ fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
 macro_rules! gpu_test {
     ($name:ident, $body:expr) => {
         #[test]
-        #[ignore = "requires CUDA 12+ GPU"]
+        #[ignore = "requires CUDA 12.8+ GPU"]
         fn $name() {
             if !gpu_available() {
                 eprintln!("skipping {} — no CUDA device found", stringify!($name));

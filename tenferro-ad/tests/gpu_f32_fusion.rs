@@ -16,7 +16,7 @@ fn upload_traced(backend: &CubeclBackend, tensor: &Tensor) -> TracedTensor {
 }
 
 #[test]
-#[ignore = "requires CUDA 12+ GPU"]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_f32_gpu_fusion_chain_e2e() {
     if !gpu_available() {
         eprintln!("skipping test_f32_gpu_fusion_chain_e2e — no CUDA device found");

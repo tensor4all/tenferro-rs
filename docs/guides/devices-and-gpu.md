@@ -72,8 +72,8 @@ cargo check -p tenferro-gpu --features cuda --example cuda_quickstart
 Run it on a configured CUDA machine:
 
 ```bash
-CUDA_PATH=/usr/local/cuda-12.0 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.0/lib64:$LD_LIBRARY_PATH \
+CUDA_PATH=/usr/local/cuda-12.8 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH \
   cargo run -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
