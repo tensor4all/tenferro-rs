@@ -593,8 +593,7 @@ than overloading runtime graph construction.
 
 Only AD rules are process-global. The implementation uses a process-local
 `OnceLock<RwLock<HashMap<&'static str, Arc<dyn ExtensionAdRule>>>>`, keyed by
-`family_id`. New extension crates SHOULD register a ChainRules-style rule with
-`register_extension_chain_rule`; advanced code MAY use the low-level
+`family_id`. New extension crates register an `ExtensionAdRule` with
 `register_extension_rule`.
 
 Double-registration under the same `family_id` MUST be rejected with
@@ -643,41 +642,11 @@ graph-building or execution work begins on the `family_id` they added.
 
 ## 10. AD API surface
 
-### Preferred ChainRules-style API
-
-Extension AD is registered independently from the primal op. New
-extension crates SHOULD use `register_extension_chain_rule` and implement
-`ExtensionChainRule`:
-
-```rust
-pub trait ExtensionChainRule: Debug + Send + Sync + 'static {
-    fn family_id(&self) -> &'static str;
-
-    fn frule(&self, op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()>;
-
-    fn rrule(&self, op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()>;
-}
-```
-
-`FruleBuilder` exposes primal inputs and input tangents through
-`primal(i)` and `tangent(i)`, and records output tangents through
-`set_output_tangent(i, value)`. `RRuleBuilder` exposes primal inputs and
-output cotangents through `primal(i)` and `cotangent(i)`, and records input
-cotangents through `set_input_cotangent(i, value)`.
-
-The builders may emit any core `StdTensorOp` through `emit`, convenience
-helpers such as `add`, `mul`, `reduce_sum_all`, and registered extension ops
-through `apply_extension`. They intentionally hide `LocalValId`; extension
-authors pass opaque `AdValue` handles between builder methods.
-
-### Low-level adapter API
-
-The ChainRules-style API is adapted to the lower-level
-`register_extension_rule(Arc<dyn ExtensionAdRule>)` registry. Advanced code may
-implement `ExtensionAdRule` directly when it needs exact control over
-`FragmentBuilder`, `OpEmitter`, `LocalValId`, or `ValRef`. Rule signatures
-mirror `PrimitiveOp::try_linearize` and `PrimitiveOp::try_transpose_rule` and
-return `ADRuleResult<_>` so missing rules can propagate without panic:
+Extension AD is registered independently from the primal op. Extension crates
+implement `ExtensionAdRule` and register it with
+`register_extension_rule(Arc<dyn ExtensionAdRule>)`. Rule signatures mirror
+`PrimitiveOp::try_linearize` and `PrimitiveOp::try_transpose_rule` and return
+`ADRuleResult<_>` so missing rules can propagate without panic:
 
 ```rust
 pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
@@ -705,15 +674,14 @@ pub trait ExtensionAdRule: Debug + Send + Sync + 'static {
 }
 ```
 
-In both APIs, the `op` argument is the concrete extension payload as a trait
-object. Rules that need payload parameters should downcast via `op.as_any()`.
+The `op` argument is the concrete extension payload as a trait object. Rules
+that need payload parameters should downcast via `op.as_any()`.
 
 ### AD closure
 
-`frule`, `rrule`, `linearize`, and `transpose_rule` may emit core
-`StdTensorOp` values and `StdTensorOp::Extension` values. Emitted extension
-families MUST have their own registered `ExtensionChainRule` or
-`ExtensionAdRule` before a subsequent AD pass reaches them.
+`linearize` and `transpose_rule` may emit core `StdTensorOp` values and
+`StdTensorOp::Extension` values. Emitted extension families MUST have their
+own registered `ExtensionAdRule` before a subsequent AD pass reaches them.
 This keeps out-of-tree operations in the same compute graph while preserving
 the `PrimitiveOp` closure invariant at the `StdTensorOp` carrier level.
 
@@ -741,7 +709,7 @@ extension's AD rules.
 ### Failure signature
 
 - Dispatcher reaching a `StdTensorOp::Extension` variant for an
-  `family_id` with no registered `ExtensionChainRule` or `ExtensionAdRule` returns
+  `family_id` with no registered `ExtensionAdRule` returns
   `ADRuleError::Unsupported` with the family ID and rule kind.
 
 ---
@@ -809,7 +777,7 @@ these error types / behaviours in the listed scenarios.
 | Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::backend_failure(...)` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD rules (`frule` / `rrule`, or low-level `linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
+| AD rules (`linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
 | Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
@@ -955,19 +923,35 @@ AD registration:
 #[derive(Debug)]
 struct FusedTropicalDotGeneralRule;
 
-impl ExtensionChainRule for FusedTropicalDotGeneralRule {
+impl ExtensionAdRule for FusedTropicalDotGeneralRule {
     fn family_id(&self) -> &'static str {
         "tenferro-ext-tropical.fused_dot_general.v1"
     }
 
-    fn frule(&self, op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
         let op = op.as_any().downcast_ref::<FusedTropicalDotGeneral>().unwrap();
         // Sketch only; the real implementation lives in tenferro-ext-tropical.
         // Emit a tangent graph using core StdTensorOp values.
         todo!("emit the tropical JVP graph for op.config");
     }
 
-    fn rrule(&self, op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
+    fn transpose_rule(
+        &self,
+        op: &dyn ExtensionOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
         let op = op.as_any().downcast_ref::<FusedTropicalDotGeneral>().unwrap();
         // Sketch only. Scatter or indicator-mask the incoming cotangent
         // back to lhs and rhs cotangents using core StdTensorOp values.
@@ -981,9 +965,7 @@ Registration:
 ```rust
 // In tenferro-ext-tropical/src/lib.rs:
 pub fn register() -> Result<(), RegistrationError> {
-    tenferro_ad::extension::register_extension_chain_rule(
-        Arc::new(FusedTropicalDotGeneralRule),
-    )
+    tenferro_ad::extension::register_extension_rule(Arc::new(FusedTropicalDotGeneralRule))
 }
 ```
 

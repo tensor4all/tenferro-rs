@@ -28,260 +28,316 @@ pub(crate) type TransposeFn = fn(
     &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 
-pub(crate) struct PrimitiveAdRule {
-    pub(crate) kind: PrimitiveOpKind,
-    pub(crate) linearize: LinearizeFn,
-    pub(crate) transpose: TransposeFn,
+pub(crate) trait PrimitiveAdRule: Send + Sync {
+    fn kind(&self) -> PrimitiveOpKind;
+
+    fn linearize(
+        &self,
+        op: &StdTensorOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
+
+    fn transpose_rule(
+        &self,
+        op: &StdTensorOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>>;
 }
 
-pub(crate) fn primitive_ad_rule(kind: PrimitiveOpKind) -> Option<&'static PrimitiveAdRule> {
-    PRIMITIVE_AD_RULES.iter().find(|rule| rule.kind == kind)
+struct FunctionPrimitiveAdRule {
+    kind: PrimitiveOpKind,
+    linearize: LinearizeFn,
+    transpose_rule: TransposeFn,
+}
+
+impl PrimitiveAdRule for FunctionPrimitiveAdRule {
+    fn kind(&self) -> PrimitiveOpKind {
+        self.kind
+    }
+
+    fn linearize(
+        &self,
+        op: &StdTensorOp,
+        builder: &mut FragmentBuilder<StdTensorOp>,
+        primal_in: &[GlobalValKey<StdTensorOp>],
+        primal_out: &[GlobalValKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        (self.linearize)(op, builder, primal_in, primal_out, tangent_in, ctx)
+    }
+
+    fn transpose_rule(
+        &self,
+        op: &StdTensorOp,
+        emitter: &mut dyn OpEmitter<StdTensorOp>,
+        cotangent_out: &[Option<LocalValId>],
+        inputs: &[ValRef<StdTensorOp>],
+        mode: &OpMode,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValId>>> {
+        (self.transpose_rule)(op, emitter, cotangent_out, inputs, mode, ctx)
+    }
+}
+
+pub(crate) fn primitive_ad_rule(kind: PrimitiveOpKind) -> Option<&'static dyn PrimitiveAdRule> {
+    let rule = PRIMITIVE_AD_RULES[kind.as_index()];
+    debug_assert_eq!(rule.kind(), kind);
+    Some(rule)
 }
 
 pub(crate) fn missing_rule(kind: PrimitiveOpKind, rule: ADRuleKind) -> ADRuleError {
     ADRuleError::unsupported(format!("missing primitive AD rule for {kind:?}"), rule)
 }
 
-static PRIMITIVE_AD_RULES: &[PrimitiveAdRule] = &[
-    PrimitiveAdRule {
+static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT] = [
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Add,
         linearize: linearize_add,
-        transpose: transpose_add,
+        transpose_rule: transpose_add,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Mul,
         linearize: linearize_mul,
-        transpose: transpose_mul,
+        transpose_rule: transpose_mul,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Neg,
         linearize: linearize_neg,
-        transpose: transpose_neg,
+        transpose_rule: transpose_neg,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Conj,
         linearize: linearize_conj,
-        transpose: transpose_conj,
+        transpose_rule: transpose_conj,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Div,
         linearize: linearize_div,
-        transpose: transpose_div,
+        transpose_rule: transpose_div,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Abs,
         linearize: linearize_abs,
-        transpose: transpose_abs,
+        transpose_rule: transpose_abs,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sign,
         linearize: linearize_sign,
-        transpose: transpose_sign,
+        transpose_rule: transpose_sign,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Maximum,
         linearize: linearize_maximum,
-        transpose: transpose_maximum,
+        transpose_rule: transpose_maximum,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Minimum,
         linearize: linearize_minimum,
-        transpose: transpose_minimum,
+        transpose_rule: transpose_minimum,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Compare,
         linearize: linearize_compare,
-        transpose: transpose_compare,
+        transpose_rule: transpose_compare,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Select,
         linearize: linearize_select,
-        transpose: transpose_select,
+        transpose_rule: transpose_select,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Clamp,
         linearize: linearize_clamp,
-        transpose: transpose_clamp,
+        transpose_rule: transpose_clamp,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Exp,
         linearize: linearize_exp,
-        transpose: transpose_exp,
+        transpose_rule: transpose_exp,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Log,
         linearize: linearize_log,
-        transpose: transpose_log,
+        transpose_rule: transpose_log,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sin,
         linearize: linearize_sin,
-        transpose: transpose_sin,
+        transpose_rule: transpose_sin,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Cos,
         linearize: linearize_cos,
-        transpose: transpose_cos,
+        transpose_rule: transpose_cos,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Tanh,
         linearize: linearize_tanh,
-        transpose: transpose_tanh,
+        transpose_rule: transpose_tanh,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Sqrt,
         linearize: linearize_sqrt,
-        transpose: transpose_sqrt,
+        transpose_rule: transpose_sqrt,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Rsqrt,
         linearize: linearize_rsqrt,
-        transpose: transpose_rsqrt,
+        transpose_rule: transpose_rsqrt,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Pow,
         linearize: linearize_pow,
-        transpose: transpose_pow,
+        transpose_rule: transpose_pow,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Expm1,
         linearize: linearize_expm1,
-        transpose: transpose_expm1,
+        transpose_rule: transpose_expm1,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Log1p,
         linearize: linearize_log1p,
-        transpose: transpose_log1p,
+        transpose_rule: transpose_log1p,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DotGeneral,
         linearize: linearize_dot_general,
-        transpose: transpose_dot_general,
+        transpose_rule: transpose_dot_general,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceSum,
         linearize: linearize_reduce_sum,
-        transpose: transpose_reduce_sum,
+        transpose_rule: transpose_reduce_sum,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceProd,
         linearize: linearize_reduce_prod,
-        transpose: transpose_reduce_prod,
+        transpose_rule: transpose_reduce_prod,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceMax,
         linearize: linearize_reduce_max,
-        transpose: transpose_reduce_max,
+        transpose_rule: transpose_reduce_max,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ReduceMin,
         linearize: linearize_reduce_min,
-        transpose: transpose_reduce_min,
+        transpose_rule: transpose_reduce_min,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Transpose,
         linearize: linearize_transpose,
-        transpose: transpose_transpose,
+        transpose_rule: transpose_transpose,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Reshape,
         linearize: linearize_reshape,
-        transpose: transpose_reshape,
+        transpose_rule: transpose_reshape,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::BroadcastInDim,
         linearize: linearize_broadcast_in_dim,
-        transpose: transpose_broadcast_in_dim,
+        transpose_rule: transpose_broadcast_in_dim,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Convert,
         linearize: linearize_convert,
-        transpose: transpose_convert,
+        transpose_rule: transpose_convert,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ExtractDiag,
         linearize: linearize_extract_diag,
-        transpose: transpose_extract_diag,
+        transpose_rule: transpose_extract_diag,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::EmbedDiag,
         linearize: linearize_embed_diag,
-        transpose: transpose_embed_diag,
+        transpose_rule: transpose_embed_diag,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Tril,
         linearize: linearize_tril,
-        transpose: transpose_tril,
+        transpose_rule: transpose_tril,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Triu,
         linearize: linearize_triu,
-        transpose: transpose_triu,
+        transpose_rule: transpose_triu,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Gather,
         linearize: linearize_gather,
-        transpose: transpose_gather,
+        transpose_rule: transpose_gather,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::GatherDynamicSliceSizes,
         linearize: linearize_gather_dynamic_slice_sizes,
-        transpose: transpose_gather_dynamic_slice_sizes,
+        transpose_rule: transpose_gather_dynamic_slice_sizes,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Scatter,
         linearize: linearize_scatter,
-        transpose: transpose_scatter,
+        transpose_rule: transpose_scatter,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Slice,
         linearize: linearize_slice,
-        transpose: transpose_slice,
+        transpose_rule: transpose_slice,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicSlice,
         linearize: linearize_dynamic_slice,
-        transpose: transpose_dynamic_slice,
+        transpose_rule: transpose_dynamic_slice,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicUpdateSlice,
         linearize: linearize_dynamic_update_slice,
-        transpose: transpose_dynamic_update_slice,
+        transpose_rule: transpose_dynamic_update_slice,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Pad,
         linearize: linearize_pad,
-        transpose: transpose_pad,
+        transpose_rule: transpose_pad,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Concatenate,
         linearize: linearize_concatenate,
-        transpose: transpose_concatenate,
+        transpose_rule: transpose_concatenate,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Reverse,
         linearize: linearize_reverse,
-        transpose: transpose_reverse,
+        transpose_rule: transpose_reverse,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::ShapeOf,
         linearize: linearize_shape_of,
-        transpose: transpose_shape_of,
+        transpose_rule: transpose_shape_of,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DynamicTruncate,
         linearize: linearize_dynamic_truncate,
-        transpose: transpose_dynamic_truncate,
+        transpose_rule: transpose_dynamic_truncate,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::PadToMatch,
         linearize: linearize_pad_to_match,
-        transpose: transpose_pad_to_match,
+        transpose_rule: transpose_pad_to_match,
     },
-    PrimitiveAdRule {
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::Constant,
         linearize: linearize_constant,
-        transpose: transpose_constant,
+        transpose_rule: transpose_constant,
     },
 ];
 

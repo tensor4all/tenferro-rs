@@ -146,6 +146,32 @@ macro_rules! define_kind {
         pub enum PrimitiveOpKind {
             $( $variant, )*
         }
+
+        impl PrimitiveOpKind {
+            /// Number of primitive operation kinds in the catalog.
+            ///
+            /// # Examples
+            ///
+            /// ```rust
+            /// use tenferro_core_ops::PrimitiveOpKind;
+            ///
+            /// assert!(PrimitiveOpKind::COUNT > 0);
+            /// ```
+            pub const COUNT: usize = <[()]>::len(&[$({ let _ = stringify!($variant); () }),*]);
+
+            /// Return this kind's dense catalog index.
+            ///
+            /// # Examples
+            ///
+            /// ```rust
+            /// use tenferro_core_ops::PrimitiveOpKind;
+            ///
+            /// assert_eq!(PrimitiveOpKind::Add.as_index(), 0);
+            /// ```
+            pub const fn as_index(self) -> usize {
+                self as usize
+            }
+        }
     };
 }
 
@@ -201,4 +227,573 @@ primitive_ops!(define_descriptors);
 /// ```
 pub fn all_primitive_descriptors() -> &'static [PrimitiveOpDescriptor] {
     DESCRIPTORS
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! define_std_tensor_op {
+    () => {
+        #[derive(Clone, Debug)]
+        pub enum StdTensorOp {
+            // Semiring arithmetic core
+            Add,
+            Mul,
+            Neg,
+            Conj,
+            DotGeneral {
+                config: DotGeneralConfig,
+            },
+            Transpose {
+                perm: Vec<usize>,
+            },
+            Reshape {
+                to_shape: Vec<DimExpr>,
+            },
+            BroadcastInDim {
+                shape: Vec<DimExpr>,
+                dims: Vec<usize>,
+            },
+            Convert {
+                from: DType,
+                to: DType,
+            },
+            Constant {
+                dtype: DType,
+                bytes: Vec<u8>,
+            },
+            ReduceSum {
+                axes: Vec<usize>,
+            },
+
+            // Elementwise (non-semiring)
+            Div,
+            Abs,
+            Sign,
+            Maximum,
+            Minimum,
+            Compare(CompareDir),
+            Select,
+            Clamp,
+
+            // Analytic
+            Exp,
+            Log,
+            Sin,
+            Cos,
+            Tanh,
+            Sqrt,
+            Rsqrt,
+            Pow,
+            Expm1,
+            Log1p,
+
+            // Diagonal extraction / embedding (AD-closed pair)
+            ExtractDiag {
+                axis_a: usize,
+                axis_b: usize,
+            },
+            EmbedDiag {
+                axis_a: usize,
+                axis_b: usize,
+            },
+            Tril {
+                k: i64,
+            },
+            Triu {
+                k: i64,
+            },
+
+            // Indexing
+            Gather(GatherConfig),
+            GatherDynamicSliceSizes {
+                offset_dims: Vec<usize>,
+                collapsed_slice_dims: Vec<usize>,
+                start_index_map: Vec<usize>,
+                index_vector_dim: usize,
+                slice_sizes: Vec<DimExpr>,
+            },
+            Scatter(ScatterConfig),
+            Slice(SliceConfig),
+            DynamicSlice {
+                slice_sizes: Vec<usize>,
+            },
+            DynamicUpdateSlice,
+            Pad(PadConfig),
+            Concatenate {
+                axis: usize,
+                n_inputs: usize,
+            },
+            Reverse {
+                axes: Vec<usize>,
+            },
+            ShapeOf {
+                axis: usize,
+            },
+            DynamicTruncate {
+                axis: usize,
+            },
+            PadToMatch {
+                axis: usize,
+            },
+
+            // Reductions
+            ReduceProd {
+                axes: Vec<usize>,
+            },
+            ReduceMax {
+                axes: Vec<usize>,
+            },
+            ReduceMin {
+                axes: Vec<usize>,
+            },
+
+            /// Out-of-tree extension carrier.
+            ///
+            /// See [`crate::ext_op`] and `docs/spec/extension-op.md`. Identity,
+            /// hashing, equality, arity, shape inference, and AD rules are delegated
+            /// to the inner [`ExtensionOp`] trait object.
+            Extension(Arc<dyn ExtensionOp>),
+        }
+
+        impl StdTensorOp {
+            /// Return the core primitive catalog kind for this graph operation.
+            ///
+            /// Extension operations do not claim a core primitive kind; they are
+            /// dispatched through their extension family id instead.
+            ///
+            /// # Examples
+            ///
+            /// ```rust
+            /// use tenferro_core_ops::PrimitiveOpKind;
+            /// use tenferro_ops::std_tensor_op::StdTensorOp;
+            ///
+            /// assert_eq!(StdTensorOp::Add.primitive_kind(), Some(PrimitiveOpKind::Add));
+            /// ```
+            pub fn primitive_kind(&self) -> Option<$crate::PrimitiveOpKind> {
+                let kind = match self {
+                    Self::Add => $crate::PrimitiveOpKind::Add,
+                    Self::Mul => $crate::PrimitiveOpKind::Mul,
+                    Self::Neg => $crate::PrimitiveOpKind::Neg,
+                    Self::Conj => $crate::PrimitiveOpKind::Conj,
+                    Self::DotGeneral { .. } => $crate::PrimitiveOpKind::DotGeneral,
+                    Self::Transpose { .. } => $crate::PrimitiveOpKind::Transpose,
+                    Self::Reshape { .. } => $crate::PrimitiveOpKind::Reshape,
+                    Self::BroadcastInDim { .. } => $crate::PrimitiveOpKind::BroadcastInDim,
+                    Self::Convert { .. } => $crate::PrimitiveOpKind::Convert,
+                    Self::Constant { .. } => $crate::PrimitiveOpKind::Constant,
+                    Self::ReduceSum { .. } => $crate::PrimitiveOpKind::ReduceSum,
+                    Self::Div => $crate::PrimitiveOpKind::Div,
+                    Self::Abs => $crate::PrimitiveOpKind::Abs,
+                    Self::Sign => $crate::PrimitiveOpKind::Sign,
+                    Self::Maximum => $crate::PrimitiveOpKind::Maximum,
+                    Self::Minimum => $crate::PrimitiveOpKind::Minimum,
+                    Self::Compare(_) => $crate::PrimitiveOpKind::Compare,
+                    Self::Select => $crate::PrimitiveOpKind::Select,
+                    Self::Clamp => $crate::PrimitiveOpKind::Clamp,
+                    Self::Exp => $crate::PrimitiveOpKind::Exp,
+                    Self::Log => $crate::PrimitiveOpKind::Log,
+                    Self::Sin => $crate::PrimitiveOpKind::Sin,
+                    Self::Cos => $crate::PrimitiveOpKind::Cos,
+                    Self::Tanh => $crate::PrimitiveOpKind::Tanh,
+                    Self::Sqrt => $crate::PrimitiveOpKind::Sqrt,
+                    Self::Rsqrt => $crate::PrimitiveOpKind::Rsqrt,
+                    Self::Pow => $crate::PrimitiveOpKind::Pow,
+                    Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
+                    Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                    Self::ExtractDiag { .. } => $crate::PrimitiveOpKind::ExtractDiag,
+                    Self::EmbedDiag { .. } => $crate::PrimitiveOpKind::EmbedDiag,
+                    Self::Tril { .. } => $crate::PrimitiveOpKind::Tril,
+                    Self::Triu { .. } => $crate::PrimitiveOpKind::Triu,
+                    Self::Gather(_) => $crate::PrimitiveOpKind::Gather,
+                    Self::GatherDynamicSliceSizes { .. } => {
+                        $crate::PrimitiveOpKind::GatherDynamicSliceSizes
+                    }
+                    Self::Scatter(_) => $crate::PrimitiveOpKind::Scatter,
+                    Self::Slice(_) => $crate::PrimitiveOpKind::Slice,
+                    Self::DynamicSlice { .. } => $crate::PrimitiveOpKind::DynamicSlice,
+                    Self::DynamicUpdateSlice => $crate::PrimitiveOpKind::DynamicUpdateSlice,
+                    Self::Pad(_) => $crate::PrimitiveOpKind::Pad,
+                    Self::Concatenate { .. } => $crate::PrimitiveOpKind::Concatenate,
+                    Self::Reverse { .. } => $crate::PrimitiveOpKind::Reverse,
+                    Self::ShapeOf { .. } => $crate::PrimitiveOpKind::ShapeOf,
+                    Self::DynamicTruncate { .. } => $crate::PrimitiveOpKind::DynamicTruncate,
+                    Self::PadToMatch { .. } => $crate::PrimitiveOpKind::PadToMatch,
+                    Self::ReduceProd { .. } => $crate::PrimitiveOpKind::ReduceProd,
+                    Self::ReduceMax { .. } => $crate::PrimitiveOpKind::ReduceMax,
+                    Self::ReduceMin { .. } => $crate::PrimitiveOpKind::ReduceMin,
+                    Self::Extension(_) => return None,
+                };
+                Some(kind)
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! define_elementwise_fusion_op {
+    () => {
+        /// Elementwise op kinds supported by backend fusion implementations.
+        #[doc(hidden)]
+        #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+        pub enum ElementwiseFusionOp {
+            Add,
+            Multiply,
+            Negate,
+            Conj,
+            Divide,
+            Abs,
+            Maximum,
+            Minimum,
+            Clamp,
+            Exp,
+            Log,
+            Sin,
+            Cos,
+            Tanh,
+            Sqrt,
+            Rsqrt,
+            Pow,
+            Expm1,
+            Log1p,
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! define_exec_op {
+    () => {
+        #[derive(Clone, Debug)]
+        pub enum ExecOp {
+            Transpose {
+                perm: Vec<usize>,
+            },
+            Reshape {
+                shape: Vec<DimExpr>,
+            },
+            BroadcastInDim {
+                shape: Vec<DimExpr>,
+                dims: Vec<usize>,
+            },
+            Convert {
+                to: DType,
+            },
+            Constant {
+                dtype: DType,
+                bytes: Vec<u8>,
+            },
+            DotGeneral(DotGeneralConfig),
+            DotGeneralWithConj {
+                config: DotGeneralConfig,
+                lhs_conj: bool,
+                rhs_conj: bool,
+            },
+            ReduceSum {
+                axes: Vec<usize>,
+            },
+            ExtractDiag {
+                axis_a: usize,
+                axis_b: usize,
+            },
+            EmbedDiag {
+                axis_a: usize,
+                axis_b: usize,
+            },
+            Tril {
+                k: i64,
+            },
+            Triu {
+                k: i64,
+            },
+            Add,
+            Multiply,
+            Negate,
+            Conj,
+            Divide,
+            Abs,
+            Sign,
+            Maximum,
+            Minimum,
+            Compare(CompareDir),
+            Select,
+            Clamp,
+            Exp,
+            Log,
+            Sin,
+            Cos,
+            Tanh,
+            Sqrt,
+            Rsqrt,
+            Pow,
+            Expm1,
+            Log1p,
+            Gather(GatherConfig),
+            GatherDynamicSliceSizes {
+                offset_dims: Vec<usize>,
+                collapsed_slice_dims: Vec<usize>,
+                start_index_map: Vec<usize>,
+                index_vector_dim: usize,
+                slice_sizes: Vec<DimExpr>,
+            },
+            Scatter(ScatterConfig),
+            Slice(SliceConfig),
+            DynamicSlice {
+                slice_sizes: Vec<usize>,
+            },
+            DynamicUpdateSlice,
+            Pad(PadConfig),
+            Concatenate {
+                axis: usize,
+            },
+            Reverse {
+                axes: Vec<usize>,
+            },
+            ShapeOf {
+                axis: usize,
+            },
+            DynamicTruncate {
+                axis: usize,
+            },
+            PadToMatch {
+                axis: usize,
+            },
+            ReduceProd {
+                axes: Vec<usize>,
+            },
+            ReduceMax {
+                axes: Vec<usize>,
+            },
+            ReduceMin {
+                axes: Vec<usize>,
+            },
+            /// Out-of-tree extension carrier in the execution IR.
+            ///
+            /// Payload and dispatch are defined by the inner [`ExtensionOp`]. The
+            /// execution pipeline treats extensions as single-instruction FFI
+            /// boundaries (spec Section 8): no elementwise fusion, and dispatch is
+            /// routed through the executor's registered extension runtime.
+            Extension(Arc<dyn ExtensionOp>),
+        }
+
+        impl ExecOp {
+            pub(crate) fn primitive_kind(&self) -> Option<$crate::PrimitiveOpKind> {
+                let kind = match self {
+                    Self::Transpose { .. } => $crate::PrimitiveOpKind::Transpose,
+                    Self::Reshape { .. } => $crate::PrimitiveOpKind::Reshape,
+                    Self::BroadcastInDim { .. } => $crate::PrimitiveOpKind::BroadcastInDim,
+                    Self::Convert { .. } => $crate::PrimitiveOpKind::Convert,
+                    Self::Constant { .. } => $crate::PrimitiveOpKind::Constant,
+                    Self::DotGeneral(_) | Self::DotGeneralWithConj { .. } => {
+                        $crate::PrimitiveOpKind::DotGeneral
+                    }
+                    Self::ReduceSum { .. } => $crate::PrimitiveOpKind::ReduceSum,
+                    Self::ExtractDiag { .. } => $crate::PrimitiveOpKind::ExtractDiag,
+                    Self::EmbedDiag { .. } => $crate::PrimitiveOpKind::EmbedDiag,
+                    Self::Tril { .. } => $crate::PrimitiveOpKind::Tril,
+                    Self::Triu { .. } => $crate::PrimitiveOpKind::Triu,
+                    Self::Add => $crate::PrimitiveOpKind::Add,
+                    Self::Multiply => $crate::PrimitiveOpKind::Mul,
+                    Self::Negate => $crate::PrimitiveOpKind::Neg,
+                    Self::Conj => $crate::PrimitiveOpKind::Conj,
+                    Self::Divide => $crate::PrimitiveOpKind::Div,
+                    Self::Abs => $crate::PrimitiveOpKind::Abs,
+                    Self::Sign => $crate::PrimitiveOpKind::Sign,
+                    Self::Maximum => $crate::PrimitiveOpKind::Maximum,
+                    Self::Minimum => $crate::PrimitiveOpKind::Minimum,
+                    Self::Compare(_) => $crate::PrimitiveOpKind::Compare,
+                    Self::Select => $crate::PrimitiveOpKind::Select,
+                    Self::Clamp => $crate::PrimitiveOpKind::Clamp,
+                    Self::Exp => $crate::PrimitiveOpKind::Exp,
+                    Self::Log => $crate::PrimitiveOpKind::Log,
+                    Self::Sin => $crate::PrimitiveOpKind::Sin,
+                    Self::Cos => $crate::PrimitiveOpKind::Cos,
+                    Self::Tanh => $crate::PrimitiveOpKind::Tanh,
+                    Self::Sqrt => $crate::PrimitiveOpKind::Sqrt,
+                    Self::Rsqrt => $crate::PrimitiveOpKind::Rsqrt,
+                    Self::Pow => $crate::PrimitiveOpKind::Pow,
+                    Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
+                    Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                    Self::Gather(_) => $crate::PrimitiveOpKind::Gather,
+                    Self::GatherDynamicSliceSizes { .. } => {
+                        $crate::PrimitiveOpKind::GatherDynamicSliceSizes
+                    }
+                    Self::Scatter(_) => $crate::PrimitiveOpKind::Scatter,
+                    Self::Slice(_) => $crate::PrimitiveOpKind::Slice,
+                    Self::DynamicSlice { .. } => $crate::PrimitiveOpKind::DynamicSlice,
+                    Self::DynamicUpdateSlice => $crate::PrimitiveOpKind::DynamicUpdateSlice,
+                    Self::Pad(_) => $crate::PrimitiveOpKind::Pad,
+                    Self::Concatenate { .. } => $crate::PrimitiveOpKind::Concatenate,
+                    Self::Reverse { .. } => $crate::PrimitiveOpKind::Reverse,
+                    Self::ShapeOf { .. } => $crate::PrimitiveOpKind::ShapeOf,
+                    Self::DynamicTruncate { .. } => $crate::PrimitiveOpKind::DynamicTruncate,
+                    Self::PadToMatch { .. } => $crate::PrimitiveOpKind::PadToMatch,
+                    Self::ReduceProd { .. } => $crate::PrimitiveOpKind::ReduceProd,
+                    Self::ReduceMax { .. } => $crate::PrimitiveOpKind::ReduceMax,
+                    Self::ReduceMin { .. } => $crate::PrimitiveOpKind::ReduceMin,
+                    Self::Extension(_) => return None,
+                };
+                Some(kind)
+            }
+
+            pub(crate) fn from_std_tensor_op(
+                op: &tenferro_ops::std_tensor_op::StdTensorOp,
+            ) -> Self {
+                match op {
+                    tenferro_ops::std_tensor_op::StdTensorOp::Add => Self::Add,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Mul => Self::Multiply,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Neg => Self::Negate,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Conj => Self::Conj,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Div => Self::Divide,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Abs => Self::Abs,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Sign => Self::Sign,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Maximum => Self::Maximum,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Minimum => Self::Minimum,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Compare(dir) => {
+                        Self::Compare(dir.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Select => Self::Select,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Clamp => Self::Clamp,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Exp => Self::Exp,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Log => Self::Log,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Sin => Self::Sin,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Cos => Self::Cos,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Tanh => Self::Tanh,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Sqrt => Self::Sqrt,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Rsqrt => Self::Rsqrt,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Pow => Self::Pow,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Expm1 => Self::Expm1,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Log1p => Self::Log1p,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Transpose { perm } => {
+                        Self::Transpose { perm: perm.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Reshape { to_shape } => {
+                        Self::Reshape {
+                            shape: to_shape.clone(),
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::BroadcastInDim { shape, dims } => {
+                        Self::BroadcastInDim {
+                            shape: shape.clone(),
+                            dims: dims.clone(),
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Convert { to, .. } => {
+                        Self::Convert { to: *to }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Constant { dtype, bytes } => {
+                        Self::Constant {
+                            dtype: *dtype,
+                            bytes: bytes.clone(),
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::DotGeneral { config } => {
+                        Self::DotGeneral(config.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ReduceSum { axes } => {
+                        Self::ReduceSum { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ReduceProd { axes } => {
+                        Self::ReduceProd { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ReduceMax { axes } => {
+                        Self::ReduceMax { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ReduceMin { axes } => {
+                        Self::ReduceMin { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ExtractDiag { axis_a, axis_b } => {
+                        Self::ExtractDiag {
+                            axis_a: *axis_a,
+                            axis_b: *axis_b,
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::EmbedDiag { axis_a, axis_b } => {
+                        Self::EmbedDiag {
+                            axis_a: *axis_a,
+                            axis_b: *axis_b,
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Tril { k } => Self::Tril { k: *k },
+                    tenferro_ops::std_tensor_op::StdTensorOp::Triu { k } => Self::Triu { k: *k },
+                    tenferro_ops::std_tensor_op::StdTensorOp::Gather(config) => {
+                        Self::Gather(config.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes {
+                        offset_dims,
+                        collapsed_slice_dims,
+                        start_index_map,
+                        index_vector_dim,
+                        slice_sizes,
+                    } => Self::GatherDynamicSliceSizes {
+                        offset_dims: offset_dims.clone(),
+                        collapsed_slice_dims: collapsed_slice_dims.clone(),
+                        start_index_map: start_index_map.clone(),
+                        index_vector_dim: *index_vector_dim,
+                        slice_sizes: slice_sizes.clone(),
+                    },
+                    tenferro_ops::std_tensor_op::StdTensorOp::Scatter(config) => {
+                        Self::Scatter(config.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Slice(config) => {
+                        Self::Slice(config.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::DynamicSlice { slice_sizes } => {
+                        Self::DynamicSlice {
+                            slice_sizes: slice_sizes.clone(),
+                        }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::DynamicUpdateSlice => {
+                        Self::DynamicUpdateSlice
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Pad(config) => {
+                        Self::Pad(config.clone())
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Concatenate { axis, .. } => {
+                        Self::Concatenate { axis: *axis }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Reverse { axes } => {
+                        Self::Reverse { axes: axes.clone() }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::ShapeOf { axis } => {
+                        Self::ShapeOf { axis: *axis }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::DynamicTruncate { axis } => {
+                        Self::DynamicTruncate { axis: *axis }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::PadToMatch { axis } => {
+                        Self::PadToMatch { axis: *axis }
+                    }
+                    tenferro_ops::std_tensor_op::StdTensorOp::Extension(op) => {
+                        Self::Extension(op.clone())
+                    }
+                }
+            }
+
+            pub(crate) fn elementwise_fusion_op(&self) -> Option<ElementwiseFusionOp> {
+                match self {
+                    Self::Add => Some(ElementwiseFusionOp::Add),
+                    Self::Multiply => Some(ElementwiseFusionOp::Multiply),
+                    Self::Negate => Some(ElementwiseFusionOp::Negate),
+                    Self::Conj => Some(ElementwiseFusionOp::Conj),
+                    Self::Divide => Some(ElementwiseFusionOp::Divide),
+                    Self::Abs => Some(ElementwiseFusionOp::Abs),
+                    Self::Maximum => Some(ElementwiseFusionOp::Maximum),
+                    Self::Minimum => Some(ElementwiseFusionOp::Minimum),
+                    Self::Clamp => Some(ElementwiseFusionOp::Clamp),
+                    Self::Exp => Some(ElementwiseFusionOp::Exp),
+                    Self::Log => Some(ElementwiseFusionOp::Log),
+                    Self::Sin => Some(ElementwiseFusionOp::Sin),
+                    Self::Cos => Some(ElementwiseFusionOp::Cos),
+                    Self::Tanh => Some(ElementwiseFusionOp::Tanh),
+                    Self::Sqrt => Some(ElementwiseFusionOp::Sqrt),
+                    Self::Rsqrt => Some(ElementwiseFusionOp::Rsqrt),
+                    Self::Pow => Some(ElementwiseFusionOp::Pow),
+                    Self::Expm1 => Some(ElementwiseFusionOp::Expm1),
+                    Self::Log1p => Some(ElementwiseFusionOp::Log1p),
+                    _ => None,
+                }
+            }
+        }
+    };
 }

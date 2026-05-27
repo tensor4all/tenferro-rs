@@ -38,6 +38,30 @@ fn exec_op_maps_to_catalog_kind() {
 }
 
 #[test]
+fn exec_op_boilerplate_is_catalog_generated() {
+    let exec_source = include_str!("../exec.rs");
+    let compiler_source = include_str!("../compiler/mod.rs");
+    let segment_source = include_str!("../segment.rs");
+
+    assert!(
+        exec_source.contains("define_exec_op"),
+        "ExecOp variants and primitive_kind routing should be emitted from the catalog"
+    );
+    assert!(
+        !exec_source.contains("Self::Add => PrimitiveOpKind::Add"),
+        "ExecOp primitive_kind should not repeat per-op catalog routing by hand"
+    );
+    assert!(
+        !compiler_source.contains("fn std_to_exec_op"),
+        "StdTensorOp to ExecOp lowering should be catalog-generated, not a hand-written match"
+    );
+    assert!(
+        !segment_source.contains("fn map_exec_op_to_elementwise_fusion"),
+        "ExecOp to ElementwiseFusionOp mapping should be catalog-generated"
+    );
+}
+
+#[test]
 fn backend_dispatch_table_covers_all_backend_exec_ops() {
     let cases = backend_dispatch_cases();
     assert_eq!(cases.len(), BACKEND_DISPATCH_TABLE.len());

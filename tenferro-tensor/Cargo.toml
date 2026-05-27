@@ -28,6 +28,7 @@ libloading.workspace = true
 lru.workspace = true
 rayon = "1"
 strided-kernel.workspace = true
+tenferro-core-ops = { path = "../tenferro-core-ops" }
 thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }

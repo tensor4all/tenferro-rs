@@ -2,187 +2,19 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TypedTensor,
+    BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionOp, GatherConfig,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
 use crate::extension_runtime::ExtensionExecutor;
 
 mod dispatch;
 
-#[derive(Clone, Debug)]
-pub enum ExecOp {
-    Transpose {
-        perm: Vec<usize>,
-    },
-    Reshape {
-        shape: Vec<DimExpr>,
-    },
-    BroadcastInDim {
-        shape: Vec<DimExpr>,
-        dims: Vec<usize>,
-    },
-    Convert {
-        to: DType,
-    },
-    Constant {
-        dtype: DType,
-        bytes: Vec<u8>,
-    },
-    DotGeneral(DotGeneralConfig),
-    DotGeneralWithConj {
-        config: DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    },
-    ReduceSum {
-        axes: Vec<usize>,
-    },
-    ExtractDiag {
-        axis_a: usize,
-        axis_b: usize,
-    },
-    EmbedDiag {
-        axis_a: usize,
-        axis_b: usize,
-    },
-    Tril {
-        k: i64,
-    },
-    Triu {
-        k: i64,
-    },
-    Add,
-    Multiply,
-    Negate,
-    Conj,
-    Divide,
-    Abs,
-    Sign,
-    Maximum,
-    Minimum,
-    Compare(CompareDir),
-    Select,
-    Clamp,
-    Exp,
-    Log,
-    Sin,
-    Cos,
-    Tanh,
-    Sqrt,
-    Rsqrt,
-    Pow,
-    Expm1,
-    Log1p,
-    Gather(GatherConfig),
-    GatherDynamicSliceSizes {
-        offset_dims: Vec<usize>,
-        collapsed_slice_dims: Vec<usize>,
-        start_index_map: Vec<usize>,
-        index_vector_dim: usize,
-        slice_sizes: Vec<DimExpr>,
-    },
-    Scatter(ScatterConfig),
-    Slice(SliceConfig),
-    DynamicSlice {
-        slice_sizes: Vec<usize>,
-    },
-    DynamicUpdateSlice,
-    Pad(PadConfig),
-    Concatenate {
-        axis: usize,
-    },
-    Reverse {
-        axes: Vec<usize>,
-    },
-    ShapeOf {
-        axis: usize,
-    },
-    DynamicTruncate {
-        axis: usize,
-    },
-    PadToMatch {
-        axis: usize,
-    },
-    ReduceProd {
-        axes: Vec<usize>,
-    },
-    ReduceMax {
-        axes: Vec<usize>,
-    },
-    ReduceMin {
-        axes: Vec<usize>,
-    },
-    /// Out-of-tree extension carrier in the execution IR.
-    ///
-    /// Payload and dispatch are defined by the inner [`ExtensionOp`]. The
-    /// execution pipeline treats extensions as single-instruction FFI
-    /// boundaries (spec Section 8): no elementwise fusion, and dispatch is
-    /// routed through the executor's registered extension runtime.
-    Extension(Arc<dyn ExtensionOp>),
-}
-
-impl ExecOp {
-    pub(crate) fn primitive_kind(&self) -> Option<PrimitiveOpKind> {
-        let kind = match self {
-            Self::Transpose { .. } => PrimitiveOpKind::Transpose,
-            Self::Reshape { .. } => PrimitiveOpKind::Reshape,
-            Self::BroadcastInDim { .. } => PrimitiveOpKind::BroadcastInDim,
-            Self::Convert { .. } => PrimitiveOpKind::Convert,
-            Self::Constant { .. } => PrimitiveOpKind::Constant,
-            Self::DotGeneral(_) | Self::DotGeneralWithConj { .. } => PrimitiveOpKind::DotGeneral,
-            Self::ReduceSum { .. } => PrimitiveOpKind::ReduceSum,
-            Self::ExtractDiag { .. } => PrimitiveOpKind::ExtractDiag,
-            Self::EmbedDiag { .. } => PrimitiveOpKind::EmbedDiag,
-            Self::Tril { .. } => PrimitiveOpKind::Tril,
-            Self::Triu { .. } => PrimitiveOpKind::Triu,
-            Self::Add => PrimitiveOpKind::Add,
-            Self::Multiply => PrimitiveOpKind::Mul,
-            Self::Negate => PrimitiveOpKind::Neg,
-            Self::Conj => PrimitiveOpKind::Conj,
-            Self::Divide => PrimitiveOpKind::Div,
-            Self::Abs => PrimitiveOpKind::Abs,
-            Self::Sign => PrimitiveOpKind::Sign,
-            Self::Maximum => PrimitiveOpKind::Maximum,
-            Self::Minimum => PrimitiveOpKind::Minimum,
-            Self::Compare(_) => PrimitiveOpKind::Compare,
-            Self::Select => PrimitiveOpKind::Select,
-            Self::Clamp => PrimitiveOpKind::Clamp,
-            Self::Exp => PrimitiveOpKind::Exp,
-            Self::Log => PrimitiveOpKind::Log,
-            Self::Sin => PrimitiveOpKind::Sin,
-            Self::Cos => PrimitiveOpKind::Cos,
-            Self::Tanh => PrimitiveOpKind::Tanh,
-            Self::Sqrt => PrimitiveOpKind::Sqrt,
-            Self::Rsqrt => PrimitiveOpKind::Rsqrt,
-            Self::Pow => PrimitiveOpKind::Pow,
-            Self::Expm1 => PrimitiveOpKind::Expm1,
-            Self::Log1p => PrimitiveOpKind::Log1p,
-            Self::Gather(_) => PrimitiveOpKind::Gather,
-            Self::GatherDynamicSliceSizes { .. } => PrimitiveOpKind::GatherDynamicSliceSizes,
-            Self::Scatter(_) => PrimitiveOpKind::Scatter,
-            Self::Slice(_) => PrimitiveOpKind::Slice,
-            Self::DynamicSlice { .. } => PrimitiveOpKind::DynamicSlice,
-            Self::DynamicUpdateSlice => PrimitiveOpKind::DynamicUpdateSlice,
-            Self::Pad(_) => PrimitiveOpKind::Pad,
-            Self::Concatenate { .. } => PrimitiveOpKind::Concatenate,
-            Self::Reverse { .. } => PrimitiveOpKind::Reverse,
-            Self::ShapeOf { .. } => PrimitiveOpKind::ShapeOf,
-            Self::DynamicTruncate { .. } => PrimitiveOpKind::DynamicTruncate,
-            Self::PadToMatch { .. } => PrimitiveOpKind::PadToMatch,
-            Self::ReduceProd { .. } => PrimitiveOpKind::ReduceProd,
-            Self::ReduceMax { .. } => PrimitiveOpKind::ReduceMax,
-            Self::ReduceMin { .. } => PrimitiveOpKind::ReduceMin,
-            Self::Extension(_) => return None,
-        };
-        Some(kind)
-    }
-}
+tenferro_core_ops::define_exec_op!();
 
 #[derive(Clone, Debug)]
 pub struct ExecInstruction {

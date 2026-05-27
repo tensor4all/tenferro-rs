@@ -8,12 +8,10 @@ use crate::exec::{
     eval_exec_ir_single_session_with_workspace, eval_exec_ir_unsegmented_with_cache_and_workspace,
     execute_backend_op, execute_ffi_instruction_cached, execute_host_instruction,
     initialize_slots_in, is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
-    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecOp, ExecProgram,
+    reclaim_last_use_inputs_exec, DispatchMode, ExecInstruction, ExecProgram,
 };
 use crate::extension_runtime::ExtensionExecutor;
-use tenferro_tensor::{
-    ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan, Tensor, TensorBackend,
-};
+use tenferro_tensor::{ElementwiseFusionInst, ElementwiseFusionPlan, Tensor, TensorBackend};
 
 /// A compiled execution segment.
 ///
@@ -399,7 +397,7 @@ fn build_elementwise_fusion_plan(
         if inst.dtype != dtype || inst.output_slots.len() != 1 {
             return None;
         }
-        let op = map_exec_op_to_elementwise_fusion(&inst.op)?;
+        let op = inst.op.elementwise_fusion_op()?;
         let inputs = inst
             .input_slots
             .iter()
@@ -421,29 +419,4 @@ fn build_elementwise_fusion_plan(
         outputs,
         ops,
     })
-}
-
-fn map_exec_op_to_elementwise_fusion(op: &ExecOp) -> Option<ElementwiseFusionOp> {
-    match op {
-        ExecOp::Add => Some(ElementwiseFusionOp::Add),
-        ExecOp::Multiply => Some(ElementwiseFusionOp::Multiply),
-        ExecOp::Negate => Some(ElementwiseFusionOp::Negate),
-        ExecOp::Conj => Some(ElementwiseFusionOp::Conj),
-        ExecOp::Divide => Some(ElementwiseFusionOp::Divide),
-        ExecOp::Abs => Some(ElementwiseFusionOp::Abs),
-        ExecOp::Maximum => Some(ElementwiseFusionOp::Maximum),
-        ExecOp::Minimum => Some(ElementwiseFusionOp::Minimum),
-        ExecOp::Clamp => Some(ElementwiseFusionOp::Clamp),
-        ExecOp::Exp => Some(ElementwiseFusionOp::Exp),
-        ExecOp::Log => Some(ElementwiseFusionOp::Log),
-        ExecOp::Sin => Some(ElementwiseFusionOp::Sin),
-        ExecOp::Cos => Some(ElementwiseFusionOp::Cos),
-        ExecOp::Tanh => Some(ElementwiseFusionOp::Tanh),
-        ExecOp::Sqrt => Some(ElementwiseFusionOp::Sqrt),
-        ExecOp::Rsqrt => Some(ElementwiseFusionOp::Rsqrt),
-        ExecOp::Pow => Some(ElementwiseFusionOp::Pow),
-        ExecOp::Expm1 => Some(ElementwiseFusionOp::Expm1),
-        ExecOp::Log1p => Some(ElementwiseFusionOp::Log1p),
-        _ => None,
-    }
 }

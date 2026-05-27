@@ -12,12 +12,10 @@ use tenferro_tensor::Tensor;
 use crate::eager::{record_eager_outputs, EagerTensor};
 
 pub use tenferro_ops::ext_op::ExtensionAdRule as ExtensionAdRuleTrait;
-pub use tenferro_ops::ext_op::ExtensionChainRule as ExtensionChainRuleTrait;
 pub use tenferro_ops::ext_op::{
-    is_extension_rule_registered, lookup_extension_rule, register_extension_chain_rule,
-    register_extension_rule, AdValue, ExtensionAdRule as _ExtensionAdRuleReexport,
-    ExtensionChainRule, ExtensionOp as _ExtensionOpReexport, ExtensionRegistryError,
-    ExtensionRuleSet, FruleBuilder, RRuleBuilder,
+    is_extension_rule_registered, lookup_extension_rule, register_extension_rule,
+    ExtensionAdRule as _ExtensionAdRuleReexport, ExtensionOp as _ExtensionOpReexport,
+    ExtensionRegistryError, ExtensionRuleSet,
 };
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
