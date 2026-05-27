@@ -212,7 +212,6 @@ the project with AI agents for implementation, documentation, review, issue
 triage, and verification. Human maintainers own design decisions, review
 outcomes, and merge decisions.
 
-Bug reports should include a minimal reproducer, expected behavior, actual
-behavior, and the backend/device involved. Feature requests can stay informal:
-describe what you are trying to do, what is hard today, and any examples or
-related APIs that help explain the desired workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy.
+Bug-fix pull requests are welcome. New features must start as feature request
+issues before implementation PRs are opened.

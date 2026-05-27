@@ -1,12 +1,18 @@
 # Repository Rules
 
-These are tenferro-specific rules. Apply them on top of the shared Tensor4all
+These are tenferro-specific rules. Apply them on top of the shared tensor4all
 rules from `tensor4all-agent-rules`.
 
 ## Public Surface Drift
 
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
 - When the public API changes, check for stale names, stale capability claims, and deleted paths in `README`, rustdoc, and examples before considering the work complete.
+
+## Naming Style
+
+- Prefer `tensor4all` over `Tensor4all` in project prose, documentation,
+  issue text, comments, and contributor notes unless quoting an external name
+  or preserving an existing proper noun.
 
 ## Public Surface Discipline
 
@@ -24,6 +30,24 @@ rules from `tensor4all-agent-rules`.
   repository and whether tenferro is prepared to support its semantics as a
   public contract. If the answer is unclear, keep it `pub(crate)` and expose a
   smaller high-level API instead.
+
+## External Contribution Intake
+
+- Bug-fix PRs may be reviewed as merge candidates when they fix behavior that
+  is already intended by current docs, specs, or tests.
+- New features must start as feature request issues. Do not treat a
+  new-feature implementation PR as the source of truth unless maintainers
+  already accepted the linked issue and agreed that implementation should
+  start.
+- New-feature PRs opened before an accepted issue may be closed and redirected
+  to an issue. Prototype code should be linked from the issue as reference
+  material.
+- Accepted feature issues, specs, and repository rules are the source of truth
+  for implementation. External prototype code may inform implementation only
+  when its license and provenance are compatible with this repository.
+- When maintainer or AI-assisted implementation is based on external prototype
+  code, preserve appropriate copyright notices, license obligations,
+  attribution, and links to the original prototype or issue discussion.
 
 ## Standard Extension Boundary
 
