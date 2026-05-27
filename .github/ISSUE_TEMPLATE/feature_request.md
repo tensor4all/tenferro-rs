@@ -5,6 +5,12 @@ title: "[Feature]: "
 labels: ["enhancement"]
 ---
 
+New features start here. Please do not open a new-feature implementation PR
+before maintainers accept the issue and agree that implementation should start.
+
+If you already have prototype code, link to a fork branch, gist, or repository
+from this issue.
+
 ## What are you trying to do?
 
 <!-- Describe the user goal or workflow. -->
@@ -13,10 +19,18 @@ labels: ["enhancement"]
 
 <!-- Explain the current limitation, friction, or missing documentation. -->
 
+## Proposed behavior or API
+
+<!-- Optional, but useful. Show the public API, command, or workflow you want. -->
+
 ## Relevant area
 
 <!-- TypedTensor / Tensor / EagerTensor / TracedTensor / CUDA / AD / Docs / Performance / Unsure -->
 
+## Dependency, backend, or AD impact
+
+<!-- Optional. Note expected CPU/GPU/backend/provider/dependency/AD implications if known. -->
+
 ## Notes, examples, or related APIs
 
-<!-- Optional: code sketch, math notation, links, or similar APIs from PyTorch/JAX/Julia/etc. -->
+<!-- Optional: prototype link, code sketch, math notation, links, or similar APIs from PyTorch/JAX/Julia/etc. -->

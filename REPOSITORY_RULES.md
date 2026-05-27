@@ -25,6 +25,24 @@ rules from `tensor4all-agent-rules`.
   public contract. If the answer is unclear, keep it `pub(crate)` and expose a
   smaller high-level API instead.
 
+## External Contribution Intake
+
+- Bug-fix PRs may be reviewed as merge candidates when they fix behavior that
+  is already intended by current docs, specs, or tests.
+- New features must start as feature request issues. Do not treat a
+  new-feature implementation PR as the source of truth unless maintainers
+  already accepted the linked issue and agreed that implementation should
+  start.
+- New-feature PRs opened before an accepted issue may be closed and redirected
+  to an issue. Prototype code should be linked from the issue as reference
+  material.
+- Accepted feature issues, specs, and repository rules are the source of truth
+  for implementation. External prototype code may inform implementation only
+  when its license and provenance are compatible with this repository.
+- When maintainer or AI-assisted implementation is based on external prototype
+  code, preserve appropriate copyright notices, license obligations,
+  attribution, and links to the original prototype or issue discussion.
+
 ## Standard Extension Boundary
 
 - Standard operation families (`tenferro-einsum`, `tenferro-linalg`,
