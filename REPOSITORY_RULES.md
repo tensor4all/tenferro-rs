@@ -52,7 +52,8 @@ rules from `tensor4all-agent-rules`.
 
 ## Oracle Gate
 
-- Do not add or keep an AD `frule` or `rrule` in the mainline without a corresponding oracle family.
+- Do not add or keep an AD rule implementation in the mainline without a
+  corresponding oracle family.
 - Prefer oracle families with both Torch reference data and finite-difference checks.
 - If a Torch reference is not available, a finite-difference-only oracle is acceptable.
 - If no corresponding oracle exists yet, add it to `tensor-ad-oracles` before treating the rule as a supported mainline AD rule.
@@ -63,6 +64,16 @@ rules from `tensor4all-agent-rules`.
   are the semantic source of truth for AD rules.
 - These are graph-level rules that emit ops into a `FragmentBuilder`.
   `tidu::differentiate` calls `linearize`; `tidu::transpose` calls `transpose_rule`.
+- The canonical tenferro AD model is graph-level `linearize` plus
+  `transpose_rule`. Do not model tensor primitive AD by implementing
+  `chainrules_core::ReverseRule<StdTensorOp>` or `ForwardRule<StdTensorOp>`;
+  those traits are value/tape-level interfaces and are not the standard
+  primitive-op rule surface in this repository.
+- Avoid introducing ChainRules-style `frule`/`rrule` terminology for new
+  tenferro AD APIs. Use `linearize` for JVP graph emission and
+  `transpose_rule` for transposed linear graph emission. A future
+  externally supplied pullback API must be designed separately instead of
+  being mixed into the current primitive rule contract.
 - Reverse-mode support is not always a direct `transpose_rule` arm on the
   primal op. Some ops are supported by first applying `linearize` and then
   transposing the emitted linear primitive graph. Before filing or closing an

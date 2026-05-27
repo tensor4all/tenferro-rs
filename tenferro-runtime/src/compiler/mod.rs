@@ -138,7 +138,7 @@ pub fn compile_std_to_exec(
             }
 
             ExecInstruction {
-                op: std_to_exec_op(&instr.op),
+                op: ExecOp::from_std_tensor_op(&instr.op),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: output_dtype,
@@ -308,88 +308,6 @@ fn combine_monotonic_kinds(lhs: ExtentKind, rhs: ExtentKind) -> ExtentKind {
         (ExtentKind::Unknown, _) | (_, ExtentKind::Unknown) => ExtentKind::Unknown,
         (ExtentKind::Exact, ExtentKind::Exact) => ExtentKind::Exact,
         _ => ExtentKind::UpperBound,
-    }
-}
-
-fn std_to_exec_op(op: &StdTensorOp) -> ExecOp {
-    match op {
-        StdTensorOp::Add => ExecOp::Add,
-        StdTensorOp::Mul => ExecOp::Multiply,
-        StdTensorOp::Neg => ExecOp::Negate,
-        StdTensorOp::Conj => ExecOp::Conj,
-        StdTensorOp::Div => ExecOp::Divide,
-        StdTensorOp::Abs => ExecOp::Abs,
-        StdTensorOp::Sign => ExecOp::Sign,
-        StdTensorOp::Maximum => ExecOp::Maximum,
-        StdTensorOp::Minimum => ExecOp::Minimum,
-        StdTensorOp::Compare(dir) => ExecOp::Compare(dir.clone()),
-        StdTensorOp::Select => ExecOp::Select,
-        StdTensorOp::Clamp => ExecOp::Clamp,
-        StdTensorOp::Exp => ExecOp::Exp,
-        StdTensorOp::Log => ExecOp::Log,
-        StdTensorOp::Sin => ExecOp::Sin,
-        StdTensorOp::Cos => ExecOp::Cos,
-        StdTensorOp::Tanh => ExecOp::Tanh,
-        StdTensorOp::Sqrt => ExecOp::Sqrt,
-        StdTensorOp::Rsqrt => ExecOp::Rsqrt,
-        StdTensorOp::Pow => ExecOp::Pow,
-        StdTensorOp::Expm1 => ExecOp::Expm1,
-        StdTensorOp::Log1p => ExecOp::Log1p,
-        StdTensorOp::Transpose { perm } => ExecOp::Transpose { perm: perm.clone() },
-        StdTensorOp::Reshape { to_shape, .. } => ExecOp::Reshape {
-            shape: to_shape.clone(),
-        },
-        StdTensorOp::BroadcastInDim { shape, dims } => ExecOp::BroadcastInDim {
-            shape: shape.clone(),
-            dims: dims.clone(),
-        },
-        StdTensorOp::Convert { to, .. } => ExecOp::Convert { to: *to },
-        StdTensorOp::Constant { dtype, bytes } => ExecOp::Constant {
-            dtype: *dtype,
-            bytes: bytes.clone(),
-        },
-        StdTensorOp::DotGeneral { config, .. } => ExecOp::DotGeneral(config.clone()),
-        StdTensorOp::ReduceSum { axes, .. } => ExecOp::ReduceSum { axes: axes.clone() },
-        StdTensorOp::ReduceProd { axes, .. } => ExecOp::ReduceProd { axes: axes.clone() },
-        StdTensorOp::ReduceMax { axes, .. } => ExecOp::ReduceMax { axes: axes.clone() },
-        StdTensorOp::ReduceMin { axes, .. } => ExecOp::ReduceMin { axes: axes.clone() },
-        StdTensorOp::ExtractDiag { axis_a, axis_b } => ExecOp::ExtractDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-        StdTensorOp::EmbedDiag { axis_a, axis_b } => ExecOp::EmbedDiag {
-            axis_a: *axis_a,
-            axis_b: *axis_b,
-        },
-        StdTensorOp::Tril { k } => ExecOp::Tril { k: *k },
-        StdTensorOp::Triu { k } => ExecOp::Triu { k: *k },
-        StdTensorOp::Gather(config) => ExecOp::Gather(config.clone()),
-        StdTensorOp::GatherDynamicSliceSizes {
-            offset_dims,
-            collapsed_slice_dims,
-            start_index_map,
-            index_vector_dim,
-            slice_sizes,
-        } => ExecOp::GatherDynamicSliceSizes {
-            offset_dims: offset_dims.clone(),
-            collapsed_slice_dims: collapsed_slice_dims.clone(),
-            start_index_map: start_index_map.clone(),
-            index_vector_dim: *index_vector_dim,
-            slice_sizes: slice_sizes.clone(),
-        },
-        StdTensorOp::Scatter(config) => ExecOp::Scatter(config.clone()),
-        StdTensorOp::Slice(config) => ExecOp::Slice(config.clone()),
-        StdTensorOp::DynamicSlice { slice_sizes } => ExecOp::DynamicSlice {
-            slice_sizes: slice_sizes.clone(),
-        },
-        StdTensorOp::DynamicUpdateSlice => ExecOp::DynamicUpdateSlice,
-        StdTensorOp::Pad(config) => ExecOp::Pad(config.clone()),
-        StdTensorOp::Concatenate { axis, .. } => ExecOp::Concatenate { axis: *axis },
-        StdTensorOp::Reverse { axes } => ExecOp::Reverse { axes: axes.clone() },
-        StdTensorOp::ShapeOf { axis } => ExecOp::ShapeOf { axis: *axis },
-        StdTensorOp::DynamicTruncate { axis } => ExecOp::DynamicTruncate { axis: *axis },
-        StdTensorOp::PadToMatch { axis } => ExecOp::PadToMatch { axis: *axis },
-        StdTensorOp::Extension(ext) => ExecOp::Extension(ext.clone()),
     }
 }
 

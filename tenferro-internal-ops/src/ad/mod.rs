@@ -92,7 +92,7 @@ pub fn try_linearize(
         .expect("non-extension StdTensorOp must have a primitive kind");
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Linearize))?;
-    (rule.linearize)(op, builder, primal_in, primal_out, tangent_in, ctx)
+    rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx)
 }
 
 /// Reverse-mode AD (VJP) for `StdTensorOp`: given the primal op, its
@@ -144,7 +144,7 @@ pub fn try_transpose_rule(
     let rule = registry::primitive_ad_rule(kind)
         .ok_or_else(|| registry::missing_rule(kind, ADRuleKind::Transpose))?;
     let emitter_dyn: &mut dyn OpEmitter<StdTensorOp> = emitter;
-    (rule.transpose)(op, emitter_dyn, cotangent_out, inputs, mode, ctx)
+    rule.transpose_rule(op, emitter_dyn, cotangent_out, inputs, mode, ctx)
 }
 
 #[cfg(test)]

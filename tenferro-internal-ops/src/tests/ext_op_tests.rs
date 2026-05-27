@@ -12,13 +12,12 @@ use computegraph::OpEmitter;
 use crate::ad::context::ShapeGuardContext;
 use crate::ext_op::{
     is_extension_rule_registered, linearize_extension_rule, lookup_extension_rule,
-    register_extension_chain_rule, register_extension_rule, transpose_extension_rule,
-    ExtensionAdRule, ExtensionChainRule, ExtensionOp, ExtensionRegistryError, FruleBuilder,
-    RRuleBuilder,
+    register_extension_rule, transpose_extension_rule, ExtensionAdRule, ExtensionOp,
+    ExtensionRegistryError,
 };
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim, TensorMeta};
+use crate::{ExtensionFamilyId, ExtensionRuleSet, SymDim};
 use tenferro_tensor::{DType, Tensor};
 
 #[derive(Debug)]
@@ -33,12 +32,6 @@ struct NoInlineRuleOp;
 struct FamilyOnlyOp {
     family: &'static str,
 }
-
-#[derive(Clone, Debug)]
-struct ChainScaleOp;
-
-#[derive(Clone, Debug)]
-struct BuilderCoverageOp;
 
 #[derive(ExtensionFamilyId)]
 #[tenferro_extension(namespace = "covtest", name = "macro_rule", version = 1)]
@@ -129,89 +122,6 @@ impl ExtensionOp for FamilyOnlyOp {
     }
 }
 
-impl ExtensionOp for ChainScaleOp {
-    fn family_id(&self) -> &'static str {
-        "covtest.chain_scale.v1"
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<ChainScaleOp>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn n_inputs(&self) -> usize {
-        1
-    }
-
-    fn n_outputs(&self) -> usize {
-        1
-    }
-
-    fn infer_output_meta(
-        &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![(input_dtypes[0], input_shapes[0].to_vec())]
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone()])
-    }
-}
-
-impl ExtensionOp for BuilderCoverageOp {
-    fn family_id(&self) -> &'static str {
-        "covtest.builder_coverage.v1"
-    }
-
-    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other.as_any().downcast_ref::<BuilderCoverageOp>().is_some()
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn n_inputs(&self) -> usize {
-        2
-    }
-
-    fn n_outputs(&self) -> usize {
-        2
-    }
-
-    fn infer_output_meta(
-        &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
-    ) -> Vec<(DType, Vec<SymDim>)> {
-        vec![
-            (input_dtypes[0], input_shapes[0].to_vec()),
-            (input_dtypes[1], input_shapes[1].to_vec()),
-        ]
-    }
-
-    fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Ok(vec![inputs[0].clone(), inputs[1].clone()])
-    }
-}
-
 impl ExtensionAdRule for CoverageRule {
     fn family_id(&self) -> &'static str {
         self.family
@@ -239,94 +149,6 @@ impl ExtensionAdRule for CoverageRule {
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValId>>> {
         Ok(vec![cotangent_out[0]])
-    }
-}
-
-#[derive(Debug)]
-struct ChainScaleRule;
-
-impl ExtensionChainRule for ChainScaleRule {
-    fn family_id(&self) -> &'static str {
-        "covtest.chain_scale.v1"
-    }
-
-    fn frule(&self, _op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
-        let Some(dx) = cx.tangent(0)? else {
-            cx.set_output_tangent(0, None)?;
-            return Ok(());
-        };
-        let doubled = cx.add(dx.clone(), dx)?;
-        cx.set_output_tangent(0, Some(doubled))
-    }
-
-    fn rrule(&self, _op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
-        let Some(cot_y) = cx.cotangent(0)? else {
-            cx.set_input_cotangent(0, None)?;
-            return Ok(());
-        };
-        let doubled = cx.add(cot_y.clone(), cot_y)?;
-        cx.set_input_cotangent(0, Some(doubled))
-    }
-}
-
-#[derive(Debug)]
-struct BuilderCoverageRule;
-
-impl ExtensionChainRule for BuilderCoverageRule {
-    fn family_id(&self) -> &'static str {
-        "covtest.builder_coverage.v1"
-    }
-
-    fn frule(&self, _op: &dyn ExtensionOp, cx: &mut FruleBuilder<'_>) -> ADRuleResult<()> {
-        let x0 = cx.primal(0)?;
-        let _y0 = cx.output(0)?;
-        assert_eq!(cx.input_rank(0)?, 2);
-
-        let primal_sum = cx.add(x0.clone(), x0)?;
-        let primal_product = cx.mul(primal_sum.clone(), primal_sum)?;
-
-        let Some(dx0) = cx.tangent(0)? else {
-            cx.set_output_tangent(0, None)?;
-            cx.set_output_tangent(1, None)?;
-            return Ok(());
-        };
-        let squared = cx.mul(dx0.clone(), dx0)?;
-        let reduced = cx.reduce_sum_all(squared, 2)?;
-        let broadcast = cx.broadcast_scalar_to_input(reduced, 0)?;
-        let mut ext_outputs = cx.apply_extension(Arc::new(NoInlineRuleOp), vec![broadcast])?;
-        let ext_out = ext_outputs.remove(0);
-        let dy1 = match cx.tangent(1)? {
-            Some(dx1) => cx.add(ext_out.clone(), dx1)?,
-            None => cx.add(ext_out.clone(), primal_product)?,
-        };
-
-        cx.set_output_tangent(0, Some(ext_out))?;
-        cx.set_output_tangent(1, Some(dy1))
-    }
-
-    fn rrule(&self, _op: &dyn ExtensionOp, cx: &mut RRuleBuilder<'_>) -> ADRuleResult<()> {
-        let x1 = cx.primal(1)?;
-        assert_eq!(cx.input_rank(0)?, 2);
-
-        let primal_product = cx.mul(x1.clone(), x1)?;
-
-        let Some(cot_y0) = cx.cotangent(0)? else {
-            cx.set_input_cotangent(0, None)?;
-            cx.set_input_cotangent(1, None)?;
-            return Ok(());
-        };
-        let squared = cx.mul(cot_y0.clone(), cot_y0)?;
-        let reduced = cx.reduce_sum_all(squared, 2)?;
-        let broadcast = cx.broadcast_scalar_to_input(reduced, 0)?;
-        let mut ext_outputs = cx.apply_extension(Arc::new(NoInlineRuleOp), vec![broadcast])?;
-        let ext_out = ext_outputs.remove(0);
-        let dx1 = match cx.cotangent(1)? {
-            Some(cot_y1) => cx.add(ext_out.clone(), cot_y1)?,
-            None => cx.add(ext_out.clone(), primal_product)?,
-        };
-
-        cx.set_input_cotangent(0, Some(ext_out))?;
-        cx.set_input_cotangent(1, Some(dx1))
     }
 }
 
@@ -372,81 +194,6 @@ fn register_rule_rejects_malformed_family_id() {
         }
         other => panic!("expected MalformedFamilyId for {bad:?}, got {other:?}"),
     }
-}
-
-#[test]
-fn register_chain_rule_adapts_frule_and_rrule() {
-    register_extension_chain_rule(Arc::new(ChainScaleRule))
-        .expect("first chain rule registration should succeed");
-
-    let op = ChainScaleOp;
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let dx = builder.add_input(TensorInputKey::User { id: 10_001 });
-    let mut ctx = ShapeGuardContext::default();
-    let jvp = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
-        .expect("chain frule should adapt to linearize");
-    assert_ne!(jvp, vec![Some(dx)]);
-    let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
-    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
-    assert_eq!(jvp, vec![Some(fragment.ops()[0].outputs[0])]);
-
-    let mut emitter = FragmentBuilder::<StdTensorOp>::new();
-    let cot_y = emitter.add_input(TensorInputKey::User { id: 10_002 });
-    let mut ctx = ShapeGuardContext::default();
-    let vjp = transpose_extension_rule(
-        &op,
-        &mut emitter,
-        &[Some(cot_y)],
-        &[],
-        &OpMode::Linear {
-            active_mask: vec![true],
-        },
-        &mut ctx,
-    )
-    .expect("chain rrule should adapt to transpose_rule");
-    assert_ne!(vjp, vec![Some(cot_y)]);
-    let fragment = emitter.build();
-    assert_eq!(fragment.ops().len(), 1);
-    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
-    assert_eq!(vjp, vec![Some(fragment.ops()[0].outputs[0])]);
-}
-
-#[test]
-fn owned_rule_set_adapts_chain_rule_without_global_lookup() {
-    let rules = ExtensionRuleSet::new()
-        .with_chain_rule(Arc::new(ChainScaleRule))
-        .expect("owned chain rule registration should succeed");
-
-    let op = ChainScaleOp;
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let dx = builder.add_input(TensorInputKey::User { id: 10_101 });
-    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules.clone());
-    let jvp = linearize_extension_rule(&op, &mut builder, &[], &[], &[Some(dx)], &mut ctx)
-        .expect("owned chain frule should adapt to linearize");
-    let fragment = builder.build();
-    assert_eq!(fragment.ops().len(), 1);
-    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
-    assert_eq!(jvp, vec![Some(fragment.ops()[0].outputs[0])]);
-
-    let mut emitter = FragmentBuilder::<StdTensorOp>::new();
-    let cot_y = emitter.add_input(TensorInputKey::User { id: 10_102 });
-    let mut ctx = ShapeGuardContext::default().with_extension_rules(rules);
-    let vjp = transpose_extension_rule(
-        &op,
-        &mut emitter,
-        &[Some(cot_y)],
-        &[],
-        &OpMode::Linear {
-            active_mask: vec![true],
-        },
-        &mut ctx,
-    )
-    .expect("owned chain rrule should adapt to transpose_rule");
-    let fragment = emitter.build();
-    assert_eq!(fragment.ops().len(), 1);
-    assert_eq!(fragment.ops()[0].op, StdTensorOp::Add);
-    assert_eq!(vjp, vec![Some(fragment.ops()[0].outputs[0])]);
 }
 
 #[test]
@@ -518,99 +265,6 @@ fn owned_rule_set_rejects_duplicate_and_malformed_rules() {
             family_id: "covtest.owned_malformed"
         }
     ));
-}
-
-#[test]
-fn chain_rule_builders_cover_core_helpers() {
-    register_extension_chain_rule(Arc::new(BuilderCoverageRule))
-        .expect("first builder coverage rule registration should succeed");
-
-    let x0 = GlobalValKey::Input(TensorInputKey::User { id: 20_001 });
-    let x1 = GlobalValKey::Input(TensorInputKey::User { id: 20_002 });
-    let y0 = GlobalValKey::Input(TensorInputKey::User { id: 20_003 });
-    let y1 = GlobalValKey::Input(TensorInputKey::User { id: 20_004 });
-    let mut ctx = ShapeGuardContext::default();
-    ctx.insert_metadata(
-        x0.clone(),
-        TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]),
-    );
-    ctx.insert_metadata(
-        x1.clone(),
-        TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]),
-    );
-
-    let op = BuilderCoverageOp;
-    let mut builder = FragmentBuilder::<StdTensorOp>::new();
-    let dx0 = builder.add_input(TensorInputKey::User { id: 20_005 });
-    let dx1 = builder.add_input(TensorInputKey::User { id: 20_006 });
-    let jvp = linearize_extension_rule(
-        &op,
-        &mut builder,
-        &[x0.clone(), x1.clone()],
-        &[y0, y1],
-        &[Some(dx0), Some(dx1)],
-        &mut ctx,
-    )
-    .expect("builder frule should emit helper ops");
-    assert_eq!(jvp.len(), 2);
-    assert!(jvp.iter().all(Option::is_some));
-    let fragment = builder.build();
-    assert!(fragment
-        .ops()
-        .iter()
-        .any(|node| node.op == StdTensorOp::Mul));
-    assert!(fragment.ops().iter().any(|node| {
-        matches!(
-            node.op,
-            StdTensorOp::BroadcastInDim {
-                dims: ref broadcast_dims,
-                ..
-            } if broadcast_dims.is_empty()
-        )
-    }));
-    assert!(fragment
-        .ops()
-        .iter()
-        .any(|node| matches!(node.op, StdTensorOp::Extension(_))));
-    assert!(fragment
-        .ops()
-        .iter()
-        .any(|node| matches!(node.mode, OpMode::Primal)));
-
-    let mut emitter = FragmentBuilder::<StdTensorOp>::new();
-    let cot_y0 = emitter.add_input(TensorInputKey::User { id: 20_007 });
-    let cot_y1 = emitter.add_input(TensorInputKey::User { id: 20_008 });
-    let mut ctx = ShapeGuardContext::default();
-    ctx.insert_metadata(
-        x0.clone(),
-        TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]),
-    );
-    ctx.insert_metadata(
-        x1.clone(),
-        TensorMeta::exact(DType::F64, vec![SymDim::from(2usize), SymDim::from(3usize)]),
-    );
-    let vjp = transpose_extension_rule(
-        &op,
-        &mut emitter,
-        &[Some(cot_y0), Some(cot_y1)],
-        &[ValRef::External(x0), ValRef::External(x1)],
-        &OpMode::Linear {
-            active_mask: vec![true, true],
-        },
-        &mut ctx,
-    )
-    .expect("builder rrule should emit helper ops");
-    assert_eq!(vjp.len(), 2);
-    assert!(vjp.iter().all(Option::is_some));
-    let fragment = emitter.build();
-    assert!(fragment
-        .ops()
-        .iter()
-        .any(|node| node.op == StdTensorOp::Mul));
-    assert!(fragment
-        .ops()
-        .iter()
-        .any(|node| matches!(node.op, StdTensorOp::Extension(_))));
 }
 
 #[test]

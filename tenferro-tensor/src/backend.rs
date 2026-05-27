@@ -21,30 +21,7 @@ pub struct ElementwiseFusionInst {
     pub inputs: Vec<usize>,
 }
 
-/// Elementwise op kinds supported by backend fusion implementations.
-#[doc(hidden)]
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum ElementwiseFusionOp {
-    Add,
-    Multiply,
-    Negate,
-    Conj,
-    Divide,
-    Abs,
-    Maximum,
-    Minimum,
-    Clamp,
-    Exp,
-    Log,
-    Sin,
-    Cos,
-    Tanh,
-    Sqrt,
-    Rsqrt,
-    Pow,
-    Expm1,
-    Log1p,
-}
+tenferro_core_ops::define_elementwise_fusion_op!();
 
 /// Elementwise tensor operations.
 ///

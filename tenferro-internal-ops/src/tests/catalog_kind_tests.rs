@@ -78,3 +78,36 @@ fn extension_ops_do_not_claim_core_kind() {
 
     assert_eq!(op.primitive_kind(), None);
 }
+
+#[test]
+fn std_tensor_op_boilerplate_is_catalog_generated() {
+    let source = include_str!("../std_tensor_op.rs");
+
+    assert!(
+        source.contains("define_std_tensor_op"),
+        "StdTensorOp variants and primitive_kind routing should be emitted from the catalog"
+    );
+    assert!(
+        !source.contains("StdTensorOp::Add => PrimitiveOpKind::Add"),
+        "StdTensorOp primitive_kind should not repeat per-op catalog routing by hand"
+    );
+}
+
+#[test]
+fn extension_ad_api_uses_linearize_and_transpose_terminology() {
+    let source = include_str!("../ext_op.rs");
+
+    for forbidden in [
+        "ExtensionChainRule",
+        "FruleBuilder",
+        "RRuleBuilder",
+        "register_extension_chain_rule",
+        "frule",
+        "rrule",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "extension AD API should not expose ChainRules-style `{forbidden}` terminology"
+        );
+    }
+}
