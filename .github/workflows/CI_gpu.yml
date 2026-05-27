@@ -1,0 +1,292 @@
+name: CI_gpu
+
+# Build CUDA test archives on a standard GitHub-hosted runner (no CUDA toolkit required;
+# GPU libraries are loaded at runtime via dlopen), then execute only ignored GPU tests on
+# the org larger GPU runner `ubuntu-gpu` to minimize GPU billing.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-gpu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CUBECL_DEBUG_LOG: "0"
+  CUDA_ARCHIVE: cuda-tests.tar.zst
+  CUDA_RUNTIME_VERSION: "12.6"
+  CUTENSOR_VERSION: "2.6.0.4"
+
+jobs:
+  cuda-archive:
+    name: CUDA test archive
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compute CUDA archive cache key
+        id: archive_key
+        run: |
+          set -euo pipefail
+          rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
+          echo "key=cuda-archive-v2-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+      - name: Cache CUDA test archive
+        uses: actions/cache@v4
+        id: cuda_archive_cache
+        with:
+          path: ${{ env.CUDA_ARCHIVE }}
+          key: ${{ steps.archive_key.outputs.key }}
+      - uses: Swatinem/rust-cache@v2
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        with:
+          prefix-key: v0-rust-cuda
+          shared-key: cuda-release
+          cache-all-crates: true
+          cache-workspace-crates: true
+      - uses: taiki-e/install-action@nextest
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+      - name: Build CUDA test archive
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        env:
+          # cubecl-cuda's build.rs reads cudarc's CUDA_VERSION. Without this, cudarc's
+          # fallback-latest path can enable cuda_12080 cfgs while bindings stay at cuda-12060.
+          CUDARC_CUDA_VERSION: "12060"
+        run: |
+          set -euo pipefail
+          cargo nextest archive \
+            --release \
+            --locked \
+            --archive-file "${CUDA_ARCHIVE}" \
+            -p tenferro-gpu \
+            -p tenferro-ad \
+            --features cuda
+      - name: Verify CUDA test archive
+        env:
+          ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "${CUDA_ARCHIVE}" ]; then
+            echo "Missing archive: ${CUDA_ARCHIVE}"
+            exit 1
+          fi
+          if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
+            echo "Reusing cached CUDA test archive."
+          else
+            echo "Built fresh CUDA test archive."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cuda-tests
+          path: ${{ env.CUDA_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+
+  cuda-run:
+    name: CUDA tests (${{ matrix.gpu_vendor }})
+    needs: [cuda-archive]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-gpu
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gpu_vendor: cuda
+          # Future ROCm lane example:
+          # - gpu_vendor: rocm
+          #   if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: cuda-tests
+      - uses: taiki-e/install-action@nextest
+      - name: Cache cuTENSOR redistributable
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cutensor-${{ env.CUTENSOR_VERSION }}
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12
+      - name: Cache CUDA minimal runtime tree
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cuda-runtime-${{ env.CUDA_RUNTIME_VERSION }}
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v2
+      - name: Configure CUDA runtime libraries
+        run: |
+          set -euo pipefail
+          if ! command -v nvidia-smi >/dev/null 2>&1; then
+            echo "nvidia-smi not found; the ubuntu-gpu larger runner image should include NVIDIA drivers."
+            exit 1
+          fi
+          nvidia-smi
+
+          cuda_runtime_cache="${RUNNER_TEMP}/cuda-runtime-${CUDA_RUNTIME_VERSION}"
+          cuda_path="${CUDA_PATH:-}"
+          if [ -z "${cuda_path}" ] && command -v nvcc >/dev/null 2>&1; then
+            cuda_path="$(dirname "$(dirname "$(command -v nvcc)")")"
+          fi
+          if [ -z "${cuda_path}" ]; then
+            for candidate in \
+              /usr/local/cuda-${CUDA_RUNTIME_VERSION} \
+              /usr/local/cuda \
+              /usr/local/cuda-13.1 \
+              /usr/local/cuda-13 \
+              /usr/local/cuda-12; do
+              if [ -d "${candidate}" ]; then
+                cuda_path="${candidate}"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "${cuda_path}" ] && [ -f "${cuda_runtime_cache}/.seed-complete" ] && [ -d "${cuda_runtime_cache}/lib64" ]; then
+            echo "Using cached CUDA ${CUDA_RUNTIME_VERSION} minimal runtime tree from ${cuda_runtime_cache}."
+            cuda_path="${cuda_runtime_cache}"
+          fi
+
+          if [ -z "${cuda_path}" ]; then
+            echo "Installing minimal CUDA ${CUDA_RUNTIME_VERSION} runtime packages without driver packages..."
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              cuda-cudart-12-6 \
+              cuda-cudart-dev-12-6 \
+              cuda-nvrtc-12-6 \
+              cuda-nvrtc-dev-12-6 \
+              libcublas-12-6 \
+              libcusolver-12-6 \
+              libcusparse-12-6 \
+              libnvjitlink-12-6
+            for candidate in "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" /usr/local/cuda; do
+              if [ -d "${candidate}" ]; then
+                cuda_path="${candidate}"
+                break
+              fi
+            done
+            if [ -n "${cuda_path}" ]; then
+              echo "Seeding CUDA runtime cache at ${cuda_runtime_cache} for future runs..."
+              rm -rf "${cuda_runtime_cache}"
+              mkdir -p "${cuda_runtime_cache}"
+              cp -aL "${cuda_path}/." "${cuda_runtime_cache}/"
+              touch "${cuda_runtime_cache}/.seed-complete"
+            fi
+          fi
+
+          if [ -z "${cuda_path}" ]; then
+            echo "CUDA toolkit path not found after minimal CUDA ${CUDA_RUNTIME_VERSION} runtime package install on the ubuntu-gpu larger runner."
+            exit 1
+          fi
+
+          cuda_library_path="${cuda_path}/lib64"
+          if [ -d "${cuda_path}/targets/x86_64-linux/lib" ]; then
+            cuda_library_path="${cuda_library_path}:${cuda_path}/targets/x86_64-linux/lib"
+          fi
+
+          cutensor_root="${RUNNER_TEMP}/cutensor-${CUTENSOR_VERSION}"
+          cutensor_lib="${cutensor_root}/lib"
+          cutensor_archive="libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive.tar.xz"
+          cutensor_url="https://developer.download.nvidia.com/compute/cutensor/redist/libcutensor/linux-x86_64/${cutensor_archive}"
+          cutensor_min_bytes=400000000
+
+          cutensor_path=""
+          for candidate in \
+            "${cuda_path}/lib64/libcutensor.so.2" \
+            "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2" \
+            "${cutensor_lib}/libcutensor.so.2" \
+            "${cutensor_lib}/libcutensor.so.2.6.0"; do
+            if [ -e "${candidate}" ]; then
+              cutensor_path="${candidate}"
+              break
+            fi
+          done
+
+          if [ -z "${cutensor_path}" ]; then
+            echo "Installing cuTENSOR ${CUTENSOR_VERSION} redistributable for CUDA 12..."
+            tmpdir="$(mktemp -d)"
+            archive_path="${tmpdir}/${cutensor_archive}"
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+              -o "${archive_path}" "${cutensor_url}"
+            archive_bytes="$(wc -c < "${archive_path}" | tr -d ' ')"
+            if [ "${archive_bytes}" -lt "${cutensor_min_bytes}" ]; then
+              echo "cuTENSOR download too small (${archive_bytes} bytes); expected at least ${cutensor_min_bytes}."
+              exit 1
+            fi
+            rm -rf "${cutensor_root}"
+            mkdir -p "${cutensor_root}"
+            tar -xJf "${archive_path}" -C "${cutensor_root}" \
+              --strip-components=1 \
+              "libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive/lib"
+            rm -rf "${tmpdir}"
+          fi
+
+          if [ -z "${cutensor_path}" ]; then
+            for candidate in \
+              "${cutensor_lib}/libcutensor.so.2" \
+              "${cutensor_lib}/libcutensor.so.2.6.0"; do
+              if [ -e "${candidate}" ]; then
+                cutensor_path="${candidate}"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "${cutensor_path}" ]; then
+            echo "cuTENSOR shared library not found after redistributable install."
+            echo "Expected ${cutensor_lib}/libcutensor.so.2 under ${RUNNER_TEMP}."
+            if [ -d "${cutensor_lib}" ]; then
+              ls -la "${cutensor_lib}" || true
+            else
+              echo "Missing directory: ${cutensor_lib}"
+            fi
+            exit 1
+          fi
+
+          echo "CUDA_PATH=${cuda_path}" >> "${GITHUB_ENV}"
+          echo "${cuda_path}/bin" >> "${GITHUB_PATH}"
+          echo "LD_LIBRARY_PATH=${cuda_library_path}:$(dirname "${cutensor_path}"):${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
+          echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
+      - name: Run ignored CUDA tests from archive
+        env:
+          NEXTEST_TEST_THREADS: "1"
+        run: |
+          set -euo pipefail
+          cargo nextest run \
+            --archive-file "${CUDA_ARCHIVE}" \
+            --workspace-remap "${GITHUB_WORKSPACE}" \
+            --run-ignored only \
+            --no-fail-fast \
+            -j 1
+
+  cuda-gate:
+    name: CI GPU gate
+    needs: [cuda-archive, cuda-run]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require CUDA GPU tests
+        env:
+          ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
+          CUDA_RESULT: ${{ needs.cuda-run.result }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${ARCHIVE_RESULT}" != "success" ]; then
+            echo "Expected cuda-archive to succeed; got cuda-archive=${ARCHIVE_RESULT}"
+            exit 1
+          fi
+          if [ "${IS_FORK_PR}" = "true" ]; then
+            echo "Fork PR: GPU tests skipped on the org larger GPU runner; archive build passed."
+            exit 0
+          fi
+          if [ "${CUDA_RESULT}" = "success" ]; then
+            exit 0
+          fi
+          echo "Expected cuda-run to succeed on ubuntu-gpu; got cuda-run=${CUDA_RESULT}"
+          exit 1
