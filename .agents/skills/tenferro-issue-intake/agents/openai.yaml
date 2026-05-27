@@ -1,0 +1,4 @@
+interface:
+  display_name: "tenferro Issue Intake"
+  short_description: "Create well-scoped tenferro-rs issues."
+  default_prompt: "Create a tenferro-rs issue from this request."

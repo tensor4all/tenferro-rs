@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         Thanks for reporting a bug. Precise, reproducible reports are easiest for maintainers and AI agents to verify.
+        If you are using an AI agent, use or follow the repository-local `tenferro-issue-intake` workflow.
 
   - type: textarea
     id: what-happened

@@ -8,6 +8,9 @@
 >
 > New-feature PRs opened before an accepted issue may be closed and redirected
 > to an issue.
+>
+> If you are using an AI agent for a bug-fix PR, use or follow the
+> repository-local `tenferro-bugfix-pr` workflow before editing code.
 
 ## Type
 
@@ -30,3 +33,5 @@ Fixes/Refs #
 - [ ] I added or updated tests/docs as needed.
 - [ ] If this implements a new feature, the linked issue has been accepted by
       maintainers.
+- [ ] If this is an AI-assisted bug fix, I applied the bug-fix scope gate from
+      `ai/contribution-workflows/bugfix-pr.md`.

@@ -226,3 +226,7 @@ non-trivial upgrades, AI-assisted migration is recommended.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy.
 Bug-fix pull requests are welcome. New features must start as feature request
 issues before implementation PRs are opened.
+
+Repository-local AI workflows are available for issue intake and scoped
+bug-fix PR preparation across Codex CLI, Claude Code, and OpenCode; see
+`CONTRIBUTING.md` for the supported entry points.

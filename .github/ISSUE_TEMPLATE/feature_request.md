@@ -11,6 +11,10 @@ before maintainers accept the issue and agree that implementation should start.
 If you already have prototype code, link to a fork branch, gist, or repository
 from this issue.
 
+If you are using an AI agent, use or follow the repository-local
+`tenferro-issue-intake` workflow. Prototype code is useful context, but the
+accepted issue remains the source of truth.
+
 ## What are you trying to do?
 
 <!-- Describe the user goal or workflow. -->

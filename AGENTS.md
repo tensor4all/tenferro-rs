@@ -37,6 +37,26 @@ Keep tenferro-specific durable rules in `REPOSITORY_RULES.md`. This
 duplicating the detailed performance, layout, CPU kernel, slicing, cache,
 threading, and GPU backend rules here.
 
+## Contribution Workflow Assets
+
+Use repository-local contribution workflows when preparing external-facing
+issues or bug-fix PRs:
+
+- `ai/contribution-workflows/issue-intake.md` for bug reports, feature
+  requests, design discussions, and documentation or article topic issues.
+- `ai/contribution-workflows/bugfix-pr.md` for pull requests that fix existing
+  intended behavior.
+
+Do not open a new-feature implementation PR before maintainers accept the
+corresponding issue. If a proposed bug-fix PR needs a new public API, operation
+family, backend, dependency, feature flag, architectural layer, or AD semantics
+change, stop the PR path and use issue intake.
+
+Thin tool adapters live in `.agents/skills/`, `.claude/skills/`, and
+`.opencode/commands/`. Keep policy in `CONTRIBUTING.md` and
+`REPOSITORY_RULES.md`; keep reusable workflow steps in
+`ai/contribution-workflows/`.
+
 ### GPU Status
 
 CUDA GPU support is implemented through the feature-gated CubeCL backend across

@@ -4,6 +4,33 @@ Thanks for helping improve tenferro-rs. This file describes the external
 contribution path. Repository-specific implementation rules live in
 `REPOSITORY_RULES.md`.
 
+## Agent-assisted workflows
+
+Agent-assisted issue and bug-fix PR preparation is supported.
+
+The canonical contribution policy is this file plus `REPOSITORY_RULES.md`.
+Repository-local AI workflows are helpers for collecting the right information
+and applying the contribution boundary; they do not replace maintainer review,
+merge authority, or roadmap decisions.
+
+Supported entry points:
+
+- Codex CLI: use the `tenferro-issue-intake` or `tenferro-bugfix-pr` skill
+  from `.agents/skills/`.
+- Claude Code: invoke `/tenferro-issue-intake` or `/tenferro-bugfix-pr`; the
+  project skills live in `.claude/skills/`.
+- OpenCode: invoke `/tenferro-issue-intake` or `/tenferro-bugfix-pr`; the
+  project commands live in `.opencode/commands/`.
+
+The shared workflow bodies live in `ai/contribution-workflows/`.
+
+Use the issue-intake workflow for bug reports, feature requests, design
+discussion issues, and documentation or article topic issues. Use the
+bug-fix PR workflow only for fixes to existing intended behavior. If a proposed
+bug-fix PR needs a new public API, operation family, backend, dependency,
+feature flag, architectural layer, or AD semantics change, move it to an issue
+first.
+
 ## Bug fixes
 
 Bug-fix pull requests are welcome.
