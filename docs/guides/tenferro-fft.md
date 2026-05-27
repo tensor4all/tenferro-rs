@@ -1,8 +1,8 @@
 # FFT (extension)
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
-crate, not part of the core `tenferro` facade: users add the package, import
-its `traced_tensor` functions, and use them with `TracedTensor` graphs.
+crate imported directly alongside `tenferro-runtime`: users add the package,
+import its `traced_tensor` functions, and use them with `TracedTensor` graphs.
 
 The current implementation provides one-dimensional CPU-host transforms backed
 by `rustfft` through tenferro extension operations. The public functions are
@@ -45,7 +45,7 @@ let x = TracedTensor::from_vec_col_major(
         Complex64::new(4.0, 0.0),
     ],
 );
-let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward);
+let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&y)?;

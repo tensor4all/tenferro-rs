@@ -270,19 +270,16 @@ fn alloc_workspace(rt: &CubeclRuntime, workspace_size: u64) -> crate::Result<Wor
     if workspace_size == 0 {
         return Ok(Workspace::none());
     }
-    let workspace_len =
-        usize::try_from(workspace_size).map_err(|_| crate::Error::BackendFailure {
-            op: OP,
-            message: format!("workspace size {workspace_size} does not fit in usize"),
-        })?;
+    let workspace_len = usize::try_from(workspace_size).map_err(|_| {
+        crate::Error::backend_failure(
+            OP,
+            format!("workspace size {workspace_size} does not fit in usize"),
+        )
+    })?;
     let handle = rt.client().empty(workspace_len);
-    let resource =
-        rt.client()
-            .get_resource(handle.clone())
-            .map_err(|err| crate::Error::BackendFailure {
-                op: OP,
-                message: format!("failed to obtain workspace resource: {err:?}"),
-            })?;
+    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
+        crate::Error::backend_failure(OP, format!("failed to obtain workspace resource: {err:?}"))
+    })?;
     Ok(Workspace {
         _handle: Some(handle),
         ptr: resource.resource().ptr as usize as *mut c_void,
@@ -298,9 +295,8 @@ fn typed_device_ptr<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle.clone())
-        .map_err(|err| crate::Error::BackendFailure {
-            op: OP,
-            message: format!("failed to obtain CubeCL resource: {err:?}"),
+        .map_err(|err| {
+            crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
         })?;
     Ok(resource.resource().ptr as usize as *mut c_void)
 }

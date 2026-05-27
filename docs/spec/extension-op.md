@@ -538,7 +538,7 @@ The compiled path runs through
 3. An `execute_extension_op` dispatcher in `tenferro-runtime/src/exec.rs` that,
    at runtime, calls the registered `ExtensionExecutor<B>`.
 4. A single-instruction-boundary category for extensions in
-   `tenferro-runtime/src/segment.rs` (similar to `DotGeneral` / `NaryEinsum`).
+   `tenferro-runtime/src/segment.rs` (similar to `DotGeneral`).
    Extensions MUST NOT participate in elementwise fusion planning
    because their fusion semantics are implementer-defined.
 
@@ -564,8 +564,8 @@ avoids hidden thread-local or process-global state in extension crates.
 ### Failure signature
 
 - An extension whose `eager_execute` errors surfaces as
-  `Error::BackendFailure { op, message }` with `op = "extension"` (or
-  a similar constant) and the `family_id` in `message`; see Section 12.
+  `Error::backend_failure("extension", message)` (or a similar constant)
+  with the `family_id` in `message`; see Section 12.
 - If a backend lacks a capability the extension needs (e.g.
   cuTENSOR unavailable on CPU-only builds), the extension SHOULD
   produce a descriptive `Error::BackendFailure` rather than panicking;
@@ -805,15 +805,15 @@ these error types / behaviours in the listed scenarios.
 
 | Scenario | Required behaviour |
 |---|---|
-| Extension runtime execution returns `Err` | Propagate to caller as `Error::BackendFailure { op: "extension", message }` with `family_id` included in `message`. MUST NOT retry, MUST NOT swallow. |
-| Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::BackendFailure` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
+| Extension runtime execution returns `Err` | Propagate to caller with `Error::backend_failure("extension", message)` and include `family_id` in `message`. MUST NOT retry, MUST NOT swallow. |
+| Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::backend_failure(...)` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
 | AD rules (`frule` / `rrule`, or low-level `linearize` / `transpose_rule`) encounter an `Extension` with no registered AD rule | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced `grad` / eager `backward` propagate it through the public `Error` type re-exported by the owning surface crate. |
 | Hash collision on `family_id` (second registration attempt) | Registry MUST reject with `RegistrationError::Duplicate`. |
 | Arity mismatch: `n_inputs()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
-| Extension runtime returns a tensor on the wrong device | Propagate to the caller as `Error::BackendFailure` (the core pipeline does not re-locate tensors). |
+| Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
 | Registration with malformed `family_id` | `RegistrationError::MalformedFamilyId`. |
 
 ### Constants for `op` field

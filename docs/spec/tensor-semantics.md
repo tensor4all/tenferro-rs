@@ -230,8 +230,8 @@ The contraction path optimizer decides the pairwise decomposition order.
 Concrete-shape results are cached by `GraphCompiler`; symbolic-shape runtime
 results are cached by `GraphExecutor`.
 
-For StableHLO lowering: the Fragment's binary ops map directly to
-`stablehlo.dot_general`, `stablehlo.multiply`, etc.
+For execution lowering: the Fragment's binary ops lower to `ExecOp` instructions
+such as `DotGeneral` and `Multiply`.
 
 ---
 

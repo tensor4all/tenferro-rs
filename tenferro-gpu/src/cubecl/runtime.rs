@@ -54,32 +54,36 @@ impl CubeclRuntime {
         let device = CudaDevice::new(device_ordinal);
         let client = CudaRuntime::client(&device);
         cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
-            crate::Error::BackendFailure {
-                op: "cubecl_runtime_init",
-                message: format!("failed to set CUDA runtime device: {err:?}"),
-            }
+            crate::Error::backend_failure(
+                "cubecl_runtime_init",
+                format!("failed to set CUDA runtime device: {err:?}"),
+            )
         })?;
-        cudarc::driver::result::init().map_err(|err| crate::Error::BackendFailure {
-            op: "cubecl_runtime_init",
-            message: format!("failed to initialize CUDA driver: {err:?}"),
+        cudarc::driver::result::init().map_err(|err| {
+            crate::Error::backend_failure(
+                "cubecl_runtime_init",
+                format!("failed to initialize CUDA driver: {err:?}"),
+            )
         })?;
         let cuda_device =
             cudarc::driver::result::device::get(device_ordinal as i32).map_err(|err| {
-                crate::Error::BackendFailure {
-                    op: "cubecl_runtime_init",
-                    message: format!("failed to obtain CUDA device {device_ordinal}: {err:?}"),
-                }
+                crate::Error::backend_failure(
+                    "cubecl_runtime_init",
+                    format!("failed to obtain CUDA device {device_ordinal}: {err:?}"),
+                )
             })?;
         let cuda_context = unsafe { cudarc::driver::result::primary_ctx::retain(cuda_device) }
-            .map_err(|err| crate::Error::BackendFailure {
-                op: "cubecl_runtime_init",
-                message: format!("failed to retain CUDA primary context: {err:?}"),
+            .map_err(|err| {
+                crate::Error::backend_failure(
+                    "cubecl_runtime_init",
+                    format!("failed to retain CUDA primary context: {err:?}"),
+                )
             })?;
         unsafe { cudarc::driver::result::ctx::set_current(cuda_context) }.map_err(|err| {
-            crate::Error::BackendFailure {
-                op: "cubecl_runtime_init",
-                message: format!("failed to set CUDA primary context current: {err:?}"),
-            }
+            crate::Error::backend_failure(
+                "cubecl_runtime_init",
+                format!("failed to set CUDA primary context current: {err:?}"),
+            )
         })?;
         Ok(Self {
             client,
@@ -117,18 +121,16 @@ impl CubeclRuntime {
         self.device_ordinal
     }
 
-    pub(crate) fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+    #[doc(hidden)]
+    pub fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
         cudarc::runtime::result::device::set(self.device_ordinal as i32).map_err(|err| {
-            crate::Error::BackendFailure {
-                op,
-                message: format!("failed to set CUDA runtime device: {err:?}"),
-            }
+            crate::Error::backend_failure(op, format!("failed to set CUDA runtime device: {err:?}"))
         })?;
         unsafe { cudarc::driver::result::ctx::set_current(self.cuda_context) }.map_err(|err| {
-            crate::Error::BackendFailure {
+            crate::Error::backend_failure(
                 op,
-                message: format!("failed to activate CUDA primary context: {err:?}"),
-            }
+                format!("failed to activate CUDA primary context: {err:?}"),
+            )
         })
     }
 
@@ -148,14 +150,12 @@ impl CubeclRuntime {
                 server
                     .raw_stream(StreamId::current())
                     .map(|stream| stream as u64)
-                    .map_err(|err| crate::Error::BackendFailure {
-                        op: "raw_cuda_stream",
-                        message: format!("{err:?}"),
+                    .map_err(|err| {
+                        crate::Error::backend_failure("raw_cuda_stream", format!("{err:?}"))
                     })
             })
-            .ok_or_else(|| crate::Error::BackendFailure {
-                op: "raw_cuda_stream",
-                message: "with_server returned None".into(),
+            .ok_or_else(|| {
+                crate::Error::backend_failure("raw_cuda_stream", "with_server returned None")
             })?
     }
 }

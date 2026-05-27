@@ -111,23 +111,4 @@ pub fn parse_einsum_subscripts(notation: &str) -> Result<EinsumSubscripts> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_matches_subscripts_integer_labels() {
-        let parsed = parse_einsum_subscripts("ij,jk->ik").unwrap();
-
-        assert_eq!(
-            parsed.inputs,
-            vec![
-                vec![b'i' as u32, b'j' as u32],
-                vec![b'j' as u32, b'k' as u32]
-            ]
-        );
-        assert_eq!(
-            Subscripts::from(&parsed),
-            Subscripts::parse("ij,jk->ik").unwrap()
-        );
-    }
-}
+mod tests;

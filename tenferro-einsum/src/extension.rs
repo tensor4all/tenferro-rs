@@ -16,6 +16,7 @@ use computegraph::types::{GlobalValKey, ValRef};
 use computegraph::types::{LocalValId, OpMode};
 #[cfg(feature = "autodiff")]
 use computegraph::OpEmitter;
+use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
@@ -28,10 +29,7 @@ use tenferro_ops::ext_op::{
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
-use tenferro_runtime::extension::{
-    ExtensionCacheKey, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
-};
+use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_tensor::{DType, Tensor, TensorBackend};
 
 use crate::builder::build_einsum_fragment;
@@ -483,44 +481,19 @@ fn project_repeated_labels_to_diagonal(
     result
 }
 
-/// Runtime executor for the standard einsum extension.
-#[derive(Debug, Default)]
-pub(crate) struct EinsumRuntime;
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for EinsumRuntime {
-    fn family_id(&self) -> &'static str {
-        EINSUM_EXTENSION_FAMILY_ID
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOp,
-        inputs: &[&Tensor],
-        ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let op = op
-            .as_any()
-            .downcast_ref::<EinsumExtensionOp>()
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                op: "einsum_extension",
-                message: "payload type mismatch for tenferro.einsum.v1".into(),
-            })?;
-        execute_einsum_extension(op, inputs, ctx).map(|tensor| vec![tensor])
-    }
-}
-
-/// Register the einsum runtime on a graph executor.
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor.registry_mut().register(Arc::new(EinsumRuntime))
+define_extension_runtime! {
+    runtime = EinsumRuntime,
+    family_id = EINSUM_EXTENSION_FAMILY_ID,
+    op_type = EinsumExtensionOp,
+    execute = execute_einsum_extension,
+    register_fn = register_runtime,
 }
 
 fn execute_einsum_extension<B: TensorBackend + 'static>(
     op: &EinsumExtensionOp,
     inputs: &[&Tensor],
     ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Tensor> {
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.is_empty() {
         return Err(tenferro_tensor::Error::InvalidConfig {
             op: "einsum_extension",
@@ -556,10 +529,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let result_local = match result_ref {
         ValRef::Local(local) => local,
         ValRef::External(_) => {
-            return Err(tenferro_tensor::Error::BackendFailure {
-                op: "einsum_extension",
-                message: "einsum builder returned an external value at runtime".into(),
-            })
+            return Err(tenferro_tensor::Error::backend_failure(
+                "einsum_extension",
+                "einsum builder returned an external value at runtime",
+            ))
         }
     };
     builder.set_outputs(vec![result_local]);
@@ -578,10 +551,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
             GlobalValKey::Input(TensorInputKey::User { id }) => {
                 let input_idx = *id as usize;
                 let tensor = inputs.get(input_idx).ok_or_else(|| {
-                    tenferro_tensor::Error::BackendFailure {
-                        op: "einsum_extension",
-                        message: format!("runtime input {input_idx} missing"),
-                    }
+                    tenferro_tensor::Error::backend_failure(
+                        "einsum_extension",
+                        format!("runtime input {input_idx} missing"),
+                    )
                 })?;
                 program_inputs.push((*tensor).clone());
                 input_dtypes.push(tensor.dtype());
@@ -590,10 +563,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
                 ));
             }
             other => {
-                return Err(tenferro_tensor::Error::BackendFailure {
-                    op: "einsum_extension",
-                    message: format!("unexpected runtime input key: {other:?}"),
-                })
+                return Err(tenferro_tensor::Error::backend_failure(
+                    "einsum_extension",
+                    format!("unexpected runtime input key: {other:?}"),
+                ))
             }
         }
     }
@@ -605,17 +578,14 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         &program,
         program_inputs,
     )
-    .map_err(|err| tenferro_tensor::Error::BackendFailure {
-        op: "einsum_extension",
-        message: err.to_string(),
-    })?;
+    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
     if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::BackendFailure {
-            op: "einsum_extension",
-            message: format!("expected 1 output, got {}", outputs.len()),
-        });
+        return Err(tenferro_tensor::Error::backend_failure(
+            "einsum_extension",
+            format!("expected 1 output, got {}", outputs.len()),
+        ));
     }
-    Ok(outputs.remove(0))
+    Ok(vec![outputs.remove(0)])
 }
 
 fn cached_runtime_tree<B: TensorBackend>(
@@ -646,10 +616,7 @@ fn cached_runtime_tree<B: TensorBackend>(
 }
 
 fn einsum_runtime_error(error: tenferro_device::Error) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::BackendFailure {
-        op: "einsum_extension",
-        message: error.to_string(),
-    }
+    tenferro_tensor::Error::backend_failure("einsum_extension", error.to_string())
 }
 
 fn hash_value<T: Hash>(value: &T) -> u64 {
@@ -752,65 +719,4 @@ fn promotion_rank(dt: DType) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-    use tenferro_ops::ext_op::ExtensionOp;
-
-    #[test]
-    fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
-        let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
-        let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
-        let rhs_shape = [SymDim::from(3usize), SymDim::from(4usize)];
-
-        let meta = op.infer_output_meta(
-            &[DType::F32, DType::F64],
-            &[lhs_shape.as_slice(), rhs_shape.as_slice()],
-        );
-
-        assert_eq!(meta[0].0, DType::F64);
-        assert_eq!(meta[0].1, vec![SymDim::from(2usize), SymDim::from(4usize)]);
-    }
-
-    #[test]
-    fn payload_identity_ignores_static_tree_execution_hint() {
-        let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
-        let raw_subscripts = crate::Subscripts::from(&subscripts);
-        let shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..]];
-        let left_first = Arc::new(
-            ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(0, 1), (3, 2)]).unwrap(),
-        );
-        let right_first = Arc::new(
-            ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(1, 2), (0, 3)]).unwrap(),
-        );
-
-        let without_hint = EinsumExtensionOp::new(subscripts.clone());
-        let hinted_left = EinsumExtensionOp::with_static_tree(subscripts.clone(), left_first);
-        let hinted_right = EinsumExtensionOp::with_static_tree(subscripts, right_first);
-
-        assert!(without_hint.payload_eq(&hinted_left));
-        assert!(hinted_left.payload_eq(&hinted_right));
-        assert_eq!(payload_hash(&without_hint), payload_hash(&hinted_left));
-        assert_eq!(payload_hash(&hinted_left), payload_hash(&hinted_right));
-    }
-
-    #[test]
-    fn payload_identity_includes_output_shape_hint() {
-        let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-        let without_hint = EinsumExtensionOp::new(subscripts.clone());
-        let with_hint = EinsumExtensionOp::with_output_shape_hint(
-            subscripts,
-            vec![SymDim::from(2usize), SymDim::from(4usize)],
-        );
-
-        assert!(!without_hint.payload_eq(&with_hint));
-        assert_ne!(payload_hash(&without_hint), payload_hash(&with_hint));
-    }
-
-    fn payload_hash(op: &EinsumExtensionOp) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        op.payload_hash(&mut hasher);
-        hasher.finish()
-    }
-}
+mod tests;

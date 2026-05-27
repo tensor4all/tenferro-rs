@@ -232,29 +232,6 @@ pub trait BackendSession {
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor>;
-    fn triangular_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor>;
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor>;
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-
     fn reclaim_buffer(&mut self, tensor: Tensor);
 
     #[doc(hidden)]
@@ -347,22 +324,6 @@ impl<B: TensorBackend + ?Sized> BackendSession for BackendSessionAdapter<'_, B> 
         pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        cholesky(input: &Tensor) -> crate::Result<Tensor>;
-        triangular_solve(
-            a: &Tensor,
-            b: &Tensor,
-            left_side: bool,
-            lower: bool,
-            transpose_a: bool,
-            unit_diagonal: bool
-        ) -> crate::Result<Tensor>;
-        lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        full_piv_lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> crate::Result<Tensor>;
-        svd(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        qr(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        eigh(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        eig(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         reclaim_buffer(tensor: Tensor) -> ();
         execute_elementwise_fusion(
             inputs: &[&Tensor],
@@ -573,30 +534,6 @@ pub trait TensorBackend {
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor>;
-    fn triangular_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor>;
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor>;
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor>;
 
     /// Execute a batch of operations inside the backend's execution context.
     ///

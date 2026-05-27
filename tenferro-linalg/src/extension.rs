@@ -2,12 +2,12 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
-};
-use tenferro_tensor::{DType, Tensor, TensorBackend};
+use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOpTrait};
+use tenferro_tensor::{DType, Tensor};
+
+use crate::backend::LinalgBackend;
 
 pub const LINALG_EXTENSION_FAMILY_ID: &str = "tenferro-linalg.linalg.v1";
 
@@ -179,38 +179,24 @@ impl ExtensionOpTrait for LinalgExtensionOp {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct LinalgRuntime;
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for LinalgRuntime {
-    fn family_id(&self) -> &'static str {
-        LINALG_EXTENSION_FAMILY_ID
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOpTrait,
-        inputs: &[&Tensor],
-        ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let op = op
-            .as_any()
-            .downcast_ref::<LinalgExtensionOp>()
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                op: "linalg_extension",
-                message: "payload type mismatch for tenferro-linalg.linalg.v1".into(),
-            })?;
-        execute_linalg(op.op(), inputs, ctx.backend_mut())
-    }
+fn execute_linalg_extension<B: LinalgBackend + 'static>(
+    op: &LinalgExtensionOp,
+    inputs: &[&Tensor],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    execute_linalg(op.op(), inputs, ctx.backend_mut())
 }
 
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor.registry_mut().register(Arc::new(LinalgRuntime))
+define_extension_runtime! {
+    runtime = LinalgRuntime,
+    family_id = LINALG_EXTENSION_FAMILY_ID,
+    op_type = LinalgExtensionOp,
+    execute = execute_linalg_extension,
+    register_fn = register_runtime,
+    backend_bound = LinalgBackend,
 }
 
-fn execute_linalg<B: TensorBackend>(
+fn execute_linalg<B: LinalgBackend>(
     op: LinalgOp,
     inputs: &[&Tensor],
     backend: &mut B,

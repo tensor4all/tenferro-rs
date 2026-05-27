@@ -74,13 +74,10 @@ pub fn download_tensor(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<Ten
 /// ```
 pub fn device_ptr(rt: &CubeclRuntime, tensor: &Tensor) -> crate::Result<u64> {
     let handle = cubecl_handle(tensor)?;
-    let resource =
-        rt.client()
-            .get_resource(handle)
-            .map_err(|err| crate::Error::BackendFailure {
-                op: "device_ptr",
-                message: format!("{err:?}"),
-            })?;
+    let resource = rt
+        .client()
+        .get_resource(handle)
+        .map_err(|err| crate::Error::backend_failure("device_ptr", format!("{err:?}")))?;
     Ok(resource.resource().ptr)
 }
 
@@ -92,13 +89,13 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     let host_data = match &typed.buffer {
         Buffer::Host(data) => data,
         Buffer::Backend(buffer) => {
-            return Err(crate::Error::BackendFailure {
-                op: "upload",
-                message: format!(
+            return Err(crate::Error::backend_failure(
+                "upload",
+                format!(
                     "expected host buffer, got `{}` backend buffer",
                     buffer.backend_family()
                 ),
-            });
+            ));
         }
     };
 
@@ -122,20 +119,17 @@ fn download_typed<T: CubeElement + Clone + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     let handle = match &typed.buffer {
         Buffer::Host(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "download",
-                message: "expected CubeCL buffer".into(),
-            });
+            return Err(crate::Error::backend_failure(
+                "download",
+                "expected CubeCL buffer",
+            ));
         }
         Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
 
     let bytes = client
         .read_one(handle)
-        .map_err(|err| crate::Error::BackendFailure {
-            op: "download",
-            message: format!("{err:?}"),
-        })?;
+        .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = T::from_bytes(&bytes).to_vec();
     Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
 }
@@ -148,13 +142,13 @@ fn upload_bool(
     let host_data = match &typed.buffer {
         Buffer::Host(data) => data,
         Buffer::Backend(buffer) => {
-            return Err(crate::Error::BackendFailure {
-                op: "upload",
-                message: format!(
+            return Err(crate::Error::backend_failure(
+                "upload",
+                format!(
                     "expected host buffer, got `{}` backend buffer",
                     buffer.backend_family()
                 ),
-            });
+            ));
         }
     };
 
@@ -179,20 +173,17 @@ fn download_bool(
 ) -> crate::Result<TypedTensor<bool>> {
     let handle = match &typed.buffer {
         Buffer::Host(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "download",
-                message: "expected CubeCL buffer".into(),
-            });
+            return Err(crate::Error::backend_failure(
+                "download",
+                "expected CubeCL buffer",
+            ));
         }
         Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
 
     let bytes = client
         .read_one(handle)
-        .map_err(|err| crate::Error::BackendFailure {
-            op: "download",
-            message: format!("{err:?}"),
-        })?;
+        .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = bytes.iter().map(|&byte| byte != 0).collect();
     Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
 }
@@ -213,10 +204,10 @@ fn cubecl_handle_from_buffer<T: 'static>(
     buffer: &Buffer<T>,
 ) -> crate::Result<cubecl_runtime::server::Handle> {
     match buffer {
-        Buffer::Host(_) => Err(crate::Error::BackendFailure {
-            op: "cubecl_handle",
-            message: "expected CubeCL buffer".into(),
-        }),
+        Buffer::Host(_) => Err(crate::Error::backend_failure(
+            "cubecl_handle",
+            "expected CubeCL buffer",
+        )),
         Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "cubecl_handle"),
     }
 }
@@ -229,11 +220,13 @@ fn cubecl_handle_from_backend<T: 'static>(
         .as_any()
         .downcast_ref::<CubeclBuffer<T>>()
         .map(|buffer| buffer.handle.clone())
-        .ok_or_else(|| crate::Error::BackendFailure {
-            op,
-            message: format!(
-                "expected CubeCL buffer, got `{}` backend buffer",
-                buffer.backend_family()
-            ),
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!(
+                    "expected CubeCL buffer, got `{}` backend buffer",
+                    buffer.backend_family()
+                ),
+            )
         })
 }

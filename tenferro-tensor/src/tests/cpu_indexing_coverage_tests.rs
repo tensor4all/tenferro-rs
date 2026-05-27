@@ -629,78 +629,11 @@ fn cpu_indexing_validation_covers_error_branches() {
 }
 
 #[test]
-fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
+fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
     let mut backend = CpuBackend::new();
     backend.with_backend_session(|exec| {
-        let eye = Tensor::C64(TypedTensor::from_vec_col_major(
-            vec![2, 2],
-            vec![
-                Complex64::new(1.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(1.0, 0.0),
-            ],
-        ));
-        let rhs = Tensor::C64(TypedTensor::from_vec_col_major(
-            vec![2, 1],
-            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-        ));
-
-        assert_eq!(exec.cholesky(&eye).unwrap().shape(), &[2, 2]);
-        assert_eq!(exec.lu(&eye).unwrap().len(), 4);
-        assert_eq!(exec.full_piv_lu(&eye).unwrap().len(), 5);
-        assert_eq!(
-            exec.full_piv_lu_solve(&eye, &rhs, false).unwrap().shape(),
-            &[2, 1]
-        );
-        assert_eq!(
-            exec.triangular_solve(&eye, &rhs, true, true, false, false)
-                .unwrap()
-                .shape(),
-            &[2, 1]
-        );
-        assert_eq!(exec.svd(&eye).unwrap().len(), 3);
-        assert_eq!(exec.qr(&eye).unwrap().len(), 2);
-        assert_eq!(exec.eigh(&eye).unwrap().len(), 2);
-        assert_eq!(exec.eig(&eye).unwrap().len(), 2);
-
         let f32_vec = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
-        let i64_vec = Tensor::I64(TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]));
-        assert!(matches!(
-            exec.eig(&i64_vec),
-            Err(crate::Error::BackendFailure { op: "eig", .. })
-        ));
-        assert!(matches!(
-            exec.triangular_solve(&i64_vec, &i64_vec, true, true, false, false),
-            Err(crate::Error::BackendFailure {
-                op: "triangular_solve",
-                ..
-            })
-        ));
-        assert!(matches!(
-            exec.full_piv_lu_solve(&i64_vec, &i64_vec, false),
-            Err(crate::Error::BackendFailure {
-                op: "full_piv_lu_solve",
-                ..
-            })
-        ));
-
         let f64_vec = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
-        assert!(matches!(
-            exec.triangular_solve(&f64_vec, &f32_vec, true, true, false, false),
-            Err(crate::Error::DTypeMismatch {
-                op: "triangular_solve",
-                ..
-            })
-        ));
-        assert!(matches!(
-            exec.full_piv_lu_solve(&f64_vec, &f32_vec, false),
-            Err(crate::Error::DTypeMismatch {
-                op: "full_piv_lu_solve",
-                ..
-            })
-        ));
-
         let dot_cfg = DotGeneralConfig {
             lhs_contracting_dims: vec![0],
             rhs_contracting_dims: vec![0],

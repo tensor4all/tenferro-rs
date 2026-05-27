@@ -69,16 +69,6 @@ impl TensorBackend for WrongDTypeBackend {
         pad(input: &Tensor, config: &PadConfig) -> tenferro_tensor::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> tenferro_tensor::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
-        cholesky(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
-        triangular_solve(a: &Tensor, b: &Tensor, left_side: bool, lower: bool, transpose_a: bool, unit_diagonal: bool) -> tenferro_tensor::Result<Tensor>;
-        lu(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        full_piv_lu(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> tenferro_tensor::Result<Tensor>;
-        svd(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        qr(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        eigh(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        eig(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
-        solve(a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor>;
     }
 
     fn dot_general(

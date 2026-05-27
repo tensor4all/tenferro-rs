@@ -7,7 +7,6 @@ mod exec_session;
 pub mod gemm;
 pub mod indexing;
 mod indexing_alloc;
-pub mod linalg;
 pub mod reduction;
 pub mod structural;
 

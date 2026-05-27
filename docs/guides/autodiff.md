@@ -47,7 +47,7 @@ use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
 
 let mut compiler = GraphCompiler::new();
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let factor = tenferro_linalg::traced_tensor::cholesky(&a);
+let factor = tenferro_linalg::traced_tensor::cholesky(&a).unwrap();
 let ad = AdContext::builder()
     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
     .build()

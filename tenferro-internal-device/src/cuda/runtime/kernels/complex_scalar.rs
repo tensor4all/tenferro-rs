@@ -12,6 +12,8 @@ use crate::Result;
 
 pub const COMPLEX_REAL_UNARY_KERNEL_NAME_F32: &str = "pointwise_unary_complex32_to_real_f32";
 pub const COMPLEX_REAL_UNARY_KERNEL_NAME_F64: &str = "pointwise_unary_complex64_to_real_f64";
+pub const COMPLEX_REAL_SCALE_KERNEL_NAME_F32: &str = "pointwise_scale_complex32_real_f32";
+pub const COMPLEX_REAL_SCALE_KERNEL_NAME_F64: &str = "pointwise_scale_complex64_real_f64";
 pub const COMPLEX_SCALE_KERNEL_NAME_F32: &str = "pointwise_mul_complex32_real_f32";
 pub const COMPLEX_SCALE_KERNEL_NAME_F64: &str = "pointwise_mul_complex64_real_f64";
 

@@ -12,6 +12,7 @@ mod state;
 mod structural;
 
 use kernels::*;
+pub use kernels::{KernelComplex32, KernelComplex64};
 pub use shared::*;
 pub(crate) use shared::{
     MetadataBinaryOp, MetadataBinarySpec, MetadataCastSpec, MetadataGenerateOp,

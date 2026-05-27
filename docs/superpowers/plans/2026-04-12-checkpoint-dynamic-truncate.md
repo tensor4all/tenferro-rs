@@ -809,7 +809,7 @@ fn shape_of_grad_is_zero() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 3], vec![0.0; 12]));
     let s = x.shape_of(0);
     // shape_of should not be differentiable
-    assert!(s.try_grad(&x).unwrap().is_none());
+    assert!(s.grad_optional(&x).unwrap().is_none());
 }
 ```
 

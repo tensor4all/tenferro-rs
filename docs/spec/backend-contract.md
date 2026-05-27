@@ -104,13 +104,13 @@ the ops are the real runtime contract:
 - Indexing / shape: `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
   `DynamicSlice`, `DynamicUpdateSlice`, `Pad`, `Concatenate`, `Reverse`, `ShapeOf`,
   `DynamicTruncate`, `PadToMatch`
-- Contraction: `DotGeneral`, `NaryEinsum`
-- Linalg: `Cholesky`, `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
-  `TriangularSolve`, `ValidateNonsingular`
+- Contraction: `DotGeneral`
+- Extension boundary: `Extension`
 - Constants: `Constant`
 
 String `CustomCall` dispatch is gone. Structured linalg variants are first
-class `ExecOp`s.
+class extension operations owned by `tenferro-linalg`, not core `ExecOp`
+variants.
 
 ---
 
@@ -195,7 +195,6 @@ These are handled without calling backend kernels:
 `GatherDynamicSliceSizes` resolves its symbolic `slice_sizes` against concrete
 runtime tensor shapes in the execution layer, then calls the backend through the
 normal concrete `Gather` path.
-- `ValidateNonsingular`
 
 `Constant` uses `TensorBackend::upload_host_tensor()` so device-specific
 execution still receives correctly placed tensors without implicit transfer of
@@ -206,16 +205,11 @@ user-supplied inputs.
 These stay as single-instruction boundaries in segmented execution:
 
 - `DotGeneral`
-- `NaryEinsum`
-- `Cholesky`
-- `Svd`
-- `Qr`
-- `Lu`
-- `Eigh`
-- `Eig`
-- `TriangularSolve`
+- `Extension`
 
-The standard path dispatches them through `TensorBackend`.
+`DotGeneral` dispatches through `TensorBackend`. `Extension` dispatch routes
+through the registered `ExtensionRuntime` for the operation family; linalg,
+einsum, and FFT register those runtimes from their owning crates.
 
 ---
 
@@ -261,7 +255,6 @@ It includes:
 - reductions
 - `dot_general`
 - indexing ops
-- linalg ops
 - `with_backend_session`
 - `download_to_host`
 - `upload_host_tensor`

@@ -6,13 +6,6 @@ use strided_kernel::reduce_axis;
 use super::typed_view;
 use crate::types::{Tensor, TypedTensor};
 
-fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: err.to_string(),
-    }
-}
-
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
     let mut seen = vec![false; rank];
     for &axis in axes {
@@ -37,10 +30,10 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum(t, axes)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum(t, axes)?)),
-        Tensor::Bool(_) => Err(crate::Error::BackendFailure {
-            op: "reduce_sum",
-            message: "unsupported dtype Bool".into(),
-        }),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+            "reduce_sum",
+            "unsupported dtype Bool",
+        )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_sum(t, axes)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_sum(t, axes)?)),
     }
@@ -52,10 +45,10 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod(t, axes)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod(t, axes)?)),
-        Tensor::Bool(_) => Err(crate::Error::BackendFailure {
-            op: "reduce_prod",
-            message: "unsupported dtype Bool".into(),
-        }),
+        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+            "reduce_prod",
+            "unsupported dtype Bool",
+        )),
         Tensor::C32(t) => Ok(Tensor::C32(typed_reduce_prod(t, axes)?)),
         Tensor::C64(t) => Ok(Tensor::C64(typed_reduce_prod(t, axes)?)),
     }
@@ -70,10 +63,10 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F32(tensor) => Ok(Tensor::F32(typed_reduce_max(tensor, axes)?)),
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_max(tensor, axes)?)),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-            Err(crate::Error::BackendFailure {
-                op: "reduce_max",
-                message: format!("unsupported dtype {:?}", input.dtype()),
-            })
+            Err(crate::Error::backend_failure(
+                "reduce_max",
+                format!("unsupported dtype {:?}", input.dtype()),
+            ))
         }
     }
 }
@@ -87,10 +80,10 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F32(tensor) => Ok(Tensor::F32(typed_reduce_min(tensor, axes)?)),
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_min(tensor, axes)?)),
         Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-            Err(crate::Error::BackendFailure {
-                op: "reduce_min",
-                message: format!("unsupported dtype {:?}", input.dtype()),
-            })
+            Err(crate::Error::backend_failure(
+                "reduce_min",
+                format!("unsupported dtype {:?}", input.dtype()),
+            ))
         }
     }
 }
@@ -129,11 +122,11 @@ where
 
     let input_view = typed_view(input);
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
-        .map_err(|err| backend_failure(label, err))?;
+        .map_err(|err| crate::Error::backend_failure(label, err))?;
 
     for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
-            .map_err(|err| backend_failure(label, err))?;
+            .map_err(|err| crate::Error::backend_failure(label, err))?;
     }
 
     Ok(TypedTensor::from_vec_col_major(

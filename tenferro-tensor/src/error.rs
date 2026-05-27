@@ -69,6 +69,31 @@ pub enum Error {
     MissingValue { slot: usize },
 }
 
+impl Error {
+    /// Construct a backend failure error while preserving the operation name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Error;
+    ///
+    /// let err = Error::backend_failure("matmul", "backend rejected launch");
+    /// assert!(matches!(
+    ///     err,
+    ///     Error::BackendFailure {
+    ///         op: "matmul",
+    ///         ref message,
+    ///     } if message == "backend rejected launch"
+    /// ));
+    /// ```
+    pub fn backend_failure(op: &'static str, message: impl std::fmt::Display) -> Self {
+        Self::BackendFailure {
+            op,
+            message: message.to_string(),
+        }
+    }
+}
+
 /// Result type alias for runtime tensor operations.
 ///
 /// # Examples

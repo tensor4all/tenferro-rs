@@ -19,6 +19,7 @@ cuda = ["dep:cubecl", "dep:cubecl-cuda", "dep:cubecl-runtime", "dep:cudarc"]
 rocm = []
 
 [dependencies]
+tenferro-core-ops = { path = "../tenferro-core-ops" }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }

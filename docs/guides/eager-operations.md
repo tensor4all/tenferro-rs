@@ -77,6 +77,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 ## Linear algebra
 
 ```rust
+use tenferro_linalg::LinalgBackend;
 use tenferro_runtime::{CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
@@ -87,23 +88,27 @@ let a = Tensor::from_vec_col_major(vec![3, 3], vec![
 ]);
 
 // SVD
-let (_u, s, _vt) = a.svd(&mut ctx).unwrap();
+let svd = LinalgBackend::svd(&mut ctx, &a).unwrap();
 
 // QR
-let (_q, _r) = a.qr(&mut ctx).unwrap();
+let qr = LinalgBackend::qr(&mut ctx, &a).unwrap();
 
 // Cholesky (for positive definite matrices)
-let chol = a.cholesky(&mut ctx).unwrap();
+let chol = LinalgBackend::cholesky(&mut ctx, &a).unwrap();
 
 // Eigendecomposition (symmetric)
-let (eigenvalues, eigenvectors) = a.eigh(&mut ctx).unwrap();
+let eigh = LinalgBackend::eigh(&mut ctx, &a).unwrap();
 
 // Solve Ax = b
 let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let x = a.solve(&b, &mut ctx).unwrap();
+let x = LinalgBackend::solve(&mut ctx, &a, &b).unwrap();
 
+let s = &svd[1];
 assert_eq!(s.shape(), &[3]);
+assert_eq!(qr[0].shape(), &[3, 3]);
 assert_eq!(chol.shape(), &[3, 3]);
+let eigenvalues = &eigh[0];
+let eigenvectors = &eigh[1];
 assert_eq!(eigenvalues.shape(), &[3]);
 assert_eq!(eigenvectors.shape(), &[3, 3]);
 assert_eq!(x.shape(), &[3]);

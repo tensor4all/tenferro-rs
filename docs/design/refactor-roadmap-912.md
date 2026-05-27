@@ -152,14 +152,8 @@ FFI handles, buffer pools, or caches.
 
 `tenferro-linalg` fully owns linalg.
 
-Remove direct tensor linalg methods such as:
-
-- `Tensor::svd`
-- `Tensor::qr`
-- `Tensor::cholesky`
-- `Tensor::eigh`
-- `Tensor::eig`
-- `Tensor::triangular_solve`
+Remove direct tensor linalg convenience methods for SVD, QR, Cholesky,
+eigendecomposition, solve, and triangular solve.
 
 Do not add compatibility aliases or deprecated shims.
 
@@ -181,8 +175,9 @@ runtime, and buffer owner.
 
 ## Public API Consistency
 
-Use `try_*` only for Result-returning checked variants. Rename `try_grad` to
-`grad_optional`. Do not keep aliases.
+Use `try_*` only for Result-returning checked variants. Use `grad_optional`
+for gradients that return `None` when the target is inactive. Do not keep
+aliases.
 
 Traced extension APIs that can fail return `Result`. Convert panic/assert
 validation in public or traced extension paths to typed errors.
@@ -216,7 +211,7 @@ crate sections:
 
 - eager linalg uses `tenferro_linalg::eager_tensor::*`
 - traced linalg uses `tenferro_linalg::traced_tensor::*` and `?`
-- examples of removed direct methods such as `Tensor::svd` are deleted
+- examples of removed direct tensor linalg methods are deleted
 
 Keep docs aligned with the no-facade-crate architecture: users import
 `tenferro-linalg`, `tenferro-einsum`, and `tenferro-fft` directly.
@@ -271,3 +266,38 @@ After #912, remaining redundancy should be intentional and localized:
 - Core primitive op metadata, dtype policy, AD rule lookup, runtime dispatch,
   and GPU dispatch should not each maintain independent hand-written match
   groups for the same operation set.
+
+## File And Test Audit Notes
+
+The #912 cleanup removed the new inline test block introduced for GPU primitive
+descriptors; production modules now use external test modules or crate-level
+tests for nontrivial test suites. The audit command:
+
+```bash
+rg -n '^mod tests \{' tenferro-* -g'*.rs'
+```
+
+should return no matches.
+
+Large files remaining above roughly 1000 lines are review triggers, not
+line-count-only split targets. The current retained cases are coherent concerns
+or vendor/API boundaries:
+
+- `tenferro-gpu/src/cubecl/mod.rs`: CUDA backend implementation surface and
+  backend trait glue after linalg ownership moved out.
+- `tenferro-linalg/src/cpu/linalg/faer_linalg.rs`: faer-backed linalg adapter
+  with shared batching, dtype, and error handling.
+- `tenferro-runtime/src/traced.rs`: public traced tensor construction and core
+  operation API surface.
+- `tenferro-tensor/src/types/strided_view.rs` and `tenferro-tensor/src/types.rs`:
+  tensor value/view surface with tightly coupled documentation and doctests.
+- `tenferro-runtime/src/compiler/mod.rs`: pass pipeline implementation; future
+  splits should follow pass ownership.
+- `tenferro-gpu/src/cubecl/ffi/cusolver.rs`: external cuSOLVER ABI boundary.
+- `tenferro-internal-ops/src/ad/registry.rs` and
+  `tenferro-internal-ops/src/ext_op.rs`: AD registry and extension contract
+  surfaces.
+
+Future splits should be by backend resource ownership, pass ownership, FFI
+library boundary, AD rule category, or public/private API boundary, not by
+arbitrary line count.

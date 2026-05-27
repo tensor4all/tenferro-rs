@@ -98,13 +98,10 @@ risk rather than propagating it.
 
 ### File Organization
 
-Keep source files **small and focused** — one logical concern per file. Use **~1000 lines** as the soft upper bound; files in the 500–1000 range are fine when they cover a single coherent concern. Actively split files that exceed 1000 lines. Benefits:
-
-- **Abstraction review**: module boundaries make the public/private API surface explicit and easier to audit
-- **Parallel editing**: multiple agents (or humans) can work on separate files without merge conflicts
-- **Navigation**: smaller files are faster to read and search
-
-When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
+See `REPOSITORY_RULES.md` for the authoritative tenferro file-organization
+rules. Treat **~1000 lines** as a soft review trigger, not a mechanical
+split requirement; split only along clear behavior, abstraction, feature,
+ownership, or public/private API boundaries.
 
 ### Test Coverage Target
 
@@ -114,32 +111,9 @@ coverage for the modified file and add tests if below 90%.
 
 ### Unit Test Organization
 
-For Rust modules, keep production source files focused on production code.
-Do not keep inline `#[cfg(test)]` blocks in normal modules unless the file is a
-genuinely tiny leaf module and the test is trivially small. Prefer
-module-local test directories such as `src/<module>/tests/*.rs` and leave only
-`#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
-integration tests. Do not use `include!` to inject test files into modules.
-
-When splitting tests, optimize for keeping AI and human reading context clean:
-a developer reading `src/**` should not need to scroll through large unit-test
-blocks to understand the implementation. Prefer splitting larger extracted test
-suites by concern rather than keeping one monolithic test module.
-
-Tests follow implementation ownership.
-
-- Public facade crates should prefer integration tests for user-visible
-  behavior.
-- Private implementation details must be tested in the crate that owns the
-  implementation, typically an internal crate, not through a public facade
-  crate.
-- If a crate sets `[lib] test = false`, do not add `src/**/tests`, inline
-  `#[cfg(test)] mod tests`, or other crate-local unit-test entrypoints to that
-  crate.
-- If a private helper in a facade crate needs direct unit testing, move that
-  helper into the owning internal crate instead of re-enabling facade-crate lib
-  tests.
-- This rule is enforced by repository contract tests and must stay green in CI.
+See `REPOSITORY_RULES.md` for the authoritative tenferro unit-test
+organization rules, including inline `#[cfg(test)]` block restrictions and
+module-local test file placement.
 
 ### ASCII Diagrams
 

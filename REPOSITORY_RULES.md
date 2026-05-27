@@ -84,6 +84,54 @@ rules from `tensor4all-agent-rules`.
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
 
+## File Organization
+
+Keep source files small and focused, but do not split files solely to reduce
+line count. Treat ~1000 lines as a soft review trigger, not as a mechanical
+limit. A file that remains one coherent concern may stay above that size until
+there is a clear behavior, abstraction, feature, or ownership boundary to
+extract.
+
+When splitting a large file, the split must make the code easier to reason
+about. Prefer boundaries such as parsing, plan computation, execution,
+dispatch, public API, AD rules, operation families, backend glue, validation,
+or cache ownership. Avoid arbitrary `part1` / `part2` splits and avoid moving
+code into tiny files that force readers to chase one concept across many
+modules.
+
+Use line count to decide where to inspect first. Use responsibility, change
+frequency, public/private API boundaries, and human navigation to decide
+whether and how to split.
+
+## Unit Test Organization
+
+For Rust modules, keep production source files focused on production code.
+Do not keep inline `#[cfg(test)]` blocks in normal modules unless the file is a
+genuinely tiny leaf module and the test is trivially small. Prefer
+module-local test directories such as `src/<module>/tests/*.rs` and leave only
+`#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
+integration tests. Do not use `include!` to inject test files into modules.
+
+When splitting tests, optimize for keeping AI and human reading context clean:
+a developer reading `src/**` should not need to scroll through large unit-test
+blocks to understand the implementation. Prefer splitting larger extracted test
+suites by concern rather than keeping one monolithic test module.
+
+Tests follow implementation ownership.
+
+- Public facade crates should prefer integration tests for user-visible
+  behavior.
+- Private implementation details must be tested in the crate that owns the
+  implementation, typically an internal crate, not through a public facade
+  crate.
+- If a crate sets `[lib] test = false`, do not add `src/**/tests`, inline
+  `#[cfg(test)] mod tests`, or other crate-local unit-test entrypoints to that
+  crate.
+- If a private helper in a facade crate needs direct unit testing, move that
+  helper into the owning internal crate instead of re-enabling facade-crate lib
+  tests.
+- This rule is enforced by repository contract tests and must stay green in CI.
+
 ## Performance And Layout Rules
 
 ### Complexity Budget

@@ -19,9 +19,9 @@ const CUBLAS_DEFAULT_PATHS: &[&str] = &[
     "/usr/lib/x86_64-linux-gnu/libcublas.so",
 ];
 
-pub(crate) type CusolverDnHandleRaw = *mut c_void;
-pub(crate) type CublasHandleRaw = *mut c_void;
-pub(crate) type CudaStream = *mut c_void;
+pub type CusolverDnHandleRaw = *mut c_void;
+pub type CublasHandleRaw = *mut c_void;
+pub type CudaStream = *mut c_void;
 
 type CusolverStatus = i32;
 type CublasStatus = i32;
@@ -31,7 +31,7 @@ const CUBLAS_STATUS_SUCCESS: CublasStatus = 0;
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CudaDataType {
+pub enum CudaDataType {
     F32,
     F64,
     Complex32,
@@ -40,35 +40,35 @@ pub(crate) enum CudaDataType {
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CublasFillMode {
+pub enum CublasFillMode {
     Lower = 0,
     Upper = 1,
 }
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CublasDiagType {
+pub enum CublasDiagType {
     NonUnit = 0,
     Unit = 1,
 }
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CublasSideMode {
+pub enum CublasSideMode {
     Left = 0,
     Right = 1,
 }
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CublasOperation {
+pub enum CublasOperation {
     N = 0,
     T = 1,
 }
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub(crate) enum CusolverEigMode {
+pub enum CusolverEigMode {
     Vector = 1,
 }
 
@@ -729,15 +729,15 @@ unsafe fn load_symbol<T: Copy>(
     name: &[u8],
     library_name: &'static str,
 ) -> crate::Result<T> {
-    let symbol = lib
-        .get::<T>(name)
-        .map_err(|err| crate::Error::BackendFailure {
-            op: "cubecl_linalg",
-            message: format!(
+    let symbol = lib.get::<T>(name).map_err(|err| {
+        crate::Error::backend_failure(
+            "cubecl_linalg",
+            format!(
                 "failed to load {library_name} symbol {}: {err}",
                 String::from_utf8_lossy(name).trim_end_matches('\0')
             ),
-        })?;
+        )
+    })?;
     Ok(*symbol)
 }
 
@@ -785,14 +785,14 @@ impl CusolverLibrary {
             }));
         }
 
-        Err(crate::Error::BackendFailure {
-            op: "cubecl_linalg",
-            message: format!(
+        Err(crate::Error::backend_failure(
+            "cubecl_linalg",
+            format!(
                 "failed to load cuSOLVER library (tried {}): {}",
                 paths.join(", "),
                 errors.join("; ")
             ),
-        })
+        ))
     }
 
     fn check_status(
@@ -804,13 +804,13 @@ impl CusolverLibrary {
         if status == CUSOLVER_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "{call} failed with cuSOLVER {} ({status})",
                 cusolver_status_name(status)
             ),
-        })
+        ))
     }
 }
 
@@ -838,14 +838,14 @@ impl CublasLibrary {
             return Ok(Arc::new(Self { _lib: lib, vtable }));
         }
 
-        Err(crate::Error::BackendFailure {
-            op: "triangular_solve",
-            message: format!(
+        Err(crate::Error::backend_failure(
+            "triangular_solve",
+            format!(
                 "failed to load cuBLAS library (tried {}): {}",
                 paths.join(", "),
                 errors.join("; ")
             ),
-        })
+        ))
     }
 
     fn check_status(
@@ -857,13 +857,13 @@ impl CublasLibrary {
         if status == CUBLAS_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "{call} failed with cuBLAS {} ({status})",
                 cublas_status_name(status)
             ),
-        })
+        ))
     }
 }
 
@@ -907,7 +907,7 @@ fn cublas_status_name(status: CublasStatus) -> &'static str {
     }
 }
 
-pub(crate) struct CusolverDnHandle {
+pub struct CusolverDnHandle {
     lib: Arc<CusolverLibrary>,
     raw: CusolverDnHandleRaw,
 }
@@ -915,7 +915,7 @@ pub(crate) struct CusolverDnHandle {
 unsafe impl Send for CusolverDnHandle {}
 
 impl CusolverDnHandle {
-    pub(crate) fn load() -> crate::Result<Self> {
+    pub fn load() -> crate::Result<Self> {
         let lib = CusolverLibrary::load()?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
@@ -923,12 +923,12 @@ impl CusolverDnHandle {
         Ok(Self { lib, raw })
     }
 
-    pub(crate) fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
+    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cusolverDnSetStream")
     }
 
-    pub(crate) fn potrf_buffer_size(
+    pub fn potrf_buffer_size(
         &self,
         dtype: CudaDataType,
         uplo: CublasFillMode,
@@ -979,7 +979,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn potrf(
+    pub unsafe fn potrf(
         &self,
         dtype: CudaDataType,
         uplo: CublasFillMode,
@@ -1036,7 +1036,7 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*potrf")
     }
 
-    pub(crate) fn getrf_buffer_size(
+    pub fn getrf_buffer_size(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1067,7 +1067,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn getrf(
+    pub unsafe fn getrf(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1124,7 +1124,7 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*getrf")
     }
 
-    pub(crate) fn geqrf_buffer_size(
+    pub fn geqrf_buffer_size(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1155,7 +1155,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn geqrf(
+    pub unsafe fn geqrf(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1217,7 +1217,7 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*geqrf")
     }
 
-    pub(crate) fn orgqr_buffer_size(
+    pub fn orgqr_buffer_size(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1278,7 +1278,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn orgqr(
+    pub unsafe fn orgqr(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1345,7 +1345,7 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*orgqr")
     }
 
-    pub(crate) fn gesvd_buffer_size(
+    pub fn gesvd_buffer_size(
         &self,
         dtype: CudaDataType,
         m: i32,
@@ -1374,7 +1374,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn gesvd(
+    pub unsafe fn gesvd(
         &self,
         dtype: CudaDataType,
         jobu: c_char,
@@ -1471,7 +1471,7 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*gesvd")
     }
 
-    pub(crate) fn syevd_buffer_size(
+    pub fn syevd_buffer_size(
         &self,
         dtype: CudaDataType,
         jobz: CusolverEigMode,
@@ -1532,7 +1532,7 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
-    pub(crate) unsafe fn syevd(
+    pub unsafe fn syevd(
         &self,
         dtype: CudaDataType,
         jobz: CusolverEigMode,
@@ -1606,7 +1606,7 @@ impl Drop for CusolverDnHandle {
     }
 }
 
-pub(crate) struct CublasHandle {
+pub struct CublasHandle {
     lib: Arc<CublasLibrary>,
     raw: CublasHandleRaw,
 }
@@ -1614,7 +1614,7 @@ pub(crate) struct CublasHandle {
 unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {
-    pub(crate) fn load() -> crate::Result<Self> {
+    pub fn load() -> crate::Result<Self> {
         let lib = CublasLibrary::load()?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
@@ -1622,12 +1622,12 @@ impl CublasHandle {
         Ok(Self { lib, raw })
     }
 
-    pub(crate) fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
+    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cublasSetStream_v2")
     }
 
-    pub(crate) unsafe fn trsm(
+    pub unsafe fn trsm(
         &self,
         dtype: CudaDataType,
         side: CublasSideMode,
@@ -1711,24 +1711,24 @@ impl Drop for CublasHandle {
     }
 }
 
-pub(crate) struct CudaLinalgHandles {
+pub struct CudaLinalgHandles {
     cusolver: CusolverDnHandle,
     cublas: CublasHandle,
 }
 
 impl CudaLinalgHandles {
-    pub(crate) fn load() -> crate::Result<Self> {
+    pub fn load() -> crate::Result<Self> {
         Ok(Self {
             cusolver: CusolverDnHandle::load()?,
             cublas: CublasHandle::load()?,
         })
     }
 
-    pub(crate) fn cusolver(&self) -> &CusolverDnHandle {
+    pub fn cusolver(&self) -> &CusolverDnHandle {
         &self.cusolver
     }
 
-    pub(crate) fn cublas(&self) -> &CublasHandle {
+    pub fn cublas(&self) -> &CublasHandle {
         &self.cublas
     }
 }

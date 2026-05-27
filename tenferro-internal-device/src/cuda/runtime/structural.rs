@@ -64,7 +64,7 @@ impl CudaRuntime {
     ///     runtime.free_raw(dst).unwrap();
     /// }
     /// ```
-    pub unsafe fn copy_strided_raw_with_transform<T: 'static>(
+    pub unsafe fn copy_strided_raw_with_transform<T: StridedCopyTransformElement>(
         &self,
         src: *const T,
         dst: *mut T,
@@ -169,14 +169,14 @@ impl CudaRuntime {
         self.launch_strided_copy_raw_impl(src, dst, spec, STRIDED_COPY_TRANSFORM_NONE)
     }
 
-    pub(super) unsafe fn launch_strided_copy_raw_with_transform<T: 'static>(
+    pub(super) unsafe fn launch_strided_copy_raw_with_transform<T: StridedCopyTransformElement>(
         &self,
         src: *const T,
         dst: *mut T,
         spec: &StridedCopySpec,
         transform: StridedCopyTransform,
     ) -> Result<std::sync::Arc<CudaStream>> {
-        if matches!(transform, StridedCopyTransform::Conj) && !supports_conj_strided_copy::<T>() {
+        if matches!(transform, StridedCopyTransform::Conj) && !T::SUPPORTS_CONJ_STRIDED_COPY {
             return Err(Error::InvalidArgument(
                 "strided copy conj transform requires Complex32 or Complex64 element type".into(),
             ));

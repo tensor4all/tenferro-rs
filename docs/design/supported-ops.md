@@ -32,9 +32,6 @@ CPU execution, and backend-parametric concrete tensor kernels.
 - Indexing: gather, scatter, slice, dynamic slice, pad, concatenate, reverse.
 - Shape packing helpers: `Tensor::stack` and `Tensor::index_select` compose
   reshape/concatenate/gather for host-known positions.
-- Linalg: Cholesky, triangular solve, LU, full-pivot LU, full-pivot LU solve,
-  SVD, QR, symmetric/Hermitian eigendecomposition, and general eigendecomposition
-  where the backend supports it.
 - Placement: explicit host/device upload and download hooks.
 - Optional backend elementwise fusion.
 
@@ -43,11 +40,12 @@ CPU execution, and backend-parametric concrete tensor kernels.
 The CPU backend is the main complete backend. Exactly one CPU feature must be
 enabled:
 
-- `cpu-faer` for faer-backed GEMM/linalg,
-- `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
+- `cpu-faer` for faer-backed GEMM,
+- `cpu-blas` for BLAS-backed GEMM.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
-dense linalg are implemented on CPU for the supported dtype subset of each op.
+the standard linalg extension are implemented on CPU for the supported dtype
+subset of each op.
 
 ### CUDA/CubeCL Status
 
@@ -72,7 +70,7 @@ CUDA operation and dtype matrix. The high-level categories are:
   gather/scatter/dynamic_slice for floating and complex data with numeric
   index tensors,
 - cuTENSOR-backed contraction paths for real and complex floating dtypes,
-- cuSOLVER/cuBLAS linalg paths for real and complex floating dtypes.
+- cuSOLVER/cuBLAS linalg extension paths for real and complex floating dtypes.
 
 Unsupported GPU operations and unsupported dtypes return `BackendFailure`.
 Known CUDA backend limitations are operation-specific: `eig`,
@@ -137,33 +135,24 @@ functions such as `svd`, `qr`, `cholesky`, `solve`, `triangular_solve`, `lu`,
 `full_piv_lu`, `eig`, `eigh`, `pinv`, `det`, `slogdet`, and `norm`, plus an
 eager `EagerTensor` surface when `autodiff` is enabled.
 
-The crate owns the linalg extension payload, runtime registration, and linalg
-AD rules where implemented. Backend kernels remain in `tenferro-tensor`.
+The crate owns the linalg extension payload, direct `LinalgBackend` trait,
+runtime registration, CPU linalg kernels, CUDA linalg bridge code, and linalg
+AD rules where implemented. `tenferro-gpu` remains the CUDA backend and resource
+owner; `tenferro-linalg` optionally depends on it for CUDA linalg execution.
 
 ## `tenferro-fft`
 
 `tenferro-fft` is the standard FFT extension. It follows the same explicit
 runtime registration model as einsum and linalg.
 
-## `tenferro`
+## Public Crates
 
-`tenferro` is the user-facing facade.
+The workspace intentionally has no root `tenferro` facade crate. Applications
+import runtime APIs from `tenferro-runtime`, eager and transform AD APIs from
+`tenferro-ad`, and operation families from explicit crates such as
+`tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`.
 
-Implemented public surfaces include:
-
-- `TracedTensor` graph construction through `GraphCompiler` and backend
-  execution through `GraphExecutor`.
-- `EagerTensor` / `EagerRuntime` for eager scalar-loss reverse-mode workflows.
-- Public AD transforms such as VJP/JVP/HVP over supported traced dense numeric
-  paths.
-- Compiled execution through `ExecProgram` / `eval_exec_ir`.
-- Extension application and runtime registration APIs. Standard operation
-  families are imported from their own crates and registered explicitly.
-- Shape packing on concrete, eager, and traced tensors: use `stack(..., -1)`
-  to create a trailing batch axis and `index_select(-1, positions)` to align
-  entries along that axis.
-
-The facade can evaluate through `CpuBackend` or the CUDA backend when the
+Runtime surfaces can evaluate through `CpuBackend` or the CUDA backend when the
 program uses operations supported by that backend and tensors are placed
 explicitly by the execution pipeline or caller. Unsupported GPU ops return
 errors rather than silently falling back to CPU.

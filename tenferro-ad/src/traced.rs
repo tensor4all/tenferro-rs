@@ -65,7 +65,7 @@ pub(crate) fn jvp_with_rules(
     )
 }
 
-pub(crate) fn try_grad_with_rules(
+pub(crate) fn grad_optional_with_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
@@ -146,7 +146,7 @@ fn grad_with_optional_rules(
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
 /// let loss = x.scale_real(2.0);
-/// let maybe_dx = loss.try_grad(&x).unwrap();
+/// let maybe_dx = loss.grad_optional(&x).unwrap();
 /// assert!(maybe_dx.is_some());
 /// ```
 pub trait TracedTensorAdExt {
@@ -154,7 +154,7 @@ pub trait TracedTensorAdExt {
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`grad`](Self::grad), but returns `None` when `wrt` is inactive.
-    fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>>;
+    fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>>;
 
     /// Evaluate this tensor and replace its graph with a concrete leaf while
     /// preserving the previous graph for AD replay.
@@ -193,7 +193,7 @@ impl TracedTensorAdExt for TracedTensor {
         grad_with_optional_rules(self, wrt, None)
     }
 
-    fn try_grad(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
+    fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
         if self.rank != 0 {
             return Err(Error::NonScalarGrad {
                 shape: error_shape_hint(self),

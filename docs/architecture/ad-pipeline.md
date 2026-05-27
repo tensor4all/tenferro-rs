@@ -79,7 +79,7 @@ chainrules     PrimitiveOp: GraphOp (adds add + linearize + transpose_rule)
 tidu           differentiate, transpose — generic AD transforms
                over PrimitiveOp; no graph infrastructure of its own
     ↓
-tenferro       Concrete tensor primitives + StableHLO lowering
+tenferro       Concrete tensor primitives + execution lowering
 ```
 
 `computegraph` provides the general-purpose computation graph engine. It is
@@ -788,7 +788,7 @@ by graph structure to avoid recompilation.
 ### Backend boundary
 
 This document stops at `MaterializedGraph -> CompiledProgram`. Backend-specific
-details (StableHLO lowering, GPU dispatch) remain in `../spec/backend-contract.md`.
+details (execution lowering, GPU dispatch) remain in `../spec/backend-contract.md`.
 
 The important contract is:
 

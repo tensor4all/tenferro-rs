@@ -1,4 +1,5 @@
-pub(crate) mod cusolver;
+#[doc(hidden)]
+pub mod cusolver;
 pub(crate) mod cutensor;
 
 #[cfg(test)]

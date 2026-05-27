@@ -10,13 +10,6 @@ use crate::{
 
 use super::{tensor_from_array, typed_array_uninit, typed_array_uninit_from_pool, typed_view};
 
-fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: err.to_string(),
-    }
-}
-
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
@@ -101,12 +94,12 @@ fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, 
         crate::Buffer::Host(data) => {
             let strides = col_major_strides(&tensor.shape);
             StridedView::new(data, &tensor.shape, &strides, 0)
-                .map_err(|err| backend_failure("structural", err))
+                .map_err(|err| crate::Error::backend_failure("structural", err))
         }
-        crate::Buffer::Backend(_) => Err(crate::Error::BackendFailure {
-            op: "structural",
-            message: "backend buffers are not supported for structural CPU helpers".into(),
-        }),
+        crate::Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            "structural",
+            "backend buffers are not supported for structural CPU helpers",
+        )),
     }
 }
 
@@ -115,7 +108,7 @@ fn copy_view_to_array<T: Copy + Clone>(
     mut out: strided_kernel::StridedArray<T>,
     src: &StridedView<'_, T>,
 ) -> crate::Result<TypedTensor<T>> {
-    copy_into(&mut out.view_mut(), src).map_err(|err| backend_failure(op, err))?;
+    copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_failure(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -152,10 +145,10 @@ where
     let input = match &tensor.buffer {
         crate::Buffer::Host(data) => data,
         crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
+            return Err(crate::Error::backend_failure(
                 op,
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
+                "backend buffers are not supported for structural CPU helpers",
+            ))
         }
     };
     // SAFETY: copy_from_slice initializes every element before returning.
@@ -433,7 +426,7 @@ pub fn typed_transpose<T: Copy + Clone>(
     let src = host_view(tensor)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit(permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted)
@@ -451,7 +444,7 @@ where
     let src = host_view(tensor)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit_from_pool(buffers, permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted)
@@ -539,21 +532,21 @@ where
     }
     let base: StridedView<'_, T, Identity> = match &tensor.buffer {
         crate::Buffer::Host(data) => StridedView::new(data, &base_dims, &base_strides, 0)
-            .map_err(|err| backend_failure("broadcast_in_dim", err))?,
+            .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?,
         crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "broadcast_in_dim",
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
+            return Err(crate::Error::backend_failure(
+                "broadcast_in_dim",
+                "backend buffers are not supported for structural CPU helpers",
+            ))
         }
     };
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
-        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = make_out(shape);
     copy_into(&mut out.view_mut(), &broadcast)
-        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -583,11 +576,11 @@ pub fn typed_extract_diagonal<T: Copy + Clone>(
 
     let diag = host_view(tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -606,11 +599,11 @@ where
 
     let diag = host_view(tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -667,10 +660,10 @@ where
     let input_data = match &tensor.buffer {
         crate::Buffer::Host(data) => data,
         crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "embed_diagonal",
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
+            return Err(crate::Error::backend_failure(
+                "embed_diagonal",
+                "backend buffers are not supported for structural CPU helpers",
+            ))
         }
     };
 
@@ -752,10 +745,10 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     let data = match &mut out.buffer {
         crate::Buffer::Host(data) => data,
         crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: if upper { "triu" } else { "tril" },
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
+            return Err(crate::Error::backend_failure(
+                if upper { "triu" } else { "tril" },
+                "backend buffers are not supported for structural CPU helpers",
+            ))
         }
     };
 

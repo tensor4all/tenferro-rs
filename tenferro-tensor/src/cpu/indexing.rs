@@ -92,10 +92,9 @@ macro_rules! dispatch_same_dtype_without_bool_result {
             (Tensor::I64($lhs_t), Tensor::I64($rhs_t)) => Ok(Tensor::I64($body?)),
             (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
             (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
-            (Tensor::Bool(_), Tensor::Bool(_)) => Err(crate::Error::BackendFailure {
-                op: $op,
-                message: $bool_message.into(),
-            }),
+            (Tensor::Bool(_), Tensor::Bool(_)) => {
+                Err(crate::Error::backend_failure($op, $bool_message))
+            }
             _ => Err(crate::Error::DTypeMismatch {
                 op: $op,
                 lhs: $lhs.dtype(),

@@ -120,10 +120,10 @@ fn extension_error(
     ext: &dyn tenferro_ops::ext_op::ExtensionOp,
     err: tenferro_tensor::Error,
 ) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
-        op: "extension",
-        message: format!("family_id={:?}: {err}", ext.family_id()),
-    })
+    Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+        "extension",
+        format!("family_id={:?}: {err}", ext.family_id()),
+    ))
 }
 
 fn exec_standard_op_on_tensors<B: TensorBackend>(

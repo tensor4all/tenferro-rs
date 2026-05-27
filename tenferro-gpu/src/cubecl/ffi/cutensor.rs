@@ -170,28 +170,28 @@ impl CutensorVtable {
 }
 
 unsafe fn load_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
-    let symbol = lib
-        .get::<T>(name)
-        .map_err(|err| crate::Error::BackendFailure {
-            op: OP,
-            message: format!(
+    let symbol = lib.get::<T>(name).map_err(|err| {
+        crate::Error::backend_failure(
+            OP,
+            format!(
                 "failed to load cuTENSOR symbol {}: {err}",
                 String::from_utf8_lossy(name).trim_end_matches('\0')
             ),
-        })?;
+        )
+    })?;
     Ok(*symbol)
 }
 
 unsafe fn load_data_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
-    let symbol = lib
-        .get::<*const T>(name)
-        .map_err(|err| crate::Error::BackendFailure {
-            op: OP,
-            message: format!(
+    let symbol = lib.get::<*const T>(name).map_err(|err| {
+        crate::Error::backend_failure(
+            OP,
+            format!(
                 "failed to load cuTENSOR data symbol {}: {err}",
                 String::from_utf8_lossy(name).trim_end_matches('\0')
             ),
-        })?;
+        )
+    })?;
     Ok(**symbol)
 }
 
@@ -219,14 +219,14 @@ impl CutensorLibrary {
             return Ok(Arc::new(Self { _lib: lib, vtable }));
         }
 
-        Err(crate::Error::BackendFailure {
-            op: OP,
-            message: format!(
+        Err(crate::Error::backend_failure(
+            OP,
+            format!(
                 "failed to load cuTENSOR library (tried {}): {}",
                 paths.join(", "),
                 errors.join("; ")
             ),
-        })
+        ))
     }
 
     fn status_message(&self, status: CutensorStatus) -> String {
@@ -248,13 +248,13 @@ impl CutensorLibrary {
         if status == CUTENSOR_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "{call} failed with cuTENSOR {} ({status})",
                 self.status_message(status)
             ),
-        })
+        ))
     }
 }
 
@@ -359,9 +359,8 @@ impl TensorDescriptor {
         alignment_requirement: u32,
         op: &'static str,
     ) -> crate::Result<Self> {
-        let num_modes = u32::try_from(extents.len()).map_err(|_| crate::Error::BackendFailure {
-            op,
-            message: "tensor rank exceeds cuTENSOR u32 limit".into(),
+        let num_modes = u32::try_from(extents.len()).map_err(|_| {
+            crate::Error::backend_failure(op, "tensor rank exceeds cuTENSOR u32 limit")
         })?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe {

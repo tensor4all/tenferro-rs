@@ -27,13 +27,13 @@ The previous architecture organized around eager execution families and tape-bas
 |---|---|---|
 | `internal/ad-core` | deleted | Fragment replaces tape |
 | `internal/ad-ops` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules live on TensorOp |
-| `internal/ad-linalg` | → `tenferro-internal-ops` PrimitiveOp impl | AD rules in ops/ad/linalg.rs |
+| `internal/ad-linalg` | → `tenferro-linalg` | Optional extension AD rules |
 | `internal/ad-surface` | → tidu-rs `differentiate`/`transpose` | External crate |
 | `internal/frontend-core` | → `tenferro-runtime` TracedTensor | Lazy, not eager |
 | `internal/runtime` | → `tenferro-runtime` graph compiler/executor | |
 | `tenferro-dynamic-compute` | deleted | Always graph |
 | `tenferro-internal-tensor-compute` | → `tenferro-internal-ops` | |
-| `tenferro-linalg-prims` | → `tenferro-internal-ops` | No need to separate |
+| `tenferro-linalg-prims` | → `tenferro-linalg` | Linalg is an extension family |
 | `tenferro-capi` | deferred | Phase 4+ |
 | `extension/*` | deferred | |
 
@@ -57,25 +57,20 @@ The current split is intentionally direct rather than facade-based. See
 ## III. Crate Dependency Graph
 
 ```text
-chainrules-core
-    |
-    ├── chainrules
-    └── tidu
+chainrules      -> chainrules-core
+tidu            -> chainrules-core
 
-tenferro-internal-device
-    |
-tenferro-tensor
-    |\
-    | \-- tenferro-gpu
-    |
-tenferro-internal-ops ─────── computegraph-rs (GraphOp, Fragment)
-    |
-tenferro-runtime ──────────── tidu-rs integration points
-    |
-    ├── tenferro-ad
-    ├── tenferro-einsum
-    ├── tenferro-linalg
-    └── tenferro-fft
+tenferro-tensor -> tenferro-internal-device
+tenferro-gpu    -> tenferro-tensor
+
+tenferro-internal-ops -> tenferro-tensor, tidu, computegraph-rs
+tenferro-runtime      -> tenferro-internal-ops, tenferro-tensor
+
+tenferro-ad           -> tenferro-runtime, tenferro-internal-ops, tidu
+tenferro-einsum       -> tenferro-runtime, tenferro-internal-ops
+tenferro-linalg       -> tenferro-runtime, tenferro-internal-ops, tenferro-tensor
+tenferro-linalg/cuda  -> tenferro-gpu
+tenferro-fft          -> tenferro-runtime, tenferro-internal-ops
 ```
 
 ---
@@ -89,10 +84,10 @@ different `Operand` types, tenferro provides two Op types:
 
 ### StdTensorOp — standard algebra, full vocabulary, AD-capable
 
-`StdTensorOp` is a **flat** enum whose variants mostly mirror StableHLO ops
-1:1 (documented exceptions: composite lowerings like `Conj`, multi-output
-linalg ops like `Svd`). It implements `GraphOp` (only — not `EvalGraphOp`),
-`PrimitiveOp`, and `SemiringOps`. There is no `GraphOp::eval`; all execution
+`StdTensorOp` is a **flat** enum whose core primitive variants mostly mirror
+StableHLO ops 1:1, with `StdTensorOp::Extension` carrying operation-family
+payloads such as linalg, einsum, and FFT. It implements `GraphOp` (only — not
+`EvalGraphOp`) and `SemiringOps`. There is no `GraphOp::eval`; all execution
 flows through the backend pipeline.
 
 Canonical definition: [`spec/primitive-catalog.md`](../spec/primitive-catalog.md) (Section IV -- Tenferro IR Vocabulary).
@@ -121,7 +116,7 @@ automatically by the execution engine.
 It is used **only** inside `SemiringOp<T>` — the generic custom-algebra op
 type. `StdTensorOp` does **not** wrap `SemiringOpKind`; it has its own flat
 variants that mostly mirror StableHLO 1:1 (with documented exceptions for
-composite lowerings and multi-output linalg ops).
+composite lowerings and extension carriers).
 
 `SemiringOpKind` is the minimal set of ops all algebras must support:
 `Add`, `Mul`, `DotGeneral`, `ReduceSum`, `Transpose`, `Reshape`,
@@ -230,10 +225,9 @@ pipeline.
 
 `ExecInstruction` carries the `ExecOp`, slot wiring, inferred `dtype`,
 inferred `output_shapes`, and liveness metadata (`last_use`). The compiler
-lowers `StdTensorOp` and `SemiringOpKind` almost 1:1 into `ExecOp`, with
-structured linalg variants (`Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
-`TriangularSolve`, `ValidateNonsingular`) represented directly instead of via
-stringly-typed custom calls.
+lowers core `StdTensorOp` variants and `SemiringOpKind` almost 1:1 into
+`ExecOp`; extension families lower to `ExecOp::Extension` and dispatch through
+registered extension runtimes instead of stringly typed custom calls.
 
 ### Pass pipeline
 
@@ -248,8 +242,8 @@ Pass algorithms: [`spec/optimizer-passes.md`](../spec/optimizer-passes.md).
 ### Generic execution engine
 
 The generic engine interprets `ExecProgram` by dispatching each instruction
-to `TensorBackend` methods, standard kernels, or common infrastructure,
-depending on the dispatch category.
+to `TensorBackend` methods, host helpers, extension runtimes, or common
+infrastructure, depending on the dispatch category.
 
 *(illustrative, non-normative -- see [`spec/backend-contract.md`](../spec/backend-contract.md) for canonical definition)*
 
@@ -463,8 +457,8 @@ GPU backend implementation crate. It depends on `tenferro-tensor` and exports
 GPU backend/runtime types plus explicit upload/download helpers. It does not
 re-export tensor types as its public API surface.
 
-- `cubecl/` — CubeCL/CUDA backend, runtime, memory transfer, GEMM/linalg FFI,
-  and kernel dispatch when the `cuda` feature is enabled
+- `cubecl/` — CubeCL/CUDA backend, runtime, memory transfer, GEMM support, FFI
+  handles, and kernel dispatch when the `cuda` feature is enabled
 - `kernels/` — CubeCL kernel launch helpers
 - `CubeclBackend` — `TensorBackend` implementation for CUDA-capable devices
 
@@ -478,8 +472,8 @@ The core crate:
 - `SemiringOps` trait
 - `SemiringOp<T>` generic wrapper + `impl GraphOp` (graph construction only,
   no eval — execution is dispatched through `TensorBackend`)
-- `StdTensorOp` enum — **flat**, most variants mirror a StableHLO op 1:1
-  (documented exceptions: `Conj`, multi-output linalg)
+- `StdTensorOp` enum — **flat**, with core primitive variants and an extension
+  carrier for linalg, einsum, FFT, and other operation families
 - `impl GraphOp for StdTensorOp` (graph construction only, no eval)
 - `impl PrimitiveOp for StdTensorOp` (linearize + transpose_rule)
 - `impl SemiringOps for StdTensorOp` — maps to flat variants directly

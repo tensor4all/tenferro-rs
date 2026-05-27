@@ -90,9 +90,9 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
         for i in 0..n {
             let diag = batch[i + i * rows];
             if diag.is_singular_or_nonfinite() {
-                return Err(Error::BackendFailure {
-                    op: "solve",
-                    message: if batch_total > 1 {
+                return Err(Error::backend_failure(
+                    "solve",
+                    if batch_total > 1 {
                         format!(
                             "singular matrix: non-finite or zero diagonal at batch {}, position [{},{}] = {:?}",
                             batch_idx, i, i, diag
@@ -103,7 +103,7 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
                             i, i, diag
                         )
                     },
-                });
+                ));
             }
         }
     }
@@ -131,10 +131,10 @@ pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
         Tensor::F32(t) => check_singular_diagonal(t),
         Tensor::C64(t) => check_singular_diagonal(t),
         Tensor::C32(t) => check_singular_diagonal(t),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::BackendFailure {
-            op: "solve",
-            message: format!("unsupported dtype {:?}", u.dtype()),
-        }),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::backend_failure(
+            "solve",
+            format!("unsupported dtype {:?}", u.dtype()),
+        )),
     }
 }
 

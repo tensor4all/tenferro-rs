@@ -273,8 +273,5 @@ fn broadcast_to(
 }
 
 fn broadcast_error(err: impl std::fmt::Display) -> Error {
-    Error::BackendFailure {
-        op: "broadcast",
-        message: err.to_string(),
-    }
+    Error::backend_failure("broadcast", err.to_string())
 }

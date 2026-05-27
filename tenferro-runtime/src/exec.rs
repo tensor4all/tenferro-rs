@@ -530,10 +530,10 @@ fn execute_extension_instruction<B: TensorBackend + 'static>(
         ext.eager_execute(&inputs)
     }
     .map_err(|err| {
-        Error::TensorRuntime(tenferro_tensor::Error::BackendFailure {
-            op: "extension",
-            message: format!("family_id={:?}: {err}", ext.family_id()),
-        })
+        Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+            "extension",
+            format!("family_id={:?}: {err}", ext.family_id()),
+        ))
     })?;
     if outputs.len() != inst.output_slots.len() {
         return Err(Error::TensorRuntime(

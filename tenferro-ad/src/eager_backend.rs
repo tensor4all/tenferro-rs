@@ -93,16 +93,6 @@ impl TensorBackend for EagerBackend {
         fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
         fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
         fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn cholesky(input: &Tensor) -> TensorResult<Tensor>;
-        fn triangular_solve(a: &Tensor, b: &Tensor, left_side: bool, lower: bool, transpose_a: bool, unit_diagonal: bool) -> TensorResult<Tensor>;
-        fn lu(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn full_piv_lu(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> TensorResult<Tensor>;
-        fn svd(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn qr(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn eigh(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn eig(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn solve(a: &Tensor, b: &Tensor) -> TensorResult<Tensor>;
     }
 
     fn with_backend_session<R: Send>(

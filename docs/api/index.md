@@ -28,6 +28,8 @@ For contributors, internal crate APIs are also available in the
   eager helpers, extension runtime, and optional linalg AD rules
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
   public FFT APIs
+- [tenferro-core-ops](./tenferro_core_ops/index.html): internal core primitive
+  operation catalog used by graph, runtime, and backend dispatch
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph op vocabulary and
   AD rule implementations
 - [tenferro-internal-device](./tenferro_device/index.html): shared device and
@@ -38,20 +40,15 @@ For contributors, internal crate APIs are also available in the
 ## Architecture Summary
 
 ```text
-tenferro-internal-device
-    |
-tenferro-tensor            -- dense runtime tensors, TensorBackend, CpuBackend
-    |\
-    | \-- tenferro-gpu    -- CubeCL/CUDA backend and GPU transfers
-    |
-tenferro-internal-ops      -- StdTensorOp, ExtensionOp boundary, PrimitiveOp rules
-    |
-tenferro-runtime           -- TracedTensor, GraphCompiler, GraphExecutor
-    |\
-    | \-- tenferro-ad     -- EagerRuntime, EagerTensor, traced AD traits
+tenferro-tensor          -> tenferro-internal-device
+tenferro-gpu             -> tenferro-tensor
+tenferro-internal-ops    -> tenferro-core-ops, tenferro-tensor
+tenferro-runtime         -> tenferro-internal-ops, tenferro-tensor
+tenferro-ad              -> tenferro-runtime, tenferro-internal-ops
 
-tenferro-einsum   -- standard einsum extension
-tenferro-linalg   -- standard linalg extension with optional AD rules
-tenferro-fft      -- standard FFT extension
+tenferro-einsum          -> tenferro-runtime
+tenferro-linalg          -> tenferro-runtime, tenferro-tensor
+tenferro-linalg/cuda     -> tenferro-gpu
+tenferro-fft             -> tenferro-runtime
 tenferro-internal-extension-macros    -- extension-op registration macros
 ```

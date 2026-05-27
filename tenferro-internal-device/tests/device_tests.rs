@@ -197,6 +197,7 @@ fn preferred_devices_main_memory_all_op_kinds() {
 }
 
 #[test]
+#[cfg(not(feature = "cuda"))]
 fn preferred_devices_gpu_memory_no_backend() {
     let result = preferred_compute_devices(
         LogicalMemorySpace::GpuMemory { device_id: 0 },
@@ -209,6 +210,23 @@ fn preferred_devices_gpu_memory_no_backend() {
             assert_eq!(op, OpKind::BatchedGemm);
         }
         other => panic!("expected NoCompatibleComputeDevice, got {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn preferred_devices_gpu_memory_with_cuda_feature() {
+    let result = preferred_compute_devices(
+        LogicalMemorySpace::GpuMemory { device_id: 0 },
+        OpKind::BatchedGemm,
+    );
+    match result {
+        Ok(devices) => assert_eq!(devices, vec![ComputeDevice::Cuda { device_id: 0 }]),
+        Err(Error::NoCompatibleComputeDevice { space, op }) => {
+            assert_eq!(space, LogicalMemorySpace::GpuMemory { device_id: 0 });
+            assert_eq!(op, OpKind::BatchedGemm);
+        }
+        Err(other) => panic!("expected CUDA device or NoCompatibleComputeDevice, got {other:?}"),
     }
 }
 

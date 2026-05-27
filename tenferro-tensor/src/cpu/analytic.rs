@@ -123,13 +123,6 @@ impl_real_analytic_elem!(f64);
 impl_complex_analytic_elem!(Complex32);
 impl_complex_analytic_elem!(Complex64);
 
-fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: err.to_string(),
-    }
-}
-
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
@@ -149,10 +142,10 @@ macro_rules! define_unary_analytic_op {
                 Tensor::F32(t) => Ok(Tensor::F32($typed_with_pool_fn(buffers, t)?)),
                 Tensor::F64(t) => Ok(Tensor::F64($typed_with_pool_fn(buffers, t)?)),
                 Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-                    Err(crate::Error::BackendFailure {
-                        op: stringify!($dispatch_fn),
-                        message: format!("unsupported dtype {:?}", input.dtype()),
-                    })
+                    Err(crate::Error::backend_failure(
+                        stringify!($dispatch_fn),
+                        format!("unsupported dtype {:?}", input.dtype()),
+                    ))
                 }
                 Tensor::C32(t) => Ok(Tensor::C32($typed_with_pool_fn(buffers, t)?)),
                 Tensor::C64(t) => Ok(Tensor::C64($typed_with_pool_fn(buffers, t)?)),
@@ -168,7 +161,7 @@ macro_rules! define_unary_analytic_op {
         {
             let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
             map_into(&mut out.view_mut(), &typed_view(input), |x| x.$elem_fn())
-                .map_err(|err| backend_failure(stringify!($typed_fn), err))?;
+                .map_err(|err| crate::Error::backend_failure(stringify!($typed_fn), err))?;
             Ok(tensor_from_array(out))
         }
     };
@@ -258,6 +251,6 @@ where
         &typed_view(rhs),
         |x, y| x.pow_elem(y),
     )
-    .map_err(|err| backend_failure("pow", err))?;
+    .map_err(|err| crate::Error::backend_failure("pow", err))?;
     Ok(tensor_from_array(out))
 }

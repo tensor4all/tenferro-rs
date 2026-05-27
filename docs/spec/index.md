@@ -6,7 +6,7 @@ link here rather than re-stating.
 
 | Document | Owns |
 |----------|------|
-| [primitive-catalog.md](./primitive-catalog.md) | Tenferro IR op vocabulary, per-op semantics, StableHLO lowering rules |
+| [primitive-catalog.md](./primitive-catalog.md) | Tenferro IR op vocabulary, per-op semantics, and core primitive catalog boundary |
 | [backend-contract.md](./backend-contract.md) | Backend pipeline, Execution IR dispatch, backend trait signatures |
 | [ad-contract.md](./ad-contract.md) | PrimitiveOp trait signature, linearize/transpose_rule requirements |
 | [optimizer-passes.md](./optimizer-passes.md) | Optimization pass algorithms and ordering |

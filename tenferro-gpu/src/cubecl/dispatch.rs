@@ -12,12 +12,14 @@ use crate::types::{
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 
-pub(crate) fn cube_count_for_len(len: usize) -> CubeCount {
+#[doc(hidden)]
+pub fn cube_count_for_len(len: usize) -> CubeCount {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize) as u32;
     CubeCount::Static(cubes.max(1), 1, 1)
 }
 
-pub(crate) fn cube_dim_1d() -> CubeDim {
+#[doc(hidden)]
+pub fn cube_dim_1d() -> CubeDim {
     CubeDim::new_1d(DEFAULT_CUBE_DIM_X)
 }
 
@@ -32,26 +34,28 @@ where
     out
 }
 
-pub(crate) fn cubecl_buffer<'a, T: 'static>(
+#[doc(hidden)]
+pub fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     match &tensor.buffer {
-        Buffer::Host(_) => Err(crate::Error::BackendFailure {
+        Buffer::Host(_) => Err(crate::Error::backend_failure(
             op,
-            message: "expected CubeCL GPU tensor, got host tensor. \
-                      Use upload_tensor() to transfer to GPU before calling GPU ops."
-                .into(),
-        }),
+            "expected CubeCL GPU tensor, got host tensor. \
+                      Use upload_tensor() to transfer to GPU before calling GPU ops.",
+        )),
         Buffer::Backend(buffer) => buffer
             .as_any()
             .downcast_ref::<CubeclBuffer<T>>()
-            .ok_or_else(|| crate::Error::BackendFailure {
-                op,
-                message: format!(
-                    "expected CubeCL GPU tensor, got backend buffer family `{}`",
-                    buffer.backend_family()
-                ),
+            .ok_or_else(|| {
+                crate::Error::backend_failure(
+                    op,
+                    format!(
+                        "expected CubeCL GPU tensor, got backend buffer family `{}`",
+                        buffer.backend_family()
+                    ),
+                )
             }),
     }
 }
@@ -68,9 +72,11 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
     shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| crate::Error::BackendFailure {
-            op,
-            message: format!("shape product overflow for CubeCL tensor shape {shape:?}"),
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!("shape product overflow for CubeCL tensor shape {shape:?}"),
+            )
         })
 }
 
@@ -81,13 +87,13 @@ fn validate_cubecl_buffer_len<T>(
 ) -> crate::Result<()> {
     let expected_len = checked_shape_product(op, &tensor.shape)?;
     if expected_len != buffer.len {
-        return Err(crate::Error::BackendFailure {
+        return Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "expected shape product {expected_len} elements, actual CubeclBuffer::len {}",
                 buffer.len
             ),
-        });
+        ));
     }
     Ok(())
 }
@@ -122,7 +128,8 @@ fn validate_raw_ternary_shapes<TA, TB, TC>(
     ensure_same_shape(op, &c.shape, out_shape)
 }
 
-pub(crate) fn typed_tensor_binding<T: CubeElement + Clone>(
+#[doc(hidden)]
+pub fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CudaRuntime>> {
@@ -147,13 +154,13 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
 ) -> crate::Result<()> {
     cubecl_buffer(tensor, op)?;
     if !matches!(&tensor.placement.memory_kind, MemoryKind::Device) {
-        return Err(crate::Error::BackendFailure {
+        return Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "expected GPU tensor placement, got {:?}",
                 tensor.placement.memory_kind
             ),
-        });
+        ));
     }
     match &tensor.placement.device {
         Some(device)
@@ -162,26 +169,27 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
         {
             Ok(())
         }
-        Some(device) => Err(crate::Error::BackendFailure {
+        Some(device) => Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "expected GPU tensor resident on cuda:{}, got {:?}:{}",
                 rt.device_ordinal(),
                 device.kind,
                 device.ordinal
             ),
-        }),
-        None => Err(crate::Error::BackendFailure {
+        )),
+        None => Err(crate::Error::backend_failure(
             op,
-            message: format!(
+            format!(
                 "expected GPU tensor resident on cuda:{}, got missing device metadata",
                 rt.device_ordinal()
             ),
-        }),
+        )),
     }
 }
 
-pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
+#[doc(hidden)]
+pub fn typed_from_cubecl<T: Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
     device_ordinal: usize,
@@ -199,7 +207,8 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
     }
 }
 
-pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
+#[doc(hidden)]
+pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CubeclRuntime,
     shape: &[usize],
 ) -> TypedTensor<T> {
@@ -222,7 +231,8 @@ pub(crate) fn alloc_bool_output(rt: &CubeclRuntime, shape: &[usize]) -> TypedTen
     )
 }
 
-pub(crate) fn typed_tensor_array_arg<T: CubeElement + Clone>(
+#[doc(hidden)]
+pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
@@ -260,29 +270,28 @@ where
 {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let requested_bytes =
-        len.checked_mul(core::mem::size_of::<U>())
-            .ok_or_else(|| crate::Error::BackendFailure {
-                op,
-                message: format!("reinterpreted CubeCL array length overflow for len {len}"),
-            })?;
+    let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
+        crate::Error::backend_failure(
+            op,
+            format!("reinterpreted CubeCL array length overflow for len {len}"),
+        )
+    })?;
     let available_bytes = buffer
         .len
         .checked_mul(core::mem::size_of::<T>())
-        .ok_or_else(|| crate::Error::BackendFailure {
-            op,
-            message: format!(
-                "CubeCL buffer byte length overflow for {} elements",
-                buffer.len
-            ),
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!(
+                    "CubeCL buffer byte length overflow for {} elements",
+                    buffer.len
+                ),
+            )
         })?;
     if requested_bytes > available_bytes {
-        return Err(crate::Error::BackendFailure {
-            op,
-            message: format!(
+        return Err(crate::Error::backend_failure(op, format!(
                 "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
-            ),
-        });
+            )));
     }
 
     // SAFETY: `validate_cubecl_buffer_len` first proves the typed tensor shape
@@ -675,15 +684,15 @@ pub(crate) fn ternary_dtype_mismatch(
     second: &Tensor,
     third: &Tensor,
 ) -> crate::Error {
-    crate::Error::BackendFailure {
+    crate::Error::backend_failure(
         op,
-        message: format!(
+        format!(
             "dtype mismatch first={:?} second={:?} third={:?}",
             first.dtype(),
             second.dtype(),
             third.dtype()
         ),
-    }
+    )
 }
 
 pub(crate) fn ensure_same_shape(
@@ -745,3 +754,230 @@ pub(crate) fn compare_mode(dir: &CompareDir) -> usize {
         CompareDir::Ge => 4,
     }
 }
+
+macro_rules! launch_binary_elementwise_kernel {
+    ($backend:expr, $lhs:ident, $rhs:ident, $op:expr, $kernel:ident, $scalar:ty, $variant:ident) => {
+        launch_binary(
+            $backend.runtime(),
+            $lhs,
+            $rhs,
+            &$lhs.shape,
+            $op,
+            |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(
+                    client, count, dim, out, lhs_arg, rhs_arg,
+                );
+            },
+        )
+        .map(Tensor::$variant)
+    };
+}
+
+macro_rules! launch_unary_elementwise_kernel {
+    ($backend:expr, $input:ident, $op:expr, $kernel:ident, $scalar:ty, $variant:ident) => {
+        launch_unary(
+            $backend.runtime(),
+            $input,
+            &$input.shape,
+            $op,
+            |client, count, dim, out, input_arg| unsafe {
+                crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(
+                    client, count, dim, out, input_arg,
+                );
+            },
+        )
+        .map(Tensor::$variant)
+    };
+}
+
+macro_rules! dispatch_binary_float_complex {
+    ($backend:expr, $lhs:expr, $rhs:expr, $kind:expr, $float_kernel:ident, $complex_kernel:ident) => {{
+        let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
+            $kind,
+            $crate::cubecl::op_descriptor::GpuLaunchKind::BinaryFloatComplex,
+        )?;
+        let op = descriptor.name;
+        match ($lhs, $rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f32,
+                    F32
+                )
+            }
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f64,
+                    F64
+                )
+            }
+            (Tensor::C32(lhs), Tensor::C32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex32,
+                    C32
+                )
+            }
+            (Tensor::C64(lhs), Tensor::C64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $complex_kernel,
+                    num_complex::Complex64,
+                    C64
+                )
+            }
+            _ => Err(dtype_mismatch(op, $lhs, $rhs)),
+        }
+    }};
+}
+
+macro_rules! dispatch_binary_float_only {
+    ($backend:expr, $lhs:expr, $rhs:expr, $kind:expr, $float_kernel:ident) => {{
+        let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
+            $kind,
+            $crate::cubecl::op_descriptor::GpuLaunchKind::BinaryFloatOnly,
+        )?;
+        let op = descriptor.name;
+        match ($lhs, $rhs) {
+            (Tensor::F32(lhs), Tensor::F32(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f32,
+                    F32
+                )
+            }
+            (Tensor::F64(lhs), Tensor::F64(rhs)) => {
+                $crate::cubecl::dispatch::launch_binary_elementwise_kernel!(
+                    $backend,
+                    lhs,
+                    rhs,
+                    op,
+                    $float_kernel,
+                    f64,
+                    F64
+                )
+            }
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", $lhs.dtype())),
+            ),
+            _ => Err(dtype_mismatch(op, $lhs, $rhs)),
+        }
+    }};
+}
+
+macro_rules! dispatch_unary_float_complex {
+    ($backend:expr, $input:expr, $kind:expr, $float_kernel:ident, $complex_kernel:ident) => {{
+        let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
+            $kind,
+            $crate::cubecl::op_descriptor::GpuLaunchKind::UnaryFloatComplex,
+        )?;
+        let op = descriptor.name;
+        match $input {
+            Tensor::F32(tensor) => {
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $float_kernel,
+                    f32,
+                    F32
+                )
+            }
+            Tensor::F64(tensor) => {
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $float_kernel,
+                    f64,
+                    F64
+                )
+            }
+            Tensor::C32(tensor) => $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                $backend,
+                tensor,
+                op,
+                $complex_kernel,
+                num_complex::Complex32,
+                C32
+            ),
+            Tensor::C64(tensor) => $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                $backend,
+                tensor,
+                op,
+                $complex_kernel,
+                num_complex::Complex64,
+                C64
+            ),
+            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+                Err(crate::Error::backend_failure(
+                    op,
+                    format!("unsupported dtype {:?}", $input.dtype()),
+                ))
+            }
+        }
+    }};
+}
+
+macro_rules! dispatch_unary_float_only {
+    ($backend:expr, $input:expr, $kind:expr, $float_kernel:ident) => {{
+        let descriptor = $crate::cubecl::op_descriptor::require_gpu_descriptor(
+            $kind,
+            $crate::cubecl::op_descriptor::GpuLaunchKind::UnaryFloatOnly,
+        )?;
+        let op = descriptor.name;
+        match $input {
+            Tensor::F32(tensor) => {
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $float_kernel,
+                    f32,
+                    F32
+                )
+            }
+            Tensor::F64(tensor) => {
+                $crate::cubecl::dispatch::launch_unary_elementwise_kernel!(
+                    $backend,
+                    tensor,
+                    op,
+                    $float_kernel,
+                    f64,
+                    F64
+                )
+            }
+            _ => Err(crate::Error::backend_failure(
+                op,
+                format!("unsupported dtype {:?}", $input.dtype()),
+            )),
+        }
+    }};
+}
+
+pub(crate) use dispatch_binary_float_complex;
+pub(crate) use dispatch_binary_float_only;
+pub(crate) use dispatch_unary_float_complex;
+pub(crate) use dispatch_unary_float_only;
+pub(crate) use launch_binary_elementwise_kernel;
+pub(crate) use launch_unary_elementwise_kernel;
