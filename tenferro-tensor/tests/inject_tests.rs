@@ -9,7 +9,7 @@ use tenferro_tensor::inject::{
     register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, register_lapack_provider_ptrs,
     BlasGemmFnPtrSet, LapackFullPivLuFnPtrSet, LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
 static TEST_LOCK: Mutex<()> = Mutex::new(());
