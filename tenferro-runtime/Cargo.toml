@@ -16,6 +16,7 @@ cpu-faer = ["tenferro-tensor/cpu-faer"]
 cpu-blas = ["tenferro-tensor/cpu-blas"]
 
 [dependencies]
+tenferro-core-ops = { path = "../tenferro-core-ops" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
 computegraph.workspace = true

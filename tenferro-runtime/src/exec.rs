@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use num_complex::{Complex32, Complex64};
+use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
@@ -11,7 +12,8 @@ use tenferro_tensor::{
 };
 
 use crate::extension_runtime::ExtensionExecutor;
-use crate::scalar_semantics::dynamic_truncate_size;
+
+mod dispatch;
 
 #[derive(Clone, Debug)]
 pub enum ExecOp {
@@ -125,6 +127,63 @@ pub enum ExecOp {
     Extension(Arc<dyn ExtensionOp>),
 }
 
+impl ExecOp {
+    pub(crate) fn primitive_kind(&self) -> Option<PrimitiveOpKind> {
+        let kind = match self {
+            Self::Transpose { .. } => PrimitiveOpKind::Transpose,
+            Self::Reshape { .. } => PrimitiveOpKind::Reshape,
+            Self::BroadcastInDim { .. } => PrimitiveOpKind::BroadcastInDim,
+            Self::Convert { .. } => PrimitiveOpKind::Convert,
+            Self::Constant { .. } => PrimitiveOpKind::Constant,
+            Self::DotGeneral(_) | Self::DotGeneralWithConj { .. } => PrimitiveOpKind::DotGeneral,
+            Self::ReduceSum { .. } => PrimitiveOpKind::ReduceSum,
+            Self::ExtractDiag { .. } => PrimitiveOpKind::ExtractDiag,
+            Self::EmbedDiag { .. } => PrimitiveOpKind::EmbedDiag,
+            Self::Tril { .. } => PrimitiveOpKind::Tril,
+            Self::Triu { .. } => PrimitiveOpKind::Triu,
+            Self::Add => PrimitiveOpKind::Add,
+            Self::Multiply => PrimitiveOpKind::Mul,
+            Self::Negate => PrimitiveOpKind::Neg,
+            Self::Conj => PrimitiveOpKind::Conj,
+            Self::Divide => PrimitiveOpKind::Div,
+            Self::Abs => PrimitiveOpKind::Abs,
+            Self::Sign => PrimitiveOpKind::Sign,
+            Self::Maximum => PrimitiveOpKind::Maximum,
+            Self::Minimum => PrimitiveOpKind::Minimum,
+            Self::Compare(_) => PrimitiveOpKind::Compare,
+            Self::Select => PrimitiveOpKind::Select,
+            Self::Clamp => PrimitiveOpKind::Clamp,
+            Self::Exp => PrimitiveOpKind::Exp,
+            Self::Log => PrimitiveOpKind::Log,
+            Self::Sin => PrimitiveOpKind::Sin,
+            Self::Cos => PrimitiveOpKind::Cos,
+            Self::Tanh => PrimitiveOpKind::Tanh,
+            Self::Sqrt => PrimitiveOpKind::Sqrt,
+            Self::Rsqrt => PrimitiveOpKind::Rsqrt,
+            Self::Pow => PrimitiveOpKind::Pow,
+            Self::Expm1 => PrimitiveOpKind::Expm1,
+            Self::Log1p => PrimitiveOpKind::Log1p,
+            Self::Gather(_) => PrimitiveOpKind::Gather,
+            Self::GatherDynamicSliceSizes { .. } => PrimitiveOpKind::GatherDynamicSliceSizes,
+            Self::Scatter(_) => PrimitiveOpKind::Scatter,
+            Self::Slice(_) => PrimitiveOpKind::Slice,
+            Self::DynamicSlice { .. } => PrimitiveOpKind::DynamicSlice,
+            Self::DynamicUpdateSlice => PrimitiveOpKind::DynamicUpdateSlice,
+            Self::Pad(_) => PrimitiveOpKind::Pad,
+            Self::Concatenate { .. } => PrimitiveOpKind::Concatenate,
+            Self::Reverse { .. } => PrimitiveOpKind::Reverse,
+            Self::ShapeOf { .. } => PrimitiveOpKind::ShapeOf,
+            Self::DynamicTruncate { .. } => PrimitiveOpKind::DynamicTruncate,
+            Self::PadToMatch { .. } => PrimitiveOpKind::PadToMatch,
+            Self::ReduceProd { .. } => PrimitiveOpKind::ReduceProd,
+            Self::ReduceMax { .. } => PrimitiveOpKind::ReduceMax,
+            Self::ReduceMin { .. } => PrimitiveOpKind::ReduceMin,
+            Self::Extension(_) => return None,
+        };
+        Some(kind)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecInstruction {
     pub op: ExecOp,
@@ -189,27 +248,15 @@ pub(crate) fn collect_outputs_from(
 }
 
 pub(crate) fn is_host_instruction(inst: &ExecInstruction) -> bool {
-    matches!(
-        &inst.op,
-        ExecOp::ShapeOf { .. }
-            | ExecOp::DynamicTruncate { .. }
-            | ExecOp::PadToMatch { .. }
-            | ExecOp::Constant { .. }
-    )
+    dispatch::is_host_op(&inst.op)
 }
 
 pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
-    matches!(
-        &inst.op,
-        ExecOp::DotGeneral(_) | ExecOp::DotGeneralWithConj { .. } | ExecOp::Extension(_)
-    )
+    dispatch::is_ffi_op(&inst.op)
 }
 
 pub(crate) fn is_exec_session_ffi_instruction(inst: &ExecInstruction) -> bool {
-    matches!(
-        &inst.op,
-        ExecOp::DotGeneral(_) | ExecOp::DotGeneralWithConj { .. }
-    )
+    dispatch::is_exec_session_ffi_op(&inst.op)
 }
 
 pub(crate) fn resolve_tensor_shape_exprs(
@@ -360,137 +407,7 @@ pub(crate) fn execute_backend_op(
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    let result = match &inst.op {
-        ExecOp::Transpose { perm } => exec.transpose(get(slots, &inst.input_slots, 0)?, perm)?,
-        ExecOp::Reshape { shape } => {
-            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-            exec.reshape(get(slots, &inst.input_slots, 0)?, &shape)?
-        }
-        ExecOp::BroadcastInDim { shape, dims } => {
-            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-            exec.broadcast_in_dim(get(slots, &inst.input_slots, 0)?, &shape, dims)?
-        }
-        ExecOp::Convert { to } => exec.convert(get(slots, &inst.input_slots, 0)?, *to)?,
-        ExecOp::ReduceSum { axes } => exec.reduce_sum(get(slots, &inst.input_slots, 0)?, axes)?,
-        ExecOp::ExtractDiag { axis_a, axis_b } => {
-            exec.extract_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
-        }
-        ExecOp::EmbedDiag { axis_a, axis_b } => {
-            exec.embed_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?
-        }
-        ExecOp::Tril { k } => exec.tril(get(slots, &inst.input_slots, 0)?, *k)?,
-        ExecOp::Triu { k } => exec.triu(get(slots, &inst.input_slots, 0)?, *k)?,
-        ExecOp::Add => exec.add(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Multiply => exec.mul(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Negate => exec.neg(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Conj => exec.conj(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Divide => exec.div(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Abs => exec.abs(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Sign => exec.sign(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Maximum => exec.maximum(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Minimum => exec.minimum(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Compare(dir) => exec.compare(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            dir,
-        )?,
-        ExecOp::Select => exec.select(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            get(slots, &inst.input_slots, 2)?,
-        )?,
-        ExecOp::Clamp => exec.clamp(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            get(slots, &inst.input_slots, 2)?,
-        )?,
-        ExecOp::Exp => exec.exp(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Log => exec.log(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Sin => exec.sin(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Cos => exec.cos(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Tanh => exec.tanh(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Sqrt => exec.sqrt(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Rsqrt => exec.rsqrt(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Pow => exec.pow(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-        )?,
-        ExecOp::Expm1 => exec.expm1(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Log1p => exec.log1p(get(slots, &inst.input_slots, 0)?)?,
-        ExecOp::Gather(config) => exec.gather(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            config,
-        )?,
-        ExecOp::GatherDynamicSliceSizes {
-            offset_dims,
-            collapsed_slice_dims,
-            start_index_map,
-            index_vector_dim,
-            slice_sizes,
-        } => {
-            let slice_sizes = resolve_tensor_shape_exprs(slots, &inst.input_slots, slice_sizes)?;
-            let config = GatherConfig {
-                offset_dims: offset_dims.clone(),
-                collapsed_slice_dims: collapsed_slice_dims.clone(),
-                start_index_map: start_index_map.clone(),
-                index_vector_dim: *index_vector_dim,
-                slice_sizes,
-            };
-            exec.gather(
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
-                &config,
-            )?
-        }
-        ExecOp::Scatter(config) => exec.scatter(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            get(slots, &inst.input_slots, 2)?,
-            config,
-        )?,
-        ExecOp::Slice(config) => exec.slice(get(slots, &inst.input_slots, 0)?, config)?,
-        ExecOp::DynamicSlice { slice_sizes } => exec.dynamic_slice(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            slice_sizes,
-        )?,
-        ExecOp::DynamicUpdateSlice => exec.dynamic_update_slice(
-            get(slots, &inst.input_slots, 0)?,
-            get(slots, &inst.input_slots, 1)?,
-            get(slots, &inst.input_slots, 2)?,
-        )?,
-        ExecOp::Pad(config) => exec.pad(get(slots, &inst.input_slots, 0)?, config)?,
-        ExecOp::Concatenate { axis } => {
-            let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
-            exec.concatenate(&inputs, *axis)?
-        }
-        ExecOp::Reverse { axes } => exec.reverse(get(slots, &inst.input_slots, 0)?, axes)?,
-        ExecOp::ReduceProd { axes } => exec.reduce_prod(get(slots, &inst.input_slots, 0)?, axes)?,
-        ExecOp::ReduceMax { axes } => exec.reduce_max(get(slots, &inst.input_slots, 0)?, axes)?,
-        ExecOp::ReduceMin { axes } => exec.reduce_min(get(slots, &inst.input_slots, 0)?, axes)?,
-        other => {
-            return Err(Error::Internal(format!(
-                "host or FFI op reached backend executor: {other:?}"
-            )))
-        }
-    };
-    Ok(result)
+    dispatch::execute_backend_dispatch(exec, slots, inst)
 }
 
 pub(crate) fn execute_host_instruction<B: TensorBackend>(
@@ -498,123 +415,17 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<()> {
-    match &inst.op {
-        ExecOp::ShapeOf { axis } => {
-            let input = get(slots, &inst.input_slots, 0)?;
-            if *axis >= input.shape().len() {
-                return Err(Error::Internal(format!(
-                    "ShapeOf: axis {} out of bounds for rank {}",
-                    axis,
-                    input.shape().len()
-                )));
-            }
-            let host = Tensor::F64(TypedTensor::from_vec_col_major(
-                vec![],
-                vec![input.shape()[*axis] as f64],
-            ));
-            slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
-        }
-        ExecOp::DynamicTruncate { axis } => {
-            let input = get(slots, &inst.input_slots, 0)?;
-            if *axis >= input.shape().len() {
-                return Err(Error::Internal(format!(
-                    "DynamicTruncate: axis {} out of bounds for rank {}",
-                    axis,
-                    input.shape().len()
-                )));
-            }
-            let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
-            let axis_extent = input.shape()[*axis];
-            let size = dynamic_truncate_size(&size_tensor, axis_extent)?;
-            let rank = input.shape().len();
-            let mut limits = input.shape().to_vec();
-            limits[*axis] = size;
-            let config = SliceConfig {
-                starts: vec![0; rank],
-                limits,
-                strides: vec![1; rank],
-            };
-            slots[inst.output_slots[0]] = Some(backend.slice(input, &config)?);
-        }
-        ExecOp::PadToMatch { axis } => {
-            let input = get(slots, &inst.input_slots, 0)?;
-            let reference = get(slots, &inst.input_slots, 1)?;
-            if *axis >= input.shape().len() {
-                return Err(Error::Internal(format!(
-                    "PadToMatch: axis {} out of bounds for rank {}",
-                    axis,
-                    input.shape().len()
-                )));
-            }
-            let target_size = reference.shape()[*axis];
-            let current_size = input.shape()[*axis];
-            if current_size >= target_size {
-                slots[inst.output_slots[0]] = Some(input.clone());
-            } else {
-                let rank = input.shape().len();
-                let mut high = vec![0i64; rank];
-                high[*axis] = (target_size - current_size) as i64;
-                let config = PadConfig {
-                    edge_padding_low: vec![0i64; rank],
-                    edge_padding_high: high,
-                    interior_padding: vec![0i64; rank],
-                };
-                slots[inst.output_slots[0]] = Some(backend.pad(input, &config)?);
-            }
-        }
-        ExecOp::Constant { dtype, bytes } => {
-            let host = constant_tensor(*dtype, bytes);
-            slots[inst.output_slots[0]] = Some(backend.upload_host_tensor(&host)?);
-        }
-        other => {
-            return Err(Error::Internal(format!(
-                "non-host op reached host executor: {other:?}"
-            )))
-        }
-    }
-    Ok(())
+    dispatch::execute_host_dispatch(backend, slots, inst)
 }
 
 pub(crate) fn execute_ffi_instruction<B: TensorBackend + 'static>(
     backend: &mut B,
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
-    _mode: DispatchMode,
+    mode: DispatchMode,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<()> {
-    match &inst.op {
-        ExecOp::DotGeneral(config) => {
-            let result = backend.dot_general(
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
-                config,
-            )?;
-            slots[inst.output_slots[0]] = Some(result);
-        }
-        ExecOp::DotGeneralWithConj {
-            config,
-            lhs_conj,
-            rhs_conj,
-        } => {
-            let result = backend.dot_general_with_conj(
-                get(slots, &inst.input_slots, 0)?,
-                get(slots, &inst.input_slots, 1)?,
-                config,
-                *lhs_conj,
-                *rhs_conj,
-            )?;
-            slots[inst.output_slots[0]] = Some(result);
-        }
-        ExecOp::Extension(ext) => {
-            execute_extension_instruction(backend, slots, inst, ext.as_ref(), extension_executor)?
-        }
-        other => {
-            return Err(Error::Internal(format!(
-                "non-ffi op reached ffi executor: {other:?}"
-            )))
-        }
-    }
-    Ok(())
+    dispatch::execute_ffi_dispatch(backend, slots, inst, mode, extension_executor)
 }
 
 pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
@@ -850,3 +661,6 @@ pub(crate) fn reclaim_last_use_inputs_backend<B: TensorBackend>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
