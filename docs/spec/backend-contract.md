@@ -31,7 +31,7 @@ ExecProgram
   └── eval_exec_ir() / eval_exec_segmented()
          │
          ▼
-  TensorBackend / TensorExec dispatch
+  TensorBackend / BackendSession dispatch
 ```
 
 ### Custom algebra path
@@ -169,7 +169,7 @@ Execution is divided into three instruction categories.
 
 ### Backend-session instructions
 
-These run through `TensorExec` inside `TensorBackend::with_exec_session()`.
+These run through `BackendSession` inside `TensorBackend::with_backend_session()`.
 They are the operations eligible for grouped segmented execution and, when
 supported by the backend, elementwise fusion planning.
 
@@ -243,7 +243,7 @@ Segmented execution exists to:
 - preserve the same observable behavior as unsegmented execution
 
 The engine uses `last_use` metadata to reclaim buffers via
-`TensorExec::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
+`BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
 
 ---
 
@@ -262,13 +262,13 @@ It includes:
 - `dot_general`
 - indexing ops
 - linalg ops
-- `with_exec_session`
+- `with_backend_session`
 - `download_to_host`
 - `upload_host_tensor`
 - `reclaim_buffer`
 
-`TensorExec` is the session-local companion trait used by grouped backend
-execution. Backends may override `with_exec_session()` to install one shared
+`BackendSession` is the session-local companion trait used by grouped backend
+execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
 ### SemiringBackend

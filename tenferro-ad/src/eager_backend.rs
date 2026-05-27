@@ -2,8 +2,8 @@
 use tenferro_gpu::cubecl::CubeclBackend;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig,
-    Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorExec,
+    BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig,
+    PadConfig, Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend,
     TensorRead,
 };
 
@@ -105,8 +105,11 @@ impl TensorBackend for EagerBackend {
         fn solve(a: &Tensor, b: &Tensor) -> TensorResult<Tensor>;
     }
 
-    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        dispatch!(self, with_exec_session(f))
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        dispatch!(self, with_backend_session(f))
     }
 
     delegate_tensor_backend_methods! {

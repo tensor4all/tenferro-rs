@@ -3,7 +3,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
-    DType, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec, TypedTensor,
+    BackendSession, DType, PadConfig, SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
 use crate::error::{Error, Result};
@@ -26,7 +26,7 @@ impl<'a> PromotedTensor<'a> {
 }
 
 fn promote_to_dtype<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     tensor: &'a Tensor,
     promoted: DType,
 ) -> Result<PromotedTensor<'a>> {
@@ -43,7 +43,7 @@ fn promote_to_dtype<'a>(
 /// both match the promoted result dtype. Returns the (possibly converted)
 /// tensors.
 fn promote_binary_to_dtype<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     a: &'a Tensor,
     b: &'a Tensor,
     promoted: DType,
@@ -54,7 +54,7 @@ fn promote_binary_to_dtype<'a>(
 }
 
 fn promote_binary<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     a: &'a Tensor,
     b: &'a Tensor,
     op: &StdTensorOp,
@@ -72,7 +72,7 @@ pub(crate) fn exec_dot_general_with_conj_on_tensors<B: TensorBackend>(
     backend: &mut B,
 ) -> Result<Tensor> {
     let promoted = crate::shape_infer::promote_dtype(lhs.dtype(), rhs.dtype());
-    backend.with_exec_session(|exec| {
+    backend.with_backend_session(|exec| {
         let (lhs, rhs) = promote_binary_to_dtype(exec, lhs, rhs, promoted)?;
         exec.dot_general_with_conj(lhs.tensor(), rhs.tensor(), config, lhs_conj, rhs_conj)
             .map_err(Error::from)
@@ -131,7 +131,7 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
-    backend.with_exec_session(|exec| {
+    backend.with_backend_session(|exec| {
         let result = match op {
             StdTensorOp::Add => {
                 let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;

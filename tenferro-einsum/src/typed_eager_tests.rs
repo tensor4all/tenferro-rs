@@ -258,7 +258,7 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
             .unwrap();
     assert_eq!(folded.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let value = TensorBackend::with_exec_session_cached(&mut backend, &mut cache, |exec| {
+    let value = TensorBackend::with_backend_session_cached(&mut backend, &mut cache, |exec| {
         let cached = exec
             .dot_general_cached(Some(3), &lhs, &rhs, &config)
             .unwrap();

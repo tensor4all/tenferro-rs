@@ -631,7 +631,7 @@ fn cpu_indexing_validation_covers_error_branches() {
 #[test]
 fn cpu_exec_session_covers_complex_linalg_and_error_dispatch() {
     let mut backend = CpuBackend::new();
-    backend.with_exec_session(|exec| {
+    backend.with_backend_session(|exec| {
         let eye = Tensor::C64(TypedTensor::from_vec_col_major(
             vec![2, 2],
             vec![

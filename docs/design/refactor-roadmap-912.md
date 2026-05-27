@@ -12,7 +12,7 @@ should be removed when the new owner is in place.
 - Move linalg ownership fully into `tenferro-linalg`.
 - Replace scattered primitive-op metadata with a single core-op catalog.
 - Collapse runtime and GPU dispatch duplication into descriptor-driven tables.
-- Remove `TensorExec` and make backend sessions the operation execution surface.
+- Use `BackendSession` as the backend operation execution surface.
 - Make `try_*`, traced extension `Result`, crate-local `Result` aliases, and
   backend error construction consistent.
 - Keep file and test cleanup driven by ownership boundaries, not line count
@@ -136,7 +136,7 @@ map those policies to backend launches.
 
 ## Backend Session Model
 
-Remove `TensorExec`.
+Use `BackendSession` as the lightweight session surface.
 
 `TensorBackend` becomes the backend owner and session factory. It owns device
 state, resource pools, caches, contexts, and backend identity.

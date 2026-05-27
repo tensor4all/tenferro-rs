@@ -212,7 +212,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
                     output_slots,
                     last_use,
                 } => {
-                    backend.with_exec_session(|exec| -> Result<()> {
+                    backend.with_backend_session(|exec| -> Result<()> {
                         if let Some(plan) =
                             build_elementwise_fusion_plan(instructions, input_slots, output_slots)
                         {
@@ -370,7 +370,7 @@ fn reclaim_segment_inputs_exec(
     slots: &mut [Option<Tensor>],
     input_slots: &[usize],
     last_use: &[bool],
-    exec: &mut dyn tenferro_tensor::TensorExec,
+    exec: &mut dyn tenferro_tensor::BackendSession,
 ) {
     for (&slot, &is_last_use) in input_slots.iter().zip(last_use.iter()) {
         if is_last_use {

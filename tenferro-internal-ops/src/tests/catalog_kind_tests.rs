@@ -54,7 +54,10 @@ impl ExtensionOp for CatalogExt {
 
 #[test]
 fn std_tensor_op_maps_core_ops_to_catalog_kinds() {
-    assert_eq!(StdTensorOp::Add.primitive_kind(), Some(PrimitiveOpKind::Add));
+    assert_eq!(
+        StdTensorOp::Add.primitive_kind(),
+        Some(PrimitiveOpKind::Add)
+    );
     assert_eq!(
         StdTensorOp::Compare(CompareDir::Lt).primitive_kind(),
         Some(PrimitiveOpKind::Compare)

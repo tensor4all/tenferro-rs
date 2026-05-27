@@ -78,8 +78,8 @@ pub mod validate;
     not(all(feature = "cpu-faer", feature = "cpu-blas"))
 ))]
 pub use backend::{
-    default_exec_session, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
-    TensorBackend, TensorExec,
+    default_backend_session, BackendSession, ElementwiseFusionInst, ElementwiseFusionOp,
+    ElementwiseFusionPlan, TensorBackend,
 };
 #[cfg(all(
     any(feature = "cpu-faer", feature = "cpu-blas"),

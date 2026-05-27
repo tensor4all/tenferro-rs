@@ -1,6 +1,8 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
-use tenferro_tensor::{GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorExec};
+use tenferro_tensor::{
+    BackendSession, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend,
+};
 
 use super::{
     collect_tensor_refs, constant_tensor, execute_extension_instruction, get,
@@ -10,7 +12,7 @@ use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 
 type BackendDispatchFn =
-    fn(&mut dyn TensorExec, &[Option<Tensor>], &ExecInstruction) -> Result<Tensor>;
+    fn(&mut dyn BackendSession, &[Option<Tensor>], &ExecInstruction) -> Result<Tensor>;
 
 type FfiDispatchFn<B> = fn(
     &mut B,
@@ -234,7 +236,7 @@ pub(super) fn host_dispatch_entry<B: TensorBackend>(op: &ExecOp) -> Option<HostD
 }
 
 pub(super) fn execute_backend_dispatch(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -466,7 +468,7 @@ fn execute_extension_ffi<B: TensorBackend + 'static>(
 }
 
 fn execute_transpose(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -477,7 +479,7 @@ fn execute_transpose(
 }
 
 fn execute_reshape(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -489,7 +491,7 @@ fn execute_reshape(
 }
 
 fn execute_broadcast_in_dim(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -501,7 +503,7 @@ fn execute_broadcast_in_dim(
 }
 
 fn execute_convert(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -512,7 +514,7 @@ fn execute_convert(
 }
 
 fn execute_reduce_sum(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -523,7 +525,7 @@ fn execute_reduce_sum(
 }
 
 fn execute_extract_diag(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -534,7 +536,7 @@ fn execute_extract_diag(
 }
 
 fn execute_embed_diag(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -545,7 +547,7 @@ fn execute_embed_diag(
 }
 
 fn execute_tril(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -556,7 +558,7 @@ fn execute_tril(
 }
 
 fn execute_triu(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -567,7 +569,7 @@ fn execute_triu(
 }
 
 fn execute_add(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -578,7 +580,7 @@ fn execute_add(
 }
 
 fn execute_multiply(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -589,7 +591,7 @@ fn execute_multiply(
 }
 
 fn execute_negate(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -597,7 +599,7 @@ fn execute_negate(
 }
 
 fn execute_conj(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -605,7 +607,7 @@ fn execute_conj(
 }
 
 fn execute_divide(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -616,7 +618,7 @@ fn execute_divide(
 }
 
 fn execute_abs(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -624,7 +626,7 @@ fn execute_abs(
 }
 
 fn execute_sign(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -632,7 +634,7 @@ fn execute_sign(
 }
 
 fn execute_maximum(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -643,7 +645,7 @@ fn execute_maximum(
 }
 
 fn execute_minimum(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -654,7 +656,7 @@ fn execute_minimum(
 }
 
 fn execute_compare(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -669,7 +671,7 @@ fn execute_compare(
 }
 
 fn execute_select(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -681,7 +683,7 @@ fn execute_select(
 }
 
 fn execute_clamp(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -693,7 +695,7 @@ fn execute_clamp(
 }
 
 fn execute_exp(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -701,7 +703,7 @@ fn execute_exp(
 }
 
 fn execute_log(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -709,7 +711,7 @@ fn execute_log(
 }
 
 fn execute_sin(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -717,7 +719,7 @@ fn execute_sin(
 }
 
 fn execute_cos(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -725,7 +727,7 @@ fn execute_cos(
 }
 
 fn execute_tanh(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -733,7 +735,7 @@ fn execute_tanh(
 }
 
 fn execute_sqrt(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -741,7 +743,7 @@ fn execute_sqrt(
 }
 
 fn execute_rsqrt(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -749,7 +751,7 @@ fn execute_rsqrt(
 }
 
 fn execute_pow(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -760,7 +762,7 @@ fn execute_pow(
 }
 
 fn execute_expm1(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -768,7 +770,7 @@ fn execute_expm1(
 }
 
 fn execute_log1p(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -776,7 +778,7 @@ fn execute_log1p(
 }
 
 fn execute_gather(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -791,7 +793,7 @@ fn execute_gather(
 }
 
 fn execute_gather_dynamic_slice_sizes(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -824,7 +826,7 @@ fn execute_gather_dynamic_slice_sizes(
 }
 
 fn execute_scatter(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -840,7 +842,7 @@ fn execute_scatter(
 }
 
 fn execute_slice(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -851,7 +853,7 @@ fn execute_slice(
 }
 
 fn execute_dynamic_slice(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -866,7 +868,7 @@ fn execute_dynamic_slice(
 }
 
 fn execute_dynamic_update_slice(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -878,7 +880,7 @@ fn execute_dynamic_update_slice(
 }
 
 fn execute_pad(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -889,7 +891,7 @@ fn execute_pad(
 }
 
 fn execute_concatenate(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -901,7 +903,7 @@ fn execute_concatenate(
 }
 
 fn execute_reverse(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -912,7 +914,7 @@ fn execute_reverse(
 }
 
 fn execute_reduce_prod(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -923,7 +925,7 @@ fn execute_reduce_prod(
 }
 
 fn execute_reduce_max(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -934,7 +936,7 @@ fn execute_reduce_max(
 }
 
 fn execute_reduce_min(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {

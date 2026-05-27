@@ -1,4 +1,4 @@
-use crate::backend::TensorExec;
+use crate::backend::BackendSession;
 use crate::buffer_pool::BufferPool;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -123,7 +123,7 @@ macro_rules! linalg_multi {
     };
 }
 
-impl TensorExec for CpuExecSession<'_> {
+impl BackendSession for CpuExecSession<'_> {
     // Elementwise — direct delegation, no install
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
     delegate_with_pool!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);

@@ -7,8 +7,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor, TensorBackend, TensorExec, TypedTensor,
+    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    SliceConfig, Tensor, TensorBackend, TypedTensor,
 };
 
 use crate::extension_runtime::ExtensionExecutor;
@@ -350,7 +350,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
                 )?;
             } else {
                 let result =
-                    backend.with_exec_session(|exec| execute_backend_op(exec, slots, inst))?;
+                    backend.with_backend_session(|exec| execute_backend_op(exec, slots, inst))?;
                 slots[inst.output_slots[0]] = Some(result);
             }
             reclaim_last_use_inputs_backend(slots, inst, backend);
@@ -379,7 +379,7 @@ pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
     let result = (|| {
         initialize_slots_in(program, inputs, slots);
 
-        backend.with_exec_session_cached(backend_cache, |exec| -> Result<()> {
+        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
                 if is_host_instruction(inst) {
                     return Err(Error::Internal(
@@ -403,7 +403,7 @@ pub(crate) fn eval_exec_ir_single_session_with_workspace<B: TensorBackend>(
 }
 
 pub(crate) fn execute_backend_op(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &[Option<Tensor>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -471,7 +471,7 @@ pub(crate) fn execute_ffi_instruction_cached<B: TensorBackend + 'static>(
 }
 
 pub(crate) fn execute_ffi_instruction_exec(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
     cache_slot: Option<usize>,
@@ -637,7 +637,7 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> [u8; N] {
 pub(crate) fn reclaim_last_use_inputs_exec(
     slots: &mut [Option<Tensor>],
     inst: &ExecInstruction,
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last {

@@ -256,7 +256,7 @@ depending on the dispatch category.
 ### Backend trait
 
 `TensorBackend` (defined in `tenferro-tensor`) is the single backend trait
-that encapsulates standard tensor kernel dispatch. `TensorExec` is the
+that encapsulates standard tensor kernel dispatch. `BackendSession` is the
 session-scoped companion trait used for batches of backend ops inside one
 execution context. `CpuBackend` lives in `tenferro-tensor` and implements
 `TensorBackend`; the CubeCL GPU backend lives in `tenferro-gpu` and is

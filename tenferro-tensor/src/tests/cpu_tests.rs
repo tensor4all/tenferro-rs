@@ -334,9 +334,9 @@ fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
 }
 
 #[test]
-fn test_with_exec_session_runs_compiled_ops() {
+fn test_with_backend_session_runs_compiled_ops() {
     let mut backend = CpuBackend::with_threads(2);
-    let result = backend.with_exec_session(|session| {
+    let result = backend.with_backend_session(|session| {
         session
             .add(
                 &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
@@ -373,7 +373,7 @@ fn cpu_install_accepts_non_send_state() {
 fn cpu_backend_exec_session_runs_on_caller_thread() {
     let mut backend = CpuBackend::with_threads(2);
     let caller_thread = std::thread::current().id();
-    let seen_thread = backend.with_exec_session(|_| std::thread::current().id());
+    let seen_thread = backend.with_backend_session(|_| std::thread::current().id());
     assert_eq!(seen_thread, caller_thread);
 }
 
@@ -1236,7 +1236,7 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
     assert_eq!(direct.shape(), &[2, 2]);
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
-    let session = backend.with_exec_session(|exec| {
+    let session = backend.with_backend_session(|exec| {
         exec.dot_general_read(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_view(rhs_view),
@@ -4118,7 +4118,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     struct DefaultOnlyExec;
 
-    impl crate::backend::TensorExec for DefaultOnlyExec {
+    impl crate::backend::BackendSession for DefaultOnlyExec {
         panic_backend_methods! {
             add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
             mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -4263,19 +4263,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         .unwrap()
         .is_none());
 
-    let session_value = TensorBackend::with_exec_session_cached(&mut backend, &mut cache, |exec| {
-        let cached = exec
-            .dot_general_cached(Some(2), &lhs, &rhs, &config)
-            .unwrap();
-        let folded = exec
-            .dot_general_with_conj_cached(Some(3), &lhs, &rhs, &config, true, false)
-            .unwrap();
-        cached.as_slice::<f64>().unwrap()[0] + folded.as_slice::<f64>().unwrap()[0]
-    });
+    let session_value =
+        TensorBackend::with_backend_session_cached(&mut backend, &mut cache, |exec| {
+            let cached = exec
+                .dot_general_cached(Some(2), &lhs, &rhs, &config)
+                .unwrap();
+            let folded = exec
+                .dot_general_with_conj_cached(Some(3), &lhs, &rhs, &config, true, false)
+                .unwrap();
+            cached.as_slice::<f64>().unwrap()[0] + folded.as_slice::<f64>().unwrap()[0]
+        });
     assert_eq!(session_value, 12.0);
 
     let mut exec = DefaultOnlyExec;
-    let exec_read_tensor = crate::backend::TensorExec::dot_general_read(
+    let exec_read_tensor = crate::backend::BackendSession::dot_general_read(
         &mut exec,
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&rhs),
@@ -4283,7 +4284,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views = crate::backend::TensorExec::dot_general_read(
+    let exec_read_views = crate::backend::BackendSession::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
@@ -4291,22 +4292,22 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_no_conj = crate::backend::TensorExec::dot_general_with_conj(
+    let exec_no_conj = crate::backend::BackendSession::dot_general_with_conj(
         &mut exec, &lhs, &rhs, &config, false, false,
     )
     .unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_lhs_conj = crate::backend::TensorExec::dot_general_with_conj(
+    let exec_lhs_conj = crate::backend::BackendSession::dot_general_with_conj(
         &mut exec, &lhs, &rhs, &config, true, false,
     )
     .unwrap();
     assert_eq!(exec_lhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_rhs_conj = crate::backend::TensorExec::dot_general_with_conj(
+    let exec_rhs_conj = crate::backend::BackendSession::dot_general_with_conj(
         &mut exec, &lhs, &rhs, &config, false, true,
     )
     .unwrap();
     assert_eq!(exec_rhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_both_conj = crate::backend::TensorExec::dot_general_with_conj(
+    let exec_both_conj = crate::backend::BackendSession::dot_general_with_conj(
         &mut exec, &lhs, &rhs, &config, true, true,
     )
     .unwrap();

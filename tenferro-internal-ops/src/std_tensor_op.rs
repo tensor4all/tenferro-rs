@@ -192,9 +192,7 @@ impl StdTensorOp {
             StdTensorOp::Tril { .. } => PrimitiveOpKind::Tril,
             StdTensorOp::Triu { .. } => PrimitiveOpKind::Triu,
             StdTensorOp::Gather(_) => PrimitiveOpKind::Gather,
-            StdTensorOp::GatherDynamicSliceSizes { .. } => {
-                PrimitiveOpKind::GatherDynamicSliceSizes
-            }
+            StdTensorOp::GatherDynamicSliceSizes { .. } => PrimitiveOpKind::GatherDynamicSliceSizes,
             StdTensorOp::Scatter(_) => PrimitiveOpKind::Scatter,
             StdTensorOp::Slice(_) => PrimitiveOpKind::Slice,
             StdTensorOp::DynamicSlice { .. } => PrimitiveOpKind::DynamicSlice,

@@ -1420,7 +1420,7 @@ impl Tensor {
     /// assert_eq!(vt.shape(), &[2, 2]);
     /// ```
     pub fn svd(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_three("svd", exec.svd(self)?))
+        ctx.with_backend_session(|exec| unpack_three("svd", exec.svd(self)?))
     }
 
     /// QR decomposition: `A = Q R`.
@@ -1440,7 +1440,7 @@ impl Tensor {
     /// assert_eq!(r.shape(), &[2, 2]);
     /// ```
     pub fn qr(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_two("qr", exec.qr(self)?))
+        ctx.with_backend_session(|exec| unpack_two("qr", exec.qr(self)?))
     }
 
     /// LU decomposition with partial pivoting: `P A = L U`.
@@ -1462,7 +1462,7 @@ impl Tensor {
     /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// ```
     pub fn lu(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self, Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_four("lu", exec.lu(self)?))
+        ctx.with_backend_session(|exec| unpack_four("lu", exec.lu(self)?))
     }
 
     /// LU decomposition with complete pivoting: `P A Q^T = L U`.
@@ -1488,7 +1488,7 @@ impl Tensor {
         &self,
         ctx: &mut impl TensorBackend,
     ) -> crate::Result<(Self, Self, Self, Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_five("full_piv_lu", exec.full_piv_lu(self)?))
+        ctx.with_backend_session(|exec| unpack_five("full_piv_lu", exec.full_piv_lu(self)?))
     }
 
     /// Cholesky decomposition: `A = L L^T` or `A = L L^H` for complex inputs.
@@ -1507,7 +1507,7 @@ impl Tensor {
     /// assert_eq!(l.shape(), &[2, 2]);
     /// ```
     pub fn cholesky(&self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.cholesky(self))
+        ctx.with_backend_session(|exec| exec.cholesky(self))
     }
 
     /// Symmetric or Hermitian eigendecomposition: `A = V diag(W) V^T`.
@@ -1527,7 +1527,7 @@ impl Tensor {
     /// assert_eq!(v.shape(), &[2, 2]);
     /// ```
     pub fn eigh(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_two("eigh", exec.eigh(self)?))
+        ctx.with_backend_session(|exec| unpack_two("eigh", exec.eigh(self)?))
     }
 
     /// General eigendecomposition.
@@ -1547,7 +1547,7 @@ impl Tensor {
     /// assert_eq!(v.shape(), &[2, 2]);
     /// ```
     pub fn eig(&self, ctx: &mut impl TensorBackend) -> crate::Result<(Self, Self)> {
-        ctx.with_exec_session(|exec| unpack_two("eig", exec.eig(self)?))
+        ctx.with_backend_session(|exec| unpack_two("eig", exec.eig(self)?))
     }
 
     /// Solve `A x = b` for `x`.
@@ -1612,7 +1612,7 @@ impl Tensor {
         unit_diagonal: bool,
         ctx: &mut impl TensorBackend,
     ) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| {
+        ctx.with_backend_session(|exec| {
             exec.triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
         })
     }
@@ -1632,7 +1632,7 @@ impl Tensor {
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
     /// ```
     pub fn add(&self, other: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.add(self, other))
+        ctx.with_backend_session(|exec| exec.add(self, other))
     }
 
     /// Elementwise multiplication.
@@ -1650,7 +1650,7 @@ impl Tensor {
     /// assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
     /// ```
     pub fn mul(&self, other: &Self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.mul(self, other))
+        ctx.with_backend_session(|exec| exec.mul(self, other))
     }
 
     /// Negation.
@@ -1667,7 +1667,7 @@ impl Tensor {
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[-1.0, 2.0, -3.0]);
     /// ```
     pub fn neg(&self, ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.neg(self))
+        ctx.with_backend_session(|exec| exec.neg(self))
     }
 
     /// Transpose with an explicit permutation.
@@ -1685,7 +1685,7 @@ impl Tensor {
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
     pub fn transpose(&self, perm: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.transpose(self, perm))
+        ctx.with_backend_session(|exec| exec.transpose(self, perm))
     }
 
     /// Reshape to a new shape with the same number of elements.
@@ -1703,7 +1703,7 @@ impl Tensor {
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// ```
     pub fn reshape(&self, shape: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.reshape(self, shape))
+        ctx.with_backend_session(|exec| exec.reshape(self, shape))
     }
 
     /// Reduce sum over the specified axes.
@@ -1721,7 +1721,7 @@ impl Tensor {
     /// assert_eq!(b.as_slice::<f64>().unwrap(), &[9.0, 12.0]);
     /// ```
     pub fn reduce_sum(&self, axes: &[usize], ctx: &mut impl TensorBackend) -> crate::Result<Self> {
-        ctx.with_exec_session(|exec| exec.reduce_sum(self, axes))
+        ctx.with_backend_session(|exec| exec.reduce_sum(self, axes))
     }
 
     /// Matrix multiplication for rank-2 tensors.
@@ -1748,7 +1748,7 @@ impl Tensor {
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         };
-        ctx.with_exec_session(|exec| exec.dot_general(self, other, &config))
+        ctx.with_backend_session(|exec| exec.dot_general(self, other, &config))
     }
 }
 

@@ -4,7 +4,7 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::backend::{TensorBackend, TensorExec};
+use crate::backend::{BackendSession, TensorBackend};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -71,7 +71,7 @@ fn maybe_print_cpu_session_profile() {
             .lock()
             .expect("CPU session profile mutex poisoned");
         state
-            .get("with_exec_session_cached.total")
+            .get("with_backend_session_cached.total")
             .is_some_and(|entry| entry.calls % print_every == 0)
     };
     if !should_print {
@@ -1325,17 +1325,20 @@ impl TensorBackend for CpuBackend {
         }
     }
 
-    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        let mut cache = profile_cpu_session_section("with_exec_session.cache_default", || {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        let mut cache = profile_cpu_session_section("with_backend_session.cache_default", || {
             gemm::GemmAnalysisCache::default()
         });
-        self.with_exec_session_cached(&mut cache, f)
+        self.with_backend_session_cached(&mut cache, f)
     }
 
-    fn with_exec_session_cached<R: Send>(
+    fn with_backend_session_cached<R: Send>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         if !cpu_session_profile_enabled() {
             let mut buffers = std::mem::take(&mut self.buffers);
@@ -1352,34 +1355,35 @@ impl TensorBackend for CpuBackend {
 
         let total_started = Instant::now();
         let mut buffers =
-            profile_cpu_session_section("with_exec_session_cached.take_buffers", || {
+            profile_cpu_session_section("with_backend_session_cached.take_buffers", || {
                 std::mem::take(&mut self.buffers)
             });
         let ctx = Arc::clone(&self.ctx);
-        let result = profile_cpu_session_section("with_exec_session_cached.exec_session", || {
-            let session_started = Instant::now();
-            let mut session = CpuExecSession {
-                ctx: ctx.as_ref(),
-                buffers: &mut buffers,
-                gemm_analysis_cache: cache,
-            };
-            record_cpu_session_profile(
-                "with_exec_session_cached.session_construct",
-                session_started.elapsed(),
-            );
+        let result =
+            profile_cpu_session_section("with_backend_session_cached.exec_session", || {
+                let session_started = Instant::now();
+                let mut session = CpuExecSession {
+                    ctx: ctx.as_ref(),
+                    buffers: &mut buffers,
+                    gemm_analysis_cache: cache,
+                };
+                record_cpu_session_profile(
+                    "with_backend_session_cached.session_construct",
+                    session_started.elapsed(),
+                );
 
-            let exec_started = Instant::now();
-            let result = f(&mut session);
-            record_cpu_session_profile(
-                "with_exec_session_cached.exec_body",
-                exec_started.elapsed(),
-            );
-            result
-        });
-        profile_cpu_session_section("with_exec_session_cached.restore_buffers", || {
+                let exec_started = Instant::now();
+                let result = f(&mut session);
+                record_cpu_session_profile(
+                    "with_backend_session_cached.exec_body",
+                    exec_started.elapsed(),
+                );
+                result
+            });
+        profile_cpu_session_section("with_backend_session_cached.restore_buffers", || {
             self.buffers = buffers;
         });
-        record_cpu_session_profile("with_exec_session_cached.total", total_started.elapsed());
+        record_cpu_session_profile("with_backend_session_cached.total", total_started.elapsed());
         maybe_print_cpu_session_profile();
         result
     }
