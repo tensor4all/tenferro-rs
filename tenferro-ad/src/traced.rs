@@ -55,14 +55,12 @@ pub(crate) fn jvp_with_rules(
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<TracedTensor> {
-    try_jvp_result_with_optional_rules(output, wrt, tangent, Some(extension_rules))?.ok_or_else(
-        || {
-            Error::Internal(format!(
-                "jvp output is inactive for {:?}",
-                leaf_input_key(wrt)
-            ))
-        },
-    )
+    jvp_optional_result_with_rules(output, wrt, tangent, Some(extension_rules))?.ok_or_else(|| {
+        Error::Internal(format!(
+            "jvp output is inactive for {:?}",
+            leaf_input_key(wrt)
+        ))
+    })
 }
 
 pub(crate) fn grad_optional_with_rules(
@@ -78,16 +76,16 @@ pub(crate) fn grad_optional_with_rules(
 
     let ones = ones_tensor(output.dtype, vec![]);
     let seed = TracedTensor::from_tensor_concrete_shape(ones);
-    try_vjp_result_with_optional_rules(output, wrt, &seed, Some(extension_rules))
+    vjp_optional_result_with_rules(output, wrt, &seed, Some(extension_rules))
 }
 
-pub(crate) fn try_jvp_with_rules(
+pub(crate) fn jvp_optional_with_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<Option<TracedTensor>> {
-    try_jvp_result_with_optional_rules(output, wrt, tangent, Some(extension_rules))
+    jvp_optional_result_with_rules(output, wrt, tangent, Some(extension_rules))
 }
 
 pub(crate) fn vjp_with_rules(
@@ -96,7 +94,7 @@ pub(crate) fn vjp_with_rules(
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<TracedTensor> {
-    try_vjp_result_with_optional_rules(output, wrt, cotangent, Some(extension_rules))?.ok_or_else(
+    vjp_optional_result_with_rules(output, wrt, cotangent, Some(extension_rules))?.ok_or_else(
         || {
             Error::Internal(format!(
                 "vjp output is inactive for {:?}",
@@ -106,13 +104,13 @@ pub(crate) fn vjp_with_rules(
     )
 }
 
-pub(crate) fn try_vjp_with_rules(
+pub(crate) fn vjp_optional_with_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     extension_rules: &ExtensionRuleSet,
 ) -> Result<Option<TracedTensor>> {
-    try_vjp_result_with_optional_rules(output, wrt, cotangent, Some(extension_rules))
+    vjp_optional_result_with_rules(output, wrt, cotangent, Some(extension_rules))
 }
 
 fn grad_with_optional_rules(
@@ -128,7 +126,7 @@ fn grad_with_optional_rules(
 
     let ones = ones_tensor(output.dtype, vec![]);
     let seed = TracedTensor::from_tensor_concrete_shape(ones);
-    try_vjp_result_with_optional_rules(output, wrt, &seed, extension_rules)?.ok_or_else(|| {
+    vjp_optional_result_with_rules(output, wrt, &seed, extension_rules)?.ok_or_else(|| {
         Error::Internal(format!(
             "grad output is inactive for {:?}",
             leaf_input_key(wrt)
@@ -168,10 +166,10 @@ pub trait TracedTensorAdExt {
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor;
 
     /// Like [`jvp`](Self::jvp), but returns `None` when `wrt` is inactive.
-    fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor>;
+    fn jvp_optional(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor>;
 
     /// Fallible forward-mode Jacobian-vector product.
-    fn try_jvp_result(
+    fn jvp_optional_result(
         &self,
         wrt: &TracedTensor,
         tangent: &TracedTensor,
@@ -180,8 +178,11 @@ pub trait TracedTensorAdExt {
     /// Reverse-mode vector-Jacobian product.
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor;
 
+    /// Like [`vjp`](Self::vjp), but returns `None` when `wrt` is inactive.
+    fn vjp_optional(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor>;
+
     /// Fallible reverse-mode vector-Jacobian product.
-    fn try_vjp_result(
+    fn vjp_optional_result(
         &self,
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
@@ -202,7 +203,7 @@ impl TracedTensorAdExt for TracedTensor {
 
         let ones = ones_tensor(self.dtype, vec![]);
         let seed = TracedTensor::from_tensor_concrete_shape(ones);
-        try_vjp_result_with_optional_rules(self, wrt, &seed, None)
+        vjp_optional_result_with_rules(self, wrt, &seed, None)
     }
 
     fn checkpoint<B: TensorBackend>(
@@ -221,41 +222,43 @@ impl TracedTensorAdExt for TracedTensor {
     }
 
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> TracedTensor {
-        self.try_jvp(wrt, tangent)
+        self.jvp_optional(wrt, tangent)
             .unwrap_or_else(|| panic!("jvp output is inactive for {:?}", leaf_input_key(wrt)))
     }
 
-    fn try_jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
-        self.try_jvp_result(wrt, tangent)
+    fn jvp_optional(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Option<TracedTensor> {
+        self.jvp_optional_result(wrt, tangent)
             .unwrap_or_else(|err| panic!("{err}"))
     }
 
-    fn try_jvp_result(
+    fn jvp_optional_result(
         &self,
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        try_jvp_result_with_optional_rules(self, wrt, tangent, None)
+        jvp_optional_result_with_rules(self, wrt, tangent, None)
     }
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> TracedTensor {
-        match self.try_vjp_result(wrt, cotangent) {
-            Ok(Some(vjp)) => vjp,
-            Ok(None) => panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)),
-            Err(err) => panic!("{err}"),
-        }
+        self.vjp_optional(wrt, cotangent)
+            .unwrap_or_else(|| panic!("vjp output is inactive for {:?}", leaf_input_key(wrt)))
     }
 
-    fn try_vjp_result(
+    fn vjp_optional(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Option<TracedTensor> {
+        self.vjp_optional_result(wrt, cotangent)
+            .unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    fn vjp_optional_result(
         &self,
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        try_vjp_result_with_optional_rules(self, wrt, cotangent, None)
+        vjp_optional_result_with_rules(self, wrt, cotangent, None)
     }
 }
 
-fn try_jvp_result_with_optional_rules(
+fn jvp_optional_result_with_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
@@ -340,7 +343,7 @@ fn try_jvp_result_with_optional_rules(
     })))
 }
 
-fn try_vjp_result_with_optional_rules(
+fn vjp_optional_result_with_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
