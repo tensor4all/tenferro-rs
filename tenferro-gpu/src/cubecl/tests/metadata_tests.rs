@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
 };
+use crate::cubecl::CudaExtensionCache;
 use crate::{
     Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement,
     TypedTensor,
@@ -16,6 +17,39 @@ fn cubecl_metadata_uses_dense_column_major_strides() {
         cubecl_shape_and_strides(&[2, 3, 4]),
         (vec![2, 3, 4], vec![1, 2, 6])
     );
+}
+
+#[test]
+fn cuda_extension_cache_is_type_indexed_and_lazy() {
+    let cache = CudaExtensionCache::new();
+    let mut initializers = 0usize;
+
+    {
+        let value = cache
+            .get_or_try_init::<usize>(|| {
+                initializers += 1;
+                Ok(17)
+            })
+            .unwrap();
+        assert_eq!(*value, 17);
+    }
+    {
+        let value = cache
+            .get_or_try_init::<usize>(|| {
+                initializers += 1;
+                Ok(23)
+            })
+            .unwrap();
+        assert_eq!(*value, 17);
+    }
+    {
+        let value = cache
+            .get_or_try_init::<String>(|| Ok("gpu".to_string()))
+            .unwrap();
+        assert_eq!(value.as_str(), "gpu");
+    }
+
+    assert_eq!(initializers, 1);
 }
 
 #[test]

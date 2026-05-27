@@ -10,6 +10,17 @@ fn linalg_source() -> String {
     .unwrap_or_else(|err| panic!("GPU linalg source should be readable: {err}"))
 }
 
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("tenferro-linalg should live inside the workspace")
+}
+
+fn read_workspace_source(path: &str) -> String {
+    fs::read_to_string(workspace_root().join(path))
+        .unwrap_or_else(|err| panic!("workspace source {path} should be readable: {err}"))
+}
+
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let start_idx = source
         .find(start)
@@ -20,6 +31,42 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start_idx + offset)
         .unwrap_or(source.len());
     &source[start_idx..end_idx]
+}
+
+#[test]
+fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
+    for path in [
+        "tenferro-gpu/src/cubecl/ffi/cusolver.rs",
+        "tenferro-gpu/src/kernels/linalg.rs",
+    ] {
+        assert!(
+            !workspace_root().join(path).exists(),
+            "{path} should be owned by tenferro-linalg, not tenferro-gpu"
+        );
+    }
+
+    let cubecl_mod = read_workspace_source("tenferro-gpu/src/cubecl/mod.rs");
+    for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
+        assert!(
+            !cubecl_mod.contains(needle),
+            "CubeclBackend should not expose linalg-specific state: found {needle}"
+        );
+    }
+}
+
+#[test]
+fn linalg_ad_rules_use_internal_ops_conjugation_helpers() {
+    let source = read_workspace_source("tenferro-linalg/src/ad/rules/mod.rs");
+    for needle in [
+        "fn is_real_dtype",
+        "fn conjugate_primal_if_dtype_complex",
+        "fn conjugate_linear_if_dtype_complex",
+    ] {
+        assert!(
+            !source.contains(needle),
+            "linalg AD should import canonical helper instead of redefining {needle}"
+        );
+    }
 }
 
 #[test]

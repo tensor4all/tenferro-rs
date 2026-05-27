@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOpTrait};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor};
 
 use crate::backend::LinalgBackend;
 
@@ -94,6 +94,91 @@ impl LinalgExtensionOp {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EagerLinalgDevice {
+    Cpu,
+    Cuda(usize),
+}
+
+fn tensor_placement(input: &Tensor) -> &Placement {
+    match input {
+        Tensor::F32(t) => &t.placement,
+        Tensor::F64(t) => &t.placement,
+        Tensor::I32(t) => &t.placement,
+        Tensor::I64(t) => &t.placement,
+        Tensor::Bool(t) => &t.placement,
+        Tensor::C32(t) => &t.placement,
+        Tensor::C64(t) => &t.placement,
+    }
+}
+
+fn input_eager_device(input: &Tensor) -> tenferro_tensor::Result<EagerLinalgDevice> {
+    let placement = tensor_placement(input);
+    match (&placement.memory_kind, placement.device.as_ref()) {
+        (MemoryKind::Device, Some(device)) => match &device.kind {
+            DeviceKind::Gpu(GpuBackendKind::Cuda) => Ok(EagerLinalgDevice::Cuda(device.ordinal)),
+            DeviceKind::Gpu(kind) => Err(Error::backend_failure(
+                "linalg_eager_execute",
+                format!("unsupported GPU backend {kind:?} for eager linalg"),
+            )),
+            kind => Err(Error::backend_failure(
+                "linalg_eager_execute",
+                format!("unsupported device kind {kind:?} for eager linalg"),
+            )),
+        },
+        (MemoryKind::Device, None) => Err(Error::backend_failure(
+            "linalg_eager_execute",
+            "device tensor is missing placement device metadata",
+        )),
+        _ => Ok(EagerLinalgDevice::Cpu),
+    }
+}
+
+fn eager_linalg_device(inputs: &[&Tensor]) -> tenferro_tensor::Result<EagerLinalgDevice> {
+    let mut selected = None;
+    for input in inputs {
+        let device = input_eager_device(input)?;
+        match (selected, device) {
+            (None, next) => selected = Some(next),
+            (Some(EagerLinalgDevice::Cpu), EagerLinalgDevice::Cpu) => {}
+            (Some(EagerLinalgDevice::Cuda(lhs)), EagerLinalgDevice::Cuda(rhs)) if lhs == rhs => {}
+            (Some(lhs), rhs) => {
+                return Err(Error::backend_failure(
+                    "linalg_eager_execute",
+                    format!("all eager linalg inputs must be on the same device, got {lhs:?} and {rhs:?}"),
+                ));
+            }
+        }
+    }
+    Ok(selected.unwrap_or(EagerLinalgDevice::Cpu))
+}
+
+#[cfg(feature = "cuda")]
+fn execute_cuda_eager_linalg(
+    op: LinalgOp,
+    inputs: &[&Tensor],
+    device_ordinal: usize,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut backend = tenferro_gpu::cubecl::CubeclBackend::new(device_ordinal)?;
+    execute_linalg(op, inputs, &mut backend)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn execute_cuda_eager_linalg(
+    _op: LinalgOp,
+    _inputs: &[&Tensor],
+    device_ordinal: usize,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    Err(Error::backend_failure(
+        "linalg_eager_execute",
+        format!(
+            "received CUDA tensor on cuda:{device_ordinal}, but tenferro-linalg was built \
+             without the cuda feature; enable the cuda feature or download the tensor to CPU \
+             before eager linalg"
+        ),
+    ))
+}
+
 impl ExtensionOpTrait for LinalgExtensionOp {
     fn family_id(&self) -> &'static str {
         LINALG_EXTENSION_FAMILY_ID
@@ -174,8 +259,27 @@ impl ExtensionOpTrait for LinalgExtensionOp {
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let mut backend = tenferro_tensor::cpu::CpuBackend::new();
-        execute_linalg(self.op, inputs, &mut backend)
+        let expected = self.n_inputs();
+        if inputs.len() != expected {
+            return Err(Error::InvalidConfig {
+                op: "linalg_eager_execute",
+                message: format!(
+                    "expected {expected} inputs for {:?}, got {}",
+                    self.op,
+                    inputs.len()
+                ),
+            });
+        }
+
+        match eager_linalg_device(inputs)? {
+            EagerLinalgDevice::Cpu => {
+                let mut backend = tenferro_tensor::cpu::CpuBackend::new();
+                execute_linalg(self.op, inputs, &mut backend)
+            }
+            EagerLinalgDevice::Cuda(device_ordinal) => {
+                execute_cuda_eager_linalg(self.op, inputs, device_ordinal)
+            }
+        }
     }
 }
 
