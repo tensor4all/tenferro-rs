@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Before acting, read the latest shared Tensor4all agent rules from the
+Before acting, read the latest shared tensor4all agent rules from the
 `tensor4all-agent-rules` repository. If internet access is unavailable or the
 remote cannot be resolved, use the sibling checkout:
 
@@ -235,39 +235,43 @@ buffer error, and CUDA library limitation contracts. See
 ### Layered Design
 
 ```
-Layer 4: tenferro-ad          — Eager AD runtime, traced AD extension traits, VJP/JVP/HVP APIs
-Layer 3: tenferro-runtime     — Public traced graph runtime: TracedTensor, lowering, execution,
-                                extension registration and dispatch
-         tenferro-einsum      — Standard extension: einsum syntax, contraction planning,
-                                fragment builder, runtime registration
-         tenferro-linalg      — Standard extension: linalg traced/eager APIs, AD rules,
-                                runtime registration
-         tenferro-fft         — Standard extension: FFT APIs and runtime registration
-         tenferro-internal-ops         — Core graph op vocabulary (`StdTensorOp`) and primitive AD rules
-Layer 2: tenferro-tensor      — Dense `Tensor` / `TypedTensor`, backend traits, CPU backend,
-                                execution kernels
-         tenferro-gpu         — CubeCL/CUDA backend and GPU kernel ownership
-Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
-         chainrules          — Engine-independent scalar AD rules and helpers (← chainrules-core)
-         tidu                — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
-         tenferro-internal-device       — Device enum, Error/Result types
-
-Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
+Layer 4: tenferro-ad       - Eager runtime, eager tensors, traced AD extension traits
+Layer 3: tenferro-runtime  - Concrete tensor helpers, traced tensors, graph compile/exec,
+                             extension runtime registration, extension cache storage
+         tenferro-einsum   - Subscripts, contraction planning, traced/eager einsum APIs,
+                             extension runtime, AD rule
+         tenferro-linalg   - Linear algebra traced APIs, eager helpers, extension runtime,
+                             optional linalg AD rules
+         tenferro-fft      - FFT extension runtime and public FFT APIs
+Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits, CPU backend,
+                             core execution kernels
+         tenferro-gpu      - CubeCL/CUDA backend and GPU transfer helpers
+Layer 1: tenferro-tensor-core - Host-only tensor data model, dtype tags,
+                                scalar trait, metadata-only views
+Internal: tenferro-core-ops  - Internal core primitive operation catalog
+          tenferro-internal-ops - Graph op vocabulary and AD rule implementations
+          tenferro-internal-device - Shared device and error infrastructure
+          tenferro-internal-extension-macros - Extension-op registration macros
 ```
 
-`chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
-of any tensor type. `chainrules` provides engine-independent scalar AD rules,
-and `tidu` provides the AD engine (Tape, TrackedValue, DualValue).
-`tenferro-tensor` owns the concrete dense runtime value types and CPU backend
-execution surface. `tenferro-gpu` owns CubeCL/CUDA backend code.
+`chainrules-rs` defines the generic `PrimitiveOp` AD contract, independent of
+any tensor type. `tidu-rs` owns generic graph transforms such as
+`differentiate` and `transpose`.
+`tenferro-tensor-core` owns the lightweight host tensor data model.
+`tenferro-tensor` owns concrete dense runtime value types and CPU backend
+execution surface. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer
+helpers.
 `tenferro-internal-ops/src/ad/` is the semantic source of truth for core
 primitive AD rules. `tenferro-runtime` owns traced graph construction,
-lowering, extension registration, and public evaluation APIs. `tenferro-ad`
-owns eager AD and traced AD transforms.
+lowering, execution, extension registration, and cache ownership. `tenferro-ad`
+owns eager AD surfaces and traced AD helper APIs.
 
 The workspace intentionally has no root `tenferro` facade crate. Standard
 operation families remain separately imported crates such as
 `tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
+
+See `docs/architecture/tenferro-crates.md` for the full crate role table and
+dependency-boundary rules.
 
 ## AI Workflow Scripts
 
@@ -281,41 +285,25 @@ the agent from the repository top-level directory. Their default prompt is
 `ai/solve_bug_issue.md`, and JSON output is the default mode unless `--text` is
 passed.
 
-### Dependency Graph (POC)
+### Dependency Graph
 
 ```
-chainrules-core (← thiserror only, no tensor deps)
-    │  Differentiable trait, ReverseRule<V>, ForwardRule<V>
-    │
-    ↓
-chainrules (← chainrules-core)
-    │  Engine-independent scalar AD rules
-    │
-tidu (← chainrules-core)
-    │  Tape<V>, TrackedValue<V>, DualValue<V>
-    │
-tenferro-internal-device (← strided-view for StridedError, ← thiserror)
-    │
-    ↓
-tenferro-tensor
-    (← strided-kernel,
-     ← strided-traits,
-     ← num-traits)
-         │
-         ▼
-tenferro-internal-ops
-    (← computegraph,
-     ← tidu,
-     ← tenferro-tensor)
-         │
-         ▼
+tenferro-tensor-core
+    |
+    v
+tenferro-tensor <---------------- tenferro-gpu
+    |                                  ^
+    |                                  |
+    v                                  |
+tenferro-internal-ops <-------- tenferro-einsum
+    |                         \-- tenferro-linalg
+    |                         \-- tenferro-fft
+    v
 tenferro-runtime
-    (← computegraph, ← tenferro-internal-ops, ← tenferro-tensor)
-         │
-         ▼
+    |
+    v
 tenferro-ad
-    (← tidu, ← chainrules-core, ← tenferro-runtime, ← tenferro-internal-ops)
 
-tenferro-einsum / tenferro-linalg / tenferro-fft
-    (← tenferro-runtime, ← tenferro-internal-ops, ← tenferro-tensor as needed)
+tenferro-core-ops is internal metadata used by tensor, runtime, GPU, and ops.
+tenferro-internal-extension-macros is used by operation-family crates.
 ```

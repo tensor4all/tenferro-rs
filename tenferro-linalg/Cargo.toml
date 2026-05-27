@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Linear algebra extension operations for the tenferro workspace."
+description = "Linear algebra traced APIs, eager helpers, extension runtime, and optional AD rules for tenferro."
 
 [features]
 default = ["cpu-faer"]

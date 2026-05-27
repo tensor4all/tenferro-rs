@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "GPU backend implementations for tenferro tensors."
+description = "CubeCL/CUDA backend and GPU transfer helpers for tenferro tensors."
 
 [lib]
 name = "tenferro_gpu"

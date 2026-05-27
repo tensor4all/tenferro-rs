@@ -6,7 +6,7 @@ op semantics), see [Specification](../spec/).
 
 | Document | Covers |
 |----------|--------|
-| [tenferro-crates.md](./tenferro-crates.md) | Crate structure, StdTensorOp / SemiringOp design, einsum builder, extension points |
+| [tenferro-crates.md](./tenferro-crates.md) | Current crate structure, dependency boundaries, extension boundary, AD boundary |
 | [computegraph.md](./computegraph.md) | GraphOp, Operand, Fragment, resolve/materialize/compile/eval pipeline |
 | [chainrules.md](./chainrules.md) | PrimitiveOp trait, AD rule structure |
 | [tidu.md](./tidu.md) | differentiate, transpose, LinearFragment, higher-order AD |

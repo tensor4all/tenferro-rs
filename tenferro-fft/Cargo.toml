@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "FFT extension operations for tenferro."
+description = "FFT extension runtime and public FFT APIs for tenferro."
 
 [features]
 default = ["cpu-faer"]
