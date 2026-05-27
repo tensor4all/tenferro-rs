@@ -120,7 +120,7 @@ where
         return Ok(input.clone());
     };
 
-    let input_view = typed_view(input);
+    let input_view = typed_view(label, input)?;
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
         .map_err(|err| crate::Error::backend_failure(label, err))?;
 

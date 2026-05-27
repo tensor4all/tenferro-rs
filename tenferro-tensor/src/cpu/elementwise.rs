@@ -10,7 +10,7 @@ use crate::{
     types::{ConjElem, Tensor, TypedTensor},
 };
 
-use super::{tensor_from_array, typed_array_uninit_from_pool, typed_view};
+use super::{tensor_from_array, typed_array_uninit_from_pool, typed_host_data, typed_view};
 
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -181,19 +181,19 @@ pub(crate) fn add_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
             Ok(Tensor::C32(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
             Ok(Tensor::C32(typed_add_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
             Ok(Tensor::C64(typed_add_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
             Ok(Tensor::C64(typed_add_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -221,19 +221,19 @@ pub(crate) fn mul_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
             Ok(Tensor::C32(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
             Ok(Tensor::C32(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
             Ok(Tensor::C64(typed_mul_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
             Ok(Tensor::C64(typed_mul_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -259,19 +259,19 @@ pub(crate) fn div_with_pool(
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
             Ok(Tensor::C32(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
             Ok(Tensor::C32(typed_div_with_pool(buffers, a, &scalar)?))
         }
         (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(a.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
             Ok(Tensor::C64(typed_div_with_pool(buffers, &scalar, b)?))
         }
         (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
-            let scalar = complex_scalar_tensor(b.host_data()[0]);
+            let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
             Ok(Tensor::C64(typed_div_with_pool(buffers, a, &scalar)?))
         }
         _ => Err(crate::Error::DTypeMismatch {
@@ -530,25 +530,29 @@ where
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
-            &typed_view(lhs),
-            &typed_view(rhs),
+            &typed_view("add", lhs)?,
+            &typed_view("add", rhs)?,
             |x, y| x + y,
         )
         .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
-        let scalar = lhs.host_data()[0];
+        let scalar = typed_host_data("add", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar + x)
-            .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
+            scalar + x
+        })
+        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
-        let scalar = rhs.host_data()[0];
+        let scalar = typed_host_data("add", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x + scalar)
-            .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
+            x + scalar
+        })
+        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::ShapeMismatch {
@@ -579,25 +583,29 @@ where
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
-            &typed_view(lhs),
-            &typed_view(rhs),
+            &typed_view("mul", lhs)?,
+            &typed_view("mul", rhs)?,
             |x, y| x * y,
         )
         .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
-        let scalar = lhs.host_data()[0];
+        let scalar = typed_host_data("mul", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar * x)
-            .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        map_into(&mut out.view_mut(), &typed_view("mul", rhs)?, |x| {
+            scalar * x
+        })
+        .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
-        let scalar = rhs.host_data()[0];
+        let scalar = typed_host_data("mul", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x * scalar)
-            .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        map_into(&mut out.view_mut(), &typed_view("mul", lhs)?, |x| {
+            x * scalar
+        })
+        .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::ShapeMismatch {
@@ -628,25 +636,29 @@ where
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
         zip_map2_into(
             &mut out.view_mut(),
-            &typed_view(lhs),
-            &typed_view(rhs),
+            &typed_view("div", lhs)?,
+            &typed_view("div", rhs)?,
             |x, y| x / y,
         )
         .map_err(|err| crate::Error::backend_failure("div", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape.is_empty() {
-        let scalar = lhs.host_data()[0];
+        let scalar = typed_host_data("div", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(rhs), |x| scalar / x)
-            .map_err(|err| crate::Error::backend_failure("div", err))?;
+        map_into(&mut out.view_mut(), &typed_view("div", rhs)?, |x| {
+            scalar / x
+        })
+        .map_err(|err| crate::Error::backend_failure("div", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape.is_empty() {
-        let scalar = rhs.host_data()[0];
+        let scalar = typed_host_data("div", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
-        map_into(&mut out.view_mut(), &typed_view(lhs), |x| x / scalar)
-            .map_err(|err| crate::Error::backend_failure("div", err))?;
+        map_into(&mut out.view_mut(), &typed_view("div", lhs)?, |x| {
+            x / scalar
+        })
+        .map_err(|err| crate::Error::backend_failure("div", err))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::ShapeMismatch {
@@ -673,7 +685,7 @@ where
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
-    map_into(&mut out.view_mut(), &typed_view(input), |x| -x)
+    map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
         .map_err(|err| crate::Error::backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
 }
@@ -694,8 +706,10 @@ where
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
-    map_into(&mut out.view_mut(), &typed_view(input), |x| x.conj_elem())
-        .map_err(|err| crate::Error::backend_failure("conj", err))?;
+    map_into(&mut out.view_mut(), &typed_view("conj", input)?, |x| {
+        x.conj_elem()
+    })
+    .map_err(|err| crate::Error::backend_failure("conj", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -716,8 +730,10 @@ where
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
-    map_into(&mut out.view_mut(), &typed_view(input), |x| x.abs_elem())
-        .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
+        x.abs_elem()
+    })
+    .map_err(|err| crate::Error::backend_failure("abs", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -738,8 +754,10 @@ where
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
-    map_into(&mut out.view_mut(), &typed_view(input), |x| x.sign_elem())
-        .map_err(|err| crate::Error::backend_failure("sign", err))?;
+    map_into(&mut out.view_mut(), &typed_view("sign", input)?, |x| {
+        x.sign_elem()
+    })
+    .map_err(|err| crate::Error::backend_failure("sign", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -773,8 +791,8 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
+        &typed_view("maximum", lhs)?,
+        &typed_view("maximum", rhs)?,
         |x, y| x.max_elem(y),
     )
     .map_err(|err| crate::Error::backend_failure("maximum", err))?;
@@ -811,8 +829,8 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
+        &typed_view("minimum", lhs)?,
+        &typed_view("minimum", rhs)?,
         |x, y| x.min_elem(y),
     )
     .map_err(|err| crate::Error::backend_failure("minimum", err))?;
@@ -851,8 +869,8 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
+        &typed_view("compare", lhs)?,
+        &typed_view("compare", rhs)?,
         |x, y| x.compare_elem(y, dir),
     )
     .map_err(|err| crate::Error::backend_failure("compare", err))?;
@@ -886,9 +904,9 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &pred.shape) };
     zip_map3_into(
         &mut out.view_mut(),
-        &typed_view(pred),
-        &typed_view(on_true),
-        &typed_view(on_false),
+        &typed_view("select", pred)?,
+        &typed_view("select", on_true)?,
+        &typed_view("select", on_false)?,
         |p, t, f| if p { t } else { f },
     )
     .map_err(|err| crate::Error::backend_failure("select", err))?;
@@ -922,9 +940,9 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
     zip_map3_into(
         &mut out.view_mut(),
-        &typed_view(input),
-        &typed_view(lower),
-        &typed_view(upper),
+        &typed_view("clamp", input)?,
+        &typed_view("clamp", lower)?,
+        &typed_view("clamp", upper)?,
         |x, lo, hi| lo.max_elem(hi.min_elem(x)),
     )
     .map_err(|err| crate::Error::backend_failure("clamp", err))?;

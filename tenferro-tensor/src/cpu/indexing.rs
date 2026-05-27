@@ -3,6 +3,7 @@ use std::ops::Add;
 use num_traits::Zero;
 
 use super::indexing_alloc::pooled_uninit_tensor;
+use super::typed_host_data;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::config::{GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use crate::types::{flat_to_multi, Tensor, TypedTensor};
@@ -120,14 +121,16 @@ where
 
 fn clone_host_tensor_from_pool<T>(
     buffers: &mut BufferPool,
+    op: &'static str,
     tensor: &TypedTensor<T>,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar,
 {
     let mut out = pooled_uninit_tensor(buffers, tensor.shape.clone());
-    out.host_data_mut().copy_from_slice(tensor.host_data());
-    out
+    out.host_data_mut()
+        .copy_from_slice(typed_host_data(op, tensor)?);
+    Ok(out)
 }
 
 pub fn gather(
@@ -568,15 +571,17 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     match tensor {
         Tensor::I32(t) => Ok(IndexTensor {
             shape: t.shape.clone(),
-            values: t.host_data().iter().map(|&value| value as i64).collect(),
+            values: typed_host_data("index_tensor", t)?
+                .iter()
+                .map(|&value| value as i64)
+                .collect(),
         }),
         Tensor::I64(t) => Ok(IndexTensor {
             shape: t.shape.clone(),
-            values: t.host_data().to_vec(),
+            values: typed_host_data("index_tensor", t)?.to_vec(),
         }),
         Tensor::F32(t) => {
-            let values: crate::Result<Vec<i64>> = t
-                .host_data()
+            let values: crate::Result<Vec<i64>> = typed_host_data("index_tensor", t)?
                 .iter()
                 .map(|&value| f32_index_to_i64(value))
                 .collect();
@@ -586,8 +591,7 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
             })
         }
         Tensor::F64(t) => {
-            let values: crate::Result<Vec<i64>> = t
-                .host_data()
+            let values: crate::Result<Vec<i64>> = typed_host_data("index_tensor", t)?
                 .iter()
                 .map(|&value| f64_index_to_i64(value))
                 .collect();
@@ -1085,7 +1089,7 @@ where
     let batch_elems = checked_product("scatter", "batch shape", &batch_shape)?.max(1);
     let window_elems =
         checked_product("scatter", "window update shape", &window_shape_updates)?.max(1);
-    let mut out = clone_host_tensor_from_pool(buffers, operand);
+    let mut out = clone_host_tensor_from_pool(buffers, "scatter", operand)?;
 
     let mut batch_idx = vec![0usize; batch_shape.len()];
     let mut window_idx = vec![0usize; window_shape_updates.len()];
@@ -1255,7 +1259,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
         )?;
     }
 
-    let mut out = clone_host_tensor_from_pool(buffers, operand);
+    let mut out = clone_host_tensor_from_pool(buffers, "dynamic_update_slice", operand)?;
     let mut update_idx = vec![0usize; update.shape.len()];
     let mut operand_idx = vec![0usize; operand.shape.len()];
 

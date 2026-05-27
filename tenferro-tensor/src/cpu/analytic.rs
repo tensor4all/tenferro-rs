@@ -160,8 +160,12 @@ macro_rules! define_unary_analytic_op {
             T: UnaryAnalyticElem + PoolScalar,
         {
             let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
-            map_into(&mut out.view_mut(), &typed_view(input), |x| x.$elem_fn())
-                .map_err(|err| crate::Error::backend_failure(stringify!($typed_fn), err))?;
+            map_into(
+                &mut out.view_mut(),
+                &typed_view(stringify!($typed_fn), input)?,
+                |x| x.$elem_fn(),
+            )
+            .map_err(|err| crate::Error::backend_failure(stringify!($typed_fn), err))?;
             Ok(tensor_from_array(out))
         }
     };
@@ -247,8 +251,8 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
     zip_map2_into(
         &mut out.view_mut(),
-        &typed_view(lhs),
-        &typed_view(rhs),
+        &typed_view("pow", lhs)?,
+        &typed_view("pow", rhs)?,
         |x, y| x.pow_elem(y),
     )
     .map_err(|err| crate::Error::backend_failure("pow", err))?;

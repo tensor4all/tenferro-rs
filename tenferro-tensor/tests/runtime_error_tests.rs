@@ -1,7 +1,9 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use tenferro_tensor::{
-    cpu::CpuBackend, DotGeneralConfig, Error, PadConfig, SliceConfig, Tensor, TensorBackend,
+    cpu::CpuBackend, Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GpuBackendKind, MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorBackend,
     TypedTensor,
 };
 
@@ -11,6 +13,20 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
+    Tensor::F64(TypedTensor {
+        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        shape,
+        placement: Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    })
 }
 
 #[test]
@@ -106,6 +122,22 @@ fn add_rejects_shape_mismatch() {
             rhs,
         } if lhs == vec![2] && rhs == vec![3]
     ));
+}
+
+#[test]
+fn cpu_backend_rejects_backend_buffers_without_panicking() {
+    let lhs = backend_f64_tensor(vec![2]);
+    let rhs = f64_tensor(vec![2], vec![3.0, 4.0]);
+    let mut backend = CpuBackend::new();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        <CpuBackend as TensorBackend>::add(&mut backend, &lhs, &rhs)
+    }));
+
+    assert!(result.is_ok(), "CPU backend should return Err, not panic");
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(err, Error::BackendFailure { op: "add", .. }));
+    assert!(err.to_string().contains("download to host"));
 }
 
 #[test]

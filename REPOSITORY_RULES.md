@@ -164,6 +164,30 @@ Tests follow implementation ownership.
   backend limitation, or external ABI boundary, make that boundary explicit in
   the implementation and cover it with tests.
 
+### Device Transfer And Backend Buffer Errors
+
+- tenferro follows the PyTorch convention: no implicit CPU-GPU transfer.
+  Tensors must already live on the device required by the backend operation.
+- User code must explicitly upload CPU tensors before CUDA backend execution
+  and explicitly download CUDA tensors before CPU-only execution or host value
+  inspection.
+- A GPU backend op receiving a CPU tensor must return
+  `Error::BackendFailure` with a diagnostic that says the op expected a GPU
+  tensor and points users to `upload_tensor()`.
+- A `Result`-returning CPU backend op receiving a backend/GPU buffer must
+  return `Error::BackendFailure` where the buffer is detected at the CPU
+  backend boundary. The diagnostic should say to download the tensor to host
+  before CPU execution.
+- Direct host-inspection APIs such as `TypedTensor::host_data()` and
+  `TypedTensor::host_data_mut()` may panic with a diagnostic on backend
+  buffers because their signatures return slices, not `Result`.
+- Execution pipeline internals may handle placement for documented cases:
+  `Constant` ops may auto-upload through `upload_host_tensor()`, and
+  host-dependent ops such as `ShapeOf` or `DynamicTruncate` may read metadata
+  or download single scalar values as documented by the backend contract.
+- Unsupported CUDA op or dtype combinations must return an explicit error, not
+  silently fall back to CPU execution.
+
 ### Dense Layout And Linear Algebra
 
 - tenferro uses column-major (Fortran order) dense storage: the leftmost
@@ -305,6 +329,9 @@ Tests follow implementation ownership.
   runtime shape/stride metadata conventions, launch configuration rules, and
   device transfer behavior. Any change to those conventions must update that
   document in the same PR.
+- CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
+  provided by cuSOLVER. `CubeclBackend::eig` returns `BackendFailure`; users
+  must explicitly download to CPU and compute via `CpuBackend::eig`.
 
 ## Documentation Policy
 
