@@ -1,7 +1,8 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
-use crate::{DType, DeviceKind, GpuBackendKind, Tensor, TensorBackend};
+use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
+use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorStructural};
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c64, tensor_f64, upload,

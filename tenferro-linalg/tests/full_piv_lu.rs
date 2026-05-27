@@ -1,5 +1,7 @@
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{
+    cpu::CpuBackend, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor,
+};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))

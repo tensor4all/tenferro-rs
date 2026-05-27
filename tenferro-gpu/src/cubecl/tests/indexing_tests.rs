@@ -1,7 +1,7 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::{PadConfig, ScatterConfig, SliceConfig};
-use crate::TensorBackend;
 use num_complex::Complex64;
+use tenferro_tensor::TensorIndexing;
 
 use super::{
     assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,

@@ -2,9 +2,11 @@
 use tenferro_gpu::cubecl::CubeclBackend;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig,
-    PadConfig, Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend,
-    TensorRead,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig, Result as TensorResult,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural,
 };
 
 pub enum EagerBackend {
@@ -44,9 +46,11 @@ macro_rules! delegate_tensor_backend_methods {
     };
 }
 
-impl TensorBackend for EagerBackend {
+impl BackendRuntimeCache for EagerBackend {
     type RuntimeCache = ();
+}
 
+impl TensorElementwise for EagerBackend {
     delegate_tensor_backend_methods! {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
@@ -60,6 +64,11 @@ impl TensorBackend for EagerBackend {
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
         fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorAnalytic for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn exp(input: &Tensor) -> TensorResult<Tensor>;
         fn log(input: &Tensor) -> TensorResult<Tensor>;
         fn sin(input: &Tensor) -> TensorResult<Tensor>;
@@ -70,6 +79,11 @@ impl TensorBackend for EagerBackend {
         fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn expm1(input: &Tensor) -> TensorResult<Tensor>;
         fn log1p(input: &Tensor) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorStructural for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
         fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
@@ -78,13 +92,28 @@ impl TensorBackend for EagerBackend {
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
         fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorReduction for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorDot for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> TensorResult<Tensor>;
         fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> TensorResult<Tensor>;
         fn dot_general_with_conj(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig, lhs_conj: bool, rhs_conj: bool) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorIndexing for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> TensorResult<Tensor>;
         fn scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> TensorResult<Tensor>;
         fn slice(input: &Tensor, config: &SliceConfig) -> TensorResult<Tensor>;
@@ -94,18 +123,33 @@ impl TensorBackend for EagerBackend {
         fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
         fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
     }
+}
 
-    fn with_backend_session<R: Send>(
-        &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+impl BackendSessionHost for EagerBackend {
+    fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
         dispatch!(self, with_backend_session(f))
     }
+}
 
+impl TensorDeviceTransfer for EagerBackend {
     delegate_tensor_backend_methods! {
         fn download_to_host(tensor: &Tensor) -> TensorResult<Tensor>;
         fn upload_host_tensor(tensor: &Tensor) -> TensorResult<Tensor>;
+    }
+}
+
+impl TensorBuffer for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn reclaim_buffer(tensor: Tensor) -> ();
+    }
+}
+
+impl TensorFusion for EagerBackend {
+    delegate_tensor_backend_methods! {
         fn execute_elementwise_fusion(inputs: &[&Tensor], plan: &ElementwiseFusionPlan) -> TensorResult<Option<Vec<Tensor>>>;
     }
 }
+
+impl BackendCachedDot for EagerBackend {}
+
+impl TensorBackend for EagerBackend {}

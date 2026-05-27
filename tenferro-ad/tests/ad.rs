@@ -29,7 +29,7 @@ use tenferro_runtime::{GraphExecutor, TracedTensor};
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
-    TensorBackend, TypedTensor,
+    TensorReduction, TypedTensor,
 };
 use tidu::{differentiate, transpose, LinearFragment};
 

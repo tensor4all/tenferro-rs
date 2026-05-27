@@ -1,6 +1,8 @@
 use tenferro_tensor::{
-    cpu::CpuBackend, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TensorRead, TensorView, TypedTensor,
+    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType,
+    DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TypedTensor,
 };
 
 use crate::eager::{
@@ -24,9 +26,11 @@ macro_rules! panic_backend_methods {
     };
 }
 
-impl TensorBackend for WrongDTypeBackend {
+impl BackendRuntimeCache for WrongDTypeBackend {
     type RuntimeCache = ();
+}
 
+impl TensorElementwise for WrongDTypeBackend {
     panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -39,6 +43,15 @@ impl TensorBackend for WrongDTypeBackend {
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> tenferro_tensor::Result<Tensor>;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> tenferro_tensor::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> tenferro_tensor::Result<Tensor>;
+    }
+
+    fn conj(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        CpuBackend::new().conj(input)
+    }
+}
+
+impl TensorAnalytic for WrongDTypeBackend {
+    panic_backend_methods! {
         exp(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         log(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         sin(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
@@ -49,6 +62,11 @@ impl TensorBackend for WrongDTypeBackend {
         pow(lhs: &Tensor, rhs: &Tensor) -> tenferro_tensor::Result<Tensor>;
         expm1(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
         log1p(input: &Tensor) -> tenferro_tensor::Result<Tensor>;
+    }
+}
+
+impl TensorStructural for WrongDTypeBackend {
+    panic_backend_methods! {
         transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> tenferro_tensor::Result<Tensor>;
@@ -57,10 +75,20 @@ impl TensorBackend for WrongDTypeBackend {
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> tenferro_tensor::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
         triu(input: &Tensor, k: i64) -> tenferro_tensor::Result<Tensor>;
+    }
+}
+
+impl TensorReduction for WrongDTypeBackend {
+    panic_backend_methods! {
         reduce_sum(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_prod(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_max(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reduce_min(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
+    }
+}
+
+impl TensorIndexing for WrongDTypeBackend {
+    panic_backend_methods! {
         gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> tenferro_tensor::Result<Tensor>;
         scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> tenferro_tensor::Result<Tensor>;
         slice(input: &Tensor, config: &SliceConfig) -> tenferro_tensor::Result<Tensor>;
@@ -70,7 +98,9 @@ impl TensorBackend for WrongDTypeBackend {
         concatenate(inputs: &[&Tensor], axis: usize) -> tenferro_tensor::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> tenferro_tensor::Result<Tensor>;
     }
+}
 
+impl TensorDot for WrongDTypeBackend {
     fn dot_general(
         &mut self,
         _lhs: &Tensor,
@@ -82,11 +112,19 @@ impl TensorBackend for WrongDTypeBackend {
             vec![1.0, 2.0, 3.0, 4.0],
         )))
     }
-
-    fn conj(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        CpuBackend::new().conj(input)
-    }
 }
+
+impl BackendCachedDot for WrongDTypeBackend {}
+
+impl BackendSessionHost for WrongDTypeBackend {}
+
+impl TensorDeviceTransfer for WrongDTypeBackend {}
+
+impl TensorBuffer for WrongDTypeBackend {}
+
+impl TensorFusion for WrongDTypeBackend {}
+
+impl TensorBackend for WrongDTypeBackend {}
 
 #[test]
 fn typed_einsum_f64() {
@@ -218,12 +256,18 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
     let mut backend = WrongDTypeBackend;
     let mut cache = ();
 
-    let direct =
-        TensorBackend::dot_general_cached(&mut backend, &mut cache, Some(7), &lhs, &rhs, &config)
-            .unwrap();
+    let direct = BackendCachedDot::dot_general_cached(
+        &mut backend,
+        &mut cache,
+        Some(7),
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
     assert_eq!(direct.shape(), &[2, 2]);
 
-    let read = TensorBackend::dot_general_read(
+    let read = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&rhs),
@@ -234,7 +278,7 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
 
     let rhs_shape = [1usize, 1];
     let rhs_data = [3.0_f64];
-    let read_view = TensorBackend::dot_general_read(
+    let read_view = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_tensor(&lhs),
         TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
@@ -244,11 +288,10 @@ fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
     assert_eq!(read_view.shape(), &[2, 2]);
 
     let folded =
-        TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true)
-            .unwrap();
+        TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(folded.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let value = TensorBackend::with_backend_session_cached(&mut backend, &mut cache, |exec| {
+    let value = BackendSessionHost::with_backend_session_cached(&mut backend, &mut cache, |exec| {
         let cached = exec
             .dot_general_cached(Some(3), &lhs, &rhs, &config)
             .unwrap();

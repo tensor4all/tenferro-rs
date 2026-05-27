@@ -5,7 +5,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
 use crate::cubecl::{gpu_available, CubeclBackend, CubeclRuntime};
 use crate::Tensor;
-use crate::TensorBackend;
+use tenferro_tensor::TensorElementwise;
 
 #[cube(launch_unchecked)]
 fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {

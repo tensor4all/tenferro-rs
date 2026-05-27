@@ -3,7 +3,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::DotGeneralConfig;
 use crate::Tensor;
-use crate::TensorBackend;
+use tenferro_tensor::TensorDot;
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,

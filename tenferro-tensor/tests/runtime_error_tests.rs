@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tenferro_tensor::{
     cpu::CpuBackend, Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
-    GpuBackendKind, MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorBackend,
-    TypedTensor,
+    GpuBackendKind, MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorAnalytic,
+    TensorDot, TensorElementwise, TensorIndexing, TensorStructural, TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -112,7 +112,7 @@ fn add_rejects_shape_mismatch() {
     let rhs = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
     let mut backend = CpuBackend::new();
 
-    let err = <CpuBackend as TensorBackend>::add(&mut backend, &lhs, &rhs).unwrap_err();
+    let err = <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs).unwrap_err();
 
     assert!(matches!(
         err,
@@ -131,7 +131,7 @@ fn cpu_backend_rejects_backend_buffers_without_panicking() {
     let mut backend = CpuBackend::new();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        <CpuBackend as TensorBackend>::add(&mut backend, &lhs, &rhs)
+        <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs)
     }));
 
     assert!(result.is_ok(), "CPU backend should return Err, not panic");

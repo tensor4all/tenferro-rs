@@ -576,7 +576,7 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
     let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
     let mut backend = CpuBackend::new();
-    let out = TensorBackend::add(&mut backend, &a, &b).unwrap();
+    let out = TensorElementwise::add(&mut backend, &a, &b).unwrap();
     assert_eq!(get_f64(&out, &[0]), 4.0);
     assert_eq!(get_f64(&out, &[1]), 6.0);
 }

@@ -1,4 +1,4 @@
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TensorRead, TensorView};
+use tenferro_tensor::{cpu::CpuBackend, BackendSessionHost, Tensor, TensorRead, TensorView};
 
 use super::{
     binary_contract, eager_einsum_exec_read, try_eager_einsum_binary_read_fast, LabeledTensor,
