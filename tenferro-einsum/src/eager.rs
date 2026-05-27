@@ -1,108 +1,21 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
-use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::env;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use tenferro_tensor::{
-    DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorExec, TensorRead, TensorView,
+    BackendSession, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorView,
 };
 
 use crate::{ContractionTree, Subscripts};
 
+mod profile;
+
+use profile::{
+    eager_einsum_profile_enabled, eager_einsum_trace_enabled, maybe_print_eager_einsum_profile,
+    profile_eager_einsum_section, record_eager_einsum_profile,
+};
+
 const EAGER_EINSUM_OP: &str = "eager_einsum";
-
-#[derive(Debug, Default, Clone)]
-struct EagerEinsumProfileEntry {
-    calls: usize,
-    total_time: Duration,
-}
-
-thread_local! {
-    static EAGER_EINSUM_PROFILE_STATE: RefCell<HashMap<&'static str, EagerEinsumProfileEntry>> =
-        RefCell::new(HashMap::new());
-}
-
-fn eager_einsum_profile_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_EINSUM_AGG").is_ok())
-}
-
-fn eager_einsum_trace_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_EINSUM").is_ok())
-}
-
-fn record_eager_einsum_profile(section: &'static str, elapsed: Duration) {
-    if !eager_einsum_profile_enabled() {
-        return;
-    }
-    EAGER_EINSUM_PROFILE_STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        let entry = state.entry(section).or_default();
-        entry.calls += 1;
-        entry.total_time += elapsed;
-    });
-}
-
-fn profile_eager_einsum_section<T>(section: &'static str, f: impl FnOnce() -> T) -> T {
-    if !eager_einsum_profile_enabled() {
-        return f();
-    }
-    let started = Instant::now();
-    let result = f();
-    record_eager_einsum_profile(section, started.elapsed());
-    result
-}
-
-fn maybe_print_eager_einsum_profile() {
-    if !eager_einsum_profile_enabled() {
-        return;
-    }
-    let Ok(print_every) = env::var("TENFERRO_PROFILE_EAGER_EINSUM_PRINT_EVERY") else {
-        return;
-    };
-    let Ok(print_every) = print_every.parse::<usize>() else {
-        return;
-    };
-    if print_every == 0 {
-        return;
-    }
-
-    let should_print = EAGER_EINSUM_PROFILE_STATE.with(|state| {
-        state
-            .borrow()
-            .get("total")
-            .is_some_and(|entry| entry.calls % print_every == 0)
-    });
-    if should_print {
-        print_and_reset_eager_einsum_profile();
-    }
-}
-
-fn print_and_reset_eager_einsum_profile() {
-    EAGER_EINSUM_PROFILE_STATE.with(|state| {
-        let mut entries: Vec<_> = state
-            .borrow()
-            .iter()
-            .map(|(section, entry)| (*section, entry.clone()))
-            .collect();
-        state.borrow_mut().clear();
-        entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
-
-        eprintln!("=== tenferro eager einsum profile ===");
-        for (section, entry) in entries {
-            eprintln!(
-                "{section}: calls={} total={:.6}ms per_call={:.3}us",
-                entry.calls,
-                entry.total_time.as_secs_f64() * 1.0e3,
-                entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64,
-            );
-        }
-    });
-}
 
 enum TensorValue<'a> {
     Borrowed(&'a Tensor),
@@ -135,7 +48,7 @@ impl TensorValue<'_> {
         }
     }
 
-    fn reclaim_if_owned(self, exec: &mut dyn TensorExec) {
+    fn reclaim_if_owned(self, exec: &mut dyn BackendSession) {
         if let Self::Owned(tensor) = self {
             exec.reclaim_buffer(tensor);
         }
@@ -171,7 +84,7 @@ impl LabeledTensor<'_> {
         }
     }
 
-    fn reclaim_if_owned(self, exec: &mut dyn TensorExec) {
+    fn reclaim_if_owned(self, exec: &mut dyn BackendSession) {
         self.tensor.reclaim_if_owned(exec);
     }
 }
@@ -275,7 +188,7 @@ fn try_build_binary_dot_fast_plan(
 }
 
 fn execute_binary_dot_fast_plan<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     plan: BinaryDotFastPlan,
@@ -359,7 +272,7 @@ fn label_size(label: u32, operands: &[&LabeledTensor<'_>]) -> Result<usize> {
 }
 
 fn reduce_tensor<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     operand: LabeledTensor<'a>,
     reduce_labels: &HashSet<u32>,
 ) -> Result<LabeledTensor<'a>> {
@@ -396,7 +309,7 @@ fn reduce_tensor<'a>(
 }
 
 fn diagonalize_repeated<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     mut operand: LabeledTensor<'a>,
 ) -> Result<LabeledTensor<'a>> {
     loop {
@@ -426,7 +339,7 @@ fn diagonalize_repeated<'a>(
 }
 
 fn embed_repeated<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     mut operand: LabeledTensor<'a>,
     output_labels: &[u32],
 ) -> Result<LabeledTensor<'a>> {
@@ -466,7 +379,7 @@ fn embed_repeated<'a>(
 }
 
 fn transpose_to_labels<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     operand: LabeledTensor<'a>,
     target_labels: &[u32],
 ) -> Result<LabeledTensor<'a>> {
@@ -496,7 +409,7 @@ fn transpose_to_labels<'a>(
 }
 
 fn outer_product<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     batch_labels: &[u32],
@@ -553,7 +466,7 @@ fn outer_product<'a>(
 }
 
 fn binary_contract<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     survive_labels: &[u32],
@@ -698,7 +611,7 @@ fn binary_contract<'a>(
 }
 
 fn eager_einsum_exec_values<'a>(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     inputs: Vec<TensorValue<'a>>,
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -789,7 +702,7 @@ fn eager_einsum_exec_values<'a>(
 }
 
 fn eager_einsum_exec(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     inputs: &[&Tensor],
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -803,7 +716,7 @@ fn eager_einsum_exec(
 
 #[cfg(test)]
 fn eager_einsum_exec_read(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -826,7 +739,7 @@ fn tensor_value_from_read(input: TensorRead<'_>) -> TensorValue<'_> {
 }
 
 fn eager_einsum_exec_binary_read_fast(
-    exec: &mut dyn TensorExec,
+    exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
     plan: BinaryDotFastPlan,
@@ -864,8 +777,8 @@ fn try_eager_einsum_binary_read_fast(
             &subscripts.output,
         )
     })?;
-    let result = profile_eager_einsum_section("fast.with_exec_session", || {
-        ctx.with_exec_session(|exec| {
+    let result = profile_eager_einsum_section("fast.with_backend_session", || {
+        ctx.with_backend_session(|exec| {
             eager_einsum_exec_binary_read_fast(exec, inputs, subscripts, plan)
         })
     });
@@ -920,8 +833,8 @@ pub(crate) fn eager_einsum_subscripts(
         let tree = profile_eager_einsum_section("plan_subscripts", || {
             plan_subscripts(subscripts, &shapes)
         })?;
-        let result = profile_eager_einsum_section("with_exec_session", || {
-            ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+        let result = profile_eager_einsum_section("with_backend_session", || {
+            ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
         });
         record_eager_einsum_profile("total", total_started.elapsed());
         maybe_print_eager_einsum_profile();
@@ -939,7 +852,7 @@ pub(crate) fn eager_einsum_subscripts(
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let result = ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree));
+        let result = ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree));
         let exec_us = started.elapsed().as_secs_f64() * 1.0e6;
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
@@ -954,7 +867,7 @@ pub(crate) fn eager_einsum_subscripts(
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
-    ctx.with_exec_session(|exec| eager_einsum_exec(exec, inputs, &tree))
+    ctx.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &tree))
 }
 
 /// Eager N-ary einsum on read-only tensor inputs.
@@ -974,7 +887,7 @@ pub(crate) fn eager_einsum_read_subscripts(
 
     let shapes: Vec<&[usize]> = inputs.iter().map(TensorRead::shape).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
-    ctx.with_exec_session(|exec| eager_einsum_exec_read(exec, inputs, &tree))
+    ctx.with_backend_session(|exec| eager_einsum_exec_read(exec, inputs, &tree))
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.
@@ -1008,7 +921,7 @@ pub(crate) fn eager_einsum_owned_subscripts(
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
-    ctx.with_exec_session(|exec| eager_einsum_exec_values(exec, values, &tree))
+    ctx.with_backend_session(|exec| eager_einsum_exec_values(exec, values, &tree))
 }
 
 #[cfg(test)]

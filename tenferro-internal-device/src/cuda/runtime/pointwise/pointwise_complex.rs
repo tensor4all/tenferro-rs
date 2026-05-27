@@ -20,7 +20,7 @@ impl CudaRuntime {
         beta: KernelComplex32,
     ) -> Result<()> {
         self.pointwise_scale_complex_real_raw_impl(
-            COMPLEX_SCALE_KERNEL_NAME_F32,
+            COMPLEX_REAL_SCALE_KERNEL_NAME_F32,
             alpha,
             lhs,
             rhs,
@@ -52,8 +52,8 @@ impl CudaRuntime {
     /// let lhs = runtime.alloc::<Complex64>(4).unwrap();
     /// let rhs = runtime.alloc::<f64>(4).unwrap();
     /// let dst = runtime.alloc::<Complex64>(4).unwrap();
-    /// let alpha = KernelComplex64 { re: 1.0, im: 0.0 };
-    /// let beta = KernelComplex64 { re: 0.0, im: 0.0 };
+    /// let alpha: KernelComplex64 = Complex64::new(1.0, 0.0).into();
+    /// let beta: KernelComplex64 = Complex64::new(0.0, 0.0).into();
     /// unsafe {
     ///     runtime.pointwise_scale_complex64_real_f64_raw(
     ///         alpha,
@@ -87,7 +87,7 @@ impl CudaRuntime {
         beta: KernelComplex64,
     ) -> Result<()> {
         self.pointwise_scale_complex_real_raw_impl(
-            COMPLEX_SCALE_KERNEL_NAME_F64,
+            COMPLEX_REAL_SCALE_KERNEL_NAME_F64,
             alpha,
             lhs,
             rhs,

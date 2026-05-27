@@ -185,7 +185,7 @@ pub fn linearize_dynamic_update_slice(
 /// use a zero operand so the operand cotangent is only the sum over
 /// gather reads, not `original operand + sum over gather reads`.
 pub fn transpose_gather(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -240,7 +240,7 @@ pub fn transpose_gather(
 /// their cotangents are always inactive.
 #[allow(clippy::too_many_arguments)]
 pub fn transpose_gather_dynamic_slice_sizes(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -298,7 +298,7 @@ pub fn transpose_gather_dynamic_slice_sizes(
 /// The transpose of `DynamicSlice(x, starts, sizes)` writes the cotangent back
 /// into a zero tensor shaped like `x` using the same start-adjustment semantics.
 pub fn transpose_dynamic_slice(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -344,7 +344,7 @@ pub fn transpose_dynamic_slice(
 /// zeros the updated window. Update cotangent is the matching dynamic slice of
 /// the output cotangent.
 pub fn transpose_dynamic_update_slice(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -483,7 +483,7 @@ pub fn linearize_scatter(
 ///   with `slice_sizes` derived from the primal `updates`' shape. The
 ///   third entry of the active mask gates whether it is returned.
 pub fn transpose_scatter(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,

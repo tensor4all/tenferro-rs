@@ -33,6 +33,7 @@ rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
 tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 chainrules-core = { workspace = true, optional = true }
 computegraph.workspace = true

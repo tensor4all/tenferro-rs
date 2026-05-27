@@ -341,7 +341,7 @@ executes.
 
 Compiled `TracedTensor` execution does not always pay one install per GEMM.
 
-- If the whole program can run in a single `TensorExec` session, install happens
+- If the whole program can run in a single `BackendSession`, install happens
   once for the graph evaluation.
 - Pure chains of `DotGeneral` / `DotGeneralWithConj` can use this path.
 - If segmentation finds a multi-instruction elementwise fused segment, the
@@ -384,7 +384,7 @@ entry point without making normal eager contractions context-dependent.
 2. Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
    backend context has more than one thread.
 3. Improve segmented execution so FFI GEMMs can run through an existing
-   `TensorExec` session instead of returning to backend-level calls.
+   `BackendSession` instead of returning to backend-level calls.
 4. Add scalar-like contraction fast paths for `nnz == 1`.
 5. Add tiny GEMM direct-loop fast paths for small `m`, `n`, `k`.
 6. Consider fixed-rank / tuple-based internal paths for common rank-2/rank-3

@@ -7,6 +7,7 @@ members = [
     "tenferro-runtime",
     "tenferro-ad",
     "tenferro-internal-extension-macros",
+    "tenferro-core-ops",
     "tenferro-internal-ops",
     "tenferro-einsum",
     "tenferro-linalg",

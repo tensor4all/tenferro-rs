@@ -6,7 +6,7 @@ use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
 pub(super) fn build_zero_like(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     dtype: DType,
     anchor: ValRef<StdTensorOp>,
     anchor_rank: usize,

@@ -94,10 +94,10 @@ impl FakeTensorBackend {
     fn result(&mut self, name: &'static str, value: f64) -> tenferro_tensor::Result<Tensor> {
         self.calls.push(name);
         if self.error_on == Some(name) {
-            return Err(tenferro_tensor::Error::BackendFailure {
-                op: name,
-                message: "injected failure".into(),
-            });
+            return Err(tenferro_tensor::Error::backend_failure(
+                name,
+                "injected failure",
+            ));
         }
         Ok(scalar_tensor(value))
     }
@@ -296,76 +296,6 @@ impl TensorBackend for FakeTensorBackend {
     fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reverse", 39.0)
     }
-    fn cholesky(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        self.result("cholesky", 40.0)
-    }
-    fn triangular_solve(
-        &mut self,
-        _a: &Tensor,
-        _b: &Tensor,
-        _left_side: bool,
-        _lower: bool,
-        _transpose_a: bool,
-        _unit_diagonal: bool,
-    ) -> tenferro_tensor::Result<Tensor> {
-        self.result("triangular_solve", 40.5)
-    }
-    fn lu(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("lu");
-        Ok(vec![
-            scalar_tensor(40.75),
-            scalar_tensor(41.0),
-            scalar_tensor(41.25),
-            scalar_tensor(41.5),
-        ])
-    }
-    fn full_piv_lu(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("full_piv_lu");
-        Ok(vec![
-            scalar_tensor(41.75),
-            scalar_tensor(42.0),
-            scalar_tensor(42.25),
-            scalar_tensor(42.5),
-            scalar_tensor(42.75),
-        ])
-    }
-    fn full_piv_lu_solve(
-        &mut self,
-        _a: &Tensor,
-        _b: &Tensor,
-        _transpose_a: bool,
-    ) -> tenferro_tensor::Result<Tensor> {
-        self.result("full_piv_lu_solve", 41.625)
-    }
-    fn svd(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("svd");
-        Ok(vec![scalar_tensor(42.0), scalar_tensor(42.5)])
-    }
-    fn qr(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("qr");
-        Ok(vec![scalar_tensor(43.0), scalar_tensor(43.5)])
-    }
-    fn eigh(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("eigh");
-        Ok(vec![scalar_tensor(44.0), scalar_tensor(44.5)])
-    }
-    fn eig(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.calls.push("eig");
-        Ok(vec![
-            Tensor::C64(TypedTensor::from_vec_col_major(
-                vec![],
-                vec![Complex64::new(45.0, 0.5)],
-            )),
-            Tensor::C64(TypedTensor::from_vec_col_major(
-                vec![],
-                vec![Complex64::new(45.5, -0.5)],
-            )),
-        ])
-    }
-    fn solve(&mut self, _a: &Tensor, _b: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        self.result("solve", 44.0)
-    }
-
     fn reclaim_buffer(&mut self, _tensor: Tensor) {
         self.reclaimed += 1;
     }

@@ -757,9 +757,11 @@ where
         lhs_conj,
         rhs_conj,
     )?
-    .ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    .ok_or_else(|| {
+        Error::backend_failure(
+            "dot_general",
+            "CPU GEMM requires host-backed canonical inputs",
+        )
     })
 }
 
@@ -890,10 +892,8 @@ where
     let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
         return Ok(None);
     };
-    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "output element count overflow".into(),
-    })?;
+    let out_n = checked_product(&dims.out_shape)
+        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
@@ -917,21 +917,12 @@ where
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off =
-            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "lhs batch offset overflow".into(),
-            })?;
-        let b_off =
-            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "rhs batch offset overflow".into(),
-            })?;
-        let c_off =
-            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "output batch offset overflow".into(),
-            })?;
+        let a_off = checked_batch_offset(batch, dims.a_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
         unsafe {
             if lhs_conj || rhs_conj {
                 T::strided_gemm_with_conj(
@@ -1041,9 +1032,11 @@ where
         &rhs_canon,
         &new_config,
     )?
-    .ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "CPU GEMM requires host-backed canonical inputs".into(),
+    .ok_or_else(|| {
+        Error::backend_failure(
+            "dot_general",
+            "CPU GEMM requires host-backed canonical inputs",
+        )
     })
 }
 
@@ -1252,10 +1245,8 @@ where
         Some(dims) => dims,
         None => return Ok(None),
     };
-    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "output element count overflow".into(),
-    })?;
+    let out_n = checked_product(&dims.out_shape)
+        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
@@ -1301,21 +1292,12 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off =
-            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "lhs batch offset overflow".into(),
-            })?;
-        let b_off =
-            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "rhs batch offset overflow".into(),
-            })?;
-        let c_off =
-            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "output batch offset overflow".into(),
-            })?;
+        let a_off = checked_batch_offset(batch, dims.a_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
         let executed = unsafe {
             T::strided_gemm_with_conj(
                 T::one(),
@@ -1367,10 +1349,8 @@ where
         Some(dims) => dims,
         None => return Ok(None),
     };
-    let out_n = checked_product(&dims.out_shape).ok_or_else(|| Error::BackendFailure {
-        op: "dot_general",
-        message: "output element count overflow".into(),
-    })?;
+    let out_n = checked_product(&dims.out_shape)
+        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
@@ -1408,21 +1388,12 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off =
-            checked_batch_offset(batch, dims.a_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "lhs batch offset overflow".into(),
-            })?;
-        let b_off =
-            checked_batch_offset(batch, dims.b_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "rhs batch offset overflow".into(),
-            })?;
-        let c_off =
-            checked_batch_offset(batch, dims.c_bs).ok_or_else(|| Error::BackendFailure {
-                op: "dot_general",
-                message: "output batch offset overflow".into(),
-            })?;
+        let a_off = checked_batch_offset(batch, dims.a_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
+        let b_off = checked_batch_offset(batch, dims.b_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
+        let c_off = checked_batch_offset(batch, dims.c_bs)
+            .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
         unsafe {
             T::strided_gemm(
                 T::one(),

@@ -31,7 +31,7 @@ ExecProgram
   └── eval_exec_ir() / eval_exec_segmented()
          │
          ▼
-  TensorBackend / TensorExec dispatch
+  TensorBackend / BackendSession dispatch
 ```
 
 ### Custom algebra path
@@ -104,13 +104,13 @@ the ops are the real runtime contract:
 - Indexing / shape: `Gather`, `GatherDynamicSliceSizes`, `Scatter`, `Slice`,
   `DynamicSlice`, `DynamicUpdateSlice`, `Pad`, `Concatenate`, `Reverse`, `ShapeOf`,
   `DynamicTruncate`, `PadToMatch`
-- Contraction: `DotGeneral`, `NaryEinsum`
-- Linalg: `Cholesky`, `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`,
-  `TriangularSolve`, `ValidateNonsingular`
+- Contraction: `DotGeneral`
+- Extension boundary: `Extension`
 - Constants: `Constant`
 
 String `CustomCall` dispatch is gone. Structured linalg variants are first
-class `ExecOp`s.
+class extension operations owned by `tenferro-linalg`, not core `ExecOp`
+variants.
 
 ---
 
@@ -169,7 +169,7 @@ Execution is divided into three instruction categories.
 
 ### Backend-session instructions
 
-These run through `TensorExec` inside `TensorBackend::with_exec_session()`.
+These run through `BackendSession` inside `TensorBackend::with_backend_session()`.
 They are the operations eligible for grouped segmented execution and, when
 supported by the backend, elementwise fusion planning.
 
@@ -195,7 +195,6 @@ These are handled without calling backend kernels:
 `GatherDynamicSliceSizes` resolves its symbolic `slice_sizes` against concrete
 runtime tensor shapes in the execution layer, then calls the backend through the
 normal concrete `Gather` path.
-- `ValidateNonsingular`
 
 `Constant` uses `TensorBackend::upload_host_tensor()` so device-specific
 execution still receives correctly placed tensors without implicit transfer of
@@ -206,16 +205,11 @@ user-supplied inputs.
 These stay as single-instruction boundaries in segmented execution:
 
 - `DotGeneral`
-- `NaryEinsum`
-- `Cholesky`
-- `Svd`
-- `Qr`
-- `Lu`
-- `Eigh`
-- `Eig`
-- `TriangularSolve`
+- `Extension`
 
-The standard path dispatches them through `TensorBackend`.
+`DotGeneral` dispatches through `TensorBackend`. `Extension` dispatch routes
+through the registered `ExtensionRuntime` for the operation family; linalg,
+einsum, and FFT register those runtimes from their owning crates.
 
 ---
 
@@ -243,7 +237,7 @@ Segmented execution exists to:
 - preserve the same observable behavior as unsegmented execution
 
 The engine uses `last_use` metadata to reclaim buffers via
-`TensorExec::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
+`BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
 
 ---
 
@@ -261,14 +255,13 @@ It includes:
 - reductions
 - `dot_general`
 - indexing ops
-- linalg ops
-- `with_exec_session`
+- `with_backend_session`
 - `download_to_host`
 - `upload_host_tensor`
 - `reclaim_buffer`
 
-`TensorExec` is the session-local companion trait used by grouped backend
-execution. Backends may override `with_exec_session()` to install one shared
+`BackendSession` is the session-local companion trait used by grouped backend
+execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
 ### SemiringBackend

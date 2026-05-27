@@ -44,7 +44,7 @@ fn svd_executes_after_runtime_registration() {
         vec![2, 2],
         vec![1.0_f64, 0.0, 0.0, 2.0],
     ));
-    let (u, s, vt) = tenferro_linalg::svd(&a);
+    let (u, s, vt) = tenferro_linalg::svd(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&u, &s, &vt]).unwrap();
@@ -66,7 +66,7 @@ fn missing_runtime_reports_linalg_family() {
         vec![2, 2],
         vec![1.0_f64, 0.0, 0.0, 1.0],
     ));
-    let y = tenferro_linalg::cholesky(&a);
+    let y = tenferro_linalg::cholesky(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
@@ -85,7 +85,7 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     ));
-    let (p, l, u, q, parity) = tenferro_linalg::full_piv_lu(&a);
+    let (p, l, u, q, parity) = tenferro_linalg::full_piv_lu(&a).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
@@ -116,20 +116,20 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]),
     ));
 
-    let (u, s, vt) = tenferro_linalg::svd(&rectangular);
+    let (u, s, vt) = tenferro_linalg::svd(&rectangular).unwrap();
     assert_eq!(u.concrete_shape(), vec![3, 3, 2]);
     assert_eq!(s.concrete_shape(), vec![3, 2]);
     assert_eq!(vt.concrete_shape(), vec![3, 4, 2]);
 
-    let (q, r) = tenferro_linalg::qr(&rectangular);
+    let (q, r) = tenferro_linalg::qr(&rectangular).unwrap();
     assert_eq!(q.concrete_shape(), vec![3, 3, 2]);
     assert_eq!(r.concrete_shape(), vec![3, 4, 2]);
 
-    let (values, vectors) = tenferro_linalg::eig(&ints);
+    let (values, vectors) = tenferro_linalg::eig(&ints).unwrap();
     assert_eq!(values.dtype, DType::C64);
     assert_eq!(vectors.dtype, DType::C64);
 
-    let (eigh_values, eigh_vectors) = tenferro_linalg::eigh(&square);
+    let (eigh_values, eigh_vectors) = tenferro_linalg::eigh(&square).unwrap();
     assert_eq!(eigh_values.concrete_shape(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape(), vec![3, 3, 2]);
 }
@@ -151,7 +151,7 @@ fn traced_metadata_promotes_linalg_dtypes_broadly() {
     for (a_dtype, b_dtype, expected_dtype) in promotion_cases {
         let a = traced_with_dtype(a_dtype, vec![2, 2]);
         let b = traced_with_dtype(b_dtype, vec![2, 1]);
-        let solved = tenferro_linalg::solve(&a, &b);
+        let solved = tenferro_linalg::solve(&a, &b).unwrap();
         assert_eq!(solved.dtype, expected_dtype);
         assert_eq!(solved.concrete_shape(), vec![2, 1]);
     }
@@ -163,7 +163,8 @@ fn traced_metadata_promotes_linalg_dtypes_broadly() {
         false,
         true,
         true,
-    );
+    )
+    .unwrap();
     assert_eq!(triangular.dtype, DType::F32);
     assert_eq!(triangular.concrete_shape(), vec![2, 1]);
 }
@@ -180,7 +181,7 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
         (DType::Bool, DType::C64),
     ] {
         let a = traced_with_dtype(input_dtype, vec![2, 2]);
-        let (values, vectors) = tenferro_linalg::eig(&a);
+        let (values, vectors) = tenferro_linalg::eig(&a).unwrap();
         assert_eq!(values.dtype, expected_dtype);
         assert_eq!(vectors.dtype, expected_dtype);
         assert_eq!(values.concrete_shape(), vec![2]);

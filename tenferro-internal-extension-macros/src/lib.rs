@@ -15,13 +15,22 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Lit, Token};
+use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token};
 
 #[derive(Debug, Default)]
 struct ExtensionArgs {
     namespace: Option<String>,
     name: Option<String>,
     version: Option<u64>,
+}
+
+struct RuntimeArgs {
+    runtime: Ident,
+    family_id: Path,
+    op_type: Path,
+    execute: Path,
+    register_fn: Ident,
+    backend_bound: Path,
 }
 
 impl Parse for ExtensionArgs {
@@ -51,6 +60,50 @@ impl Parse for ExtensionArgs {
     }
 }
 
+impl Parse for RuntimeArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut runtime = None;
+        let mut family_id = None;
+        let mut op_type = None;
+        let mut execute = None;
+        let mut register_fn = None;
+        let mut backend_bound = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "runtime" => runtime = Some(input.parse()?),
+                "family_id" => family_id = Some(input.parse()?),
+                "op_type" => op_type = Some(input.parse()?),
+                "execute" => execute = Some(input.parse()?),
+                "register_fn" => register_fn = Some(input.parse()?),
+                "backend_bound" => backend_bound = Some(input.parse()?),
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unsupported define_extension_runtime argument {other:?}"),
+                    ));
+                }
+            }
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(Self {
+            runtime: required(runtime, "runtime")?,
+            family_id: required(family_id, "family_id")?,
+            op_type: required(op_type, "op_type")?,
+            execute: required(execute, "execute")?,
+            register_fn: required(register_fn, "register_fn")?,
+            backend_bound: backend_bound
+                .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
+        })
+    }
+}
+
 /// Derive an inherent `FAMILY_ID` constant for an extension payload type.
 ///
 /// The required attribute is:
@@ -64,6 +117,16 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Generate a standard extension runtime and registration function.
+///
+/// The `execute` function must have this signature:
+/// `fn<B: BackendBound + 'static>(&OpType, &[&Tensor], &mut ExtensionExecutionContext<'_, B>)`.
+#[proc_macro]
+pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as RuntimeArgs);
+    expand_extension_runtime(args).into()
 }
 
 fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -100,6 +163,55 @@ fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::To
     })
 }
 
+fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
+    let RuntimeArgs {
+        runtime,
+        family_id,
+        op_type,
+        execute,
+        register_fn,
+        backend_bound,
+    } = args;
+
+    quote! {
+        #[derive(Debug, Default)]
+        pub(crate) struct #runtime;
+
+        impl<B: #backend_bound + 'static> tenferro_runtime::extension::ExtensionRuntime<B>
+            for #runtime
+        {
+            fn family_id(&self) -> &'static str {
+                #family_id
+            }
+
+            fn execute(
+                &self,
+                op: &dyn tenferro_runtime::extension::ExtensionOpTrait,
+                inputs: &[&tenferro_tensor::Tensor],
+                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
+            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
+                let op = op
+                    .as_any()
+                    .downcast_ref::<#op_type>()
+                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+                        op: "extension_runtime",
+                        message: format!("payload type mismatch for {}", #family_id),
+                    })?;
+                #execute(op, inputs, ctx)
+            }
+        }
+
+        pub fn #register_fn<B: #backend_bound + 'static>(
+            executor: &mut tenferro_runtime::extension::ExtensionExecutor<B>,
+        ) -> std::result::Result<
+            (),
+            tenferro_runtime::extension::ExtensionRuntimeRegistryError,
+        > {
+            executor.registry_mut().register(std::sync::Arc::new(#runtime))
+        }
+    }
+}
+
 fn expect_string(value: Expr, field: &str) -> syn::Result<String> {
     match value {
         Expr::Lit(ExprLit {
@@ -126,6 +238,10 @@ fn expect_u64(value: Expr, field: &str) -> syn::Result<u64> {
     }
 }
 
+fn required<T>(value: Option<T>, field: &str) -> syn::Result<T> {
+    value.ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), format!("missing {field}")))
+}
+
 fn to_snake_case(input: &str) -> String {
     let mut out = String::new();
     let mut prev_lower_or_digit = false;
@@ -145,70 +261,4 @@ fn to_snake_case(input: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{expand_extension_family_id, to_snake_case, ExtensionArgs};
-    use syn::DeriveInput;
-
-    #[test]
-    fn snake_case_type_name() {
-        assert_eq!(to_snake_case("FftOp"), "fft_op");
-        assert_eq!(to_snake_case("ScaleBy2"), "scale_by2");
-    }
-
-    #[test]
-    fn derive_uses_snake_case_type_name_when_name_is_omitted() {
-        let input: DeriveInput = syn::parse_quote! {
-            #[tenferro_extension(namespace = "my-crate", version = 2)]
-            struct FftPlanOp;
-        };
-
-        let tokens = expand_extension_family_id(input).expect("derive should expand");
-
-        assert!(tokens.to_string().contains("\"my-crate.fft_plan_op.v2\""));
-    }
-
-    #[test]
-    fn derive_reports_missing_attribute_fields() {
-        let missing_attr: DeriveInput = syn::parse_quote! {
-            struct MissingAttr;
-        };
-        assert!(expand_extension_family_id(missing_attr)
-            .expect_err("missing attribute should fail")
-            .to_string()
-            .contains("missing #[tenferro_extension"));
-
-        let missing_namespace: DeriveInput = syn::parse_quote! {
-            #[tenferro_extension(version = 1)]
-            struct MissingNamespace;
-        };
-        assert!(expand_extension_family_id(missing_namespace)
-            .expect_err("missing namespace should fail")
-            .to_string()
-            .contains("missing tenferro_extension namespace"));
-
-        let missing_version: DeriveInput = syn::parse_quote! {
-            #[tenferro_extension(namespace = "my-crate")]
-            struct MissingVersion;
-        };
-        assert!(expand_extension_family_id(missing_version)
-            .expect_err("missing version should fail")
-            .to_string()
-            .contains("missing tenferro_extension version"));
-    }
-
-    #[test]
-    fn derive_attribute_parser_rejects_unknown_and_wrong_typed_values() {
-        assert!(syn::parse_str::<ExtensionArgs>(r#"unknown = "x""#)
-            .expect_err("unknown argument should fail")
-            .to_string()
-            .contains("unsupported tenferro_extension argument"));
-        assert!(syn::parse_str::<ExtensionArgs>("namespace = 1")
-            .expect_err("namespace must be string")
-            .to_string()
-            .contains("namespace must be a string literal"));
-        assert!(syn::parse_str::<ExtensionArgs>(r#"version = "1""#)
-            .expect_err("version must be integer")
-            .to_string()
-            .contains("version must be an integer literal"));
-    }
-}
+mod tests;

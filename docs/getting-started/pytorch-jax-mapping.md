@@ -29,10 +29,10 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` | `x.reduce_sum(&axes)` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro_einsum::eager_tensor::einsum(...)` | `tenferro_einsum::traced_tensor::einsum(&mut compiler, ...)` plus `register_runtime` |
-| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut ctx)` | `tenferro_linalg::traced_tensor::svd(&x)` |
-| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut ctx)` | `tenferro_linalg::traced_tensor::qr(&x)` |
-| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut ctx)` | `tenferro_linalg::traced_tensor::cholesky(&x)` |
-| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut ctx)` | `tenferro_linalg::traced_tensor::solve(&a, &b)` |
+| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::svd(&x)?` |
+| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::qr(&x)?` |
+| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `tenferro_linalg::LinalgBackend::cholesky(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::cholesky(&x)?` |
+| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `tenferro_linalg::LinalgBackend::solve(&mut ctx, &a, &b)?` | `tenferro_linalg::traced_tensor::solve(&a, &b)?` |
 | Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | — | `loss.grad(&x)` |
 | VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | — | `y.vjp(&x, &cotangent)` |

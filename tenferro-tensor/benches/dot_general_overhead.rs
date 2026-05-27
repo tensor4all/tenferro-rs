@@ -142,7 +142,7 @@ fn inner_single_exec_session(
 ) -> Tensor {
     let mut env = scalar_one();
     backend
-        .with_exec_session_cached(cache, |exec| {
+        .with_backend_session_cached(cache, |exec| {
             for (site, (bra_core, ket_core)) in bra.iter().zip(ket).enumerate() {
                 let tmp = exec.dot_general_with_conj_cached(
                     Some(2 * site),

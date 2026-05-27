@@ -408,7 +408,7 @@ tenferro/src/error.rs
   Error variants that directly expose AD rule failures
 
 tenferro/src/traced.rs and traced tensor API modules
-  grad, try_grad, jvp, try_jvp, vjp, try_vjp, hvp-style helpers
+  grad, grad_optional, jvp, try_jvp, vjp, try_vjp, hvp-style helpers
 
 tenferro/src/eager.rs and eager tensor API modules
   requires_grad_in, grad, clear_grad, tracks_grad, backward,

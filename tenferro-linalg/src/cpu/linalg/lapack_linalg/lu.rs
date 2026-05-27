@@ -1,0 +1,179 @@
+use num_complex::{Complex32, Complex64};
+
+use tenferro_tensor::buffer_pool::BufferPool;
+use tenferro_tensor::TypedTensor;
+
+use super::helpers::{
+    batch_element_count, batched_multi, check_lapack_info, dim_i32, has_zero_dim,
+    leading_upper_triangle_from_lapack, matrix_core_and_batch_result, matrix_dims,
+    matrix_with_batch_shape, tensor_from_vec_with_template,
+};
+
+pub(crate) trait LapackLu: Clone + Copy + Default {
+    fn one() -> Self;
+    fn negative_one() -> Self;
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);
+}
+
+impl LapackLu for f64 {
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::dgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+impl LapackLu for f32 {
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::sgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+impl LapackLu for Complex32 {
+    fn one() -> Self {
+        Complex32::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex32::new(-1.0, 0.0)
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::cgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+impl LapackLu for Complex64 {
+    fn one() -> Self {
+        Complex64::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex64::new(-1.0, 0.0)
+    }
+
+    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
+        unsafe {
+            lapack::zgetrf(m, n, data, lda, ipiv, info);
+        }
+    }
+}
+
+fn lu_2d<T: LapackLu>(
+    _buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let (m, n) = matrix_dims(input, "lu")?;
+    let k = m.min(n);
+    let m_i32 = dim_i32(m, "lu")?;
+    let n_i32 = dim_i32(n, "lu")?;
+    let mut lu = input.host_data().to_vec();
+    let mut ipiv = vec![0_i32; k];
+    let mut info = 0;
+    T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
+    check_lapack_info("lu", "getrf", info.min(0))?;
+
+    let mut permutation: Vec<usize> = (0..m).collect();
+    let mut swap_count = 0usize;
+    for (idx, &pivot_one_based) in ipiv.iter().enumerate() {
+        let pivot = match usize::try_from(pivot_one_based - 1) {
+            Ok(pivot) => pivot,
+            Err(_) => {
+                return Err(tenferro_tensor::Error::backend_failure(
+                    "lu",
+                    "LAPACK getrf returned invalid pivot index",
+                ));
+            }
+        };
+        if pivot >= m {
+            return Err(tenferro_tensor::Error::backend_failure(
+                "lu",
+                "LAPACK getrf returned out-of-bounds pivot index",
+            ));
+        }
+        if pivot != idx {
+            permutation.swap(idx, pivot);
+            swap_count += 1;
+        }
+    }
+
+    let mut p_data = vec![T::default(); m * m];
+    for (row, &source_row) in permutation.iter().enumerate() {
+        p_data[row + source_row * m] = T::one();
+    }
+    let parity = if swap_count % 2 == 0 {
+        T::one()
+    } else {
+        T::negative_one()
+    };
+
+    let mut l_data = vec![T::default(); m * k];
+    for col in 0..k {
+        for row in col..m {
+            l_data[row + col * m] = lu[row + col * m];
+        }
+        l_data[col + col * m] = T::one();
+    }
+    let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n);
+
+    Ok(vec![
+        tensor_from_vec_with_template(vec![m, m], p_data, input),
+        tensor_from_vec_with_template(vec![m, k], l_data, input),
+        tensor_from_vec_with_template(vec![k, n], u_data, input),
+        tensor_from_vec_with_template(vec![], vec![parity], input),
+    ])
+}
+
+pub(crate) fn lu<T: LapackLu>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    if has_zero_dim(&input.shape) {
+        let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu")?;
+        let k = m.min(n);
+        let parity_elements = batch_element_count("lu", batch_shape)?;
+        return Ok(vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, m, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, k, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(k, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                batch_shape.to_vec(),
+                vec![T::one(); parity_elements],
+                input,
+            ),
+        ]);
+    }
+    batched_multi("lu", buffers, input, lu_2d)
+}

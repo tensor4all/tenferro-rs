@@ -27,14 +27,40 @@ cpu-blas = [
     "tenferro-internal-ops/cpu-blas",
     "tenferro-tensor/cpu-blas",
 ]
-cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
+provider-inject = [
+    "cpu-blas",
+    "tenferro-tensor/provider-inject",
+    "dep:cblas-inject",
+    "dep:lapack-inject",
+]
+cuda = [
+    "tenferro-ad?/cuda",
+    "tenferro-internal-ops/cuda",
+    "dep:cubecl",
+    "dep:cubecl-cuda",
+    "dep:cubecl-runtime",
+    "dep:cudarc",
+    "dep:tenferro-gpu",
+    "tenferro-gpu/cuda",
+]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
 tenferro-ad = { path = "../tenferro-ad", default-features = false, optional = true }
+tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+cblas-inject = { workspace = true, optional = true }
 chainrules-core = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }
+cubecl = { workspace = true, optional = true }
+cubecl-cuda = { workspace = true, optional = true }
+cubecl-runtime = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true }
+faer.workspace = true
+lapack.workspace = true
+lapack-inject = { workspace = true, optional = true }
 num-complex.workspace = true
+num-traits.workspace = true

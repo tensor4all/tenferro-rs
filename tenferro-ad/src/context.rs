@@ -71,7 +71,7 @@ impl AdContext {
         crate::traced::grad_with_rules(output, wrt, &self.extension_rules)
     }
 
-    /// Fallible gradient that returns `None` when `wrt` is inactive.
+    /// Gradient that returns `None` when `wrt` is inactive.
     ///
     /// # Examples
     ///
@@ -82,14 +82,14 @@ impl AdContext {
     /// let ad = AdContext::builder().build().unwrap();
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let loss = &x * &x;
-    /// assert!(ad.try_grad(&loss, &x).unwrap().is_some());
+    /// assert!(ad.grad_optional(&loss, &x).unwrap().is_some());
     /// ```
-    pub fn try_grad(
+    pub fn grad_optional(
         &self,
         output: &TracedTensor,
         wrt: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::try_grad_with_rules(output, wrt, &self.extension_rules)
+        crate::traced::grad_optional_with_rules(output, wrt, &self.extension_rules)
     }
 
     /// Forward-mode Jacobian-vector product.

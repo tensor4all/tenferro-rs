@@ -16,8 +16,8 @@ supported execution path yet.
 | --- | --- |
 | CPU tensor to CUDA backend | Upload first with `tenferro_gpu::cubecl::upload_tensor` |
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
-| CUDA tensor to CPU backend | Programming error or explicit failure; download first |
-| CUDA tensor to host inspection | Download with `tenferro_gpu::cubecl::download_tensor` |
+| CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
+| CUDA tensor to host inspection | Direct host slice APIs panic; download first |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
 
 Keep tensors on CUDA across a CUDA workload. Download only when the host needs

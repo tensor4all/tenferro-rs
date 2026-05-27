@@ -2,43 +2,103 @@ use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, TracedTensor};
+use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
 
-pub fn svd(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor) {
+/// Build a traced singular value decomposition op using the default epsilon.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::svd;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+/// let (u, s, vt) = svd(&a).unwrap();
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(s.rank, 1);
+/// assert_eq!(vt.rank, 2);
+/// ```
+pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     svd_with_eps(a, 1e-12)
 }
 
-pub fn svd_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor, TracedTensor) {
-    let mut outputs = apply(
-        Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
-        &[a],
+/// Build a traced singular value decomposition op with an explicit epsilon.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::svd_with_eps;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+/// let (_u, s, _vt) = svd_with_eps(&a, 1e-10).unwrap();
+/// assert_eq!(s.rank, 1);
+/// ```
+pub fn svd_with_eps(
+    a: &TracedTensor,
+    eps: f64,
+) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    three_outputs(
+        apply(
+            Arc::new(LinalgExtensionOp::new(LinalgOp::Svd { eps })),
+            &[a],
+        ),
+        "svd",
     )
-    .into_iter();
-    match (
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-    ) {
-        (Some(u), Some(s), Some(vt), None) => (u, s, vt),
-        _ => unreachable!("svd must produce exactly three outputs"),
-    }
 }
 
-pub fn qr(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
+/// Build a traced QR decomposition op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::qr;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
+/// let (q, r) = qr(&a).unwrap();
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(r.rank, 2);
+/// ```
+pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Qr)), &[a]),
         "qr",
     )
 }
 
-pub fn eigh(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
+/// Build a traced Hermitian eigenvalue decomposition op using the default epsilon.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::eigh;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let (values, vectors) = eigh(&a).unwrap();
+/// assert_eq!(values.rank, 1);
+/// assert_eq!(vectors.rank, 2);
+/// ```
+pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     eigh_with_eps(a, 1e-12)
 }
 
-pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor) {
+/// Build a traced Hermitian eigenvalue decomposition op with an explicit epsilon.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::eigh_with_eps;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let (values, _vectors) = eigh_with_eps(&a, 1e-10).unwrap();
+/// assert_eq!(values.rank, 1);
+/// ```
+pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh { eps })),
@@ -48,52 +108,92 @@ pub fn eigh_with_eps(a: &TracedTensor, eps: f64) -> (TracedTensor, TracedTensor)
     )
 }
 
-pub fn cholesky(a: &TracedTensor) -> TracedTensor {
+/// Build a traced Cholesky decomposition op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::cholesky;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
+/// let factor = cholesky(&a).unwrap();
+/// assert_eq!(factor.rank, 2);
+/// ```
+pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a]),
         "cholesky",
     )
 }
 
-pub fn lu(a: &TracedTensor) -> (TracedTensor, TracedTensor, TracedTensor, TracedTensor) {
-    let mut outputs = apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a]).into_iter();
-    match (
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-    ) {
-        (Some(p), Some(l), Some(u), Some(parity), None) => (p, l, u, parity),
-        _ => unreachable!("lu must produce exactly four outputs"),
-    }
+/// Build a traced LU decomposition op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::lu;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+/// let (p, l, u, parity) = lu(&a).unwrap();
+/// assert_eq!(p.rank, 2);
+/// assert_eq!(l.rank, 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(parity.rank, 0);
+/// ```
+pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
+    four_outputs(
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a]),
+        "lu",
+    )
 }
 
+/// Build a traced full-pivot LU decomposition op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::full_piv_lu;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
+/// let (p, l, u, q, parity) = full_piv_lu(&a).unwrap();
+/// assert_eq!(p.rank, 2);
+/// assert_eq!(l.rank, 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(parity.rank, 0);
+/// ```
 pub fn full_piv_lu(
     a: &TracedTensor,
-) -> (
+) -> Result<(
     TracedTensor,
     TracedTensor,
     TracedTensor,
     TracedTensor,
     TracedTensor,
-) {
-    let mut outputs =
-        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a]).into_iter();
-    match (
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-    ) {
-        (Some(p), Some(l), Some(u), Some(q), Some(parity), None) => (p, l, u, q, parity),
-        _ => unreachable!("full_piv_lu must produce exactly five outputs"),
-    }
+)> {
+    five_outputs(
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)), &[a]),
+        "full_piv_lu",
+    )
 }
 
-pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
+/// Build a traced general eigendecomposition op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::eig;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+/// let (values, vectors) = eig(&a).unwrap();
+/// assert_eq!(values.rank, 1);
+/// assert_eq!(vectors.rank, 2);
+/// ```
+pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
@@ -105,7 +205,20 @@ pub fn eig(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
     )
 }
 
-pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+/// Build a traced linear solve op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::solve;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]);
+/// let x = solve(&a, &b).unwrap();
+/// assert_eq!(x.rank, 2);
+/// ```
+pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Solve {
@@ -117,7 +230,20 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
     )
 }
 
-pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
+/// Build a traced full-pivot LU solve op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::full_piv_lu_solve;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]);
+/// let x = full_piv_lu_solve(&a, &b).unwrap();
+/// assert_eq!(x.rank, 2);
+/// ```
+pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLuSolve {
@@ -129,6 +255,19 @@ pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> TracedTensor {
     )
 }
 
+/// Build a traced triangular solve op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::triangular_solve;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]);
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]);
+/// let x = triangular_solve(&a, &b, true, true, false, false).unwrap();
+/// assert_eq!(x.rank, 2);
+/// ```
 pub fn triangular_solve(
     a: &TracedTensor,
     b: &TracedTensor,
@@ -136,7 +275,7 @@ pub fn triangular_solve(
     lower: bool,
     transpose_a: bool,
     unit_diagonal: bool,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     one_output(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::TriangularSolve {
@@ -151,35 +290,108 @@ pub fn triangular_solve(
     )
 }
 
-pub fn slogdet(a: &TracedTensor) -> (TracedTensor, TracedTensor) {
-    let (_, _, u, parity) = lu(a);
+/// Build traced sign and log-absolute-determinant ops.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::slogdet;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let (sign, logabsdet) = slogdet(&a).unwrap();
+/// assert_eq!(sign.rank, 0);
+/// assert_eq!(logabsdet.rank, 0);
+/// ```
+pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
+    let (_, _, u, parity) = lu(a)?;
     let diag_u = u.extract_diag(0, 1);
     let sign_u = diag_u.sign().reduce_prod(&[0]);
     let sign = &parity * &sign_u;
     let logabsdet = diag_u.abs().log().reduce_sum(&[0]);
-    (sign, logabsdet)
+    Ok((sign, logabsdet))
 }
 
-pub fn det(a: &TracedTensor) -> TracedTensor {
-    let (sign, logabsdet) = slogdet(a);
-    &sign * &logabsdet.exp()
+/// Build a traced determinant op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::det;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let determinant = det(&a).unwrap();
+/// assert_eq!(determinant.rank, 0);
+/// ```
+pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
+    let (sign, logabsdet) = slogdet(a)?;
+    Ok(&sign * &logabsdet.exp())
 }
 
-pub fn inv(a: &TracedTensor) -> TracedTensor {
+/// Build a traced matrix inverse op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::inv;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let inverse = inv(&a).unwrap();
+/// assert_eq!(inverse.rank, 2);
+/// ```
+pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
     let shape = a.concrete_shape();
     let eye = eye_like(a, shape[0]);
     solve(a, &eye)
 }
 
-pub fn eigvalsh(a: &TracedTensor) -> TracedTensor {
-    eigh(a).0
+/// Build a traced Hermitian eigenvalue-only op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::eigvalsh;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]);
+/// let values = eigvalsh(&a).unwrap();
+/// assert_eq!(values.rank, 1);
+/// ```
+pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
+    Ok(eigh(a)?.0)
 }
 
-pub fn eigvals(a: &TracedTensor) -> TracedTensor {
-    eig(a).0
+/// Build a traced general eigenvalue-only op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::eigvals;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+/// let values = eigvals(&a).unwrap();
+/// assert_eq!(values.rank, 1);
+/// ```
+pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
+    Ok(eig(a)?.0)
 }
 
-pub fn pinv(a: &TracedTensor) -> TracedTensor {
+/// Build a traced Moore-Penrose pseudoinverse op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::pinv;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+/// let inverse = pinv(&a).unwrap();
+/// assert_eq!(inverse.rank, 2);
+/// ```
+pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
     let shape = a.concrete_shape();
     let max_dim = match (shape.first(), shape.get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
@@ -189,8 +401,20 @@ pub fn pinv(a: &TracedTensor) -> TracedTensor {
     pinv_with_rtol(a, default_pinv_rtol(a.dtype, max_dim))
 }
 
-pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
-    let (u, s, vt) = svd(a);
+/// Build a traced Moore-Penrose pseudoinverse op with an explicit relative tolerance.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::pinv_with_rtol;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
+/// let inverse = pinv_with_rtol(&a, 1e-12).unwrap();
+/// assert_eq!(inverse.rank, 2);
+/// ```
+pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
+    let (u, s, vt) = svd(a)?;
     let abs_s = s.abs();
     let s_max = abs_s.reduce_max(&[0]);
     let s_max_shape = s_max.concrete_shape();
@@ -207,23 +431,35 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> TracedTensor {
     let uh = u.conj().transpose(&matrix_transpose_perm(u.rank));
     let s_inv_diag = s_inv.embed_diag(0, 1);
     let vs = matmul_preserve_trailing_batch(&v, &s_inv_diag);
-    matmul_preserve_trailing_batch(&vs, &uh)
+    Ok(matmul_preserve_trailing_batch(&vs, &uh))
 }
 
+/// Build a traced vector, matrix, or tensor norm op.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::traced_tensor::norm;
+/// use tenferro_runtime::TracedTensor;
+///
+/// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
+/// let length = norm(&x, Some(2.0), Some(&[0]), false).unwrap();
+/// assert_eq!(length.rank, 0);
+/// ```
 pub fn norm(
     a: &TracedTensor,
     ord: Option<f64>,
     dim: Option<&[usize]>,
     keepdim: bool,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let axes = dim.map_or_else(|| (0..a.rank).collect::<Vec<_>>(), |dims| dims.to_vec());
     if axes.is_empty() {
-        return a.clone();
+        return Ok(a.clone());
     }
 
     let out = match axes.len() {
         1 => vector_norm(a, axes[0], ord),
-        2 => matrix_norm(a, &axes, ord),
+        2 => matrix_norm(a, &axes, ord)?,
         _ => {
             let abs = a.abs();
             match ord {
@@ -236,22 +472,87 @@ pub fn norm(
         }
     };
     let shape = a.concrete_shape();
-    restore_keepdim(out, &shape, &axes, keepdim)
+    Ok(restore_keepdim(out, &shape, &axes, keepdim))
 }
 
-fn one_output(outputs: Vec<TracedTensor>, name: &str) -> TracedTensor {
+fn unexpected_output_count(name: &str, expected: usize) -> Error {
+    Error::Internal(format!("{name} must produce exactly {expected} outputs"))
+}
+
+fn one_output(outputs: Vec<TracedTensor>, name: &str) -> Result<TracedTensor> {
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next()) {
-        (Some(output), None) => output,
-        _ => unreachable!("{name} must produce exactly one output"),
+        (Some(output), None) => Ok(output),
+        _ => Err(unexpected_output_count(name, 1)),
     }
 }
 
-fn two_outputs(outputs: Vec<TracedTensor>, name: &str) -> (TracedTensor, TracedTensor) {
+fn two_outputs(outputs: Vec<TracedTensor>, name: &str) -> Result<(TracedTensor, TracedTensor)> {
     let mut outputs = outputs.into_iter();
     match (outputs.next(), outputs.next(), outputs.next()) {
-        (Some(lhs), Some(rhs), None) => (lhs, rhs),
-        _ => unreachable!("{name} must produce exactly two outputs"),
+        (Some(lhs), Some(rhs), None) => Ok((lhs, rhs)),
+        _ => Err(unexpected_output_count(name, 2)),
+    }
+}
+
+fn three_outputs(
+    outputs: Vec<TracedTensor>,
+    name: &str,
+) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(first), Some(second), Some(third), None) => Ok((first, second, third)),
+        _ => Err(unexpected_output_count(name, 3)),
+    }
+}
+
+fn four_outputs(
+    outputs: Vec<TracedTensor>,
+    name: &str,
+) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(first), Some(second), Some(third), Some(fourth), None) => {
+            Ok((first, second, third, fourth))
+        }
+        _ => Err(unexpected_output_count(name, 4)),
+    }
+}
+
+fn five_outputs(
+    outputs: Vec<TracedTensor>,
+    name: &str,
+) -> Result<(
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+    TracedTensor,
+)> {
+    let mut outputs = outputs.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(first), Some(second), Some(third), Some(fourth), Some(fifth), None) => {
+            Ok((first, second, third, fourth, fifth))
+        }
+        _ => Err(unexpected_output_count(name, 5)),
     }
 }
 
@@ -358,26 +659,26 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> TracedTensor 
     }
 }
 
-fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> TracedTensor {
+fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<TracedTensor> {
     let matrix = move_axes_to_front(a, axes);
     let abs = matrix.abs();
-    match ord {
+    Ok(match ord {
         None => frobenius_norm(&abs, &[0, 1]),
         Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
         Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(&abs, false),
         Some(p) if p == 1.0 => matrix_col_sum_norm(&abs, true),
         Some(p) if p == -1.0 => matrix_col_sum_norm(&abs, false),
         Some(p) if p == 2.0 => {
-            let singular_values = svd(&matrix).1.abs();
+            let singular_values = svd(&matrix)?.1.abs();
             singular_values.reduce_max(&[0])
         }
         Some(p) if p == -2.0 => {
-            let singular_values = svd(&matrix).1.abs();
+            let singular_values = svd(&matrix)?.1.abs();
             singular_values.reduce_min(&[0])
         }
         Some(p) if p == 0.0 => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
-    }
+    })
 }
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> TracedTensor {

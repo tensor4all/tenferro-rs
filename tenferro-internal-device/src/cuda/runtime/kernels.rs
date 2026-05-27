@@ -7,7 +7,7 @@ mod rng;
 mod triangular;
 mod zero_trailing;
 
-pub(super) use complex_scalar::*;
+pub use complex_scalar::*;
 pub(super) use copy::*;
 pub(super) use helpers::*;
 pub(super) use metadata_scalar::*;

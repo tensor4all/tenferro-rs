@@ -147,7 +147,8 @@ impl CpuContext {
 
     /// Return the faer parallelism policy for this context.
     #[cfg(feature = "cpu-faer")]
-    pub(crate) fn faer_par(&self) -> faer::Par {
+    #[doc(hidden)]
+    pub fn faer_par(&self) -> faer::Par {
         if self.num_threads == 1 {
             faer::Par::Seq
         } else {
@@ -157,11 +158,4 @@ impl CpuContext {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::CpuContext;
-
-    #[test]
-    fn try_with_threads_rejects_zero() {
-        assert!(CpuContext::try_with_threads(0).is_err());
-    }
-}
+mod tests;

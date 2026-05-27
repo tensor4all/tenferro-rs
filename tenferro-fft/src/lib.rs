@@ -20,7 +20,7 @@
 //!         Complex64::new(4.0, 0.0),
 //!     ],
 //! );
-//! let y = fft(&x, None, -1, FftNorm::Backward);
+//! let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
@@ -50,19 +50,27 @@ use rustfft::{FftNum, FftPlanner};
 use tenferro_ad::extension::{
     register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError,
 };
+use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{
-    apply, ExtensionExecutionContext, ExtensionExecutor, ExtensionOpTrait, ExtensionRuntime,
-    ExtensionRuntimeRegistryError,
-};
-use tenferro_runtime::TracedTensor;
+use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOpTrait};
+use tenferro_runtime::{Error, Result, TracedTensor};
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 
-const FFT_FAMILY_ID: &str = "tenferro-fft.fft.v1";
+/// Extension family id used by the tenferro FFT extension.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     tenferro_fft::FFT_EXTENSION_FAMILY_ID,
+///     "tenferro-fft.fft.v1"
+/// );
+/// ```
+pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 
 /// Traced tensor FFT operations.
 ///
@@ -123,7 +131,7 @@ impl FftOp {
 
 impl ExtensionOpTrait for FftOp {
     fn family_id(&self) -> &'static str {
-        FFT_FAMILY_ID
+        FFT_EXTENSION_FAMILY_ID
     }
 
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
@@ -309,7 +317,7 @@ struct FftAdRule;
 #[cfg(feature = "autodiff")]
 impl ExtensionAdRuleTrait for FftAdRule {
     fn family_id(&self) -> &'static str {
-        FFT_FAMILY_ID
+        FFT_EXTENSION_FAMILY_ID
     }
 
     fn linearize(
@@ -324,7 +332,7 @@ impl ExtensionAdRuleTrait for FftAdRule {
         let fft_op = fft_payload(op, ADRuleKind::Linearize)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
-                FFT_FAMILY_ID,
+                FFT_EXTENSION_FAMILY_ID,
                 ADRuleKind::Linearize,
             ));
         }
@@ -356,7 +364,7 @@ impl ExtensionAdRuleTrait for FftAdRule {
         let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
         if !matches!(fft_op.kind, FftKind::C2C { .. }) {
             return Err(ADRuleError::unsupported(
-                FFT_FAMILY_ID,
+                FFT_EXTENSION_FAMILY_ID,
                 ADRuleKind::Transpose,
             ));
         }
@@ -386,29 +394,20 @@ fn register_fft() -> Result<(), ExtensionRegistryError> {
     Ok(())
 }
 
-#[derive(Debug, Default)]
-struct FftRuntime;
-
-impl<B: TensorBackend + 'static> ExtensionRuntime<B> for FftRuntime {
-    fn family_id(&self) -> &'static str {
-        FFT_FAMILY_ID
-    }
-
-    fn execute(
-        &self,
-        op: &dyn ExtensionOpTrait,
-        inputs: &[&Tensor],
-        _ctx: &mut ExtensionExecutionContext<'_, B>,
-    ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        op.eager_execute(inputs)
-    }
+fn execute_fft_extension<B: TensorBackend + 'static>(
+    op: &FftOp,
+    inputs: &[&Tensor],
+    _ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    op.eager_execute(inputs)
 }
 
-/// Register the FFT runtime on a graph executor.
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor.registry_mut().register(Arc::new(FftRuntime))
+define_extension_runtime! {
+    runtime = FftRuntime,
+    family_id = FFT_EXTENSION_FAMILY_ID,
+    op_type = FftOp,
+    execute = execute_fft_extension,
+    register_fn = register_runtime,
 }
 
 /// Build a one-dimensional FFT along `axis`.
@@ -424,7 +423,7 @@ pub fn register_runtime<B: TensorBackend + 'static>(
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
-/// let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::fft(&x, None, -1, FftNorm::Backward).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -433,18 +432,26 @@ pub fn register_runtime<B: TensorBackend + 'static>(
 /// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
-pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
+pub fn fft(
+    input: &TracedTensor,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> Result<TracedTensor> {
     let kind = match input.dtype {
         DType::C32 | DType::C64 => FftKind::C2C { forward: true },
         DType::F32 | DType::F64 => FftKind::R2C { onesided: false },
         DType::I32 | DType::I64 | DType::Bool => {
-            panic!(
-                "fft expects real or complex floating input, got {:?}",
-                input.dtype
-            )
+            return Err(fft_config_error(
+                "fft",
+                format!(
+                    "fft expects real or complex floating input, got {:?}",
+                    input.dtype
+                ),
+            ))
         }
     };
-    apply_unary_fft(input, kind, n, axis, norm)
+    apply_unary_fft("fft", input, kind, n, axis, norm)
 }
 
 /// Build a one-dimensional inverse FFT along `axis`.
@@ -457,7 +464,7 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
-/// let y = traced_tensor::ifft(&spectrum, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::ifft(&spectrum, None, -1, FftNorm::Backward).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -466,13 +473,26 @@ pub fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -
 /// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
-pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
-    assert!(
-        matches!(input.dtype, DType::C32 | DType::C64),
-        "ifft expects C32 or C64 input; got {:?}",
-        input.dtype
-    );
-    apply_unary_fft(input, FftKind::C2C { forward: false }, n, axis, norm)
+pub fn ifft(
+    input: &TracedTensor,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> Result<TracedTensor> {
+    if !matches!(input.dtype, DType::C32 | DType::C64) {
+        return Err(fft_config_error(
+            "ifft",
+            format!("ifft expects C32 or C64 input; got {:?}", input.dtype),
+        ));
+    }
+    apply_unary_fft(
+        "ifft",
+        input,
+        FftKind::C2C { forward: false },
+        n,
+        axis,
+        norm,
+    )
 }
 
 /// Build a one-dimensional real FFT along `axis`.
@@ -488,7 +508,7 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-/// let y = traced_tensor::rfft(&x, None, -1, FftNorm::Backward);
+/// let y = traced_tensor::rfft(&x, None, -1, FftNorm::Backward).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -498,13 +518,26 @@ pub fn ifft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
-pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
-    assert!(
-        matches!(input.dtype, DType::F32 | DType::F64),
-        "rfft expects F32 or F64 input; got {:?}",
-        input.dtype
-    );
-    apply_unary_fft(input, FftKind::R2C { onesided: true }, n, axis, norm)
+pub fn rfft(
+    input: &TracedTensor,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> Result<TracedTensor> {
+    if !matches!(input.dtype, DType::F32 | DType::F64) {
+        return Err(fft_config_error(
+            "rfft",
+            format!("rfft expects F32 or F64 input; got {:?}", input.dtype),
+        ));
+    }
+    apply_unary_fft(
+        "rfft",
+        input,
+        FftKind::R2C { onesided: true },
+        n,
+        axis,
+        norm,
+    )
 }
 
 /// Build a one-dimensional inverse real FFT along `axis`.
@@ -523,7 +556,7 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 ///     vec![2],
 ///     vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
 /// );
-/// let y = traced_tensor::irfft(&spectrum, Some(2), -1, FftNorm::Backward);
+/// let y = traced_tensor::irfft(&spectrum, Some(2), -1, FftNorm::Backward).unwrap();
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -532,49 +565,70 @@ pub fn rfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) 
 /// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
-pub fn irfft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> TracedTensor {
-    assert!(
-        matches!(input.dtype, DType::C32 | DType::C64),
-        "irfft expects C32 or C64 input; got {:?}",
-        input.dtype
-    );
-    apply_unary_fft(input, FftKind::C2R, n, axis, norm)
+pub fn irfft(
+    input: &TracedTensor,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> Result<TracedTensor> {
+    if !matches!(input.dtype, DType::C32 | DType::C64) {
+        return Err(fft_config_error(
+            "irfft",
+            format!("irfft expects C32 or C64 input; got {:?}", input.dtype),
+        ));
+    }
+    apply_unary_fft("irfft", input, FftKind::C2R, n, axis, norm)
 }
 
 fn apply_unary_fft(
+    op_name: &'static str,
     input: &TracedTensor,
     kind: FftKind,
     n: Option<usize>,
     axis: isize,
     norm: FftNorm,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     #[cfg(feature = "autodiff")]
-    register_fft().expect("register tenferro-fft extension");
-    validate_n(n);
-    let axis = normalize_axis(axis, input.rank);
+    register_fft().map_err(|err| Error::Internal(err.to_string()))?;
+    validate_n(op_name, n)?;
+    let axis = normalize_axis(op_name, axis, input.rank)?;
     let op = Arc::new(FftOp::new(kind, axis, n, norm));
     let mut outputs = apply(op, &[input]);
     outputs
         .pop()
-        .expect("FFT extension declares exactly one output")
+        .ok_or_else(|| Error::Internal("FFT extension declares exactly one output".into()))
 }
 
-fn normalize_axis(axis: isize, rank: usize) -> usize {
-    assert!(rank > 0, "tenferro-fft requires rank >= 1");
+fn normalize_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
+    if rank == 0 {
+        return Err(fft_config_error(op, "tenferro-fft requires rank >= 1"));
+    }
     let rank_isize = rank as isize;
     let normalized = if axis < 0 { rank_isize + axis } else { axis };
-    assert!(
-        normalized >= 0 && normalized < rank_isize,
-        "tenferro-fft axis {axis} out of bounds for rank {rank}"
-    );
-    normalized as usize
+    if normalized < 0 || normalized >= rank_isize {
+        return Err(fft_config_error(
+            op,
+            format!("tenferro-fft axis {axis} out of bounds for rank {rank}"),
+        ));
+    }
+    Ok(normalized as usize)
 }
 
-fn validate_n(n: Option<usize>) {
-    assert!(
-        n != Some(0),
-        "tenferro-fft transform length n must be positive"
-    );
+fn validate_n(op: &'static str, n: Option<usize>) -> Result<()> {
+    if n == Some(0) {
+        return Err(fft_config_error(
+            op,
+            "tenferro-fft transform length n must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn fft_config_error(op: &'static str, message: impl std::fmt::Display) -> Error {
+    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        op,
+        message: message.to_string(),
+    })
 }
 
 fn transform_len_dim(n: Option<usize>, input_dim: &SymDim) -> SymDim {
@@ -592,7 +646,7 @@ fn expected_dtype_for(kind: FftKind) -> DType {
 fn fft_payload<'a>(op: &'a dyn ExtensionOpTrait, rule: ADRuleKind) -> ADRuleResult<&'a FftOp> {
     op.as_any()
         .downcast_ref::<FftOp>()
-        .ok_or_else(|| ADRuleError::unsupported(FFT_FAMILY_ID, rule))
+        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, rule))
 }
 
 fn output_shape_c2c(

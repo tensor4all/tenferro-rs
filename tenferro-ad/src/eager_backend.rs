@@ -2,8 +2,8 @@
 use tenferro_gpu::cubecl::CubeclBackend;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig,
-    Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend, TensorExec,
+    BackendSession, CompareDir, DType, DotGeneralConfig, ElementwiseFusionPlan, GatherConfig,
+    PadConfig, Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorBackend,
     TensorRead,
 };
 
@@ -93,20 +93,13 @@ impl TensorBackend for EagerBackend {
         fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
         fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
         fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn cholesky(input: &Tensor) -> TensorResult<Tensor>;
-        fn triangular_solve(a: &Tensor, b: &Tensor, left_side: bool, lower: bool, transpose_a: bool, unit_diagonal: bool) -> TensorResult<Tensor>;
-        fn lu(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn full_piv_lu(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> TensorResult<Tensor>;
-        fn svd(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn qr(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn eigh(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn eig(input: &Tensor) -> TensorResult<Vec<Tensor>>;
-        fn solve(a: &Tensor, b: &Tensor) -> TensorResult<Tensor>;
     }
 
-    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        dispatch!(self, with_exec_session(f))
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        dispatch!(self, with_backend_session(f))
     }
 
     delegate_tensor_backend_methods! {

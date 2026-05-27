@@ -49,7 +49,7 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
 
     let mut ctx = CpuBackend::new();
     let result = ctx
-        .with_exec_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
+        .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
         .unwrap();
     let labels = result.labels;
     let tensor = result.tensor.into_tensor();
@@ -77,7 +77,7 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
 
     let mut ctx = CpuBackend::new();
     let result = ctx
-        .with_exec_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
+        .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
         .unwrap();
     let labels = result.labels;
     let tensor = result.tensor.into_tensor();
@@ -98,7 +98,7 @@ fn generic_read_exec_reduces_single_view_input() {
 
     let mut ctx = CpuBackend::new();
     let result = ctx
-        .with_exec_session(|exec| eager_einsum_exec_read(exec, &inputs, &tree))
+        .with_backend_session(|exec| eager_einsum_exec_read(exec, &inputs, &tree))
         .unwrap();
 
     assert_eq!(result.shape(), &[2]);

@@ -9,7 +9,6 @@ mod elementwise_tests;
 mod fusion_tests;
 mod gemm_tests;
 mod indexing_tests;
-mod linalg_tests;
 mod metadata_tests;
 mod reduction_tests;
 mod runtime_tests;

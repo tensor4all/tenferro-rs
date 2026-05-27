@@ -43,12 +43,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_shape, row_major) = c.try_into_vec_row_major::<f64>()?;
     assert_eq!(row_major, vec![19.0, 22.0, 43.0, 50.0]);
 
-    let diag = Tensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
-    let (_u, singular_values, _vt) = diag.svd(&mut backend)?;
-    let mut values = singular_values.try_into_vec_row_major::<f64>()?.1;
-    values.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
-    assert_eq!(values, vec![1.0, 2.0]);
-
     Ok(())
 }
 ```

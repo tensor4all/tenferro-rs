@@ -1,3 +1,4 @@
+mod catalog_kind_tests;
 mod dim_expr_tests;
 #[cfg(feature = "autodiff")]
 mod ext_op_tests;

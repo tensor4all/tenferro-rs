@@ -40,7 +40,7 @@ without reconstructing shapes from scratch downstream.
 | `DotDimensionSorter` | active | Sort contracting dimensions on `ExecOp::DotGeneral` to stabilize canonical order |
 | `TransposeFolding` | active | Fold producer `ExecOp::Transpose` into downstream `ExecOp::DotGeneral` dimension numbers |
 | `DotDecomposer` | active | Canonicalize `ExecOp::DotGeneral` into `[M?, K, B...] × [K, N?, B...] → [M?, N?, B...]` by emitting explicit `Transpose`/`Reshape` wrappers |
-| `DeadCodeElimination` | active | Drop instructions whose outputs are never consumed by a program output or later instruction (preserving side-effecting `ValidateNonsingular`) |
+| `DeadCodeElimination` | active | Drop instructions whose outputs are never consumed by a program output or later instruction |
 
 ### Removed pass
 
@@ -50,10 +50,10 @@ without reconstructing shapes from scratch downstream.
 
 ### No-op category removed by IR cleanup
 
-Structured linalg operations no longer travel through string `CustomCall`
-targets, so there is no separate "linalg passthrough" pass in the current
-pipeline. `Svd`, `Qr`, `Lu`, `Eigh`, `Eig`, `TriangularSolve`, and
-`ValidateNonsingular` are first-class `ExecOp` variants.
+Structured extension operations no longer travel through string `CustomCall`
+targets, so there is no separate extension passthrough pass in the current
+pipeline. Linalg, einsum, and FFT use `ExecOp::Extension` and are handled as
+single-instruction extension boundaries.
 
 ---
 
@@ -246,9 +246,7 @@ to dead-code cleanup.
 **Scope:** `ExecProgram`
 
 **Purpose:** Remove instructions whose outputs are not consumed by any
-downstream instruction or program output. Preserves instructions with
-observable side effects (currently only `ExecOp::ValidateNonsingular`,
-which errors on singular matrices).
+downstream instruction or program output.
 
 **When to fire:** always. In practice, instructions die after
 `DotDecomposer` re-canonicalizes a DotGeneral whose upstream Transpose was
@@ -303,7 +301,7 @@ deleted.
 | Lazy transpose absorption around GEMM | Moved into `TransposeFolding` on `ExecProgram` |
 | Multi-step `DotGeneral` canonicalization | Implemented in `DotDecomposer` (#729) with the full XLA-style algorithm, including the output Reshape step |
 | Reduction hoisting before contraction | No dedicated pass today |
-| Linalg passthrough via string `CustomCall` | Removed; linalg ops are structured `ExecOp` variants |
+| Linalg passthrough via string `CustomCall` | Removed; linalg lowers to `ExecOp::Extension` and dispatches through the registered linalg runtime |
 
 ---
 

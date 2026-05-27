@@ -98,13 +98,10 @@ risk rather than propagating it.
 
 ### File Organization
 
-Keep source files **small and focused** — one logical concern per file. Use **~1000 lines** as the soft upper bound; files in the 500–1000 range are fine when they cover a single coherent concern. Actively split files that exceed 1000 lines. Benefits:
-
-- **Abstraction review**: module boundaries make the public/private API surface explicit and easier to audit
-- **Parallel editing**: multiple agents (or humans) can work on separate files without merge conflicts
-- **Navigation**: smaller files are faster to read and search
-
-When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
+See `REPOSITORY_RULES.md` for the authoritative tenferro file-organization
+rules. Treat **~1000 lines** as a soft review trigger, not a mechanical
+split requirement; split only along clear behavior, abstraction, feature,
+ownership, or public/private API boundaries.
 
 ### Test Coverage Target
 
@@ -114,32 +111,9 @@ coverage for the modified file and add tests if below 90%.
 
 ### Unit Test Organization
 
-For Rust modules, keep production source files focused on production code.
-Do not keep inline `#[cfg(test)]` blocks in normal modules unless the file is a
-genuinely tiny leaf module and the test is trivially small. Prefer
-module-local test directories such as `src/<module>/tests/*.rs` and leave only
-`#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
-integration tests. Do not use `include!` to inject test files into modules.
-
-When splitting tests, optimize for keeping AI and human reading context clean:
-a developer reading `src/**` should not need to scroll through large unit-test
-blocks to understand the implementation. Prefer splitting larger extracted test
-suites by concern rather than keeping one monolithic test module.
-
-Tests follow implementation ownership.
-
-- Public facade crates should prefer integration tests for user-visible
-  behavior.
-- Private implementation details must be tested in the crate that owns the
-  implementation, typically an internal crate, not through a public facade
-  crate.
-- If a crate sets `[lib] test = false`, do not add `src/**/tests`, inline
-  `#[cfg(test)] mod tests`, or other crate-local unit-test entrypoints to that
-  crate.
-- If a private helper in a facade crate needs direct unit testing, move that
-  helper into the owning internal crate instead of re-enabling facade-crate lib
-  tests.
-- This rule is enforced by repository contract tests and must stay green in CI.
+See `REPOSITORY_RULES.md` for the authoritative tenferro unit-test
+organization rules, including inline `#[cfg(test)]` block restrictions and
+module-local test file placement.
 
 ### ASCII Diagrams
 
@@ -250,43 +224,11 @@ Override with environment variables:
 
 Colon-separated paths are supported (like `LD_LIBRARY_PATH`).
 
-### Device Transfer Policy
+### Device Transfer And CUDA Limits
 
-tenferro follows the **PyTorch convention**: no implicit CPU↔GPU transfer.
-Tensors must be on the correct device before passing to backend ops.
-
-```rust
-// Upload to GPU
-let gpu_tensor = cubecl::upload_tensor(backend.runtime(), &cpu_tensor)?;
-// Compute on GPU
-let result = backend.add(&gpu_a, &gpu_b)?;
-// Download to CPU
-let cpu_result = cubecl::download_tensor(backend.runtime(), &result)?;
-```
-
-**Error behavior:**
-- GPU op receives CPU tensor → `Error::BackendFailure` with message
-  "expected GPU tensor ... use upload_tensor()"
-- CPU op receives GPU tensor → panic (programming error, not recoverable)
-- `TypedTensor::host_data()` on GPU buffer → panic with diagnostic message
-
-The execution pipeline (`eval_exec_ir`, segmented dispatch) handles device
-placement internally — `Constant` ops auto-upload via `upload_host_tensor()`,
-and host-dependent ops (`ShapeOf`, `DynamicTruncate`) read only metadata or
-download single scalars.
-
-**cuSOLVER feature coverage:**
-
-| Feature | cuSOLVER support | GPU status |
-|---------|-----------------|------------|
-| SVD, QR, Cholesky, LU, Eigh | All versions (11.4+) | GPU |
-| Triangular solve | Via cuBLAS (all versions) | GPU |
-| General eigendecomposition (eig) | **Not in cuSOLVER** | Returns `BackendFailure` — user must download to CPU explicitly |
-
-`eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-provided by any version of cuSOLVER. `CubeclBackend::eig` returns
-`BackendFailure`. Users must explicitly download the tensor to CPU and
-compute via `CpuBackend::eig`. This is a permanent cuSOLVER limitation.
+See `REPOSITORY_RULES.md` for the authoritative device-transfer, backend
+buffer error, and CUDA library limitation contracts. See
+`docs/guides/devices-and-gpu.md` for user-facing examples.
 
 ## Workspace Architecture
 

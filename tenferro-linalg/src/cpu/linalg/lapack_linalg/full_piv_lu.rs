@@ -1,0 +1,608 @@
+use num_complex::{Complex32, Complex64};
+
+use tenferro_tensor::buffer_pool::BufferPool;
+use tenferro_tensor::TypedTensor;
+
+use super::helpers::{
+    batch_element_count, batched_binary_result, check_lapack_info, dim_i32, has_zero_dim,
+    leading_upper_triangle_from_lapack, lower_triangle_from_lapack, matrix_core_and_batch_result,
+    matrix_dims, matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
+    tensor_from_vec_with_template, transpose_col_major_data,
+};
+
+extern "C" {
+    #[link_name = "sgetc2_"]
+    fn sgetc2_ffi(
+        n: *const i32,
+        a: *mut f32,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "sgesc2_"]
+    fn sgesc2_ffi(
+        n: *const i32,
+        a: *const f32,
+        lda: *const i32,
+        rhs: *mut f32,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f32,
+    );
+
+    #[link_name = "dgetc2_"]
+    fn dgetc2_ffi(
+        n: *const i32,
+        a: *mut f64,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "dgesc2_"]
+    fn dgesc2_ffi(
+        n: *const i32,
+        a: *const f64,
+        lda: *const i32,
+        rhs: *mut f64,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f64,
+    );
+
+    #[link_name = "cgetc2_"]
+    fn cgetc2_ffi(
+        n: *const i32,
+        a: *mut Complex32,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "cgesc2_"]
+    fn cgesc2_ffi(
+        n: *const i32,
+        a: *const Complex32,
+        lda: *const i32,
+        rhs: *mut Complex32,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f32,
+    );
+
+    #[link_name = "zgetc2_"]
+    fn zgetc2_ffi(
+        n: *const i32,
+        a: *mut Complex64,
+        lda: *const i32,
+        ipiv: *mut i32,
+        jpiv: *mut i32,
+        info: *mut i32,
+    );
+
+    #[link_name = "zgesc2_"]
+    fn zgesc2_ffi(
+        n: *const i32,
+        a: *const Complex64,
+        lda: *const i32,
+        rhs: *mut Complex64,
+        ipiv: *const i32,
+        jpiv: *const i32,
+        scale: *mut f64,
+    );
+}
+
+pub(crate) trait LapackFullPivLu: Clone + Copy + Default {
+    type Scale: Copy;
+
+    fn one() -> Self;
+    fn negative_one() -> Self;
+    fn scale_one() -> Self::Scale;
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    );
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    );
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale);
+}
+
+impl LapackFullPivLu for f32 {
+    type Scale = f32;
+
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        unsafe {
+            sgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        unsafe {
+            sgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+impl LapackFullPivLu for f64 {
+    type Scale = f64;
+
+    fn one() -> Self {
+        1.0
+    }
+
+    fn negative_one() -> Self {
+        -1.0
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
+        unsafe {
+            dgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
+        unsafe {
+            dgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+impl LapackFullPivLu for Complex32 {
+    type Scale = f32;
+
+    fn one() -> Self {
+        Complex32::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex32::new(-1.0, 0.0)
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        unsafe {
+            cgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        unsafe {
+            cgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+impl LapackFullPivLu for Complex64 {
+    type Scale = f64;
+
+    fn one() -> Self {
+        Complex64::new(1.0, 0.0)
+    }
+
+    fn negative_one() -> Self {
+        Complex64::new(-1.0, 0.0)
+    }
+
+    fn scale_one() -> Self::Scale {
+        1.0
+    }
+
+    fn getc2(
+        n: i32,
+        data: &mut [Self],
+        lda: i32,
+        ipiv: &mut [i32],
+        jpiv: &mut [i32],
+        info: &mut i32,
+    ) {
+        // SAFETY: `data` stores an `lda x n` LAPACK column-major matrix,
+        // pivot arrays have length at least `n`, and all pointers are valid
+        // for the duration of the FFI call.
+        unsafe {
+            zgetc2_ffi(
+                &n,
+                data.as_mut_ptr(),
+                &lda,
+                ipiv.as_mut_ptr(),
+                jpiv.as_mut_ptr(),
+                info,
+            );
+        }
+    }
+
+    fn gesc2(
+        n: i32,
+        data: &[Self],
+        lda: i32,
+        rhs: &mut [Self],
+        ipiv: &[i32],
+        jpiv: &[i32],
+        scale: &mut Self::Scale,
+    ) {
+        // SAFETY: `data` stores the factorized `lda x n` matrix, `rhs` has
+        // length at least `n`, pivot arrays have length at least `n`, and
+        // LAPACK only writes through `rhs` and `scale`.
+        unsafe {
+            zgesc2_ffi(
+                &n,
+                data.as_ptr(),
+                &lda,
+                rhs.as_mut_ptr(),
+                ipiv.as_ptr(),
+                jpiv.as_ptr(),
+                scale,
+            );
+        }
+    }
+
+    fn apply_inverse_scale(rhs: &mut [Self], scale: Self::Scale) {
+        if scale != 1.0 {
+            for value in rhs {
+                *value /= scale;
+            }
+        }
+    }
+}
+
+fn permutation_from_lapack_pivots(
+    pivots: &[i32],
+    op: &'static str,
+) -> tenferro_tensor::Result<Vec<usize>> {
+    let mut permutation: Vec<usize> = (0..pivots.len()).collect();
+    for (idx, &pivot_one_based) in pivots.iter().enumerate() {
+        let pivot = match usize::try_from(pivot_one_based - 1) {
+            Ok(pivot) if pivot < pivots.len() => pivot,
+            _ => {
+                return Err(tenferro_tensor::Error::backend_failure(
+                    op,
+                    "LAPACK getc2 returned invalid pivot index",
+                ));
+            }
+        };
+        if pivot != idx {
+            permutation.swap(idx, pivot);
+        }
+    }
+    Ok(permutation)
+}
+
+fn permutation_matrix<T: LapackFullPivLu>(permutation: &[usize]) -> Vec<T> {
+    let n = permutation.len();
+    let mut data = vec![T::default(); n * n];
+    for (row, &source) in permutation.iter().enumerate() {
+        data[row + source * n] = T::one();
+    }
+    data
+}
+
+fn factor_getc2<T: LapackFullPivLu>(
+    op: &'static str,
+    data: &mut [T],
+    n: usize,
+) -> tenferro_tensor::Result<(Vec<i32>, Vec<i32>, i32)> {
+    let n_i32 = dim_i32(n, op)?;
+    let mut ipiv = vec![0_i32; n];
+    let mut jpiv = vec![0_i32; n];
+    let mut info = 0;
+    T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
+    check_lapack_info(op, "getc2", info.min(0))?;
+    Ok((ipiv, jpiv, info))
+}
+
+fn full_piv_lu_2d<T: LapackFullPivLu>(
+    _buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    let n = square_matrix_dim(input, "full_piv_lu")?;
+    let mut lu = input.host_data().to_vec();
+    let (ipiv, jpiv, _info) = factor_getc2("full_piv_lu", &mut lu, n)?;
+
+    let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
+    let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
+    let p_data = permutation_matrix::<T>(&row_perm);
+    let q_data = permutation_matrix::<T>(&col_perm);
+    let mut l_data = lower_triangle_from_lapack(&lu, n, n);
+    for index in 0..n {
+        l_data[index + index * n] = T::one();
+    }
+    let u_data = leading_upper_triangle_from_lapack(&lu, n, n, n);
+    let row_swap_count = ipiv
+        .iter()
+        .enumerate()
+        .filter(|(idx, row)| **row != (*idx as i32 + 1))
+        .count();
+    let col_swap_count = jpiv
+        .iter()
+        .enumerate()
+        .filter(|(idx, col)| **col != (*idx as i32 + 1))
+        .count();
+    let parity = if (row_swap_count + col_swap_count) % 2 == 0 {
+        T::one()
+    } else {
+        T::negative_one()
+    };
+
+    Ok(vec![
+        tensor_from_vec_with_template(vec![n, n], p_data, input),
+        tensor_from_vec_with_template(vec![n, n], l_data, input),
+        tensor_from_vec_with_template(vec![n, n], u_data, input),
+        tensor_from_vec_with_template(vec![n, n], q_data, input),
+        tensor_from_vec_with_template(vec![], vec![parity], input),
+    ])
+}
+
+fn solve_2d<T: LapackFullPivLu>(
+    _buffers: &mut BufferPool,
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let n = square_matrix_dim(a, "full_piv_lu_solve")?;
+    let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
+    if b_rows != n {
+        return Err(tenferro_tensor::Error::ShapeMismatch {
+            op: "full_piv_lu_solve",
+            lhs: vec![n],
+            rhs: vec![b_rows],
+        });
+    }
+
+    let mut lu = if transpose_a {
+        transpose_col_major_data(a.host_data(), n, n)
+    } else {
+        a.host_data().to_vec()
+    };
+    let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n)?;
+    if info > 0 {
+        return Err(tenferro_tensor::Error::backend_failure(
+            "full_piv_lu_solve",
+            "matrix is singular",
+        ));
+    }
+
+    let mut rhs = b.host_data().to_vec();
+    let n_i32 = dim_i32(n, "full_piv_lu_solve")?;
+    for col in 0..b_cols {
+        let start = col * n;
+        let end = start + n;
+        let mut scale = T::scale_one();
+        T::gesc2(
+            n_i32,
+            &lu,
+            n_i32,
+            &mut rhs[start..end],
+            &ipiv,
+            &jpiv,
+            &mut scale,
+        );
+        T::apply_inverse_scale(&mut rhs[start..end], scale);
+    }
+
+    Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs, b))
+}
+
+pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    if has_zero_dim(&input.shape) {
+        let (n, batch_shape) = square_core_and_batch_result(input, "full_piv_lu")?;
+        let parity_elements = batch_element_count("full_piv_lu", batch_shape)?;
+        return Ok(vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input,
+            ),
+            tensor_from_vec_with_template(
+                batch_shape.to_vec(),
+                vec![T::one(); parity_elements],
+                input,
+            ),
+        ]);
+    }
+    super::helpers::batched_multi("full_piv_lu", buffers, input, full_piv_lu_2d)
+}
+
+pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
+    buffers: &mut BufferPool,
+    a: &TypedTensor<T>,
+    b: &TypedTensor<T>,
+    transpose_a: bool,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+        let (n, a_batch_shape) = square_core_and_batch_result(a, "full_piv_lu_solve")?;
+        let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "full_piv_lu_solve")?;
+        if b_rows != n {
+            return Err(tenferro_tensor::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: vec![n],
+                rhs: vec![b_rows],
+            });
+        }
+        if a_batch_shape != b_batch_shape {
+            return Err(tenferro_tensor::Error::ShapeMismatch {
+                op: "full_piv_lu_solve",
+                lhs: a_batch_shape.to_vec(),
+                rhs: b_batch_shape.to_vec(),
+            });
+        }
+        return Ok(tensor_from_vec_with_template(
+            b.shape.clone(),
+            Vec::new(),
+            b,
+        ));
+    }
+    batched_binary_result("full_piv_lu_solve", buffers, a, b, |buffers, a, b| {
+        solve_2d(buffers, a, b, transpose_a)
+    })
+}

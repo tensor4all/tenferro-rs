@@ -199,7 +199,7 @@ pub fn linearize_reduce_chooser(
 }
 
 pub fn transpose_dot_general(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -272,7 +272,7 @@ pub fn transpose_dot_general(
 }
 
 pub fn transpose_reduce_sum(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     op: &StdTensorOp,
     inputs: &[ValRef<StdTensorOp>],
@@ -323,7 +323,7 @@ pub fn transpose_reduce_sum(
 }
 
 pub fn transpose_reduce_prod(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
@@ -384,7 +384,7 @@ pub fn transpose_reduce_prod(
 }
 
 pub fn transpose_reduce_chooser(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     op: &StdTensorOp,
@@ -503,7 +503,7 @@ fn sym_shape_to_dim_expr(shape: &[SymDim], source_idx: usize) -> (Vec<DimExpr>, 
 }
 
 fn normalize_reduction_cotangent(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent: LocalValId,
     kept_dims: &[usize],
 ) -> ValRef<StdTensorOp> {
@@ -522,7 +522,7 @@ fn normalize_reduction_cotangent(
 }
 
 fn broadcast_reduction_output(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     output: ValRef<StdTensorOp>,
     shape_source: ValRef<StdTensorOp>,
     input_shape: &[SymDim],
@@ -545,7 +545,7 @@ fn broadcast_reduction_output(
 }
 
 fn reduction_location_indicators(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     answer_broadcast: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -557,7 +557,7 @@ fn reduction_location_indicators(
 }
 
 fn reduction_location_counts(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     indicators: LocalValId,
     axes: &[usize],
 ) -> LocalValId {
@@ -571,7 +571,7 @@ fn reduction_location_counts(
 }
 
 fn numeric_indicators(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     indicators: LocalValId,
     dtype: DType,
 ) -> LocalValId {
@@ -586,7 +586,7 @@ fn numeric_indicators(
 }
 
 fn normalize_scalar_cotangent(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent: LocalValId,
     output_rank: usize,
 ) -> ValRef<StdTensorOp> {
@@ -700,7 +700,7 @@ fn permutation_to_original_order(rank: usize, result_order: &[usize]) -> Vec<usi
 }
 
 fn add_transpose_if_needed(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     perm: &[usize],
 ) -> LocalValId {

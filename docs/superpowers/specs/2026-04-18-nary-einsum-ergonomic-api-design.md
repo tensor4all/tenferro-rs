@@ -181,7 +181,7 @@ shapes (`DimExpr::eval_all`, `tenferro/src/exec.rs:224,242`). One compiled
 
 ## § 3 — AD behavior
 
-Graph construction (`vjp`, `jvp`, `grad`, `try_grad`) is unchanged. Placeholders
+Graph construction (`vjp`, `jvp`, `grad`, `grad_optional`) is unchanged. Placeholders
 are valid `wrt` targets because they are registered as normal input leaves via
 `next_input_key()` (same mechanism as `from_tensor_*`) — the AD engine sees
 them as standard leaves regardless of whether they carry data.

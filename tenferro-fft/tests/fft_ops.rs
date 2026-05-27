@@ -32,9 +32,14 @@ fn assert_f64_close(actual: &[f64], expected: &[f64]) {
 }
 
 #[test]
+fn publishes_extension_family_id() {
+    assert_eq!(tenferro_fft::FFT_EXTENSION_FAMILY_ID, "tenferro-fft.fft.v1");
+}
+
+#[test]
 fn traced_tensor_namespace_exposes_fft() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-    let y = tenferro_fft::traced_tensor::rfft(&x, None, -1, FftNorm::Backward);
+    let y = tenferro_fft::traced_tensor::rfft(&x, None, -1, FftNorm::Backward).unwrap();
 
     assert_eq!(y.rank, 1);
 }
@@ -50,7 +55,7 @@ fn fft_c64_matches_numpy_convention() {
             Complex64::new(4.0, 0.0),
         ],
     );
-    let y = fft(&x, None, -1, FftNorm::Backward);
+    let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -76,7 +81,7 @@ fn ifft_c64_applies_backward_normalization() {
             Complex64::new(-2.0, -2.0),
         ],
     );
-    let y = ifft(&spectrum, None, -1, FftNorm::Backward);
+    let y = ifft(&spectrum, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
     assert_c64_close(
@@ -93,7 +98,7 @@ fn ifft_c64_applies_backward_normalization() {
 #[test]
 fn rfft_f64_returns_onesided_spectrum() {
     let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
-    let y = rfft(&x, None, -1, FftNorm::Backward);
+    let y = rfft(&x, None, -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[3]);
@@ -117,7 +122,7 @@ fn irfft_c64_reconstructs_real_signal() {
             Complex64::new(-2.0, 0.0),
         ],
     );
-    let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward);
+    let y = irfft(&spectrum, Some(4), -1, FftNorm::Backward).unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -146,7 +151,7 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
         ],
     );
 
-    let y = fft(&x, None, -1, FftNorm::Backward);
+    let y = fft(&x, None, -1, FftNorm::Backward).unwrap();
     let dy = y.jvp(&x, &dx);
     let out = run(&dy);
 

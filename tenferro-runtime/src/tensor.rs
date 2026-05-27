@@ -19,7 +19,7 @@ pub use tenferro_tensor::Tensor;
 /// let y = tensor::convert(&x, DType::F32, &mut backend).unwrap();
 /// ```
 pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> Result<Tensor> {
-    backend.with_exec_session(|exec| exec.convert(input, to))
+    backend.with_backend_session(|exec| exec.convert(input, to))
 }
 
 /// Elementwise addition with NumPy-style broadcasting.
@@ -35,7 +35,7 @@ pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> R
 /// ```
 pub fn add(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    backend.with_exec_session(|exec| exec.add(&lhs, &rhs))
+    backend.with_backend_session(|exec| exec.add(&lhs, &rhs))
 }
 
 macro_rules! unary_fn {
@@ -51,7 +51,7 @@ macro_rules! unary_fn {
         #[doc = concat!("let y = tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
         /// ```
         pub fn $name(input: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
-            backend.with_exec_session(|exec| exec.$method(input))
+            backend.with_backend_session(|exec| exec.$method(input))
         }
     };
 }
@@ -75,7 +75,7 @@ macro_rules! binary_fn {
             backend: &mut impl TensorBackend,
         ) -> Result<Tensor> {
             let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-            backend.with_exec_session(|exec| exec.$method(&lhs, &rhs))
+            backend.with_backend_session(|exec| exec.$method(&lhs, &rhs))
         }
     };
 }
@@ -129,8 +129,8 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// ```
 pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    let neg_rhs = backend.with_exec_session(|exec| exec.neg(&rhs))?;
-    backend.with_exec_session(|exec| exec.add(&lhs, &neg_rhs))
+    let neg_rhs = backend.with_backend_session(|exec| exec.neg(&rhs))?;
+    backend.with_backend_session(|exec| exec.add(&lhs, &neg_rhs))
 }
 
 /// Elementwise comparison with NumPy-style broadcasting.
@@ -154,7 +154,7 @@ pub fn compare(
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
     let (lhs, rhs) = broadcast_binary(lhs, rhs, backend)?;
-    backend.with_exec_session(|exec| exec.compare(&lhs, &rhs, &dir))
+    backend.with_backend_session(|exec| exec.compare(&lhs, &rhs, &dir))
 }
 
 /// Select values from `on_true` or `on_false` using a condition tensor.
@@ -178,7 +178,7 @@ pub fn where_select(
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
     let (condition, on_true, on_false) = broadcast_ternary(condition, on_true, on_false, backend)?;
-    backend.with_exec_session(|exec| exec.select(&condition, &on_true, &on_false))
+    backend.with_backend_session(|exec| exec.select(&condition, &on_true, &on_false))
 }
 
 /// Clamp values elementwise between lower and upper bounds.
@@ -200,7 +200,7 @@ pub fn clamp(
     backend: &mut impl TensorBackend,
 ) -> Result<Tensor> {
     let (input, lower, upper) = broadcast_ternary(input, lower, upper, backend)?;
-    backend.with_exec_session(|exec| exec.clamp(&input, &lower, &upper))
+    backend.with_backend_session(|exec| exec.clamp(&input, &lower, &upper))
 }
 
 /// Matrix multiplication helper for rank-2 tensors.
@@ -223,7 +223,7 @@ pub fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Resul
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    backend.with_exec_session(|exec| exec.dot_general(a, b, &config))
+    backend.with_backend_session(|exec| exec.dot_general(a, b, &config))
 }
 
 fn broadcast_binary(
@@ -267,14 +267,11 @@ fn broadcast_to(
     let source = if plan.source_shape == input_shape {
         input.clone()
     } else {
-        backend.with_exec_session(|exec| exec.reshape(input, &plan.source_shape))?
+        backend.with_backend_session(|exec| exec.reshape(input, &plan.source_shape))?
     };
-    backend.with_exec_session(|exec| exec.broadcast_in_dim(&source, target_shape, &plan.dims))
+    backend.with_backend_session(|exec| exec.broadcast_in_dim(&source, target_shape, &plan.dims))
 }
 
 fn broadcast_error(err: impl std::fmt::Display) -> Error {
-    Error::BackendFailure {
-        op: "broadcast",
-        message: err.to_string(),
-    }
+    Error::backend_failure("broadcast", err.to_string())
 }

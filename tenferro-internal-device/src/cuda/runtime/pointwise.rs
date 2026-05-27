@@ -109,7 +109,7 @@ impl CudaRuntime {
     /// let spec = StridedCopySpec::to_contiguous(&[4, 2, 3], &[6, 1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
     /// runtime.copy_strided_with_transform(&src, &dst, &spec, StridedCopyTransform::Conj).unwrap();
     /// ```
-    pub fn copy_strided_with_transform<T: 'static>(
+    pub fn copy_strided_with_transform<T: StridedCopyTransformElement>(
         &self,
         src: &CudaBuffer<T>,
         dst: &CudaBuffer<T>,

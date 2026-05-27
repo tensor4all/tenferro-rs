@@ -28,7 +28,7 @@ version counters.
 
 - Zero-copy view ops (`select`, `narrow`, `permute`, `diagonal`, `broadcast`).
 - Shared-buffer ownership model (`Arc<BufferInner<T>>`).
-- Backend protocol surface (`TensorBackend` / `TensorExec`).
+- Backend protocol surface (`TensorBackend` / `BackendSession`).
 - Existing out-parameter and buffer-reuse patterns in backend execution.
 
 ### Missing pieces
@@ -69,7 +69,7 @@ pub enum IndexingDescriptor {
     },
 }
 
-// Future shape: add an index_put-style method to TensorBackend/TensorExec
+// Future shape: add an index_put-style method to TensorBackend/BackendSession
 // once mutation/version-counter semantics are specified.
 ```
 
@@ -87,7 +87,7 @@ existing view + contiguous/copy logic.
 ### Path B: advanced indexing (Phase 2+)
 
 - Normalize tensor/mask indices.
-- Dispatch to a backend `TensorBackend`/`TensorExec` indexing method if
+- Dispatch to a backend `TensorBackend`/`BackendSession` indexing method if
   available.
 - Fallback behavior:
   - CPU backend: reference implementation.

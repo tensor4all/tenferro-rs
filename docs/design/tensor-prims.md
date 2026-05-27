@@ -9,7 +9,7 @@ The current backend protocol is:
 
 - `TensorBackend`: standalone dense tensor operations plus long-lived backend
   state,
-- `TensorExec`: execution-session surface used by compiled-program evaluation,
+- `BackendSession`: execution-session surface used by compiled-program evaluation,
 - `ElementwiseFusionPlan`: optional fused elementwise execution plan shared by
   segmentation and GPU fusion.
 
@@ -27,7 +27,7 @@ tenferro-einsum
         │
         ▼
 tenferro-tensor
-    Tensor, TypedTensor, TensorBackend, TensorExec
+    Tensor, TypedTensor, TensorBackend, BackendSession
         │
         ├── cpu::CpuBackend
         └── tenferro_gpu::CubeclBackend (feature = "cuda")
@@ -35,12 +35,12 @@ tenferro-tensor
 
 There is exactly one dense runtime tensor type family (`Tensor` /
 `TypedTensor`) and one backend trait surface. Higher layers should depend on
-`TensorBackend`/`TensorExec`, not on a backend-specific context or deleted
+`TensorBackend`/`BackendSession`, not on a backend-specific context or deleted
 primitive-family traits.
 
 ## Backend Operation Surface
 
-`TensorBackend` and `TensorExec` expose the operations needed by the compiled
+`TensorBackend` and `BackendSession` expose the operations needed by the compiled
 execution pipeline:
 
 | Category | Examples |
@@ -70,7 +70,7 @@ faer or BLAS/LAPACK for GEMM and linalg. `CpuContext` stores the CPU thread
 count as the single source of truth for faer parallelism, but it does not own a
 Rayon thread pool.
 
-`CpuBackend::with_exec_session` runs the whole compiled program through
+`CpuBackend::with_backend_session` runs the whole compiled program through
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session
 setup. faer-backed kernels receive `Par::Seq` for one thread or `Par::rayon(n)`
 for multi-threaded execution.

@@ -61,11 +61,11 @@ pub enum ElementwiseFusionOp {
 /// let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
 /// let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
 /// let sum = backend
-///     .with_exec_session(|exec| exec.add(&a, &b))
+///     .with_backend_session(|exec| exec.add(&a, &b))
 ///     .unwrap();
 /// assert_eq!(sum.shape(), &[2]);
 /// ```
-pub trait TensorExec {
+pub trait BackendSession {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -232,29 +232,6 @@ pub trait TensorExec {
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor>;
-    fn triangular_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor>;
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor>;
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-
     fn reclaim_buffer(&mut self, tensor: Tensor);
 
     #[doc(hidden)]
@@ -267,7 +244,7 @@ pub trait TensorExec {
     }
 }
 
-struct BackendExecAdapter<'a, B: TensorBackend + ?Sized> {
+struct BackendSessionAdapter<'a, B: TensorBackend + ?Sized> {
     backend: &'a mut B,
 }
 
@@ -281,7 +258,7 @@ macro_rules! forward_exec_to_backend {
     };
 }
 
-impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
+impl<B: TensorBackend + ?Sized> BackendSession for BackendSessionAdapter<'_, B> {
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,
@@ -347,22 +324,6 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
         pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
         reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        cholesky(input: &Tensor) -> crate::Result<Tensor>;
-        triangular_solve(
-            a: &Tensor,
-            b: &Tensor,
-            left_side: bool,
-            lower: bool,
-            transpose_a: bool,
-            unit_diagonal: bool
-        ) -> crate::Result<Tensor>;
-        lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        full_piv_lu(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        full_piv_lu_solve(a: &Tensor, b: &Tensor, transpose_a: bool) -> crate::Result<Tensor>;
-        svd(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        qr(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        eigh(input: &Tensor) -> crate::Result<Vec<Tensor>>;
-        eig(input: &Tensor) -> crate::Result<Vec<Tensor>>;
         reclaim_buffer(tensor: Tensor) -> ();
         execute_elementwise_fusion(
             inputs: &[&Tensor],
@@ -373,23 +334,23 @@ impl<B: TensorBackend + ?Sized> TensorExec for BackendExecAdapter<'_, B> {
 
 /// Run a closure using the default execution-session adapter.
 ///
-/// This forwards [`TensorExec`] calls back to the backend's existing
+/// This forwards [`BackendSession`] calls back to the backend's existing
 /// [`TensorBackend`] methods, which is suitable for backends whose individual
 /// ops already manage their own execution context.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, default_exec_session};
+/// use tenferro_tensor::{cpu::CpuBackend, default_backend_session};
 ///
 /// let mut backend = CpuBackend::new();
-/// let _ = default_exec_session(&mut backend, |_exec| 1usize);
+/// let _ = default_backend_session(&mut backend, |_exec| 1usize);
 /// ```
-pub fn default_exec_session<B: TensorBackend + ?Sized, R: Send>(
+pub fn default_backend_session<B: TensorBackend + ?Sized, R: Send>(
     backend: &mut B,
-    f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
 ) -> R {
-    let mut adapter = BackendExecAdapter { backend };
+    let mut adapter = BackendSessionAdapter { backend };
     f(&mut adapter)
 }
 
@@ -574,30 +535,6 @@ pub trait TensorBackend {
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor>;
-    fn triangular_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor>;
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor>;
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>>;
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor>;
-
     /// Execute a batch of operations inside the backend's execution context.
     ///
     /// Backends can override this to establish one shared scope for many ops,
@@ -609,10 +546,13 @@ pub trait TensorBackend {
     /// use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
     ///
     /// let mut backend = CpuBackend::new();
-    /// let _value = backend.with_exec_session(|_exec| 1usize);
+    /// let _value = backend.with_backend_session(|_exec| 1usize);
     /// ```
-    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        default_exec_session(self, f)
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        default_backend_session(self, f)
     }
 
     /// Execute a batch of operations with an externally owned runtime cache.
@@ -621,12 +561,12 @@ pub trait TensorBackend {
     /// this to use Engine-owned prepared plans or analysis caches while keeping
     /// cache lifetime and clearing under the caller's control.
     #[doc(hidden)]
-    fn with_exec_session_cached<R: Send>(
+    fn with_backend_session_cached<R: Send>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        self.with_exec_session(f)
+        self.with_backend_session(f)
     }
 
     /// Materialize a backend tensor into host memory.

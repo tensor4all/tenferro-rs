@@ -1,0 +1,12 @@
+[package]
+name = "tenferro-core-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Core primitive operation catalog for the tenferro workspace."
+
+[lib]
+name = "tenferro_core_ops"
+path = "src/lib.rs"

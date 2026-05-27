@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -8,7 +7,6 @@ use cudarc::{
     driver::{CudaFunction, CudaStream},
     nvrtc::{compile_ptx, Ptx},
 };
-use num_complex::{Complex32, Complex64};
 
 use super::super::{shared::ContiguousOrder, state::CudaRuntime};
 use crate::{Error, Result};
@@ -184,10 +182,6 @@ pub fn axes_to_i32(axes: &[usize], label: &str) -> Result<Vec<i32>> {
             })
         })
         .collect()
-}
-
-pub fn supports_conj_strided_copy<T: 'static>() -> bool {
-    TypeId::of::<T>() == TypeId::of::<Complex32>() || TypeId::of::<T>() == TypeId::of::<Complex64>()
 }
 
 pub fn validate_pointwise_rank(

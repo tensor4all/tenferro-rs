@@ -4,7 +4,7 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::backend::{TensorBackend, TensorExec};
+use crate::backend::{BackendSession, TensorBackend};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -12,7 +12,7 @@ use crate::config::{
 use crate::{Buffer, CacheStats, Tensor, TensorRead, TypedTensor};
 
 use super::exec_session::CpuExecSession;
-use super::{analytic, elementwise, gemm, indexing, linalg, reduction, structural, CpuContext};
+use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
 
 #[derive(Debug, Default, Clone)]
 struct CpuSessionProfileEntry {
@@ -71,7 +71,7 @@ fn maybe_print_cpu_session_profile() {
             .lock()
             .expect("CPU session profile mutex poisoned");
         state
-            .get("with_exec_session_cached.total")
+            .get("with_backend_session_cached.total")
             .is_some_and(|entry| entry.calls % print_every == 0)
     };
     if !should_print {
@@ -222,10 +222,9 @@ impl CpuBackend {
                     op: "CpuBackend::try_with_threads",
                     message,
                 },
-                crate::Error::BackendFailure { message, .. } => crate::Error::BackendFailure {
-                    op: "CpuBackend::try_with_threads",
-                    message,
-                },
+                crate::Error::BackendFailure { message, .. } => {
+                    crate::Error::backend_failure("CpuBackend::try_with_threads", message)
+                }
                 err => err,
             })
     }
@@ -385,6 +384,22 @@ impl CpuBackend {
     #[cfg(feature = "cpu-blas")]
     fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         self.run_with_pool(op)
+    }
+
+    /// Run an external linalg implementation with this backend's buffer pool.
+    ///
+    /// This is exposed for operation-family crates that own their backend
+    /// implementation while still sharing the CPU backend's allocation pool.
+    #[doc(hidden)]
+    pub fn with_linalg_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
+        self.linalg_with_pool(op)
+    }
+
+    /// Clone the CPU context used by external linalg implementations.
+    #[cfg(feature = "cpu-faer")]
+    #[doc(hidden)]
+    pub fn linalg_context(&self) -> Arc<CpuContext> {
+        Arc::clone(&self.ctx)
     }
 
     #[cfg(feature = "cpu-faer")]
@@ -851,491 +866,20 @@ impl TensorBackend for CpuBackend {
         self.install_with_pool(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
 
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F32),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => linalg::cholesky(buffers, t).map(Tensor::F32),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => linalg::cholesky(buffers, t).map(Tensor::C32),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::C32),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => linalg::cholesky(buffers, t).map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => linalg::cholesky(buffers, t).map(Tensor::C64),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::cholesky(ctx.as_ref(), buffers, t).map(Tensor::C64),
-            _ => Err(unsupported_dtype("cholesky", input.dtype())),
-        })
-    }
-
-    fn triangular_solve(
+    fn with_backend_session<R: Send>(
         &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match (a, b) {
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
-                ctx.as_ref(),
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
-                ctx.as_ref(),
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => linalg::triangular_solve(
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => linalg::triangular_solve(
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::C64),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => linalg::triangular_solve(
-                ctx.as_ref(),
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => linalg::triangular_solve(
-                ctx.as_ref(),
-                buffers,
-                a,
-                b,
-                left_side,
-                lower,
-                transpose_a,
-                unit_diagonal,
-            )
-            .map(Tensor::C64),
-            _ => {
-                if a.dtype() != b.dtype() {
-                    Err(crate::Error::DTypeMismatch {
-                        op: "triangular_solve",
-                        lhs: a.dtype(),
-                        rhs: b.dtype(),
-                    })
-                } else {
-                    Err(unsupported_dtype("triangular_solve", a.dtype()))
-                }
-            }
-        })
-    }
-
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => {
-                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F32).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => {
-                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => {
-                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C32).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => {
-                linalg::lu(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
-            }
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            _ => Err(unsupported_dtype("lu", input.dtype())),
-        })
-    }
-
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => linalg::full_piv_lu(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => linalg::full_piv_lu(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => linalg::full_piv_lu(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => linalg::full_piv_lu(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::full_piv_lu(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
-        })
-    }
-
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor> {
-        if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return Ok(zeros_like_tensor(b));
-        }
-
-        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            (
-                self.reshape(b, &matrix_rhs_shape)?,
-                Some(b.shape().to_vec()),
-            )
-        } else {
-            (b.clone(), None)
-        };
-
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        let result = self.linalg_with_pool(|buffers| match (a, &rhs) {
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F32)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::F64)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F32)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::F64)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C32)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                linalg::full_piv_lu_solve(buffers, a, b, transpose_a).map(Tensor::C64)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::C32)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                linalg::full_piv_lu_solve(ctx.as_ref(), buffers, a, b, transpose_a).map(Tensor::C64)
-            }
-            _ => {
-                if a.dtype() != rhs.dtype() {
-                    Err(crate::Error::DTypeMismatch {
-                        op: "full_piv_lu_solve",
-                        lhs: a.dtype(),
-                        rhs: rhs.dtype(),
-                    })
-                } else {
-                    Err(unsupported_dtype("full_piv_lu_solve", a.dtype()))
-                }
-            }
-        })?;
-
-        if let Some(shape) = restore_shape {
-            self.reshape(&result, &shape)
-        } else {
-            Ok(result)
-        }
-    }
-
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::svd(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::svd(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => linalg::svd(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => linalg::svd(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => linalg::svd(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => linalg::svd(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::svd(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::svd(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            _ => Err(unsupported_dtype("svd", input.dtype())),
-        })
-    }
-
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::qr(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::qr(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => {
-                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F32).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => {
-                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::F64).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => {
-                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C32).collect())
-            }
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => {
-                linalg::qr(buffers, t).map(|outputs| outputs.into_iter().map(Tensor::C64).collect())
-            }
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::qr(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::qr(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            _ => Err(unsupported_dtype("qr", input.dtype())),
-        })
-    }
-
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| match input {
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F32(t) => linalg::eigh(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::F64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F32(t) => linalg::eigh(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::F64(t) => linalg::eigh(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C32(t) => linalg::eigh(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-blas")]
-            Tensor::C64(t) => linalg::eigh(buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C32(t) => linalg::eigh(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C32).collect()),
-            #[cfg(feature = "cpu-faer")]
-            Tensor::C64(t) => linalg::eigh(ctx.as_ref(), buffers, t)
-                .map(|outputs| outputs.into_iter().map(Tensor::C64).collect()),
-            _ => Err(unsupported_dtype("eigh", input.dtype())),
-        })
-    }
-
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        if !matches!(
-            input,
-            Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
-        ) {
-            return Err(unsupported_dtype("eig", input.dtype()));
-        }
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        self.linalg_with_pool(|buffers| {
-            #[cfg(feature = "cpu-faer")]
-            {
-                linalg::eig(ctx.as_ref(), buffers, input)
-            }
-            #[cfg(feature = "cpu-blas")]
-            {
-                linalg::eig(buffers, input)
-            }
-        })
-    }
-
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
-        if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return Ok(zeros_like_tensor(b));
-        }
-
-        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            (
-                self.reshape(b, &matrix_rhs_shape)?,
-                Some(b.shape().to_vec()),
-            )
-        } else {
-            (b.clone(), None)
-        };
-
-        #[cfg(feature = "cpu-faer")]
-        let ctx = Arc::clone(&self.ctx);
-        let result = self.linalg_with_pool(|buffers| match (a, &rhs) {
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::F32)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::F64)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => {
-                linalg::solve(buffers, a, b, false).map(Tensor::F32)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => {
-                linalg::solve(buffers, a, b, false).map(Tensor::F64)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                linalg::solve(buffers, a, b, false).map(Tensor::C32)
-            }
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                linalg::solve(buffers, a, b, false).map(Tensor::C64)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => {
-                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::C32)
-            }
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => {
-                linalg::solve(ctx.as_ref(), buffers, a, b, false).map(Tensor::C64)
-            }
-            _ => {
-                if a.dtype() != rhs.dtype() {
-                    Err(crate::Error::DTypeMismatch {
-                        op: "solve",
-                        lhs: a.dtype(),
-                        rhs: rhs.dtype(),
-                    })
-                } else {
-                    Err(unsupported_dtype("solve", a.dtype()))
-                }
-            }
-        })?;
-
-        if let Some(shape) = restore_shape {
-            self.reshape(&result, &shape)
-        } else {
-            Ok(result)
-        }
-    }
-
-    fn with_exec_session<R: Send>(&mut self, f: impl FnOnce(&mut dyn TensorExec) -> R + Send) -> R {
-        let mut cache = profile_cpu_session_section("with_exec_session.cache_default", || {
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    ) -> R {
+        let mut cache = profile_cpu_session_section("with_backend_session.cache_default", || {
             gemm::GemmAnalysisCache::default()
         });
-        self.with_exec_session_cached(&mut cache, f)
+        self.with_backend_session_cached(&mut cache, f)
     }
 
-    fn with_exec_session_cached<R: Send>(
+    fn with_backend_session_cached<R: Send>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn TensorExec) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
         if !cpu_session_profile_enabled() {
             let mut buffers = std::mem::take(&mut self.buffers);
@@ -1352,34 +896,35 @@ impl TensorBackend for CpuBackend {
 
         let total_started = Instant::now();
         let mut buffers =
-            profile_cpu_session_section("with_exec_session_cached.take_buffers", || {
+            profile_cpu_session_section("with_backend_session_cached.take_buffers", || {
                 std::mem::take(&mut self.buffers)
             });
         let ctx = Arc::clone(&self.ctx);
-        let result = profile_cpu_session_section("with_exec_session_cached.exec_session", || {
-            let session_started = Instant::now();
-            let mut session = CpuExecSession {
-                ctx: ctx.as_ref(),
-                buffers: &mut buffers,
-                gemm_analysis_cache: cache,
-            };
-            record_cpu_session_profile(
-                "with_exec_session_cached.session_construct",
-                session_started.elapsed(),
-            );
+        let result =
+            profile_cpu_session_section("with_backend_session_cached.exec_session", || {
+                let session_started = Instant::now();
+                let mut session = CpuExecSession {
+                    ctx: ctx.as_ref(),
+                    buffers: &mut buffers,
+                    gemm_analysis_cache: cache,
+                };
+                record_cpu_session_profile(
+                    "with_backend_session_cached.session_construct",
+                    session_started.elapsed(),
+                );
 
-            let exec_started = Instant::now();
-            let result = f(&mut session);
-            record_cpu_session_profile(
-                "with_exec_session_cached.exec_body",
-                exec_started.elapsed(),
-            );
-            result
-        });
-        profile_cpu_session_section("with_exec_session_cached.restore_buffers", || {
+                let exec_started = Instant::now();
+                let result = f(&mut session);
+                record_cpu_session_profile(
+                    "with_backend_session_cached.exec_body",
+                    exec_started.elapsed(),
+                );
+                result
+            });
+        profile_cpu_session_section("with_backend_session_cached.restore_buffers", || {
             self.buffers = buffers;
         });
-        record_cpu_session_profile("with_exec_session_cached.total", total_started.elapsed());
+        record_cpu_session_profile("with_backend_session_cached.total", total_started.elapsed());
         maybe_print_cpu_session_profile();
         result
     }
@@ -1397,54 +942,10 @@ impl TensorBackend for CpuBackend {
     }
 }
 
-fn has_zero_dim(shape: &[usize]) -> bool {
-    shape.contains(&0)
-}
-
-fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
-    if b.shape().len() == 1 {
-        return Some(vec![b.shape()[0], 1]);
-    }
-
-    let is_batched_vector_rhs = a.shape().len() == b.shape().len() + 1
-        && !b.shape().is_empty()
-        && b.shape()[0] == a.shape()[0]
-        && b.shape()[1..] == a.shape()[2..];
-    if !is_batched_vector_rhs {
-        return None;
-    }
-
-    let mut rhs_shape = vec![b.shape()[0], 1];
-    rhs_shape.extend_from_slice(&b.shape()[1..]);
-    Some(rhs_shape)
-}
-
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
     match typed.buffer {
         Buffer::Host(data) => T::pool_release(pool, data),
         Buffer::Backend(_) => {}
-    }
-}
-
-fn zeros_like_tensor(input: &Tensor) -> Tensor {
-    match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
-        Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape.clone(),
-            vec![false; t.n_elements()],
-        )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
-    }
-}
-
-pub(crate) fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: format!("unsupported dtype {dtype:?}"),
     }
 }
 
@@ -1455,33 +956,4 @@ impl Default for CpuBackend {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cpu_session_profile_helpers_cover_current_profile_mode() {
-        let state = cpu_session_profile_state();
-        state
-            .lock()
-            .expect("CPU session profile mutex poisoned")
-            .clear();
-
-        let profiling_enabled = cpu_session_profile_enabled();
-        let _ = cpu_session_profile_print_every();
-
-        let value = profile_cpu_session_section("test.profile_section", || 7);
-        assert_eq!(value, 7);
-        record_cpu_session_profile("test.manual_record", Duration::from_nanos(1));
-
-        let entries = state.lock().expect("CPU session profile mutex poisoned");
-        if profiling_enabled {
-            assert!(entries.contains_key("test.profile_section"));
-            assert!(entries.contains_key("test.manual_record"));
-        } else {
-            assert!(entries.is_empty());
-        }
-        drop(entries);
-
-        maybe_print_cpu_session_profile();
-    }
-}
+mod tests;

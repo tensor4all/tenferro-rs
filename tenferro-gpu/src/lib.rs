@@ -3,10 +3,22 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_tensor::Tensor;
+//! #[cfg(feature = "cuda")]
+//! {
+//!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
+//!     use tenferro_tensor::{Tensor, TensorBackend};
 //!
-//! let _tensor_type = core::any::type_name::<Tensor>();
-//! assert!(_tensor_type.contains("Tensor"));
+//!     if gpu_available() {
+//!         let mut backend = CubeclBackend::new(0).unwrap();
+//!         let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+//!         let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+//!         let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
+//!         let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
+//!         let gpu_sum = backend.add(&gpu_a, &gpu_b).unwrap();
+//!         let sum = download_tensor(backend.runtime(), &gpu_sum).unwrap();
+//!         assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+//!     }
+//! }
 //! ```
 
 #[cfg(feature = "cuda")]
@@ -54,8 +66,21 @@ pub(crate) mod types {
 /// # Examples
 ///
 /// ```
-/// let _name = core::any::type_name::<tenferro_gpu::CubeclBuffer<f64>>();
-/// assert!(_name.contains("CubeclBuffer"));
+/// #[cfg(feature = "cuda")]
+/// {
+///     use tenferro_gpu::{gpu_available, upload_tensor, CubeclBackend, CubeclBuffer};
+///     use tenferro_tensor::{BackendBuffer, Buffer, Tensor};
+///
+///     if gpu_available() {
+///         let backend = CubeclBackend::new(0).unwrap();
+///         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+///         let gpu = upload_tensor(backend.runtime(), &host).unwrap();
+///         let Tensor::F64(tensor) = gpu else { unreachable!() };
+///         let Buffer::Backend(buffer) = &tensor.buffer else { unreachable!() };
+///         let cubecl = buffer.as_any().downcast_ref::<CubeclBuffer<f64>>().unwrap();
+///         assert_eq!(cubecl.len, 2);
+///     }
+/// }
 /// ```
 #[cfg(feature = "cuda")]
 #[derive(Clone)]
@@ -81,11 +106,27 @@ impl<T> std::fmt::Debug for CubeclBuffer<T> {
 impl<T> CubeclBuffer<T> {
     /// Create a CubeCL buffer wrapper from a handle and element count.
     ///
+    /// This is a low-level constructor for backend integrations that already
+    /// own a CubeCL handle. Most callers should use [`upload_tensor`] instead.
+    ///
     /// # Examples
     ///
     /// ```
-    /// let _new = tenferro_gpu::CubeclBuffer::<f64>::new;
-    /// let _ = _new;
+    /// #[cfg(feature = "cuda")]
+    /// {
+    ///     use tenferro_gpu::{gpu_available, upload_tensor, CubeclBackend, CubeclBuffer};
+    ///     use tenferro_tensor::{BackendBuffer, Buffer, Tensor};
+    ///
+    ///     if gpu_available() {
+    ///         let backend = CubeclBackend::new(0).unwrap();
+    ///         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+    ///         let gpu = upload_tensor(backend.runtime(), &host).unwrap();
+    ///         let Tensor::F64(tensor) = gpu else { unreachable!() };
+    ///         let Buffer::Backend(buffer) = &tensor.buffer else { unreachable!() };
+    ///         let cubecl = buffer.as_any().downcast_ref::<CubeclBuffer<f64>>().unwrap();
+    ///         assert_eq!(cubecl.backend_family(), "cubecl");
+    ///     }
+    /// }
     /// ```
     pub fn new(handle: cubecl_runtime::server::Handle, len: usize) -> Self {
         Self {

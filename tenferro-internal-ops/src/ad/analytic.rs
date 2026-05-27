@@ -5,7 +5,7 @@ use computegraph::OpEmitter;
 use crate::std_tensor_op::StdTensorOp;
 
 fn emit_fixed_unary(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -19,7 +19,7 @@ fn emit_fixed_unary(
 }
 
 fn emit_fixed_binary(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     op: StdTensorOp,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
@@ -34,14 +34,14 @@ fn emit_fixed_binary(
 }
 
 fn emit_fixed_neg(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
 ) -> LocalValId {
     emit_fixed_unary(emitter, StdTensorOp::Neg, input)
 }
 
 fn emit_fixed_add(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -49,7 +49,7 @@ fn emit_fixed_add(
 }
 
 fn emit_fixed_mul(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -57,7 +57,7 @@ fn emit_fixed_mul(
 }
 
 fn emit_fixed_div(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     lhs: ValRef<StdTensorOp>,
     rhs: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -65,7 +65,7 @@ fn emit_fixed_div(
 }
 
 fn emit_one_like_fixed(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     anchor: ValRef<StdTensorOp>,
 ) -> LocalValId {
     let neg = emit_fixed_neg(emitter, anchor.clone());
@@ -74,7 +74,7 @@ fn emit_one_like_fixed(
 }
 
 fn emit_linear_mul_fixed(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     fixed: ValRef<StdTensorOp>,
     active: LocalValId,
 ) -> LocalValId {
@@ -88,7 +88,7 @@ fn emit_linear_mul_fixed(
 }
 
 fn emit_linear_div_fixed_denominator(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     active: LocalValId,
     denominator: ValRef<StdTensorOp>,
 ) -> LocalValId {
@@ -350,7 +350,7 @@ pub fn linearize_log1p(
 }
 
 pub fn transpose_exp(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -372,7 +372,7 @@ pub fn transpose_exp(
 }
 
 pub fn transpose_log(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -396,7 +396,7 @@ pub fn transpose_log(
 }
 
 pub fn transpose_sin(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -418,7 +418,7 @@ pub fn transpose_sin(
 }
 
 pub fn transpose_cos(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -441,7 +441,7 @@ pub fn transpose_cos(
 }
 
 pub fn transpose_tanh(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -467,7 +467,7 @@ pub fn transpose_tanh(
 }
 
 pub fn transpose_sqrt(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -493,7 +493,7 @@ pub fn transpose_sqrt(
 }
 
 pub fn transpose_rsqrt(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -518,7 +518,7 @@ pub fn transpose_rsqrt(
 }
 
 pub fn transpose_pow(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -563,7 +563,7 @@ pub fn transpose_pow(
 }
 
 pub fn transpose_expm1(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,
@@ -585,7 +585,7 @@ pub fn transpose_expm1(
 }
 
 pub fn transpose_log1p(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     cotangent_out: &[Option<LocalValId>],
     inputs: &[ValRef<StdTensorOp>],
     mode: &OpMode,

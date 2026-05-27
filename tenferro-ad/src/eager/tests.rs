@@ -9,9 +9,11 @@ use tenferro_ops::SymDim;
 use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::Tensor;
 
+use super::backward::{
+    eager_forward_input_metadata, eager_forward_value, missing_tangent_base_key,
+};
 use super::{
-    eager_forward_input_metadata, eager_forward_value, eager_op_profile_enabled,
-    maybe_print_eager_op_profile, missing_tangent_base_key, print_and_reset_eager_op_profile,
+    eager_op_profile_enabled, maybe_print_eager_op_profile, print_and_reset_eager_op_profile,
     profile_eager_op_section, record_eager_op_profile, zero_like_tensor,
 };
 

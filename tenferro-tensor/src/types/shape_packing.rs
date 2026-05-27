@@ -98,7 +98,7 @@ impl Tensor {
         ctx: &mut impl TensorBackend,
     ) -> crate::Result<Self> {
         let (indices, config) = index_select_parts(self.shape(), axis, positions)?;
-        ctx.with_exec_session(|exec| exec.gather(self, &indices, &config))
+        ctx.with_backend_session(|exec| exec.gather(self, &indices, &config))
     }
 
     /// Stack tensors along a newly inserted axis.
@@ -143,7 +143,7 @@ impl Tensor {
         let mut expanded_shape = first.shape().to_vec();
         expanded_shape.insert(axis, 1);
 
-        ctx.with_exec_session(|exec| {
+        ctx.with_backend_session(|exec| {
             let mut expanded = Vec::with_capacity(tensors.len());
             for tensor in tensors {
                 expanded.push(exec.reshape(tensor, &expanded_shape)?);

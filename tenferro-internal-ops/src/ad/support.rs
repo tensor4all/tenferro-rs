@@ -10,7 +10,7 @@ pub(crate) fn is_real_dtype(dtype: DType) -> bool {
 }
 
 pub(crate) fn conjugate_primal_if_complex(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
 ) -> ValRef<StdTensorOp> {
@@ -19,7 +19,7 @@ pub(crate) fn conjugate_primal_if_complex(
 }
 
 pub(crate) fn conjugate_primal_if_dtype_complex(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     dtype: DType,
 ) -> ValRef<StdTensorOp> {
@@ -31,7 +31,7 @@ pub(crate) fn conjugate_primal_if_dtype_complex(
 }
 
 pub(crate) fn conjugate_linear_if_dtype_complex(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
+    emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     dtype: DType,
 ) -> LocalValId {

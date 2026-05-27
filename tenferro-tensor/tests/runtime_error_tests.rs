@@ -1,7 +1,9 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use tenferro_tensor::{
-    cpu::CpuBackend, DotGeneralConfig, Error, PadConfig, SliceConfig, Tensor, TensorBackend,
+    cpu::CpuBackend, Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GpuBackendKind, MemoryKind, PadConfig, Placement, SliceConfig, Tensor, TensorBackend,
     TypedTensor,
 };
 
@@ -11,6 +13,33 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
+    Tensor::F64(TypedTensor {
+        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        shape,
+        placement: Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    })
+}
+
+#[test]
+fn backend_failure_helper_preserves_op_and_message() {
+    let err = Error::backend_failure("custom_op", "device rejected launch");
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "custom_op",
+            ref message,
+        } if message == "device rejected launch"
+    ));
 }
 
 #[test]
@@ -44,25 +73,6 @@ fn cpu_backend_try_with_threads_rejects_zero_without_panicking() {
         Error::InvalidConfig {
             op: "CpuBackend::try_with_threads",
             ..
-        }
-    ));
-}
-
-#[test]
-fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
-    let input = f64_tensor(vec![0], Vec::new());
-    let mut backend = CpuBackend::new();
-
-    let result = catch_unwind(AssertUnwindSafe(|| backend.cholesky(&input)));
-
-    assert!(result.is_ok(), "cholesky should return Err, not panic");
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::RankMismatch {
-            op: "cholesky",
-            expected: 2,
-            actual: 1,
         }
     ));
 }
@@ -115,14 +125,19 @@ fn add_rejects_shape_mismatch() {
 }
 
 #[test]
-fn solve_rejects_singular_matrix() {
-    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
-    let b = f64_tensor(vec![2, 1], vec![1.0, 2.0]);
+fn cpu_backend_rejects_backend_buffers_without_panicking() {
+    let lhs = backend_f64_tensor(vec![2]);
+    let rhs = f64_tensor(vec![2], vec![3.0, 4.0]);
     let mut backend = CpuBackend::new();
 
-    let err = backend.solve(&a, &b).unwrap_err();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        <CpuBackend as TensorBackend>::add(&mut backend, &lhs, &rhs)
+    }));
 
-    assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+    assert!(result.is_ok(), "CPU backend should return Err, not panic");
+    let err = result.unwrap().unwrap_err();
+    assert!(matches!(err, Error::BackendFailure { op: "add", .. }));
+    assert!(err.to_string().contains("download to host"));
 }
 
 #[test]
@@ -353,52 +368,4 @@ fn concatenate_accepts_valid_inputs() {
     assert!(result.is_ok());
     let out = result.unwrap();
     assert_eq!(out.shape(), &[4, 2]);
-}
-
-#[test]
-fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
-    let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
-    let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        backend.triangular_solve(&a, &b, true, true, false, false)
-    }));
-
-    assert!(
-        result.is_ok(),
-        "triangular_solve should return Err on batch mismatch, not panic"
-    );
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::ShapeMismatch {
-            op: "triangular_solve",
-            ..
-        }
-    ));
-}
-
-#[test]
-fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
-    let mut backend = CpuBackend::new();
-    let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
-    let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        backend.full_piv_lu_solve(&a, &b, false)
-    }));
-
-    assert!(
-        result.is_ok(),
-        "full_piv_lu_solve should return Err on batch mismatch, not panic"
-    );
-    let err = result.unwrap().unwrap_err();
-    assert!(matches!(
-        err,
-        Error::ShapeMismatch {
-            op: "full_piv_lu_solve",
-            ..
-        }
-    ));
 }

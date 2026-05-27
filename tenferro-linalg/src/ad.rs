@@ -14,7 +14,7 @@
 //!     .build()
 //!     .unwrap();
 //! let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
-//! let (_u, s, _vt) = tenferro_linalg::svd(&x);
+//! let (_u, s, _vt) = tenferro_linalg::svd(&x).unwrap();
 //! let loss = s.reduce_sum(&[0]);
 //! let grad = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(grad.rank, 2);

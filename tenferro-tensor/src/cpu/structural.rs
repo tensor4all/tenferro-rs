@@ -8,14 +8,10 @@ use crate::{
     DType,
 };
 
-use super::{tensor_from_array, typed_array_uninit, typed_array_uninit_from_pool, typed_view};
-
-fn backend_failure(op: &'static str, err: impl ToString) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: err.to_string(),
-    }
-}
+use super::{
+    cpu_backend_buffer_error, tensor_from_array, typed_array_uninit, typed_array_uninit_from_pool,
+    typed_view,
+};
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
@@ -96,17 +92,17 @@ macro_rules! dispatch_tensor_unary_with_bool_special_result {
     };
 }
 
-fn host_view<T: Copy>(tensor: &TypedTensor<T>) -> crate::Result<StridedView<'_, T, Identity>> {
+fn host_view<'a, T: Copy>(
+    op: &'static str,
+    tensor: &'a TypedTensor<T>,
+) -> crate::Result<StridedView<'a, T, Identity>> {
     match &tensor.buffer {
         crate::Buffer::Host(data) => {
             let strides = col_major_strides(&tensor.shape);
             StridedView::new(data, &tensor.shape, &strides, 0)
-                .map_err(|err| backend_failure("structural", err))
+                .map_err(|err| crate::Error::backend_failure(op, err))
         }
-        crate::Buffer::Backend(_) => Err(crate::Error::BackendFailure {
-            op: "structural",
-            message: "backend buffers are not supported for structural CPU helpers".into(),
-        }),
+        crate::Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
     }
 }
 
@@ -115,7 +111,7 @@ fn copy_view_to_array<T: Copy + Clone>(
     mut out: strided_kernel::StridedArray<T>,
     src: &StridedView<'_, T>,
 ) -> crate::Result<TypedTensor<T>> {
-    copy_into(&mut out.view_mut(), src).map_err(|err| backend_failure(op, err))?;
+    copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_failure(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -151,12 +147,7 @@ where
 {
     let input = match &tensor.buffer {
         crate::Buffer::Host(data) => data,
-        crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op,
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
-        }
+        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error(op)),
     };
     // SAFETY: copy_from_slice initializes every element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
@@ -208,154 +199,85 @@ pub(crate) fn convert_with_pool(
     input: &Tensor,
     to: DType,
 ) -> crate::Result<Tensor> {
-    let converted = match (input, to) {
-        (Tensor::F32(t), DType::F32) => Tensor::F32(t.clone()),
-        (Tensor::F32(t), DType::F64) => {
-            Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
+    macro_rules! converted {
+        ($variant:ident, $tensor:expr, $map:expr) => {
+            Ok(Tensor::$variant(typed_convert_with_pool(
+                buffers, $tensor, $map,
+            )?))
+        };
+    }
+
+    match (input, to) {
+        (Tensor::F32(t), DType::F32) => Ok(Tensor::F32(t.clone())),
+        (Tensor::F32(t), DType::F64) => converted!(F64, t, |x| x as f64),
+        (Tensor::F32(t), DType::I32) => converted!(I32, t, |x| x as i32),
+        (Tensor::F32(t), DType::I64) => converted!(I64, t, |x| x as i64),
+        (Tensor::F32(t), DType::Bool) => converted!(Bool, t, |x| x != 0.0),
+        (Tensor::F32(t), DType::C32) => converted!(C32, t, |x| Complex32::new(x, 0.0)),
+        (Tensor::F32(t), DType::C64) => {
+            converted!(C64, t, |x| Complex64::new(x as f64, 0.0))
         }
-        (Tensor::F32(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
+        (Tensor::F64(t), DType::F32) => converted!(F32, t, |x| x as f32),
+        (Tensor::F64(t), DType::F64) => Ok(Tensor::F64(t.clone())),
+        (Tensor::F64(t), DType::I32) => converted!(I32, t, |x| x as i32),
+        (Tensor::F64(t), DType::I64) => converted!(I64, t, |x| x as i64),
+        (Tensor::F64(t), DType::Bool) => converted!(Bool, t, |x| x != 0.0),
+        (Tensor::F64(t), DType::C32) => {
+            converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
         }
-        (Tensor::F32(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
+        (Tensor::F64(t), DType::C64) => converted!(C64, t, |x| Complex64::new(x, 0.0)),
+        (Tensor::I32(t), DType::F32) => converted!(F32, t, |x| x as f32),
+        (Tensor::I32(t), DType::F64) => converted!(F64, t, |x| x as f64),
+        (Tensor::I32(t), DType::I32) => Ok(Tensor::I32(t.clone())),
+        (Tensor::I32(t), DType::I64) => converted!(I64, t, |x| x as i64),
+        (Tensor::I32(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
+        (Tensor::I32(t), DType::C32) => {
+            converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
         }
-        (Tensor::F32(t), DType::Bool) => {
-            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0.0))
+        (Tensor::I32(t), DType::C64) => {
+            converted!(C64, t, |x| Complex64::new(x as f64, 0.0))
         }
-        (Tensor::F32(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
-            Complex32::new(x, 0.0)
-        })),
-        (Tensor::F32(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
-            Complex64::new(x as f64, 0.0)
-        })),
-        (Tensor::F64(t), DType::F32) => {
-            Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
+        (Tensor::I64(t), DType::F32) => converted!(F32, t, |x| x as f32),
+        (Tensor::I64(t), DType::F64) => converted!(F64, t, |x| x as f64),
+        (Tensor::I64(t), DType::I32) => converted!(I32, t, |x| x as i32),
+        (Tensor::I64(t), DType::I64) => Ok(Tensor::I64(t.clone())),
+        (Tensor::I64(t), DType::Bool) => converted!(Bool, t, |x| x != 0),
+        (Tensor::I64(t), DType::C32) => {
+            converted!(C32, t, |x| Complex32::new(x as f32, 0.0))
         }
-        (Tensor::F64(t), DType::F64) => Tensor::F64(t.clone()),
-        (Tensor::F64(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
+        (Tensor::I64(t), DType::C64) => {
+            converted!(C64, t, |x| Complex64::new(x as f64, 0.0))
         }
-        (Tensor::F64(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
+        (Tensor::Bool(t), DType::F32) => converted!(F32, t, |x| if x { 1.0 } else { 0.0 }),
+        (Tensor::Bool(t), DType::F64) => converted!(F64, t, |x| if x { 1.0 } else { 0.0 }),
+        (Tensor::Bool(t), DType::I32) => converted!(I32, t, |x| if x { 1 } else { 0 }),
+        (Tensor::Bool(t), DType::I64) => converted!(I64, t, |x| if x { 1 } else { 0 }),
+        (Tensor::Bool(t), DType::Bool) => Ok(Tensor::Bool(t.clone())),
+        (Tensor::Bool(t), DType::C32) => {
+            converted!(C32, t, |x| Complex32::new(if x { 1.0 } else { 0.0 }, 0.0))
         }
-        (Tensor::F64(t), DType::Bool) => {
-            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0.0))
+        (Tensor::Bool(t), DType::C64) => {
+            converted!(C64, t, |x| Complex64::new(if x { 1.0 } else { 0.0 }, 0.0))
         }
-        (Tensor::F64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
-            Complex32::new(x as f32, 0.0)
-        })),
-        (Tensor::F64(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
-            Complex64::new(x, 0.0)
-        })),
-        (Tensor::I32(t), DType::F32) => {
-            Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
+        (Tensor::C32(t), DType::F32) => converted!(F32, t, |z| z.re),
+        (Tensor::C32(t), DType::F64) => converted!(F64, t, |z| z.re as f64),
+        (Tensor::C32(t), DType::I32) => converted!(I32, t, |z| z.re as i32),
+        (Tensor::C32(t), DType::I64) => converted!(I64, t, |z| z.re as i64),
+        (Tensor::C32(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
+        (Tensor::C32(t), DType::C32) => Ok(Tensor::C32(t.clone())),
+        (Tensor::C32(t), DType::C64) => {
+            converted!(C64, t, |z| Complex64::new(z.re as f64, z.im as f64))
         }
-        (Tensor::I32(t), DType::F64) => {
-            Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
+        (Tensor::C64(t), DType::F32) => converted!(F32, t, |z| z.re as f32),
+        (Tensor::C64(t), DType::F64) => converted!(F64, t, |z| z.re),
+        (Tensor::C64(t), DType::I32) => converted!(I32, t, |z| z.re as i32),
+        (Tensor::C64(t), DType::I64) => converted!(I64, t, |z| z.re as i64),
+        (Tensor::C64(t), DType::Bool) => converted!(Bool, t, |z| z.re != 0.0 || z.im != 0.0),
+        (Tensor::C64(t), DType::C32) => {
+            converted!(C32, t, |z| Complex32::new(z.re as f32, z.im as f32))
         }
-        (Tensor::I32(t), DType::I32) => Tensor::I32(t.clone()),
-        (Tensor::I32(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(buffers, t, |x| x as i64))
-        }
-        (Tensor::I32(t), DType::Bool) => {
-            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0))
-        }
-        (Tensor::I32(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
-            Complex32::new(x as f32, 0.0)
-        })),
-        (Tensor::I32(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
-            Complex64::new(x as f64, 0.0)
-        })),
-        (Tensor::I64(t), DType::F32) => {
-            Tensor::F32(typed_convert_with_pool(buffers, t, |x| x as f32))
-        }
-        (Tensor::I64(t), DType::F64) => {
-            Tensor::F64(typed_convert_with_pool(buffers, t, |x| x as f64))
-        }
-        (Tensor::I64(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(buffers, t, |x| x as i32))
-        }
-        (Tensor::I64(t), DType::I64) => Tensor::I64(t.clone()),
-        (Tensor::I64(t), DType::Bool) => {
-            Tensor::Bool(typed_convert_with_pool(buffers, t, |x| x != 0))
-        }
-        (Tensor::I64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
-            Complex32::new(x as f32, 0.0)
-        })),
-        (Tensor::I64(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
-            Complex64::new(x as f64, 0.0)
-        })),
-        (Tensor::Bool(t), DType::F32) => Tensor::F32(typed_convert_with_pool(buffers, t, |x| {
-            if x {
-                1.0
-            } else {
-                0.0
-            }
-        })),
-        (Tensor::Bool(t), DType::F64) => Tensor::F64(typed_convert_with_pool(buffers, t, |x| {
-            if x {
-                1.0
-            } else {
-                0.0
-            }
-        })),
-        (Tensor::Bool(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(
-                buffers,
-                t,
-                |x| if x { 1 } else { 0 },
-            ))
-        }
-        (Tensor::Bool(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(
-                buffers,
-                t,
-                |x| if x { 1 } else { 0 },
-            ))
-        }
-        (Tensor::Bool(t), DType::Bool) => Tensor::Bool(t.clone()),
-        (Tensor::Bool(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |x| {
-            Complex32::new(if x { 1.0 } else { 0.0 }, 0.0)
-        })),
-        (Tensor::Bool(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |x| {
-            Complex64::new(if x { 1.0 } else { 0.0 }, 0.0)
-        })),
-        (Tensor::C32(t), DType::F32) => Tensor::F32(typed_convert_with_pool(buffers, t, |z| z.re)),
-        (Tensor::C32(t), DType::F64) => {
-            Tensor::F64(typed_convert_with_pool(buffers, t, |z| z.re as f64))
-        }
-        (Tensor::C32(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(buffers, t, |z| z.re as i32))
-        }
-        (Tensor::C32(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(buffers, t, |z| z.re as i64))
-        }
-        (Tensor::C32(t), DType::Bool) => Tensor::Bool(typed_convert_with_pool(buffers, t, |z| {
-            z.re != 0.0 || z.im != 0.0
-        })),
-        (Tensor::C32(t), DType::C32) => Tensor::C32(t.clone()),
-        (Tensor::C32(t), DType::C64) => Tensor::C64(typed_convert_with_pool(buffers, t, |z| {
-            Complex64::new(z.re as f64, z.im as f64)
-        })),
-        (Tensor::C64(t), DType::F32) => {
-            Tensor::F32(typed_convert_with_pool(buffers, t, |z| z.re as f32))
-        }
-        (Tensor::C64(t), DType::F64) => Tensor::F64(typed_convert_with_pool(buffers, t, |z| z.re)),
-        (Tensor::C64(t), DType::I32) => {
-            Tensor::I32(typed_convert_with_pool(buffers, t, |z| z.re as i32))
-        }
-        (Tensor::C64(t), DType::I64) => {
-            Tensor::I64(typed_convert_with_pool(buffers, t, |z| z.re as i64))
-        }
-        (Tensor::C64(t), DType::Bool) => Tensor::Bool(typed_convert_with_pool(buffers, t, |z| {
-            z.re != 0.0 || z.im != 0.0
-        })),
-        (Tensor::C64(t), DType::C32) => Tensor::C32(typed_convert_with_pool(buffers, t, |z| {
-            Complex32::new(z.re as f32, z.im as f32)
-        })),
-        (Tensor::C64(t), DType::C64) => Tensor::C64(t.clone()),
-    };
-    Ok(converted)
+        (Tensor::C64(t), DType::C64) => Ok(Tensor::C64(t.clone())),
+    }
 }
 
 pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
@@ -430,10 +352,10 @@ pub fn typed_transpose<T: Copy + Clone>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
     validate_permutation("transpose", perm, tensor.shape.len())?;
-    let src = host_view(tensor)?;
+    let src = host_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit(permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted)
@@ -448,10 +370,10 @@ where
     T: Copy + Clone + PoolScalar,
 {
     validate_permutation("transpose", perm, tensor.shape.len())?;
-    let src = host_view(tensor)?;
+    let src = host_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit_from_pool(buffers, permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted)
@@ -539,21 +461,16 @@ where
     }
     let base: StridedView<'_, T, Identity> = match &tensor.buffer {
         crate::Buffer::Host(data) => StridedView::new(data, &base_dims, &base_strides, 0)
-            .map_err(|err| backend_failure("broadcast_in_dim", err))?,
-        crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "broadcast_in_dim",
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
-        }
+            .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?,
+        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("broadcast_in_dim")),
     };
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
-        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = make_out(shape);
     copy_into(&mut out.view_mut(), &broadcast)
-        .map_err(|err| backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -561,15 +478,16 @@ fn typed_convert_with_pool<S, T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<S>,
     f: impl Fn(S) -> T,
-) -> TypedTensor<T>
+) -> crate::Result<TypedTensor<T>>
 where
     S: Copy,
     T: Copy + Clone + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, &tensor.shape) };
-    map_into(&mut out.view_mut(), &typed_view(tensor), f).expect("typed_convert");
-    tensor_from_array(out)
+    map_into(&mut out.view_mut(), &typed_view("convert", tensor)?, f)
+        .map_err(|err| crate::Error::backend_failure("convert", err))?;
+    Ok(tensor_from_array(out))
 }
 
 pub fn typed_extract_diagonal<T: Copy + Clone>(
@@ -581,13 +499,13 @@ pub fn typed_extract_diagonal<T: Copy + Clone>(
     validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view(tensor)?
+    let diag = host_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -604,13 +522,13 @@ where
     validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = host_view(tensor)?
+    let diag = host_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -666,12 +584,7 @@ where
 
     let input_data = match &tensor.buffer {
         crate::Buffer::Host(data) => data,
-        crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: "embed_diagonal",
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
-        }
+        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("embed_diagonal")),
     };
 
     for flat in 0..tensor.n_elements() {
@@ -752,10 +665,11 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     let data = match &mut out.buffer {
         crate::Buffer::Host(data) => data,
         crate::Buffer::Backend(_) => {
-            return Err(crate::Error::BackendFailure {
-                op: if upper { "triu" } else { "tril" },
-                message: "backend buffers are not supported for structural CPU helpers".into(),
-            })
+            return Err(cpu_backend_buffer_error(if upper {
+                "triu"
+            } else {
+                "tril"
+            }))
         }
     };
 

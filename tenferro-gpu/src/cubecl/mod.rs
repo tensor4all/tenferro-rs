@@ -85,6 +85,7 @@ use cubecl::prelude::{
 use cubecl::prelude::{Int as CubeInt, StorageType, TensorBinding, Type};
 use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
+use tenferro_core_ops::PrimitiveOpKind;
 
 use crate::backend::TensorBackend;
 use crate::config::{
@@ -94,12 +95,14 @@ use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
 use crate::{Tensor, TypedTensor};
 
-mod dispatch;
-mod ffi;
+#[doc(hidden)]
+pub mod dispatch;
+#[doc(hidden)]
+pub mod ffi;
 mod fusion;
 mod gemm;
-mod linalg;
 mod memory;
+pub(crate) mod op_descriptor;
 mod runtime;
 
 use dispatch::{
@@ -115,10 +118,14 @@ pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CubeclRuntime};
 
 fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
-    crate::Error::BackendFailure {
-        op,
-        message: format!("unsupported dtype {dtype:?}"),
-    }
+    crate::Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
+}
+
+fn op_name(
+    kind: PrimitiveOpKind,
+    launch: op_descriptor::GpuLaunchKind,
+) -> crate::Result<&'static str> {
+    op_descriptor::require_gpu_descriptor(kind, launch).map(|descriptor| descriptor.name)
 }
 
 fn ensure_atomic_add_supported<T: CubePrimitive>(
@@ -134,10 +141,10 @@ fn ensure_atomic_add_supported<T: CubePrimitive>(
     {
         Ok(())
     } else {
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::backend_failure(
             op,
-            message: format!("CubeCL runtime does not support atomic add for {elem:?}"),
-        })
+            format!("CubeCL runtime does not support atomic add for {elem:?}"),
+        ))
     }
 }
 
@@ -147,11 +154,12 @@ fn checked_dim_product(
     shape: &[usize],
 ) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::BackendFailure {
+        acc.checked_mul(dim).ok_or_else(|| {
+            crate::Error::backend_failure(
                 op,
-                message: format!("{role} product overflow for shape {shape:?}"),
-            })
+                format!("{role} product overflow for shape {shape:?}"),
+            )
+        })
     })
 }
 
@@ -159,15 +167,15 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
     let batch_len = checked_dim_product("scatter", "batch shape", &meta.batch_shape)?;
     let window_len =
         checked_dim_product("scatter", "window update shape", &meta.window_shape_updates)?;
-    batch_len
-        .checked_mul(window_len)
-        .ok_or_else(|| crate::Error::BackendFailure {
-            op: "scatter",
-            message: format!(
+    batch_len.checked_mul(window_len).ok_or_else(|| {
+        crate::Error::backend_failure(
+            "scatter",
+            format!(
                 "scatter update domain product overflow for batch {:?} and window {:?}",
                 meta.batch_shape, meta.window_shape_updates
             ),
-        })
+        )
+    })
 }
 
 /// CubeCL-based GPU backend.
@@ -226,7 +234,8 @@ impl CubeclBackend {
         }
     }
 
-    fn linalg_handles(&self) -> crate::Result<&ffi::cusolver::CudaLinalgHandles> {
+    #[doc(hidden)]
+    pub fn linalg_handles(&self) -> crate::Result<&ffi::cusolver::CudaLinalgHandles> {
         match self
             .linalg
             .get_or_init(ffi::cusolver::CudaLinalgHandles::load)
@@ -450,12 +459,9 @@ impl CubeclBackend {
         if n == 0 {
             return Ok(output);
         }
-        let output_part_len = n
-            .checked_mul(2)
-            .ok_or_else(|| crate::Error::BackendFailure {
-                op: "convert",
-                message: "complex output part length overflow".into(),
-            })?;
+        let output_part_len = n.checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("convert", "complex output part length overflow")
+        })?;
         let output_parts =
             typed_tensor_array_arg_as::<OutComplex, OutFloat>(&output, output_part_len, "convert")?;
         let input_arg = typed_tensor_array_arg(input, "convert")?;
@@ -635,7 +641,8 @@ impl CubeclBackend {
         Ok(output)
     }
 
-    fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    #[doc(hidden)]
+    pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
     {
@@ -664,7 +671,8 @@ impl CubeclBackend {
         )
     }
 
-    fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    #[doc(hidden)]
+    pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + CubePrimitive + Clone,
     {
@@ -715,12 +723,8 @@ impl CubeclBackend {
 
         let input_binding = typed_tensor_binding(input, op)?;
         let output_binding = typed_tensor_binding(&output, op)?;
-        launch(self.runtime().client(), input_binding, output_binding).map_err(|err| {
-            crate::Error::BackendFailure {
-                op,
-                message: err.to_string(),
-            }
-        })?;
+        launch(self.runtime().client(), input_binding, output_binding)
+            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
         Ok(output)
     }
 
@@ -756,21 +760,20 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_sum",
-                |client, input, output| {
-                    cubecl_reduce::launch_sum_float::<CudaRuntime, F>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceSum,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_sum_float::<CudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -779,21 +782,20 @@ impl CubeclBackend {
         input: &TypedTensor<C>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<C>> {
-        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_sum",
-                |client, input, output| {
-                    cubecl_reduce::launch_sum_complex::<CudaRuntime, C>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceSum,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_sum_complex::<CudaRuntime, C>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -802,21 +804,20 @@ impl CubeclBackend {
         input: &TypedTensor<I>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<I>> {
-        self.reduce_axes_typed(input, axes, "reduce_sum", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_sum",
-                |client, input, output| {
-                    cubecl_reduce::launch_sum_int::<CudaRuntime, I>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceSum,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_sum_int::<CudaRuntime, I>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -825,21 +826,20 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_prod",
-                |client, input, output| {
-                    cubecl_reduce::launch_prod_float::<CudaRuntime, F>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceProd,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_prod_float::<CudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -848,21 +848,20 @@ impl CubeclBackend {
         input: &TypedTensor<C>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<C>> {
-        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_prod",
-                |client, input, output| {
-                    cubecl_reduce::launch_prod_complex::<CudaRuntime, C>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceProd,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_prod_complex::<CudaRuntime, C>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -871,21 +870,20 @@ impl CubeclBackend {
         input: &TypedTensor<I>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<I>> {
-        self.reduce_axes_typed(input, axes, "reduce_prod", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_prod",
-                |client, input, output| {
-                    cubecl_reduce::launch_prod_int::<CudaRuntime, I>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceProd,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_prod_int::<CudaRuntime, I>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -894,21 +892,20 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        self.reduce_axes_typed(input, axes, "reduce_max", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_max",
-                |client, input, output| {
-                    cubecl_reduce::launch_max_float::<CudaRuntime, F>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceMax,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_max_float::<CudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
@@ -917,25 +914,25 @@ impl CubeclBackend {
         input: &TypedTensor<F>,
         axes: &[usize],
     ) -> crate::Result<TypedTensor<F>> {
-        self.reduce_axes_typed(input, axes, "reduce_min", |backend, current, axis| {
-            backend.launch_reduce_axis_typed(
-                current,
-                axis,
-                "reduce_min",
-                |client, input, output| {
-                    cubecl_reduce::launch_min_float::<CudaRuntime, F>(
-                        client,
-                        input,
-                        output,
-                        axis,
-                        ReduceStrategy::Auto,
-                    )
-                },
-            )
+        let op = op_name(
+            PrimitiveOpKind::ReduceMin,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
+        self.reduce_axes_typed(input, axes, op, |backend, current, axis| {
+            backend.launch_reduce_axis_typed(current, axis, op, |client, input, output| {
+                cubecl_reduce::launch_min_float::<CudaRuntime, F>(
+                    client,
+                    input,
+                    output,
+                    axis,
+                    ReduceStrategy::Auto,
+                )
+            })
         })
     }
 
-    fn slice_typed<T>(
+    #[doc(hidden)]
+    pub fn slice_typed<T>(
         &self,
         input: &TypedTensor<T>,
         config: &SliceConfig,
@@ -1236,22 +1233,12 @@ impl CubeclBackend {
         }
         let client = self.runtime().client();
         ensure_atomic_add_supported::<F>(client, "scatter")?;
-        let output_part_len =
-            output
-                .n_elements()
-                .checked_mul(2)
-                .ok_or_else(|| crate::Error::BackendFailure {
-                    op: "scatter",
-                    message: "complex output part length overflow".into(),
-                })?;
-        let update_part_len =
-            updates
-                .n_elements()
-                .checked_mul(2)
-                .ok_or_else(|| crate::Error::BackendFailure {
-                    op: "scatter",
-                    message: "complex update part length overflow".into(),
-                })?;
+        let output_part_len = output.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex output part length overflow")
+        })?;
+        let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
+            crate::Error::backend_failure("scatter", "complex update part length overflow")
+        })?;
         // num_complex::Complex<T> is repr(C) as { re: T, im: T }, so the
         // complex buffers can be viewed as real scalar parts for atomic add.
         let output_parts = typed_tensor_array_arg_as::<T, F>(&output, output_part_len, "scatter")?;
@@ -1293,195 +1280,59 @@ impl TensorBackend for CubeclBackend {
     type RuntimeCache = ();
 
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "add",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::add_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "add",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::add_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "add",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::add_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C32),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "add",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::add_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C64),
-            _ => Err(dtype_mismatch("add", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_complex!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Add,
+            add_float,
+            add_complex
+        )
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "mul",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::mul_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "mul",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::mul_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "mul",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::mul_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C32),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "mul",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::mul_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C64),
-            _ => Err(dtype_mismatch("mul", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_complex!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Mul,
+            mul_float,
+            mul_complex
+        )
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "neg",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::neg_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "neg",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::neg_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            Tensor::C32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "neg",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::neg_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::C32),
-            Tensor::C64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "neg",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::neg_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::C64),
-            Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-                Err(unsupported_dtype("neg", input.dtype()))
-            }
-        }
+        dispatch::dispatch_unary_float_complex!(
+            self,
+            input,
+            PrimitiveOpKind::Neg,
+            neg_float,
+            neg_complex
+        )
     }
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::Conj,
+            op_descriptor::GpuLaunchKind::UnaryFloatComplex,
+        )?;
         match input {
             Tensor::F32(tensor) => {
-                ensure_resident_on_runtime(self.runtime(), tensor, "conj")?;
+                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
                 Ok(Tensor::F32(tensor.clone()))
             }
             Tensor::F64(tensor) => {
-                ensure_resident_on_runtime(self.runtime(), tensor, "conj")?;
+                ensure_resident_on_runtime(self.runtime(), tensor, op)?;
                 Ok(Tensor::F64(tensor.clone()))
             }
             Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-                Err(unsupported_dtype("conj", input.dtype()))
+                Err(unsupported_dtype(op, input.dtype()))
             }
             Tensor::C32(tensor) => launch_unary(
                 self.runtime(),
                 tensor,
                 &tensor.shape,
-                "conj",
+                op,
                 |client, count, dim, out, input_arg| unsafe {
                     elementwise::conj_complex::launch_unchecked::<Complex32, CudaRuntime>(
                         client, count, dim, out, input_arg,
@@ -1493,7 +1344,7 @@ impl TensorBackend for CubeclBackend {
                 self.runtime(),
                 tensor,
                 &tensor.shape,
-                "conj",
+                op,
                 |client, count, dim, out, input_arg| unsafe {
                     elementwise::conj_complex::launch_unchecked::<Complex64, CudaRuntime>(
                         client, count, dim, out, input_arg,
@@ -1505,207 +1356,56 @@ impl TensorBackend for CubeclBackend {
     }
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "div",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "div",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(lhs), Tensor::C32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "div",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_complex::launch_unchecked::<Complex32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C32),
-            (Tensor::C64(lhs), Tensor::C64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "div",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::div_complex::launch_unchecked::<Complex64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::C64),
-            _ => Err(dtype_mismatch("div", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_complex!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Div,
+            div_float,
+            div_complex
+        )
     }
 
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "abs",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "abs",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::abs_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("abs", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Abs, abs_float)
     }
 
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sign",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sign_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sign",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sign_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("sign", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sign, sign_float)
     }
 
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "maximum",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::maximum_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "maximum",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::maximum_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "maximum",
-                    message: format!("unsupported dtype {:?}", lhs.dtype()),
-                })
-            }
-            _ => Err(dtype_mismatch("maximum", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_only!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Maximum,
+            maximum_float
+        )
     }
 
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "minimum",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::minimum_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "minimum",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::minimum_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "minimum",
-                    message: format!("unsupported dtype {:?}", lhs.dtype()),
-                })
-            }
-            _ => Err(dtype_mismatch("minimum", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_only!(
+            self,
+            lhs,
+            rhs,
+            PrimitiveOpKind::Minimum,
+            minimum_float
+        )
     }
 
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::Compare,
+            op_descriptor::GpuLaunchKind::CompareFloatToBool,
+        )?;
         match (lhs, rhs) {
             (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_compare_bool(
                 self.runtime(),
                 lhs,
                 rhs,
                 &lhs.shape,
-                "compare",
+                op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
                     elementwise::compare_float_bool::launch_unchecked::<f32, CudaRuntime>(
                         client,
@@ -1724,7 +1424,7 @@ impl TensorBackend for CubeclBackend {
                 lhs,
                 rhs,
                 &lhs.shape,
-                "compare",
+                op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
                     elementwise::compare_float_bool::launch_unchecked::<f64, CudaRuntime>(
                         client,
@@ -1738,13 +1438,10 @@ impl TensorBackend for CubeclBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "compare",
-                    message: format!("unsupported dtype {:?}", lhs.dtype()),
-                })
-            }
-            _ => Err(dtype_mismatch("compare", lhs, rhs)),
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", lhs.dtype())),
+            ),
+            _ => Err(dtype_mismatch(op, lhs, rhs)),
         }
     }
 
@@ -1754,6 +1451,10 @@ impl TensorBackend for CubeclBackend {
         on_true: &Tensor,
         on_false: &Tensor,
     ) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::Select,
+            op_descriptor::GpuLaunchKind::SelectBoolFloat,
+        )?;
         match (pred, on_true, on_false) {
             (Tensor::Bool(pred), Tensor::F32(on_true), Tensor::F32(on_false)) => {
                 launch_select_bool(
@@ -1762,7 +1463,7 @@ impl TensorBackend for CubeclBackend {
                     on_true,
                     on_false,
                     &pred.shape,
-                    "select",
+                    op,
                     |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
                         elementwise::select_bool_float::launch_unchecked::<f32, CudaRuntime>(
                             client, count, dim, out, pred_arg, true_arg, false_arg,
@@ -1778,7 +1479,7 @@ impl TensorBackend for CubeclBackend {
                     on_true,
                     on_false,
                     &pred.shape,
-                    "select",
+                    op,
                     |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
                         elementwise::select_bool_float::launch_unchecked::<f64, CudaRuntime>(
                             client, count, dim, out, pred_arg, true_arg, false_arg,
@@ -1788,17 +1489,18 @@ impl TensorBackend for CubeclBackend {
                 .map(Tensor::F64)
             }
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
-            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "select",
-                    message: format!("unsupported dtype {:?}", pred.dtype()),
-                })
-            }
-            _ => Err(ternary_dtype_mismatch("select", pred, on_true, on_false)),
+            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", pred.dtype())),
+            ),
+            _ => Err(ternary_dtype_mismatch(op, pred, on_true, on_false)),
         }
     }
 
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::Clamp,
+            op_descriptor::GpuLaunchKind::ClampFloat,
+        )?;
         match (input, lower, upper) {
             (Tensor::F32(input), Tensor::F32(lower), Tensor::F32(upper)) => launch_ternary(
                 self.runtime(),
@@ -1806,7 +1508,7 @@ impl TensorBackend for CubeclBackend {
                 lower,
                 upper,
                 &input.shape,
-                "clamp",
+                op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
                     elementwise::clamp_float::launch_unchecked::<f32, CudaRuntime>(
                         client, count, dim, out, input_arg, lower_arg, upper_arg,
@@ -1820,7 +1522,7 @@ impl TensorBackend for CubeclBackend {
                 lower,
                 upper,
                 &input.shape,
-                "clamp",
+                op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
                     elementwise::clamp_float::launch_unchecked::<f64, CudaRuntime>(
                         client, count, dim, out, input_arg, lower_arg, upper_arg,
@@ -1829,322 +1531,51 @@ impl TensorBackend for CubeclBackend {
             )
             .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
-            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "clamp",
-                    message: format!("unsupported dtype {:?}", input.dtype()),
-                })
-            }
-            _ => Err(ternary_dtype_mismatch("clamp", input, lower, upper)),
+            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => Err(
+                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
+            ),
+            _ => Err(ternary_dtype_mismatch(op, input, lower, upper)),
         }
     }
 
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "exp",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::exp_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "exp",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::exp_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("exp", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
     }
 
     fn log(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "log",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::log_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "log",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::log_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("log", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Log, log_float)
     }
 
     fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sin",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sin_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sin",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sin_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("sin", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sin, sin_float)
     }
 
     fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "cos",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::cos_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "cos",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::cos_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("cos", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Cos, cos_float)
     }
 
     fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "tanh",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::tanh_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "tanh",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::tanh_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("tanh", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Tanh, tanh_float)
     }
 
     fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sqrt",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sqrt_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "sqrt",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::sqrt_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("sqrt", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Sqrt, sqrt_float)
     }
 
     fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "rsqrt",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::rsqrt_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "rsqrt",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::rsqrt_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("rsqrt", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Rsqrt, rsqrt_float)
     }
 
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            (Tensor::F32(lhs), Tensor::F32(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "pow",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::pow_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            (Tensor::F64(lhs), Tensor::F64(rhs)) => launch_binary(
-                self.runtime(),
-                lhs,
-                rhs,
-                &lhs.shape,
-                "pow",
-                |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
-                    elementwise::pow_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, lhs_arg, rhs_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::BackendFailure {
-                    op: "pow",
-                    message: format!("unsupported dtype {:?}", lhs.dtype()),
-                })
-            }
-            _ => Err(dtype_mismatch("pow", lhs, rhs)),
-        }
+        dispatch::dispatch_binary_float_only!(self, lhs, rhs, PrimitiveOpKind::Pow, pow_float)
     }
 
     fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "expm1",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::expm1_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "expm1",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::expm1_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("expm1", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Expm1, expm1_float)
     }
 
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        match input {
-            Tensor::F32(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "log1p",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::log1p_float::launch_unchecked::<f32, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F32),
-            Tensor::F64(tensor) => launch_unary(
-                self.runtime(),
-                tensor,
-                &tensor.shape,
-                "log1p",
-                |client, count, dim, out, input_arg| unsafe {
-                    elementwise::log1p_float::launch_unchecked::<f64, CudaRuntime>(
-                        client, count, dim, out, input_arg,
-                    );
-                },
-            )
-            .map(Tensor::F64),
-            _ => Err(unsupported_dtype("log1p", input.dtype())),
-        }
+        dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Log1p, log1p_float)
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
@@ -2359,51 +1790,67 @@ impl TensorBackend for CubeclBackend {
     }
 
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceSum,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
         match input {
             Tensor::F32(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_sum_float_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reduce_sum_int_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reduce_sum_int_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("reduce_sum", input.dtype())),
+            Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
             Tensor::C32(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_sum_complex_typed(t, axes).map(Tensor::C64),
         }
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceProd,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
         match input {
             Tensor::F32(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_prod_float_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reduce_prod_int_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reduce_prod_int_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) => Err(unsupported_dtype("reduce_prod", input.dtype())),
+            Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
             Tensor::C32(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reduce_prod_complex_typed(t, axes).map(Tensor::C64),
         }
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMax,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
         match input {
             Tensor::F32(t) => self.reduce_max_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_max_typed(t, axes).map(Tensor::F64),
             Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::BackendFailure {
-                    op: "reduce_max",
-                    message: format!("unsupported dtype {:?}", input.dtype()),
-                })
+                Err(crate::Error::backend_failure(
+                    op,
+                    format!("unsupported dtype {:?}", input.dtype()),
+                ))
             }
         }
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let op = op_name(
+            PrimitiveOpKind::ReduceMin,
+            op_descriptor::GpuLaunchKind::Reduction,
+        )?;
         match input {
             Tensor::F32(t) => self.reduce_min_typed(t, axes).map(Tensor::F32),
             Tensor::F64(t) => self.reduce_min_typed(t, axes).map(Tensor::F64),
             Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::BackendFailure {
-                    op: "reduce_min",
-                    message: format!("unsupported dtype {:?}", input.dtype()),
-                })
+                Err(crate::Error::backend_failure(
+                    op,
+                    format!("unsupported dtype {:?}", input.dtype()),
+                ))
             }
         }
     }
@@ -2496,10 +1943,10 @@ impl TensorBackend for CubeclBackend {
                 self.gather_typed(operand, indices, config).map(Tensor::I32)
             }
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("gather", start_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
-                op: "gather",
-                message: "complex index tensors are not supported".into(),
-            }),
+            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
+                "gather",
+                "complex index tensors are not supported",
+            )),
             (Tensor::I64(_) | Tensor::Bool(_), _) => {
                 Err(unsupported_dtype("gather", operand.dtype()))
             }
@@ -2563,10 +2010,10 @@ impl TensorBackend for CubeclBackend {
                 .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (_, Tensor::Bool(_), _) => Err(unsupported_dtype("scatter", scatter_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::BackendFailure {
-                op: "scatter",
-                message: "complex index tensors are not supported".into(),
-            }),
+            (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::backend_failure(
+                "scatter",
+                "complex index tensors are not supported",
+            )),
             (_, _, _) => Err(ternary_dtype_mismatch(
                 "scatter",
                 operand,
@@ -2656,10 +2103,10 @@ impl TensorBackend for CubeclBackend {
                 .dynamic_slice_typed(input, starts, slice_sizes)
                 .map(Tensor::I32),
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::BackendFailure {
-                op: "dynamic_slice",
-                message: "complex index tensors are not supported".into(),
-            }),
+            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
+                "dynamic_slice",
+                "complex index tensors are not supported",
+            )),
             (Tensor::I64(_) | Tensor::Bool(_), _) => {
                 Err(unsupported_dtype("dynamic_slice", input.dtype()))
             }
@@ -2672,10 +2119,10 @@ impl TensorBackend for CubeclBackend {
         _update: &Tensor,
         _starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::BackendFailure {
-            op: "dynamic_update_slice",
-            message: "dynamic_update_slice is not implemented for the CubeCL backend".into(),
-        })
+        Err(crate::Error::backend_failure(
+            "dynamic_update_slice",
+            "dynamic_update_slice is not implemented for the CubeCL backend",
+        ))
     }
 
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
@@ -2773,59 +2220,6 @@ impl TensorBackend for CubeclBackend {
             Tensor::C32(t) => self.reverse_typed(t, axes).map(Tensor::C32),
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
         }
-    }
-
-    fn cholesky(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        linalg::cholesky(self, input)
-    }
-
-    fn triangular_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-    ) -> crate::Result<Tensor> {
-        linalg::triangular_solve(self, a, b, left_side, lower, transpose_a, unit_diagonal)
-    }
-
-    fn lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::lu(self, input)
-    }
-
-    fn full_piv_lu(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::full_piv_lu(self, input)
-    }
-
-    fn full_piv_lu_solve(
-        &mut self,
-        a: &Tensor,
-        b: &Tensor,
-        transpose_a: bool,
-    ) -> crate::Result<Tensor> {
-        linalg::full_piv_lu_solve(self, a, b, transpose_a)
-    }
-
-    fn svd(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::svd(self, input)
-    }
-
-    fn qr(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::qr(self, input)
-    }
-
-    fn eigh(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::eigh(self, input)
-    }
-
-    fn eig(&mut self, input: &Tensor) -> crate::Result<Vec<Tensor>> {
-        linalg::eig(self, input)
-    }
-
-    fn solve(&mut self, a: &Tensor, b: &Tensor) -> crate::Result<Tensor> {
-        linalg::solve(self, a, b)
     }
 
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
@@ -2949,19 +2343,18 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
     let len = shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| crate::Error::BackendFailure {
-            op,
-            message: format!("shape product overflow for CubeCL reshape shape {shape:?}"),
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!("shape product overflow for CubeCL reshape shape {shape:?}"),
+            )
         })?;
     let tensor_len = tensor.n_elements();
     if len != tensor_len {
-        return Err(crate::Error::BackendFailure {
-            op,
-            message: format!(
+        return Err(crate::Error::backend_failure(op, format!(
                 "cannot reshape CubeCL output metadata from {:?} ({tensor_len} elements) to {:?} ({len} elements)",
                 tensor.shape, shape
-            ),
-        });
+            )));
     }
 
     Ok(TypedTensor { shape, ..tensor })

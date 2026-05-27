@@ -15,6 +15,8 @@ use crate::{SymDim, TensorMeta};
 mod elementwise_tests;
 #[cfg(feature = "autodiff")]
 mod indexing_tests;
+#[cfg(feature = "autodiff")]
+mod registry_tests;
 
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
