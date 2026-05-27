@@ -448,8 +448,9 @@ Tensor runtime crate. No AD-related code and no GPU runtime dependency.
   - `linalg/` — `faer_linalg.rs` (cpu-faer), `lapack_linalg.rs` (cpu-blas)
 
 **No naive CPU loop fallbacks.** All CPU kernels use strided-kernel (elementwise,
-reduction, structural), faer or BLAS (GEMM), faer or LAPACK (linalg). Exactly
-one of `cpu-faer` or `cpu-blas` must be enabled (`compile_error!` enforced).
+reduction, structural), faer or BLAS (GEMM), faer or LAPACK (linalg). At least
+one of `cpu-faer` or `cpu-blas` must be enabled. The features are additive, and
+`CpuBackend` selects the compiled provider at runtime.
 
 ### tenferro-gpu
 

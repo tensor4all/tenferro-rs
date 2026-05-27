@@ -93,15 +93,15 @@ assert!((data[2] - 7.38905609893065).abs() < 1e-12);
 ## Reshape And Transpose
 
 ```rust
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 );
-let reshaped = a.reshape(&[6], &mut backend).unwrap();
-let transposed = a.transpose(&[1, 0], &mut backend).unwrap();
+let reshaped = tensor::reshape(&a, &[6], &mut backend).unwrap();
+let transposed = tensor::transpose(&a, &[1, 0], &mut backend).unwrap();
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -125,15 +125,15 @@ assert_eq!(repeated.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0
 ## Reduce Over Axes
 
 ```rust
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 );
-let row_sums = a.reduce_sum(&[1], &mut backend).unwrap();
-let total = a.reduce_sum(&[0, 1], &mut backend).unwrap();
+let row_sums = tensor::reduce_sum(&a, &[1], &mut backend).unwrap();
+let total = tensor::reduce_sum(&a, &[0, 1], &mut backend).unwrap();
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

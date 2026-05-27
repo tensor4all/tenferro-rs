@@ -373,9 +373,6 @@ Build-time enforcement:
 ```rust
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
-
-#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
-compile_error!("enable exactly one CPU backend: cpu-faer or cpu-blas");
 ```
 
 ## Dependency Graph

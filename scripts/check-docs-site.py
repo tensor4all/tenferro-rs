@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
 import sys
-import tomllib
 from html.parser import HTMLParser
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11
+    tomllib = None
 
 
 class LinkCollector(HTMLParser):
@@ -35,6 +40,39 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_workspace_libs(root: pathlib.Path) -> list[tuple[str, str, str]]:
+    if tomllib is None:
+        metadata = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            check=False,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        if metadata.returncode != 0:
+            raise RuntimeError("cargo metadata failed while discovering workspace crates")
+        workspace = json.loads(metadata.stdout)
+        members = set(workspace["workspace_members"])
+        crates: list[tuple[str, str, str]] = []
+        for package in workspace["packages"]:
+            if package["id"] not in members:
+                continue
+            lib_targets = [
+                target
+                for target in package["targets"]
+                if "lib" in target["kind"] or "proc-macro" in target["kind"]
+            ]
+            if not lib_targets:
+                continue
+            member = pathlib.Path(package["manifest_path"]).parent
+            crates.append(
+                (
+                    str(member.relative_to(root)),
+                    package["name"],
+                    lib_targets[0]["name"],
+                )
+            )
+        return crates
+
     with (root / "Cargo.toml").open("rb") as handle:
         workspace = tomllib.load(handle)["workspace"]
 

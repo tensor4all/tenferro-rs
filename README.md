@@ -2,11 +2,11 @@
 
 Dense tensor computation in Rust.
 
-Use explicit crates for each layer: `tenferro-runtime` for tensor helpers,
-backends, traced graphs, and execution; `tenferro-ad` for eager execution and
-automatic differentiation; and standard operation crates such as
-`tenferro-linalg`, `tenferro-einsum`, and `tenferro-fft` for separately owned
-operation families.
+Use explicit crates for each layer: `tenferro-tensor-core` for the host-only
+tensor data model, `tenferro-runtime` for tensor helpers, backends, traced
+graphs, and execution; `tenferro-ad` for eager execution and automatic
+differentiation; and standard operation crates such as `tenferro-linalg`,
+`tenferro-einsum`, and `tenferro-fft` for separately owned operation families.
 
 Optional capabilities are selected on the crate that owns the operation family.
 For example, CUDA linalg with extension AD uses concrete backend features rather

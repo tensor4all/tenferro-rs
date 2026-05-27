@@ -18,6 +18,8 @@ For contributors, internal crate APIs are also available in the
   and extension cache storage
 - [tenferro-ad](./tenferro_ad/index.html): eager runtime, eager tensors, and
   traced AD extension traits
+- [tenferro-tensor-core](./tenferro_tensor_core/index.html): host-only tensor
+  data model, dtype tags, scalar trait, and metadata-only views
 - [tenferro-tensor](./tenferro_tensor/index.html): dense runtime tensors,
   backend traits, CPU backend, and core execution kernels
 - [tenferro-gpu](./tenferro_gpu/index.html): CubeCL/CUDA backend and GPU
@@ -40,7 +42,8 @@ For contributors, internal crate APIs are also available in the
 ## Architecture Summary
 
 ```text
-tenferro-tensor          -> tenferro-internal-device
+tenferro-tensor-core     -> host-only tensor data model
+tenferro-tensor          -> tenferro-tensor-core, tenferro-internal-device
 tenferro-gpu             -> tenferro-tensor
 tenferro-internal-ops    -> tenferro-core-ops, tenferro-tensor
 tenferro-runtime         -> tenferro-internal-ops, tenferro-tensor

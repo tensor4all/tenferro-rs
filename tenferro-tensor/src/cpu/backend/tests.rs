@@ -3,6 +3,109 @@ use std::time::Duration;
 use super::*;
 
 #[test]
+fn default_backend_kind_prefers_faer_when_compiled() {
+    let backend = CpuBackend::new();
+
+    #[cfg(feature = "cpu-faer")]
+    assert_eq!(backend.kind(), CpuBackendKind::Faer);
+    #[cfg(all(not(feature = "cpu-faer"), feature = "cpu-blas"))]
+    assert_eq!(backend.kind(), CpuBackendKind::Blas);
+}
+
+#[test]
+fn explicit_backend_kind_constructor_records_selection() {
+    let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+}
+
+#[test]
+#[cfg(feature = "cpu-blas")]
+fn explicit_blas_backend_kind_constructor_records_selection() {
+    let backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+
+    assert_eq!(backend.kind(), CpuBackendKind::Blas);
+}
+
+#[test]
+fn try_with_threads_and_kind_records_selection_and_validates_threads() {
+    let backend =
+        CpuBackend::try_with_threads_and_kind(1, CpuBackendKind::default_compiled()).unwrap();
+    assert_eq!(backend.num_threads(), 1);
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+
+    let err = match CpuBackend::try_with_threads_and_kind(0, CpuBackendKind::default_compiled()) {
+        Ok(_) => panic!("expected invalid thread count to fail"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "CpuBackend::try_with_threads_and_kind",
+            ..
+        }
+    ));
+}
+
+#[test]
+#[cfg(not(feature = "cpu-blas"))]
+fn unavailable_blas_backend_kind_reports_config_errors() {
+    let err = match CpuBackend::with_kind(CpuBackendKind::Blas) {
+        Ok(_) => panic!("expected unavailable BLAS backend to fail"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        crate::Error::InvalidConfig {
+            op: "CpuBackend::with_kind",
+            ..
+        }
+    ));
+
+    let mut backend = CpuBackend {
+        ctx: Arc::new(CpuContext::with_threads(1)),
+        buffers: BufferPool::new(),
+        kind: CpuBackendKind::Blas,
+    };
+    let retained = backend.with_linalg_pool(|pool| {
+        <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
+        pool.len()
+    });
+    assert_eq!(retained, 1);
+    assert_eq!(backend.buffer_pool_len(), 1);
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]);
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = gemm::GemmAnalysisCache::default();
+
+    for result in [
+        backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config),
+        backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, false, true),
+        backend.dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        ),
+    ] {
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            crate::Error::InvalidConfig {
+                op: "dot_general",
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("blas"));
+    }
+}
+
+#[test]
 fn cpu_session_profile_helpers_cover_current_profile_mode() {
     let state = cpu_session_profile_state();
     state

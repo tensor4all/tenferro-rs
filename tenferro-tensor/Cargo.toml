@@ -21,6 +21,7 @@ src-accelerate = ["provider-src", "blas-src/accelerate"]
 src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
 
 [dependencies]
+tenferro-tensor-core = { path = "../tenferro-tensor-core" }
 num-traits.workspace = true
 num-complex.workspace = true
 smallvec.workspace = true

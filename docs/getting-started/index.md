@@ -15,17 +15,19 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime" }
 ```
 
 This uses the default `cpu-faer` backend. To use the LAPACK/BLAS CPU backend,
-disable default features and enable `cpu-blas`:
+enable `cpu-blas` and select the BLAS provider at runtime:
 
 ```toml
 [dependencies]
 tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
 ```
 
-Exactly one CPU backend must be enabled: `cpu-faer` or `cpu-blas`. The
-`cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the system
-toolchain, or enable the provider feature on `tenferro-tensor` to build against
-OpenBLAS:
+CPU backend features are additive. At least one of `cpu-faer` or `cpu-blas`
+must be enabled, and builds may enable both. `CpuBackend::new()` selects faer
+when it is compiled in; use the BLAS constructor when BLAS/LAPACK execution is
+wanted. The `cpu-blas` backend needs a BLAS/LAPACK provider. Link one from the
+system toolchain, or enable the provider feature on `tenferro-tensor` to build
+against OpenBLAS:
 
 ```toml
 [dependencies]
@@ -57,7 +59,7 @@ tenferro-runtime = "..."
 
 <!-- snippet-source: tenferro-runtime/examples/cpu_quickstart.rs -->
 ```rust
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
@@ -65,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]);
 
-    let c = a.matmul(&b, &mut backend)?;
+    let c = tensor::matmul(&a, &b, &mut backend)?;
 
     assert_eq!(c.shape(), &[2, 2]);
     assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);

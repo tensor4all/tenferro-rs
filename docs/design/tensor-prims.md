@@ -60,15 +60,18 @@ does not support. Higher layers must not silently fall back across devices.
 
 ## CPU Backend
 
-`cpu::CpuBackend` is always present when exactly one CPU feature is enabled:
+`cpu::CpuBackend` is present when at least one CPU provider feature is enabled.
+CPU provider features are additive:
 
 - `cpu-faer` for faer-backed GEMM/linalg,
 - `cpu-blas` for BLAS/LAPACK-backed GEMM/linalg.
 
 CPU execution uses strided-kernel for elementwise/reduction/structural work and
-faer or BLAS/LAPACK for GEMM and linalg. `CpuContext` stores the CPU thread
-count as the single source of truth for faer parallelism, but it does not own a
-Rayon thread pool.
+faer or BLAS/LAPACK for GEMM and linalg. `CpuBackend` stores the runtime
+provider selection; when both providers are compiled, `CpuBackend::new()`
+selects faer and explicit construction can select BLAS. `CpuContext` stores the
+CPU thread count as the single source of truth for faer parallelism, but it does
+not own a Rayon thread pool.
 
 `CpuBackend::with_backend_session` runs the whole compiled program through
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session

@@ -78,7 +78,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_runtime::{tensor, CpuBackend, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
@@ -123,15 +123,15 @@ let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Transpose
-let at = a.transpose(&[1, 0], &mut ctx).unwrap();
+let at = tensor::transpose(&a, &[1, 0], &mut ctx).unwrap();
 assert_eq!(at.shape(), &[3, 2]);
 
 // Reshape
-let flat = a.reshape(&[6], &mut ctx).unwrap();
+let flat = tensor::reshape(&a, &[6], &mut ctx).unwrap();
 assert_eq!(flat.shape(), &[6]);
 
 // Reduce
-let col_sum = a.reduce_sum(&[0], &mut ctx).unwrap();
+let col_sum = tensor::reduce_sum(&a, &[0], &mut ctx).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
 

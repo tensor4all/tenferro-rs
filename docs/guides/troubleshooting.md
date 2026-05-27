@@ -65,14 +65,16 @@ row-major output, export with `try_into_vec_row_major::<T>()`; use
 order.
 See [Memory Order](memory-order.md).
 
-## CPU Backend Feature Conflicts
+## CPU Backend Feature Selection
 
-Exactly one CPU backend must be enabled. Use the default `cpu-faer` feature, or
-disable defaults and enable one BLAS option:
+At least one CPU backend feature must be enabled. `cpu-faer` is the default,
+and `cpu-blas` can be enabled by itself or together with `cpu-faer`:
 
 ```toml
 [dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", default-features = false, features = ["cpu-blas"] }
+tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", features = ["cpu-blas"] }
 ```
 
-Do not enable both `cpu-faer` and `cpu-blas`.
+When both are compiled, `CpuBackend::new()` selects faer. Use
+`CpuBackend::with_kind(CpuBackendKind::Blas)` when a linked BLAS/LAPACK
+provider should handle provider-backed kernels.

@@ -4,7 +4,7 @@ use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
-use tenferro_tensor::cpu::CpuBackend;
+use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::inject::{
     register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, register_lapack_provider_ptrs,
     BlasGemmFnPtrSet, LapackFullPivLuFnPtrSet, LapackProviderPtrSet, ProviderAbi,
@@ -184,7 +184,8 @@ fn provider_inject_dot_general_uses_registered_blas() {
         vec![5.0, 7.0, 6.0, 8.0],
     ));
 
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+    assert_eq!(backend.kind(), CpuBackendKind::Blas);
     let c = backend.dot_general(
         &a,
         &b,
@@ -214,7 +215,7 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
     let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0, 2.0]));
     let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]));
 
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
     let c = backend.dot_general(
         &a,
         &b,
@@ -247,7 +248,7 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
         vec![3.0, 4.0, 5.0, 6.0],
     ));
 
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
     let c = backend.dot_general(
         &a,
         &b,

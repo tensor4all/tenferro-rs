@@ -104,6 +104,101 @@ fn maybe_print_cpu_session_profile() {
     }
 }
 
+/// CPU provider selected by a [`CpuBackend`] instance.
+///
+/// CPU provider features are additive at compile time; this runtime selector
+/// chooses which compiled provider an individual backend uses for provider-owned
+/// kernels such as GEMM.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::cpu::CpuBackendKind;
+///
+/// let kind = CpuBackendKind::default_compiled();
+/// assert!(matches!(kind, CpuBackendKind::Faer | CpuBackendKind::Blas));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CpuBackendKind {
+    /// faer-backed CPU kernels.
+    Faer,
+    /// BLAS/LAPACK-backed CPU kernels.
+    Blas,
+}
+
+impl CpuBackendKind {
+    /// Return the default compiled CPU provider.
+    ///
+    /// faer is preferred when both faer and BLAS are compiled in because it has
+    /// no external provider-link requirement.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::CpuBackendKind;
+    ///
+    /// let _kind = CpuBackendKind::default_compiled();
+    /// ```
+    pub fn default_compiled() -> Self {
+        #[cfg(feature = "cpu-faer")]
+        {
+            Self::Faer
+        }
+        #[cfg(all(not(feature = "cpu-faer"), feature = "cpu-blas"))]
+        {
+            Self::Blas
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Faer => "faer",
+            Self::Blas => "blas",
+        }
+    }
+}
+
+fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> crate::Result<()> {
+    let _ = op;
+    match kind {
+        CpuBackendKind::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                Ok(())
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                Err(crate::Error::InvalidConfig {
+                    op,
+                    message: "CpuBackendKind::Faer requires the cpu-faer feature".to_string(),
+                })
+            }
+        }
+        CpuBackendKind::Blas => {
+            #[cfg(feature = "cpu-blas")]
+            {
+                Ok(())
+            }
+            #[cfg(not(feature = "cpu-blas"))]
+            {
+                Err(crate::Error::InvalidConfig {
+                    op,
+                    message: "CpuBackendKind::Blas requires the cpu-blas feature".to_string(),
+                })
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(super) fn unavailable_cpu_backend_kind(kind: CpuBackendKind, op: &'static str) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op,
+        message: format!("CPU backend kind {} is not compiled in", kind.name()),
+    }
+}
+
 /// CPU execution backend.
 ///
 /// # Examples
@@ -116,6 +211,7 @@ fn maybe_print_cpu_session_profile() {
 pub struct CpuBackend {
     pub(crate) ctx: Arc<CpuContext>,
     pub(crate) buffers: BufferPool,
+    kind: CpuBackendKind,
 }
 
 impl CpuBackend {
@@ -130,6 +226,20 @@ impl CpuBackend {
     /// ```
     pub fn new() -> Self {
         Self::from_context(Arc::new(CpuContext::from_env()))
+    }
+
+    /// Create a CPU backend using the selected compiled provider.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
+    ///
+    /// let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    /// assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+    /// ```
+    pub fn with_kind(kind: CpuBackendKind) -> crate::Result<Self> {
+        Self::try_from_context_with_kind(Arc::new(CpuContext::from_env()), kind)
     }
 
     /// Try to create a CPU backend using `RAYON_NUM_THREADS`.
@@ -163,7 +273,20 @@ impl CpuBackend {
         Self {
             ctx,
             buffers: BufferPool::new(),
+            kind: CpuBackendKind::default_compiled(),
         }
+    }
+
+    fn try_from_context_with_kind(
+        ctx: Arc<CpuContext>,
+        kind: CpuBackendKind,
+    ) -> crate::Result<Self> {
+        ensure_cpu_backend_kind_available(kind, "CpuBackend::with_kind")?;
+        Ok(Self {
+            ctx,
+            buffers: BufferPool::new(),
+            kind,
+        })
     }
 
     /// Create a CPU backend from an existing context and buffer-pool retention cap.
@@ -185,9 +308,22 @@ impl CpuBackend {
         ctx: Arc<CpuContext>,
         max_retained_capacity_bytes: usize,
     ) -> Self {
+        Self::from_context_with_buffer_pool_limit_and_kind(
+            ctx,
+            max_retained_capacity_bytes,
+            CpuBackendKind::default_compiled(),
+        )
+    }
+
+    fn from_context_with_buffer_pool_limit_and_kind(
+        ctx: Arc<CpuContext>,
+        max_retained_capacity_bytes: usize,
+        kind: CpuBackendKind,
+    ) -> Self {
         Self {
             ctx,
             buffers: BufferPool::with_max_retained_capacity_bytes(max_retained_capacity_bytes),
+            kind,
         }
     }
 
@@ -231,6 +367,57 @@ impl CpuBackend {
                 }
                 err => err,
             })
+    }
+
+    /// Try to create a CPU backend with a custom thread count and provider.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
+    ///
+    /// let backend = CpuBackend::try_with_threads_and_kind(
+    ///     1,
+    ///     CpuBackendKind::default_compiled(),
+    /// )?;
+    /// assert_eq!(backend.num_threads(), 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_with_threads_and_kind(
+        num_threads: usize,
+        kind: CpuBackendKind,
+    ) -> crate::Result<Self> {
+        ensure_cpu_backend_kind_available(kind, "CpuBackend::try_with_threads_and_kind")?;
+        CpuContext::try_with_threads(num_threads)
+            .map(|ctx| Self {
+                ctx: Arc::new(ctx),
+                buffers: BufferPool::new(),
+                kind,
+            })
+            .map_err(|err| match err {
+                crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
+                    op: "CpuBackend::try_with_threads_and_kind",
+                    message,
+                },
+                crate::Error::BackendFailure { message, .. } => {
+                    crate::Error::backend_failure("CpuBackend::try_with_threads_and_kind", message)
+                }
+                err => err,
+            })
+    }
+
+    /// Return the runtime CPU provider selected by this backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
+    ///
+    /// let backend = CpuBackend::new();
+    /// assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+    /// ```
+    pub fn kind(&self) -> CpuBackendKind {
+        self.kind
     }
 
     /// Return the number of threads in this backend's CPU context.
@@ -372,7 +559,7 @@ impl CpuBackend {
         result
     }
 
-    #[cfg(feature = "cpu-blas")]
+    #[allow(dead_code)]
     fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
         let mut buffers = std::mem::take(&mut self.buffers);
         let result = op(&mut buffers);
@@ -380,14 +567,11 @@ impl CpuBackend {
         result
     }
 
-    #[cfg(feature = "cpu-faer")]
     fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        self.install_with_pool(op)
-    }
-
-    #[cfg(feature = "cpu-blas")]
-    fn linalg_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        self.run_with_pool(op)
+        match self.kind {
+            CpuBackendKind::Faer => self.install_with_pool(op),
+            CpuBackendKind::Blas => self.run_with_pool(op),
+        }
     }
 
     /// Run an external linalg implementation with this backend's buffer pool.
@@ -406,7 +590,7 @@ impl CpuBackend {
         Arc::clone(&self.ctx)
     }
 
-    #[cfg(feature = "cpu-faer")]
+    #[allow(dead_code)]
     fn install_with_pool_and_gemm_cache<R>(
         &mut self,
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
@@ -418,7 +602,7 @@ impl CpuBackend {
         result
     }
 
-    #[cfg(feature = "cpu-blas")]
+    #[allow(dead_code)]
     fn run_with_pool_and_gemm_cache<R>(
         &mut self,
         gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
@@ -625,17 +809,41 @@ impl TensorDot for CpuBackend {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         let mut cache = gemm::GemmAnalysisCache::default();
-        #[cfg(feature = "cpu-faer")]
-        let direct = {
-            let ctx = Arc::clone(&self.ctx);
-            self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                gemm::dot_general_read_cached(buffers, cache, None, ctx.as_ref(), lhs, rhs, config)
-            })?
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = Arc::clone(&self.ctx);
+                    self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+                        gemm::dot_general_faer_read_cached(
+                            buffers,
+                            cache,
+                            None,
+                            ctx.as_ref(),
+                            lhs,
+                            rhs,
+                            config,
+                        )
+                    })?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "dot_general"));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+                        gemm::dot_general_blas_read_cached(buffers, cache, None, lhs, rhs, config)
+                    })?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(unavailable_cpu_backend_kind(self.kind, "dot_general"));
+                }
+            }
         };
-        #[cfg(feature = "cpu-blas")]
-        let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-            gemm::dot_general_read_cached(buffers, cache, None, lhs, rhs, config)
-        })?;
         if let Some(result) = direct {
             return Ok(result);
         }
@@ -669,59 +877,98 @@ impl BackendCachedDot for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        #[cfg(feature = "cpu-blas")]
-        {
-            return self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                (Tensor::F32(a), Tensor::F32(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config)
-                        .map(Tensor::F32)
+        match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = Arc::clone(&self.ctx);
+                    self.install_with_pool_and_gemm_cache(cache, |buffers, cache| {
+                        match (lhs, rhs) {
+                            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_faer_cached(
+                                buffers,
+                                cache,
+                                cache_slot,
+                                ctx.as_ref(),
+                                a,
+                                b,
+                                config,
+                            )
+                            .map(Tensor::F32),
+                            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_faer_cached(
+                                buffers,
+                                cache,
+                                cache_slot,
+                                ctx.as_ref(),
+                                a,
+                                b,
+                                config,
+                            )
+                            .map(Tensor::F64),
+                            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_faer_cached(
+                                buffers,
+                                cache,
+                                cache_slot,
+                                ctx.as_ref(),
+                                a,
+                                b,
+                                config,
+                            )
+                            .map(Tensor::C32),
+                            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_faer_cached(
+                                buffers,
+                                cache,
+                                cache_slot,
+                                ctx.as_ref(),
+                                a,
+                                b,
+                                config,
+                            )
+                            .map(Tensor::C64),
+                            _ => Err(crate::Error::DTypeMismatch {
+                                op: "dot_general",
+                                lhs: lhs.dtype(),
+                                rhs: rhs.dtype(),
+                            }),
+                        }
+                    })
                 }
-                (Tensor::F64(a), Tensor::F64(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config)
-                        .map(Tensor::F64)
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unavailable_cpu_backend_kind(self.kind, "dot_general"))
                 }
-                (Tensor::C32(a), Tensor::C32(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config)
-                        .map(Tensor::C32)
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
+                                .map(Tensor::F32)
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
+                                .map(Tensor::F64)
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
+                                .map(Tensor::C32)
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
+                                .map(Tensor::C64)
+                        }
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    })
                 }
-                (Tensor::C64(a), Tensor::C64(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, a, b, config)
-                        .map(Tensor::C64)
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unavailable_cpu_backend_kind(self.kind, "dot_general"))
                 }
-                _ => Err(crate::Error::DTypeMismatch {
-                    op: "dot_general",
-                    lhs: lhs.dtype(),
-                    rhs: rhs.dtype(),
-                }),
-            });
-        }
-
-        #[cfg(feature = "cpu-faer")]
-        {
-            let ctx = Arc::clone(&self.ctx);
-            self.install_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                (Tensor::F32(a), Tensor::F32(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
-                        .map(Tensor::F32)
-                }
-                (Tensor::F64(a), Tensor::F64(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
-                        .map(Tensor::F64)
-                }
-                (Tensor::C32(a), Tensor::C32(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
-                        .map(Tensor::C32)
-                }
-                (Tensor::C64(a), Tensor::C64(b)) => {
-                    gemm::dot_general_cached(buffers, cache, cache_slot, ctx.as_ref(), a, b, config)
-                        .map(Tensor::C64)
-                }
-                _ => Err(crate::Error::DTypeMismatch {
-                    op: "dot_general",
-                    lhs: lhs.dtype(),
-                    rhs: rhs.dtype(),
-                }),
-            })
+            }
         }
     }
 
@@ -735,91 +982,122 @@ impl BackendCachedDot for CpuBackend {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        #[cfg(feature = "cpu-blas")]
-        {
-            return self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
-                    buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                )
-                .map(Tensor::F32),
-                (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
-                    buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                )
-                .map(Tensor::F64),
-                (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
-                    buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                )
-                .map(Tensor::C32),
-                (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
-                    buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                )
-                .map(Tensor::C64),
-                _ => Err(crate::Error::DTypeMismatch {
-                    op: "dot_general",
-                    lhs: lhs.dtype(),
-                    rhs: rhs.dtype(),
-                }),
-            });
-        }
-
-        #[cfg(feature = "cpu-faer")]
-        {
-            let ctx = Arc::clone(&self.ctx);
-            self.install_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
-                    buffers,
-                    cache,
-                    cache_slot,
-                    ctx.as_ref(),
-                    a,
-                    b,
-                    config,
-                    lhs_conj,
-                    rhs_conj,
-                )
-                .map(Tensor::F32),
-                (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
-                    buffers,
-                    cache,
-                    cache_slot,
-                    ctx.as_ref(),
-                    a,
-                    b,
-                    config,
-                    lhs_conj,
-                    rhs_conj,
-                )
-                .map(Tensor::F64),
-                (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
-                    buffers,
-                    cache,
-                    cache_slot,
-                    ctx.as_ref(),
-                    a,
-                    b,
-                    config,
-                    lhs_conj,
-                    rhs_conj,
-                )
-                .map(Tensor::C32),
-                (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
-                    buffers,
-                    cache,
-                    cache_slot,
-                    ctx.as_ref(),
-                    a,
-                    b,
-                    config,
-                    lhs_conj,
-                    rhs_conj,
-                )
-                .map(Tensor::C64),
-                _ => Err(crate::Error::DTypeMismatch {
-                    op: "dot_general",
-                    lhs: lhs.dtype(),
-                    rhs: rhs.dtype(),
-                }),
-            })
+        match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = Arc::clone(&self.ctx);
+                    self.install_with_pool_and_gemm_cache(cache, |buffers, cache| {
+                        match (lhs, rhs) {
+                            (Tensor::F32(a), Tensor::F32(b)) => {
+                                gemm::dot_general_faer_with_conj_cached(
+                                    buffers,
+                                    cache,
+                                    cache_slot,
+                                    ctx.as_ref(),
+                                    a,
+                                    b,
+                                    config,
+                                    lhs_conj,
+                                    rhs_conj,
+                                )
+                                .map(Tensor::F32)
+                            }
+                            (Tensor::F64(a), Tensor::F64(b)) => {
+                                gemm::dot_general_faer_with_conj_cached(
+                                    buffers,
+                                    cache,
+                                    cache_slot,
+                                    ctx.as_ref(),
+                                    a,
+                                    b,
+                                    config,
+                                    lhs_conj,
+                                    rhs_conj,
+                                )
+                                .map(Tensor::F64)
+                            }
+                            (Tensor::C32(a), Tensor::C32(b)) => {
+                                gemm::dot_general_faer_with_conj_cached(
+                                    buffers,
+                                    cache,
+                                    cache_slot,
+                                    ctx.as_ref(),
+                                    a,
+                                    b,
+                                    config,
+                                    lhs_conj,
+                                    rhs_conj,
+                                )
+                                .map(Tensor::C32)
+                            }
+                            (Tensor::C64(a), Tensor::C64(b)) => {
+                                gemm::dot_general_faer_with_conj_cached(
+                                    buffers,
+                                    cache,
+                                    cache_slot,
+                                    ctx.as_ref(),
+                                    a,
+                                    b,
+                                    config,
+                                    lhs_conj,
+                                    rhs_conj,
+                                )
+                                .map(Tensor::C64)
+                            }
+                            _ => Err(crate::Error::DTypeMismatch {
+                                op: "dot_general",
+                                lhs: lhs.dtype(),
+                                rhs: rhs.dtype(),
+                            }),
+                        }
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unavailable_cpu_backend_kind(self.kind, "dot_general"))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+                            )
+                            .map(Tensor::F32)
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+                            )
+                            .map(Tensor::F64)
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+                            )
+                            .map(Tensor::C32)
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
+                            )
+                            .map(Tensor::C64)
+                        }
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    })
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(unavailable_cpu_backend_kind(self.kind, "dot_general"))
+                }
+            }
         }
     }
 }
@@ -907,6 +1185,7 @@ impl BackendSessionHost for CpuBackend {
                 ctx: ctx.as_ref(),
                 buffers: &mut buffers,
                 gemm_analysis_cache: cache,
+                kind: self.kind,
             };
             let result = f(&mut session);
             self.buffers = buffers;
@@ -926,6 +1205,7 @@ impl BackendSessionHost for CpuBackend {
                     ctx: ctx.as_ref(),
                     buffers: &mut buffers,
                     gemm_analysis_cache: cache,
+                    kind: self.kind,
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",
