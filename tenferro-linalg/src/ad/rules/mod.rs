@@ -3,10 +3,12 @@ use std::sync::Arc;
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
 use computegraph::OpEmitter;
-use tenferro_tensor::DType;
 
 use crate::ad_support::{LinalgExtensionOp, LinalgOp};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
+pub(crate) use tenferro_ops::ad::support::{
+    conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 
@@ -45,40 +47,6 @@ fn primal_input_shape(
 
 fn linalg_std_op(op: LinalgOp) -> StdTensorOp {
     StdTensorOp::Extension(Arc::new(LinalgExtensionOp::new(op)))
-}
-
-fn is_real_dtype(dtype: DType) -> bool {
-    matches!(dtype, DType::F32 | DType::F64)
-}
-
-fn conjugate_primal_if_dtype_complex(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    input: ValRef<StdTensorOp>,
-    dtype: DType,
-) -> ValRef<StdTensorOp> {
-    if is_real_dtype(dtype) {
-        input
-    } else {
-        ValRef::Local(emitter.add_op(StdTensorOp::Conj, vec![input], OpMode::Primal)[0])
-    }
-}
-
-fn conjugate_linear_if_dtype_complex(
-    emitter: &mut impl OpEmitter<StdTensorOp>,
-    input: LocalValId,
-    dtype: DType,
-) -> LocalValId {
-    if is_real_dtype(dtype) {
-        input
-    } else {
-        emitter.add_op(
-            StdTensorOp::Conj,
-            vec![ValRef::Local(input)],
-            OpMode::Linear {
-                active_mask: vec![true],
-            },
-        )[0]
-    }
 }
 
 pub(crate) fn linearize_lu(

@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use libloading::Library;
 use num_complex::{Complex32, Complex64};
+use tenferro_tensor::{Error, Result};
+
+use super::library_search_paths;
 
 /// Default cuSOLVER search paths. Override with `TENFERRO_CUSOLVER_PATH` env var.
 const CUSOLVER_DEFAULT_PATHS: &[&str] = &[
@@ -643,7 +646,7 @@ struct CusolverVtable {
 }
 
 impl CusolverVtable {
-    unsafe fn load(lib: &Library) -> crate::Result<Self> {
+    unsafe fn load(lib: &Library) -> Result<Self> {
         Ok(Self {
             create: load_symbol(lib, b"cusolverDnCreate\0", "cuSOLVER")?,
             destroy: load_symbol(lib, b"cusolverDnDestroy\0", "cuSOLVER")?,
@@ -711,7 +714,7 @@ struct CublasVtable {
 }
 
 impl CublasVtable {
-    unsafe fn load(lib: &Library) -> crate::Result<Self> {
+    unsafe fn load(lib: &Library) -> Result<Self> {
         Ok(Self {
             create: load_symbol(lib, b"cublasCreate_v2\0", "cuBLAS")?,
             destroy: load_symbol(lib, b"cublasDestroy_v2\0", "cuBLAS")?,
@@ -728,9 +731,9 @@ unsafe fn load_symbol<T: Copy>(
     lib: &Library,
     name: &[u8],
     library_name: &'static str,
-) -> crate::Result<T> {
+) -> Result<T> {
     let symbol = lib.get::<T>(name).map_err(|err| {
-        crate::Error::backend_failure(
+        Error::backend_failure(
             "cubecl_linalg",
             format!(
                 "failed to load {library_name} symbol {}: {err}",
@@ -754,8 +757,8 @@ unsafe impl Send for CusolverLibrary {}
 unsafe impl Sync for CusolverLibrary {}
 
 impl CusolverLibrary {
-    fn load() -> crate::Result<Arc<Self>> {
-        let paths = super::library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
+    fn load() -> Result<Arc<Self>> {
+        let paths = library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
         let mut errors = Vec::new();
         for path in &paths {
             let lib = match unsafe { Library::new(path) } {
@@ -785,7 +788,7 @@ impl CusolverLibrary {
             }));
         }
 
-        Err(crate::Error::backend_failure(
+        Err(Error::backend_failure(
             "cubecl_linalg",
             format!(
                 "failed to load cuSOLVER library (tried {}): {}",
@@ -800,11 +803,11 @@ impl CusolverLibrary {
         status: CusolverStatus,
         op: &'static str,
         call: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         if status == CUSOLVER_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::backend_failure(
+        Err(Error::backend_failure(
             op,
             format!(
                 "{call} failed with cuSOLVER {} ({status})",
@@ -823,8 +826,8 @@ unsafe impl Send for CublasLibrary {}
 unsafe impl Sync for CublasLibrary {}
 
 impl CublasLibrary {
-    fn load() -> crate::Result<Arc<Self>> {
-        let paths = super::library_search_paths("TENFERRO_CUBLAS_PATH", CUBLAS_DEFAULT_PATHS);
+    fn load() -> Result<Arc<Self>> {
+        let paths = library_search_paths("TENFERRO_CUBLAS_PATH", CUBLAS_DEFAULT_PATHS);
         let mut errors = Vec::new();
         for path in &paths {
             let lib = match unsafe { Library::new(path) } {
@@ -838,7 +841,7 @@ impl CublasLibrary {
             return Ok(Arc::new(Self { _lib: lib, vtable }));
         }
 
-        Err(crate::Error::backend_failure(
+        Err(Error::backend_failure(
             "triangular_solve",
             format!(
                 "failed to load cuBLAS library (tried {}): {}",
@@ -853,11 +856,11 @@ impl CublasLibrary {
         status: CublasStatus,
         op: &'static str,
         call: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         if status == CUBLAS_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::backend_failure(
+        Err(Error::backend_failure(
             op,
             format!(
                 "{call} failed with cuBLAS {} ({status})",
@@ -915,7 +918,7 @@ pub struct CusolverDnHandle {
 unsafe impl Send for CusolverDnHandle {}
 
 impl CusolverDnHandle {
-    pub fn load() -> crate::Result<Self> {
+    pub fn load() -> Result<Self> {
         let lib = CusolverLibrary::load()?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
@@ -923,7 +926,7 @@ impl CusolverDnHandle {
         Ok(Self { lib, raw })
     }
 
-    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
+    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cusolverDnSetStream")
     }
@@ -936,7 +939,7 @@ impl CusolverDnHandle {
         a: *mut c_void,
         lda: i32,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -990,7 +993,7 @@ impl CusolverDnHandle {
         lwork: i32,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.spotrf)(
                 self.raw,
@@ -1044,7 +1047,7 @@ impl CusolverDnHandle {
         a: *mut c_void,
         lda: i32,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -1078,7 +1081,7 @@ impl CusolverDnHandle {
         pivots: *mut i32,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.sgetrf)(
                 self.raw,
@@ -1132,7 +1135,7 @@ impl CusolverDnHandle {
         a: *mut c_void,
         lda: i32,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -1167,7 +1170,7 @@ impl CusolverDnHandle {
         lwork: i32,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.sgeqrf)(
                 self.raw,
@@ -1227,7 +1230,7 @@ impl CusolverDnHandle {
         lda: i32,
         tau: *const c_void,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -1291,7 +1294,7 @@ impl CusolverDnHandle {
         lwork: i32,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.sorgqr)(
                 self.raw,
@@ -1351,7 +1354,7 @@ impl CusolverDnHandle {
         m: i32,
         n: i32,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -1393,7 +1396,7 @@ impl CusolverDnHandle {
         rwork: *mut c_void,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.sgesvd)(
                 self.raw,
@@ -1481,7 +1484,7 @@ impl CusolverDnHandle {
         lda: i32,
         w: *const c_void,
         op: &'static str,
-    ) -> crate::Result<i32> {
+    ) -> Result<i32> {
         let mut lwork = 0;
         let status = unsafe {
             match dtype {
@@ -1545,7 +1548,7 @@ impl CusolverDnHandle {
         lwork: i32,
         info: *mut i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.ssyevd)(
                 self.raw,
@@ -1614,7 +1617,7 @@ pub struct CublasHandle {
 unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {
-    pub fn load() -> crate::Result<Self> {
+    pub fn load() -> Result<Self> {
         let lib = CublasLibrary::load()?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
@@ -1622,7 +1625,7 @@ impl CublasHandle {
         Ok(Self { lib, raw })
     }
 
-    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> crate::Result<()> {
+    pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cublasSetStream_v2")
     }
@@ -1642,7 +1645,7 @@ impl CublasHandle {
         b: *mut c_void,
         ldb: i32,
         op: &'static str,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let status = match dtype {
             CudaDataType::F32 => (self.lib.vtable.strsm)(
                 self.raw,
@@ -1717,7 +1720,7 @@ pub struct CudaLinalgHandles {
 }
 
 impl CudaLinalgHandles {
-    pub fn load() -> crate::Result<Self> {
+    pub fn load() -> Result<Self> {
         Ok(Self {
             cusolver: CusolverDnHandle::load()?,
             cublas: CublasHandle::load()?,

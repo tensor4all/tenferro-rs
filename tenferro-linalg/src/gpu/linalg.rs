@@ -8,20 +8,22 @@ use cudarc::runtime::{result as cuda_result, sys::cudaStream_t};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
+use super::ffi::cusolver::{
+    CublasDiagType, CublasFillMode, CublasOperation, CublasSideMode, CudaDataType,
+    CudaLinalgHandles, CudaStream, CusolverEigMode,
+};
+use super::kernels as cubecl_linalg;
 use tenferro_gpu::cubecl::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, typed_from_cubecl,
     typed_tensor_array_arg, typed_tensor_binding,
 };
-use tenferro_gpu::cubecl::ffi::cusolver::{
-    CublasDiagType, CublasFillMode, CublasOperation, CublasSideMode, CudaDataType, CudaStream,
-    CusolverEigMode,
-};
-use tenferro_gpu::cubecl::{download_tensor, CubeclBackend, CubeclRuntime};
-use tenferro_gpu::kernels::linalg as cubecl_linalg;
-use tenferro_tensor::config::{DotGeneralConfig, SliceConfig};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
+use tenferro_gpu::cubecl::{
+    download_tensor, CubeclBackend, CubeclRuntime, CudaExtensionCacheGuard,
+};
 use tenferro_gpu::CubeclBuffer;
+use tenferro_tensor::config::{DotGeneralConfig, SliceConfig};
 use tenferro_tensor::{
     Buffer, DType, Error, Tensor, TensorDot, TensorElementwise, TensorReduction, TensorStructural,
     TypedTensor,
@@ -68,6 +70,14 @@ impl LinalgScalar for Complex64 {
 
 fn unsupported_linalg_dtype(op: &'static str, input: &Tensor) -> Error {
     Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype()))
+}
+
+fn linalg_handles(
+    backend: &CubeclBackend,
+) -> Result<CudaExtensionCacheGuard<'_, CudaLinalgHandles>> {
+    backend
+        .cuda_extension_cache()
+        .get_or_try_init(CudaLinalgHandles::load)
 }
 
 struct Workspace {
@@ -286,7 +296,7 @@ where
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
@@ -365,7 +375,7 @@ where
     }
 
     let out = clone_device_tensor(backend.runtime(), b, OP)?;
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cublas().set_stream(stream, OP)?;
 
@@ -448,7 +458,7 @@ where
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
@@ -535,7 +545,7 @@ where
     let u = alloc_output::<T>(backend.runtime(), &u_shape);
     let s = alloc_output::<T::Real>(backend.runtime(), &s_shape);
     let vt = alloc_output::<T>(backend.runtime(), &vt_shape);
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
@@ -625,7 +635,7 @@ where
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
     let q = alloc_output::<T>(backend.runtime(), &q_shape);
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
@@ -732,7 +742,7 @@ where
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
     let values = alloc_output::<T::Real>(backend.runtime(), &values_shape);
-    let handles = backend.linalg_handles()?;
+    let handles = linalg_handles(backend)?;
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 

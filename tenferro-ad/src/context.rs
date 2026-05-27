@@ -128,15 +128,15 @@ impl AdContext {
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
     /// let y = &x * &x;
-    /// assert!(ad.try_jvp(&y, &x, &dx).unwrap().is_some());
+    /// assert!(ad.jvp_optional(&y, &x, &dx).unwrap().is_some());
     /// ```
-    pub fn try_jvp(
+    pub fn jvp_optional(
         &self,
         output: &TracedTensor,
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::try_jvp_with_rules(output, wrt, tangent, &self.extension_rules)
+        crate::traced::jvp_optional_with_rules(output, wrt, tangent, &self.extension_rules)
     }
 
     /// Reverse-mode vector-Jacobian product.
@@ -175,15 +175,15 @@ impl AdContext {
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]);
     /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]);
     /// let y = &x * &x;
-    /// assert!(ad.try_vjp(&y, &x, &dy).unwrap().is_some());
+    /// assert!(ad.vjp_optional(&y, &x, &dy).unwrap().is_some());
     /// ```
-    pub fn try_vjp(
+    pub fn vjp_optional(
         &self,
         output: &TracedTensor,
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        crate::traced::try_vjp_with_rules(output, wrt, cotangent, &self.extension_rules)
+        crate::traced::vjp_optional_with_rules(output, wrt, cotangent, &self.extension_rules)
     }
 }
 

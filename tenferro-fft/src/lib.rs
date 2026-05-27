@@ -47,10 +47,10 @@ use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{FftNum, FftPlanner};
 #[cfg(feature = "autodiff")]
-use tenferro_ad::extension::{
-    register_extension_rule, ExtensionAdRuleTrait, ExtensionRegistryError,
-};
+use tenferro_ad::extension::ExtensionAdRuleTrait;
 use tenferro_extension_macros::define_extension_runtime;
+#[cfg(feature = "autodiff")]
+use tenferro_extension_macros::define_idempotent_rule_registration;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -386,12 +386,9 @@ impl ExtensionAdRuleTrait for FftAdRule {
 }
 
 #[cfg(feature = "autodiff")]
-fn register_fft() -> Result<(), ExtensionRegistryError> {
-    match register_extension_rule(Arc::new(FftAdRule)) {
-        Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => {}
-        Err(err) => return Err(err),
-    }
-    Ok(())
+define_idempotent_rule_registration! {
+    register_fn = register_fft,
+    rule_type = FftAdRule,
 }
 
 fn execute_fft_extension<B: TensorBackend + 'static>(

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use tenferro_core_ops::PrimitiveOpKind;
+use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_tensor::{CompareDir, DType, Tensor};
 
 use crate::ext_op::ExtensionOp;
@@ -80,17 +80,16 @@ fn extension_ops_do_not_claim_core_kind() {
 }
 
 #[test]
-fn std_tensor_op_boilerplate_is_catalog_generated() {
-    let source = include_str!("../std_tensor_op.rs");
-
-    assert!(
-        source.contains("define_std_tensor_op"),
-        "StdTensorOp variants and primitive_kind routing should be emitted from the catalog"
-    );
-    assert!(
-        !source.contains("StdTensorOp::Add => PrimitiveOpKind::Add"),
-        "StdTensorOp primitive_kind should not repeat per-op catalog routing by hand"
-    );
+fn every_catalog_descriptor_has_a_std_tensor_op_variant() {
+    for descriptor in all_primitive_descriptors() {
+        let op = StdTensorOp::sample_from_kind(descriptor.kind);
+        assert_eq!(
+            op.primitive_kind(),
+            Some(descriptor.kind),
+            "StdTensorOp variant for {:?} disagrees with descriptor",
+            descriptor.kind
+        );
+    }
 }
 
 #[test]

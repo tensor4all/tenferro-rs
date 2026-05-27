@@ -1,9 +1,4 @@
-#[doc(hidden)]
-pub mod cusolver;
 pub(crate) mod cutensor;
-
-#[cfg(test)]
-mod tests;
 
 /// Build the library search path list for a CUDA FFI library.
 ///
@@ -15,8 +10,6 @@ mod tests;
 ///
 /// | Variable | Library |
 /// |----------|---------|
-/// | `TENFERRO_CUSOLVER_PATH` | cuSOLVER |
-/// | `TENFERRO_CUBLAS_PATH` | cuBLAS |
 /// | `TENFERRO_CUTENSOR_PATH` | cuTENSOR |
 pub(crate) fn library_search_paths(env_var: &str, default_paths: &[&str]) -> Vec<String> {
     if let Ok(val) = std::env::var(env_var) {

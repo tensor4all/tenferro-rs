@@ -25,7 +25,8 @@ mod semiring;
 #[cfg(feature = "autodiff")]
 mod structural;
 #[cfg(feature = "autodiff")]
-mod support;
+#[doc(hidden)]
+pub mod support;
 #[cfg(feature = "autodiff")]
 mod zeros;
 

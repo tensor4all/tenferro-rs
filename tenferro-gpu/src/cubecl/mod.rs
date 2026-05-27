@@ -19,7 +19,7 @@
 //!
 //! - NVIDIA GPU with CUDA compute capability ≥ 7.0
 //! - CUDA Toolkit 12.x installed (provides NVRTC for JIT kernel compilation)
-//! - cuTENSOR, cuSOLVER, cuBLAS shared libraries available on `LD_LIBRARY_PATH`
+//! - cuTENSOR shared library available on `LD_LIBRARY_PATH`
 //!
 //! ## Environment variables
 //!
@@ -28,8 +28,6 @@
 //! | `CUDA_PATH` | CUDA toolkit root (e.g. `/usr/local/cuda-12.0`) |
 //! | `CUBECL_DEBUG_LOG` | Set to `0` to suppress verbose JIT logs |
 //! | `TENFERRO_CUTENSOR_PATH` | Override cuTENSOR library search path |
-//! | `TENFERRO_CUSOLVER_PATH` | Override cuSOLVER library search path |
-//! | `TENFERRO_CUBLAS_PATH` | Override cuBLAS library search path |
 //!
 //! # Basic usage
 //!
@@ -74,7 +72,11 @@
 //! cargo test -p tenferro-gpu --features cuda -- --ignored
 //! ```
 
+use std::any::{Any, TypeId};
 use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::{Mutex, MutexGuard};
 
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
@@ -192,9 +194,109 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CubeclBackend> = CubeclBackend::new;
 /// ```
 pub struct CubeclBackend {
-    rt: CubeclRuntime,
+    // CUDA library handles are dropped before `rt`; Rust drops fields in
+    // declaration order, so cache-owned handles release while the CUDA primary
+    // context is still retained by `CubeclRuntime`.
     cutensor: OnceCell<crate::Result<ffi::cutensor::CutensorHandle>>,
-    linalg: OnceCell<crate::Result<ffi::cusolver::CudaLinalgHandles>>,
+    extension_cache: CudaExtensionCache,
+    rt: CubeclRuntime,
+}
+
+/// Type-indexed cache for CUDA extension-owned backend state.
+#[doc(hidden)]
+pub struct CudaExtensionCache {
+    entries: Mutex<HashMap<TypeId, Box<dyn Any + Send>>>,
+}
+
+impl CudaExtensionCache {
+    /// Create an empty extension cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    ///
+    /// let cache = CudaExtensionCache::new();
+    /// assert!(cache.is_empty());
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns `true` when no extension state has been initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    ///
+    /// assert!(CudaExtensionCache::new().is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.entries
+            .lock()
+            .map(|entries| entries.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Get or lazily initialize one cache entry keyed by `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cubecl::CudaExtensionCache;
+    ///
+    /// let cache = CudaExtensionCache::new();
+    /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();
+    /// assert_eq!(*value, 3);
+    /// ```
+    pub fn get_or_try_init<T>(
+        &self,
+        init: impl FnOnce() -> crate::Result<T>,
+    ) -> crate::Result<CudaExtensionCacheGuard<'_, T>>
+    where
+        T: Send + 'static,
+    {
+        let type_id = TypeId::of::<T>();
+        let mut entries = self.entries.lock().map_err(|_| {
+            crate::Error::backend_failure("cuda_extension_cache", "extension cache lock poisoned")
+        })?;
+        if !entries.contains_key(&type_id) {
+            entries.insert(type_id, Box::new(init()?));
+        }
+        Ok(CudaExtensionCacheGuard {
+            entries,
+            type_id,
+            _marker: std::marker::PhantomData,
+        })
+    }
+}
+
+impl Default for CudaExtensionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Borrow guard for one cached CUDA extension state value.
+#[doc(hidden)]
+pub struct CudaExtensionCacheGuard<'a, T> {
+    entries: MutexGuard<'a, HashMap<TypeId, Box<dyn Any + Send>>>,
+    type_id: TypeId,
+    _marker: std::marker::PhantomData<&'a T>,
+}
+
+impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.entries
+            .get(&self.type_id)
+            .and_then(|entry| entry.downcast_ref::<T>())
+            .expect("CudaExtensionCache stored value under the wrong TypeId")
+    }
 }
 
 impl CubeclBackend {
@@ -209,9 +311,9 @@ impl CubeclBackend {
     /// ```
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         Ok(Self {
-            rt: CubeclRuntime::new(device_ordinal)?,
             cutensor: OnceCell::new(),
-            linalg: OnceCell::new(),
+            extension_cache: CudaExtensionCache::new(),
+            rt: CubeclRuntime::new(device_ordinal)?,
         })
     }
 
@@ -239,14 +341,8 @@ impl CubeclBackend {
     }
 
     #[doc(hidden)]
-    pub fn linalg_handles(&self) -> crate::Result<&ffi::cusolver::CudaLinalgHandles> {
-        match self
-            .linalg
-            .get_or_init(ffi::cusolver::CudaLinalgHandles::load)
-        {
-            Ok(handles) => Ok(handles),
-            Err(err) => Err(err.clone()),
-        }
+    pub fn cuda_extension_cache(&self) -> &CudaExtensionCache {
+        &self.extension_cache
     }
 
     fn transpose_typed<T>(

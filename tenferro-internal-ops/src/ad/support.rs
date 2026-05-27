@@ -5,11 +5,11 @@ use tenferro_tensor::DType;
 use crate::ad::context::ShapeGuardContext;
 use crate::std_tensor_op::StdTensorOp;
 
-pub(crate) fn is_real_dtype(dtype: DType) -> bool {
+pub fn is_real_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64)
 }
 
-pub(crate) fn conjugate_primal_if_complex(
+pub fn conjugate_primal_if_complex(
     emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     ctx: &mut ShapeGuardContext,
@@ -18,7 +18,7 @@ pub(crate) fn conjugate_primal_if_complex(
     conjugate_primal_if_dtype_complex(emitter, input, dtype)
 }
 
-pub(crate) fn conjugate_primal_if_dtype_complex(
+pub fn conjugate_primal_if_dtype_complex(
     emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: ValRef<StdTensorOp>,
     dtype: DType,
@@ -30,7 +30,7 @@ pub(crate) fn conjugate_primal_if_dtype_complex(
     }
 }
 
-pub(crate) fn conjugate_linear_if_dtype_complex(
+pub fn conjugate_linear_if_dtype_complex(
     emitter: &mut dyn OpEmitter<StdTensorOp>,
     input: LocalValId,
     dtype: DType,

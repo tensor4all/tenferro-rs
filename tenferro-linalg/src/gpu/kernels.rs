@@ -1,6 +1,9 @@
 use cubecl::prelude::*;
 
-use crate::kernels::helpers::zero_value;
+#[cube]
+fn zero_value<E: CubePrimitive>() -> E {
+    E::cast_from(0u32)
+}
 
 #[cube]
 fn one_value<E: CubePrimitive>() -> E {

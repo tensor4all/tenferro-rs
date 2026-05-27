@@ -1,3 +1,5 @@
+mod ffi;
+mod kernels;
 mod linalg;
 
 use tenferro_gpu::cubecl::CubeclBackend;

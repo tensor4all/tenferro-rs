@@ -2,7 +2,7 @@ use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use tenferro_core_ops::PrimitiveOpKind;
+use tenferro_core_ops::{all_primitive_descriptors, PrimitiveOpKind};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::SymDim;
@@ -38,27 +38,22 @@ fn exec_op_maps_to_catalog_kind() {
 }
 
 #[test]
-fn exec_op_boilerplate_is_catalog_generated() {
-    let exec_source = include_str!("../exec.rs");
-    let compiler_source = include_str!("../compiler/mod.rs");
-    let segment_source = include_str!("../segment.rs");
-
-    assert!(
-        exec_source.contains("define_exec_op"),
-        "ExecOp variants and primitive_kind routing should be emitted from the catalog"
-    );
-    assert!(
-        !exec_source.contains("Self::Add => PrimitiveOpKind::Add"),
-        "ExecOp primitive_kind should not repeat per-op catalog routing by hand"
-    );
-    assert!(
-        !compiler_source.contains("fn std_to_exec_op"),
-        "StdTensorOp to ExecOp lowering should be catalog-generated, not a hand-written match"
-    );
-    assert!(
-        !segment_source.contains("fn map_exec_op_to_elementwise_fusion"),
-        "ExecOp to ElementwiseFusionOp mapping should be catalog-generated"
-    );
+fn every_catalog_descriptor_has_an_exec_op_variant_with_matching_arity() {
+    for descriptor in all_primitive_descriptors() {
+        let op = ExecOp::sample_from_kind(descriptor.kind);
+        assert_eq!(
+            op.primitive_kind(),
+            Some(descriptor.kind),
+            "ExecOp variant for {:?} disagrees with descriptor",
+            descriptor.kind
+        );
+        assert_eq!(
+            op.input_arity_bounds(),
+            Some((descriptor.min_inputs, descriptor.max_inputs)),
+            "ExecOp arity for {:?} disagrees with descriptor",
+            descriptor.kind
+        );
+    }
 }
 
 #[test]

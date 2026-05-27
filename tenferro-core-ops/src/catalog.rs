@@ -425,6 +425,116 @@ macro_rules! define_std_tensor_op {
                 };
                 Some(kind)
             }
+
+            #[cfg(test)]
+            pub(crate) fn sample_from_kind(kind: $crate::PrimitiveOpKind) -> Self {
+                match kind {
+                    $crate::PrimitiveOpKind::Add => Self::Add,
+                    $crate::PrimitiveOpKind::Mul => Self::Mul,
+                    $crate::PrimitiveOpKind::Neg => Self::Neg,
+                    $crate::PrimitiveOpKind::Conj => Self::Conj,
+                    $crate::PrimitiveOpKind::DotGeneral => Self::DotGeneral {
+                        config: DotGeneralConfig {
+                            lhs_contracting_dims: vec![0],
+                            rhs_contracting_dims: vec![0],
+                            lhs_batch_dims: vec![],
+                            rhs_batch_dims: vec![],
+                        },
+                    },
+                    $crate::PrimitiveOpKind::Transpose => Self::Transpose { perm: vec![0] },
+                    $crate::PrimitiveOpKind::Reshape => Self::Reshape {
+                        to_shape: vec![DimExpr::Const(1)],
+                    },
+                    $crate::PrimitiveOpKind::BroadcastInDim => Self::BroadcastInDim {
+                        shape: vec![DimExpr::Const(1)],
+                        dims: vec![0],
+                    },
+                    $crate::PrimitiveOpKind::Convert => Self::Convert {
+                        from: DType::F32,
+                        to: DType::F64,
+                    },
+                    $crate::PrimitiveOpKind::Constant => Self::Constant {
+                        dtype: DType::F64,
+                        bytes: 0.0_f64.to_le_bytes().to_vec(),
+                    },
+                    $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
+                    $crate::PrimitiveOpKind::Div => Self::Div,
+                    $crate::PrimitiveOpKind::Abs => Self::Abs,
+                    $crate::PrimitiveOpKind::Sign => Self::Sign,
+                    $crate::PrimitiveOpKind::Maximum => Self::Maximum,
+                    $crate::PrimitiveOpKind::Minimum => Self::Minimum,
+                    $crate::PrimitiveOpKind::Compare => Self::Compare(CompareDir::Eq),
+                    $crate::PrimitiveOpKind::Select => Self::Select,
+                    $crate::PrimitiveOpKind::Clamp => Self::Clamp,
+                    $crate::PrimitiveOpKind::Exp => Self::Exp,
+                    $crate::PrimitiveOpKind::Log => Self::Log,
+                    $crate::PrimitiveOpKind::Sin => Self::Sin,
+                    $crate::PrimitiveOpKind::Cos => Self::Cos,
+                    $crate::PrimitiveOpKind::Tanh => Self::Tanh,
+                    $crate::PrimitiveOpKind::Sqrt => Self::Sqrt,
+                    $crate::PrimitiveOpKind::Rsqrt => Self::Rsqrt,
+                    $crate::PrimitiveOpKind::Pow => Self::Pow,
+                    $crate::PrimitiveOpKind::Expm1 => Self::Expm1,
+                    $crate::PrimitiveOpKind::Log1p => Self::Log1p,
+                    $crate::PrimitiveOpKind::ExtractDiag => Self::ExtractDiag {
+                        axis_a: 0,
+                        axis_b: 1,
+                    },
+                    $crate::PrimitiveOpKind::EmbedDiag => Self::EmbedDiag {
+                        axis_a: 0,
+                        axis_b: 1,
+                    },
+                    $crate::PrimitiveOpKind::Tril => Self::Tril { k: 0 },
+                    $crate::PrimitiveOpKind::Triu => Self::Triu { k: 0 },
+                    $crate::PrimitiveOpKind::Gather => Self::Gather(GatherConfig {
+                        offset_dims: vec![],
+                        collapsed_slice_dims: vec![0],
+                        start_index_map: vec![0],
+                        index_vector_dim: 1,
+                        slice_sizes: vec![1],
+                    }),
+                    $crate::PrimitiveOpKind::GatherDynamicSliceSizes => {
+                        Self::GatherDynamicSliceSizes {
+                            offset_dims: vec![],
+                            collapsed_slice_dims: vec![0],
+                            start_index_map: vec![0],
+                            index_vector_dim: 1,
+                            slice_sizes: vec![DimExpr::Const(1)],
+                        }
+                    }
+                    $crate::PrimitiveOpKind::Scatter => Self::Scatter(ScatterConfig {
+                        update_window_dims: vec![],
+                        inserted_window_dims: vec![0],
+                        scatter_dims_to_operand_dims: vec![0],
+                        index_vector_dim: 1,
+                    }),
+                    $crate::PrimitiveOpKind::Slice => Self::Slice(SliceConfig {
+                        starts: vec![0],
+                        limits: vec![1],
+                        strides: vec![1],
+                    }),
+                    $crate::PrimitiveOpKind::DynamicSlice => Self::DynamicSlice {
+                        slice_sizes: vec![1],
+                    },
+                    $crate::PrimitiveOpKind::DynamicUpdateSlice => Self::DynamicUpdateSlice,
+                    $crate::PrimitiveOpKind::Pad => Self::Pad(PadConfig {
+                        edge_padding_low: vec![0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![0],
+                    }),
+                    $crate::PrimitiveOpKind::Concatenate => Self::Concatenate {
+                        axis: 0,
+                        n_inputs: 1,
+                    },
+                    $crate::PrimitiveOpKind::Reverse => Self::Reverse { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ShapeOf => Self::ShapeOf { axis: 0 },
+                    $crate::PrimitiveOpKind::DynamicTruncate => Self::DynamicTruncate { axis: 0 },
+                    $crate::PrimitiveOpKind::PadToMatch => Self::PadToMatch { axis: 0 },
+                    $crate::PrimitiveOpKind::ReduceProd => Self::ReduceProd { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceMax => Self::ReduceMax { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceMin => Self::ReduceMin { axes: vec![0] },
+                }
+            }
         }
     };
 }
@@ -435,7 +545,7 @@ macro_rules! define_elementwise_fusion_op {
     () => {
         /// Elementwise op kinds supported by backend fusion implementations.
         #[doc(hidden)]
-        #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+        #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
         pub enum ElementwiseFusionOp {
             Add,
             Multiply,
@@ -456,6 +566,83 @@ macro_rules! define_elementwise_fusion_op {
             Pow,
             Expm1,
             Log1p,
+        }
+
+        #[cfg(test)]
+        impl ElementwiseFusionOp {
+            pub(crate) fn iter() -> impl Iterator<Item = Self> {
+                [
+                    Self::Add,
+                    Self::Multiply,
+                    Self::Negate,
+                    Self::Conj,
+                    Self::Divide,
+                    Self::Abs,
+                    Self::Maximum,
+                    Self::Minimum,
+                    Self::Clamp,
+                    Self::Exp,
+                    Self::Log,
+                    Self::Sin,
+                    Self::Cos,
+                    Self::Tanh,
+                    Self::Sqrt,
+                    Self::Rsqrt,
+                    Self::Pow,
+                    Self::Expm1,
+                    Self::Log1p,
+                ]
+                .into_iter()
+            }
+
+            pub(crate) fn from_primitive_kind(kind: $crate::PrimitiveOpKind) -> Option<Self> {
+                match kind {
+                    $crate::PrimitiveOpKind::Add => Some(Self::Add),
+                    $crate::PrimitiveOpKind::Mul => Some(Self::Multiply),
+                    $crate::PrimitiveOpKind::Neg => Some(Self::Negate),
+                    $crate::PrimitiveOpKind::Conj => Some(Self::Conj),
+                    $crate::PrimitiveOpKind::Div => Some(Self::Divide),
+                    $crate::PrimitiveOpKind::Abs => Some(Self::Abs),
+                    $crate::PrimitiveOpKind::Maximum => Some(Self::Maximum),
+                    $crate::PrimitiveOpKind::Minimum => Some(Self::Minimum),
+                    $crate::PrimitiveOpKind::Clamp => Some(Self::Clamp),
+                    $crate::PrimitiveOpKind::Exp => Some(Self::Exp),
+                    $crate::PrimitiveOpKind::Log => Some(Self::Log),
+                    $crate::PrimitiveOpKind::Sin => Some(Self::Sin),
+                    $crate::PrimitiveOpKind::Cos => Some(Self::Cos),
+                    $crate::PrimitiveOpKind::Tanh => Some(Self::Tanh),
+                    $crate::PrimitiveOpKind::Sqrt => Some(Self::Sqrt),
+                    $crate::PrimitiveOpKind::Rsqrt => Some(Self::Rsqrt),
+                    $crate::PrimitiveOpKind::Pow => Some(Self::Pow),
+                    $crate::PrimitiveOpKind::Expm1 => Some(Self::Expm1),
+                    $crate::PrimitiveOpKind::Log1p => Some(Self::Log1p),
+                    _ => None,
+                }
+            }
+
+            pub(crate) fn primitive_kind(self) -> $crate::PrimitiveOpKind {
+                match self {
+                    Self::Add => $crate::PrimitiveOpKind::Add,
+                    Self::Multiply => $crate::PrimitiveOpKind::Mul,
+                    Self::Negate => $crate::PrimitiveOpKind::Neg,
+                    Self::Conj => $crate::PrimitiveOpKind::Conj,
+                    Self::Divide => $crate::PrimitiveOpKind::Div,
+                    Self::Abs => $crate::PrimitiveOpKind::Abs,
+                    Self::Maximum => $crate::PrimitiveOpKind::Maximum,
+                    Self::Minimum => $crate::PrimitiveOpKind::Minimum,
+                    Self::Clamp => $crate::PrimitiveOpKind::Clamp,
+                    Self::Exp => $crate::PrimitiveOpKind::Exp,
+                    Self::Log => $crate::PrimitiveOpKind::Log,
+                    Self::Sin => $crate::PrimitiveOpKind::Sin,
+                    Self::Cos => $crate::PrimitiveOpKind::Cos,
+                    Self::Tanh => $crate::PrimitiveOpKind::Tanh,
+                    Self::Sqrt => $crate::PrimitiveOpKind::Sqrt,
+                    Self::Rsqrt => $crate::PrimitiveOpKind::Rsqrt,
+                    Self::Pow => $crate::PrimitiveOpKind::Pow,
+                    Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
+                    Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                }
+            }
         }
     };
 }
@@ -792,6 +979,116 @@ macro_rules! define_exec_op {
                     Self::Expm1 => Some(ElementwiseFusionOp::Expm1),
                     Self::Log1p => Some(ElementwiseFusionOp::Log1p),
                     _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            pub(crate) fn input_arity_bounds(&self) -> Option<(u8, u8)> {
+                self.primitive_kind().map(|kind| {
+                    let descriptor = $crate::descriptor(kind);
+                    (descriptor.min_inputs, descriptor.max_inputs)
+                })
+            }
+
+            #[cfg(test)]
+            pub(crate) fn sample_from_kind(kind: $crate::PrimitiveOpKind) -> Self {
+                match kind {
+                    $crate::PrimitiveOpKind::Transpose => Self::Transpose { perm: vec![0] },
+                    $crate::PrimitiveOpKind::Reshape => Self::Reshape {
+                        shape: vec![DimExpr::Const(1)],
+                    },
+                    $crate::PrimitiveOpKind::BroadcastInDim => Self::BroadcastInDim {
+                        shape: vec![DimExpr::Const(1)],
+                        dims: vec![0],
+                    },
+                    $crate::PrimitiveOpKind::Convert => Self::Convert { to: DType::F64 },
+                    $crate::PrimitiveOpKind::Constant => Self::Constant {
+                        dtype: DType::F64,
+                        bytes: 0.0_f64.to_le_bytes().to_vec(),
+                    },
+                    $crate::PrimitiveOpKind::DotGeneral => Self::DotGeneral(DotGeneralConfig {
+                        lhs_contracting_dims: vec![0],
+                        rhs_contracting_dims: vec![0],
+                        lhs_batch_dims: vec![],
+                        rhs_batch_dims: vec![],
+                    }),
+                    $crate::PrimitiveOpKind::ReduceSum => Self::ReduceSum { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ExtractDiag => Self::ExtractDiag {
+                        axis_a: 0,
+                        axis_b: 1,
+                    },
+                    $crate::PrimitiveOpKind::EmbedDiag => Self::EmbedDiag {
+                        axis_a: 0,
+                        axis_b: 1,
+                    },
+                    $crate::PrimitiveOpKind::Tril => Self::Tril { k: 0 },
+                    $crate::PrimitiveOpKind::Triu => Self::Triu { k: 0 },
+                    $crate::PrimitiveOpKind::Add => Self::Add,
+                    $crate::PrimitiveOpKind::Mul => Self::Multiply,
+                    $crate::PrimitiveOpKind::Neg => Self::Negate,
+                    $crate::PrimitiveOpKind::Conj => Self::Conj,
+                    $crate::PrimitiveOpKind::Div => Self::Divide,
+                    $crate::PrimitiveOpKind::Abs => Self::Abs,
+                    $crate::PrimitiveOpKind::Sign => Self::Sign,
+                    $crate::PrimitiveOpKind::Maximum => Self::Maximum,
+                    $crate::PrimitiveOpKind::Minimum => Self::Minimum,
+                    $crate::PrimitiveOpKind::Compare => Self::Compare(CompareDir::Eq),
+                    $crate::PrimitiveOpKind::Select => Self::Select,
+                    $crate::PrimitiveOpKind::Clamp => Self::Clamp,
+                    $crate::PrimitiveOpKind::Exp => Self::Exp,
+                    $crate::PrimitiveOpKind::Log => Self::Log,
+                    $crate::PrimitiveOpKind::Sin => Self::Sin,
+                    $crate::PrimitiveOpKind::Cos => Self::Cos,
+                    $crate::PrimitiveOpKind::Tanh => Self::Tanh,
+                    $crate::PrimitiveOpKind::Sqrt => Self::Sqrt,
+                    $crate::PrimitiveOpKind::Rsqrt => Self::Rsqrt,
+                    $crate::PrimitiveOpKind::Pow => Self::Pow,
+                    $crate::PrimitiveOpKind::Expm1 => Self::Expm1,
+                    $crate::PrimitiveOpKind::Log1p => Self::Log1p,
+                    $crate::PrimitiveOpKind::Gather => Self::Gather(GatherConfig {
+                        offset_dims: vec![],
+                        collapsed_slice_dims: vec![0],
+                        start_index_map: vec![0],
+                        index_vector_dim: 1,
+                        slice_sizes: vec![1],
+                    }),
+                    $crate::PrimitiveOpKind::GatherDynamicSliceSizes => {
+                        Self::GatherDynamicSliceSizes {
+                            offset_dims: vec![],
+                            collapsed_slice_dims: vec![0],
+                            start_index_map: vec![0],
+                            index_vector_dim: 1,
+                            slice_sizes: vec![DimExpr::Const(1)],
+                        }
+                    }
+                    $crate::PrimitiveOpKind::Scatter => Self::Scatter(ScatterConfig {
+                        update_window_dims: vec![],
+                        inserted_window_dims: vec![0],
+                        scatter_dims_to_operand_dims: vec![0],
+                        index_vector_dim: 1,
+                    }),
+                    $crate::PrimitiveOpKind::Slice => Self::Slice(SliceConfig {
+                        starts: vec![0],
+                        limits: vec![1],
+                        strides: vec![1],
+                    }),
+                    $crate::PrimitiveOpKind::DynamicSlice => Self::DynamicSlice {
+                        slice_sizes: vec![1],
+                    },
+                    $crate::PrimitiveOpKind::DynamicUpdateSlice => Self::DynamicUpdateSlice,
+                    $crate::PrimitiveOpKind::Pad => Self::Pad(PadConfig {
+                        edge_padding_low: vec![0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![0],
+                    }),
+                    $crate::PrimitiveOpKind::Concatenate => Self::Concatenate { axis: 0 },
+                    $crate::PrimitiveOpKind::Reverse => Self::Reverse { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ShapeOf => Self::ShapeOf { axis: 0 },
+                    $crate::PrimitiveOpKind::DynamicTruncate => Self::DynamicTruncate { axis: 0 },
+                    $crate::PrimitiveOpKind::PadToMatch => Self::PadToMatch { axis: 0 },
+                    $crate::PrimitiveOpKind::ReduceProd => Self::ReduceProd { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceMax => Self::ReduceMax { axes: vec![0] },
+                    $crate::PrimitiveOpKind::ReduceMin => Self::ReduceMin { axes: vec![0] },
                 }
             }
         }

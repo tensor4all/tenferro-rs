@@ -744,7 +744,7 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     assert_eq!(f64_slice(&jvp_out), &[6.0, 10.0]);
 
     let jvp = ad
-        .try_jvp(&scaled, &x, &dx)
+        .jvp_optional(&scaled, &x, &dx)
         .expect("jvp should build")
         .expect("scale_by_2 output is active");
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -758,7 +758,7 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
     assert_eq!(f64_slice(&vjp_out), &[14.0, 22.0]);
 
     let vjp = ad
-        .try_vjp(&scaled, &x, &dy)
+        .vjp_optional(&scaled, &x, &dy)
         .expect("vjp should build")
         .expect("scale_by_2 input is active");
     let mut engine = GraphExecutor::new(CpuBackend::new());

@@ -1,4 +1,7 @@
-use super::{expand_extension_family_id, expand_extension_runtime, to_snake_case, ExtensionArgs};
+use super::{
+    expand_extension_family_id, expand_extension_runtime, expand_idempotent_rule_registration,
+    to_snake_case, ExtensionArgs,
+};
 use syn::DeriveInput;
 
 #[test]
@@ -96,4 +99,19 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
     let source = tokens.to_string();
 
     assert!(source.contains("impl < B : crate :: backend :: LinalgBackend + 'static >"));
+}
+
+#[test]
+fn idempotent_rule_registration_macro_generates_duplicate_guard() {
+    let tokens = expand_idempotent_rule_registration(syn::parse_quote! {
+        register_fn = ensure_einsum_extension_rule_registered,
+        rule_type = EinsumAdRule,
+        visibility = pub(crate),
+    });
+    let source = tokens.to_string();
+
+    assert!(source.contains("pub (crate) fn ensure_einsum_extension_rule_registered"));
+    assert!(source.contains("tenferro_ops :: register_extension_rule"));
+    assert!(source.contains("std :: sync :: Arc :: new (EinsumAdRule)"));
+    assert!(source.contains("ExtensionRegistryError :: DuplicateRule"));
 }
