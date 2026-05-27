@@ -14,7 +14,7 @@ Contributors include people who provide code, design proposals, accepted
 feature requests, bug reports, documentation feedback, benchmarks, review
 comments, or other substantial project input.
 
-- Jin-Guo Liu: early Tensor4all meta-design and project direction.
+- Jin-Guo Liu: early tensor4all meta-design and project direction.
 - Satoshi Terasaki: benchmark development and related project support.
 
 Contributor entries may describe the contribution type. A contributor listing

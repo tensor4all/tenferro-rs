@@ -1,12 +1,18 @@
 # Repository Rules
 
-These are tenferro-specific rules. Apply them on top of the shared Tensor4all
+These are tenferro-specific rules. Apply them on top of the shared tensor4all
 rules from `tensor4all-agent-rules`.
 
 ## Public Surface Drift
 
 - `README`, rustdoc, and examples must not claim capabilities beyond the current public surface.
 - When the public API changes, check for stale names, stale capability claims, and deleted paths in `README`, rustdoc, and examples before considering the work complete.
+
+## Naming Style
+
+- Prefer `tensor4all` over `Tensor4all` in project prose, documentation,
+  issue text, comments, and contributor notes unless quoting an external name
+  or preserving an existing proper noun.
 
 ## Public Surface Discipline
 
