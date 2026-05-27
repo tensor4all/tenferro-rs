@@ -1,12 +1,26 @@
 # tenferro-rs
 
-Dense tensor computation in Rust.
+tenferro-rs is a modular Rust tensor stack for scientific computing and
+general-purpose tensor workflows.
 
-Use explicit crates for each layer: `tenferro-tensor-core` for the host-only
-tensor data model, `tenferro-runtime` for tensor helpers, backends, traced
-graphs, and execution; `tenferro-ad` for eager execution and automatic
-differentiation; and standard operation crates such as `tenferro-linalg`,
-`tenferro-einsum`, and `tenferro-fft` for separately owned operation families.
+It is inspired by JAX and PyTorch: eager and traced execution, automatic
+differentiation, GPU backends, and extensible operation families. At the same
+time, it is designed to remain usable in lightweight settings. If you only need
+an ndarray-like host tensor data model, `tenferro-tensor-core` provides tensor
+and view types without requiring AD, GPU runtimes, linalg backends, or provider
+linking.
+
+Higher-level crates opt into execution, AD, CUDA, BLAS/LAPACK, and operation
+families explicitly. Standard operation families such as linalg, einsum, and
+FFT live in their own crates.
+
+External crates can add custom tensor operations and AD rules through the
+extension mechanism. This extensibility model is strongly influenced by the
+Julia ecosystem, where operation semantics and AD rules can be supplied outside
+a single monolithic tensor type.
+
+`tenferro` means tensor computation with an iron/Rust flavor: `tensor` +
+`ferro`.
 
 Optional capabilities are selected on the crate that owns the operation family.
 For example, CUDA linalg with extension AD uses concrete backend features rather
@@ -207,10 +221,17 @@ standard operation crate and register its runtime on the `GraphExecutor`.
 
 ## Development Model
 
-tenferro-rs uses agentic AI development: a small human-maintainer team develops
-the project with AI agents for implementation, documentation, review, issue
-triage, and verification. Human maintainers own design decisions, review
-outcomes, and merge decisions.
+tenferro-rs is pre-1.0 and intentionally evolves quickly. Public APIs, crate
+boundaries, backend contracts, and feature flags may change while the design
+stabilizes.
+
+Agentic AI workflows are a first-class development path for this repository.
+The project uses AI agents for implementation, documentation, review, issue
+triage, migration, and verification. Human maintainers own design decisions,
+review outcomes, and merge decisions.
+
+If you build against `main`, pin commits and expect breaking changes. For
+non-trivial upgrades, AI-assisted migration is recommended.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the external contribution policy.
 Bug-fix pull requests are welcome. New features must start as feature request
