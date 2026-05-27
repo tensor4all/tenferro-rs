@@ -1,6 +1,6 @@
 # Optimizing Compiler: Pass Design
 
-**Date:** 2026-04-04
+**Date:** 2026-05-28
 **Parent:** `../index.md`
 **Related:** `primitive-catalog.md`, `backend-contract.md`, `../architecture/tenferro-crates.md`
 
@@ -11,13 +11,12 @@
 This document specifies the optimization passes that run while lowering
 computegraph `CompiledProgram` values into tenferro's execution IR.
 
-The current compiler entry points are:
+The current compiler entry point is:
 
 - `compile_std_to_exec()`
-- `compile_semiring_to_exec()`
 
-Both lower directly to `ExecProgram`. Passes run on `ExecProgram` in place;
-there is no intermediate `StableHloProgram` / `StableHloOp` layer anymore.
+It lowers directly to `ExecProgram`. Passes run on `ExecProgram` in place;
+there is no intermediate `StableHloProgram` / `StableHloOp` layer.
 
 Before any pass runs, lowering also computes:
 
@@ -265,7 +264,7 @@ implementation, no tests, and no pass-order slot for it in the current code.
 The current lowering pipeline is:
 
 ```text
-CompiledProgram<StdTensorOp or SemiringOp<_>>
+CompiledProgram<StdTensorOp>
     │
     │ lower directly to ExecProgram
     │ infer dtype + output_shapes per instruction

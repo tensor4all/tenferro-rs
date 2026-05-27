@@ -1,6 +1,6 @@
 # AD Contract
 
-**Date:** 2026-04-04
+**Date:** 2026-05-28
 **Parent:** [`../index.md`](../index.md)
 **Related:** [`primitive-catalog.md`](primitive-catalog.md), [`../architecture/chainrules.md`](../architecture/chainrules.md), [`../architecture/tidu.md`](../architecture/tidu.md)
 
@@ -120,8 +120,10 @@ pub struct LinearFragment<Op: GraphOp> {
    during `materialize_merge` so that shared primal computations are not
    duplicated.
 
-5. **No AD for custom algebra**: `SemiringOp<T>` does NOT implement
-   `PrimitiveOp`. AD is only available for `StdTensorOp` (standard algebra).
+5. **Extension AD boundary**: built-in AD is defined for `StdTensorOp`.
+   `StdTensorOp::Extension` may participate in AD only when its operation
+   family registers an extension AD rule. Missing extension rules must report
+   unsupported AD; they must not silently drop or zero gradients.
 
 ## Owned by this document
 

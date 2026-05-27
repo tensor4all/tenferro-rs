@@ -1,329 +1,217 @@
-# Tensor Design: Structure and Einsum
+# Tensor Semantics
 
-**Date:** 2026-04-04
+**Date:** 2026-05-28
 **Parent:** `../index.md`
-**Related:** `../architecture/ad-pipeline.md`
+**Related:** `../architecture/tenferro-crates.md`, `backend-contract.md`,
+`primitive-catalog.md`
 
 ---
 
-## I. Principle: `tenferro_tensor::Tensor` is always dense
+## I. Purpose
 
-`Tensor` is a dense multi-dimensional array. It carries no structural metadata
-(diagonal, symmetric, block-diagonal, sparse, etc.), but it may reside on CPU
-or GPU. Runtime placement is described by `Placement`.
+This document specifies the current dense tensor data model split between
+`tenferro-tensor-core` and `tenferro-tensor`.
+
+The split is intentional:
+
+- `tenferro-tensor-core` is a lightweight host-only data model and view layer.
+- `tenferro-tensor` adds runtime tensor storage, placement metadata, backend
+  traits, CPU backends, and core execution kernels.
+
+`tenferro-tensor-core` must not require computation backends, GPU runtimes,
+provider selection, graph execution, or AD. Crates that need only dtype tags,
+host tensor data, scalar traits, shape/stride metadata, or metadata-only views
+should depend on `tenferro-tensor-core`.
+
+---
+
+## II. `tenferro-tensor-core`
+
+`tenferro-tensor-core` owns backend-independent host tensor metadata and
+contiguous host storage.
+
+Current public concepts:
+
+- `DType`: runtime dtype tags for `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`,
+  and `C64`.
+- `TensorScalar`: sealed scalar trait for supported scalar types.
+- `TypedTensor<T>`: owned typed host tensor with contiguous column-major data.
+- `Tensor`: dynamic host tensor enum over the supported scalar types.
+- `TypedTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
+- `TensorRef<'a>`: borrowed dynamic tensor reference.
+- `ShapeVec` and `StrideVec`: compact shape and signed-stride vectors.
+- `SliceSpec`: explicit positive-step slice descriptor.
+
+Core tensors are host-resident and backend-independent. They have no device
+placement, no backend-owned buffers, no GPU handles, and no execution methods.
+
+### Metadata-only views
+
+Core views describe shape, signed strides, and an offset into borrowed host
+storage. The view operations are metadata-only:
+
+- `reshape_view`
+- `permute_view`
+- `slice_view`
+
+Views may be non-contiguous. `as_slice()` succeeds only when the view is
+slice-contiguous for the borrowed storage. For v1, `SliceSpec` requires a
+positive step; negative strides and non-positive steps are intentionally
+rejected until the view contract is extended.
+
+---
+
+## III. `tenferro-tensor`
+
+`tenferro-tensor` is the runtime dense tensor crate. It reuses the core dtype
+and scalar model, then adds runtime storage and backend placement.
+
+The current typed runtime tensor shape is:
 
 ```rust
-struct Placement {
-    memory_kind: MemoryKind,
-    resident_device: Option<ComputeDevice>,
+pub struct TypedTensor<T> {
+    pub buffer: Buffer<T>,
+    pub shape: Vec<usize>,
+    pub placement: Placement,
 }
 
-enum MemoryKind {
+pub enum Buffer<T> {
+    Host(Vec<T>),
+    Backend(Arc<dyn BackendBuffer<T>>),
+}
+```
+
+`Tensor` is the dynamic runtime enum over the supported scalar types:
+
+- `F32`
+- `F64`
+- `I32`
+- `I64`
+- `Bool`
+- `C32`
+- `C64`
+
+Runtime placement is explicit metadata:
+
+```rust
+pub enum MemoryKind {
     Device,
     PinnedHost,
     UnpinnedHost,
+    Managed,
     Other(String),
 }
 
-// Typed tensor (internal)
-struct TensorData<T: Scalar> {
-    buffer: Buffer<T>,
-    shape: Vec<usize>,
-    placement: Placement,
-    preferred_compute_device: Option<ComputeDevice>,
+pub enum DeviceKind {
+    Cpu,
+    Gpu(GpuBackendKind),
+    Other(String),
 }
 
-// Type-erased tensor (user-facing)
-enum Tensor {
-    F32(TensorData<f32>),
-    F64(TensorData<f64>),
-    C32(TensorData<Complex<f32>>),
-    C64(TensorData<Complex<f64>>),
+pub enum GpuBackendKind {
+    Cuda,
+    Rocm,
+    Other(String),
 }
-```
 
-```rust
-enum Buffer<T> {
-    Host(HostBuffer<T>),
-    Backend(BufferHandle<T>),
+pub struct Placement {
+    pub memory_kind: MemoryKind,
+    pub device: Option<DeviceId>,
 }
 ```
 
-### TensorData trait (canonical signature)
+Host buffers are contiguous column-major tensors. Backend buffers are opaque to
+the runtime tensor layer; the backend that owns the concrete handle is
+responsible for downcasting and execution.
 
-`TensorData` provides structural buffer access for the execution engine's
-common infrastructure. Both `Tensor` and custom algebra types implement it.
+`tenferro-tensor` owns:
 
-```rust
-trait TensorData {
-    type Scalar: Scalar;
-    fn shape(&self) -> &[usize];
-    fn as_slice(&self) -> &[Self::Scalar];
-    fn from_dense(shape: Vec<usize>, data: Vec<Self::Scalar>) -> Self;
-}
-```
+- runtime dense tensor types
+- backend traits
+- CPU backend implementations
+- core execution kernels
+- host/runtime views used by kernels
 
-**Note:** Device-resident buffers, zero-copy
-views, and placement metadata may require additional methods or a different
-structure (e.g., `AsSlice` + `ViewAs` traits). See issue discussion for
-context.
-
-### Contiguous Memory Design
-
-All tensors are **contiguous column-major** (Fortran order). There is no
-`strides` field — the shape alone determines the layout.
-
-**Why the previous design used arbitrary strides:** In the previous eager execution model, lazy
-transpose was implemented via zero-copy stride permutation. This avoided
-data movement for operations like `.t()` and `.permute()` by simply
-reinterpreting the strides without copying memory.
-
-**Why the current design removes strides:** tenferro compiles operations as a group (Fragment /
-IR) and optimizes at the IR level. For example, `TransposeFolding` absorbs
-`Transpose` nodes into `DotGeneral` contracting/batch dimensions, eliminating
-the transpose entirely. With compiled mode, stride tricks at the tensor level
-are unnecessary — the compiler handles layout optimization.
-
-**Benefits of contiguous-only tensors:**
-
-- **Simplified kernels**: no stride arithmetic in inner loops.
-- **GPU-friendly**: contiguous memory maps directly to GPU global memory
-  without padding or indirection.
-- **Full-program optimization**: the compiler can optimize across an entire
-  computation (e.g., a full DMRG sweep), not just individual operations.
-- **No ambiguity**: `Reshape` always operates on contiguous data — there is
-  no stride ambiguity at any level (IR, runtime, or tensor).
-
-`tenferro_runtime::TracedTensor` wraps `Tensor` with graph tracking for lazy
-evaluation. AD surfaces that require tracing live in `tenferro_ad`.
-
-`Tensor` is the standard-algebra runtime value shared across CPU and GPU
-backends. Methods such as `placement()`, `resident_device()`, `to_cpu()`, and
-`to_gpu_on(...)` are part of the tensor boundary; backend-specific handles
-remain internal implementation details. Compute preference stays separate via
-`preferred_compute_device()`.
-
-### No compute methods on Tensor
-
-`Tensor` and `TensorData` have **metadata-only inherent methods**: `shape()`,
-`dtype()`, `get()`, `n_elements()`. All compute operations are free functions
-(e.g., `host_ops::typed_*`) or go through `TensorBackend`. This keeps the
-tensor type thin and decouples data representation from execution strategy.
-
-**Why dense only**: structural variants (diagonal, band, triangular, ...)
-cause combinatorial explosion in op implementations. Every op must handle
-`Dense × Dense`, `Diagonal × Dense`, `Dense × Diagonal`, `Diagonal × Diagonal`,
-etc. Adding a new structure type requires touching every op.
-
-StableHLO also assumes dense tensors. Structural variants cannot be
-lowered to StableHLO without conversion.
+GPU backend implementations and GPU transfer helpers belong in
+`tenferro-gpu`.
 
 ---
 
-## II. Structural information lives in tensor4all-rs
+## IV. Data Model vs. Execution
 
-Higher-level structure (diagonal matrices, block-diagonal, etc.) is
-managed in **tensor4all-rs**, one layer above tenferro. This matches
-the previous tensor4all-rs codebase.
+The tensor data model does not own graph compilation, AD, or extension
+registration.
 
-```
-tensor4all-rs (structure-aware layer)
-  ├── DiagonalTensor { diag: Tensor }        // N-dim vector → diagonal matrix
-  ├── BlockDiagonal { blocks: Vec<Tensor> }  // block structure
-  ├── ... (other structured types)
-  │
-  └── uses tenferro einsum with hyper edges to avoid scatter/gather
+- `tenferro-runtime` owns concrete tensor helpers, traced tensors, graph
+  compilation/execution, extension runtime registration, and extension cache
+  storage.
+- `tenferro-ad` owns eager AD runtime surfaces and traced AD extension traits.
+- `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft` own their public
+  APIs, traced/eager helpers, extension runtimes, and optional AD rules.
 
-tenferro (dense layer)
-  ├── Tensor — always dense
-  ├── TracedTensor — graph-aware wrapper
-  ├── einsum — hyper edge support
-  └── backends — faer / Custom GPU / StableHLO
-```
+Computation should be exposed as free functions, backend dispatch, runtime
+execution, or extension runtimes. The tensor types should remain data and
+metadata carriers.
 
----
-
-## III. Einsum with hyper edges replaces scatter/gather
-
-### The problem
-
-Reconstructing A = U Σ Vᵀ from SVD naively requires materializing
-the diagonal matrix Σ:
-
-```
-Naive (scatter needed):
-  diag_matrix = scatter(sigma, indices)    // [N] → [N, N]
-  temp = matmul(U, diag_matrix)            // [M, N] × [N, N]
-  A = matmul(temp, Vt)                     // [M, N] × [N, K]
-  → materializes sparse N×N matrix. wasteful.
-```
-
-### Hyper edge solution
-
-A **hyper edge** is an index that appears in 3+ tensors simultaneously.
-tenferro's einsum supports this natively:
-
-```
-einsum("ik,k,kj->ij", U, sigma, Vt)
-        ^  ^  ^
-        k appears in 3 tensors (hyper edge)
-
-→ sigma stays as 1D vector
-→ no diagonal matrix materialized
-→ no scatter/gather needed
-```
-
-### Einsum capabilities
-
-```rust
-// Diagonal embedding: vector → diagonal matrix
-einsum("i->ii", &[&v])         // [N] → [N, N]
-
-// Diagonal extraction: matrix → vector
-einsum("ii->i", &[&a])         // [N, N] → [N]
-
-// Higher-order diagonal: vector → 3D diagonal tensor
-einsum("i->iii", &[&v])        // [N] → [N, N, N]
-
-// Trace: matrix → scalar
-einsum("ii->", &[&a])          // [N, N] → scalar
-
-// SVD reconstruction with hyper edge
-einsum("ik,k,kj->ij", &[&u, &sigma, &vt])  // no scatter
-```
-
-The `Subscripts` data structure represents index equivalence classes:
-a label (u32) shared across multiple input tensors defines a hyper edge.
-This is a direct encoding of the tensor network structure.
-
-### Multiple equivalence classes
-
-A single einsum can have multiple hyper edges (equivalence classes):
-
-```
-einsum("ik,k,kj,jl,l,lm->im", &[&A, &d1, &B, &C, &d2, &D])
-        k k k   j j j  l l l
-        ^^^^^   ^^^^^   ^^^^^
-        class 1 class 2 class 3
-```
-
-Each equivalence class contracts independently. The einsum optimizer
-chooses the contraction order. No intermediate diagonal matrices needed.
+There is no implicit CPU<->GPU transfer for user-visible backend operations.
+Tensors must already be placed on the correct device for the backend call,
+except for explicit upload/download helpers and internal execution conveniences
+documented in [`backend-contract.md`](backend-contract.md).
 
 ---
 
-## IV. Einsum decomposition for compilation
+## V. Dense Tensor Boundary
 
-N-ary einsum and hyper edges are decomposed into binary contractions
-using `PrimitiveOp`s (DotGeneral, Reshape, Transpose, etc.) in a
-computegraph Fragment:
+`tenferro::Tensor` is a dense runtime tensor. It does not carry structural
+metadata such as diagonal, symmetric, block-diagonal, or sparse layout tags.
 
-```
-einsum("ik,k,kj->ij", U, sigma, Vt)
+This is a deliberate boundary:
 
-Decomposed into Fragment:
-  step 1: Mul(U_broadcasted, sigma_broadcasted)   → temp  (element-wise scaling)
-  step 2: DotGeneral(temp, Vt, ...)               → A     (matmul)
-```
+- structural variants cause a combinatorial expansion of operation cases
+- core graph and execution IR remain easier to reason about when runtime
+  tensors are logically dense
+- extension crates can add structured algorithms without changing the base
+  tensor enum
 
-The contraction path optimizer decides the pairwise decomposition order.
-Concrete-shape results are cached by `GraphCompiler`; symbolic-shape runtime
-results are cached by `GraphExecutor`.
-
-For execution lowering: the Fragment's binary ops lower to `ExecOp` instructions
-such as `DotGeneral` and `Multiply`.
+Structured values can be represented by external crates or higher-level
+wrappers that store dense tensor leaves and call tenferro operations.
+tenferro's runtime tensor remains the dense leaf type.
 
 ---
 
-## V. Diagonal structure in tensor4all-rs
+## VI. Einsum, Diagonal, and Repeated Labels
 
-### DiagonalTensor
+Trace, diagonal extraction, diagonal embedding, and tensor-network hyper-edge
+patterns should be expressed through `tenferro-einsum` rather than by adding
+structured tensor variants to the runtime tensor type.
 
-```rust
-// tensor4all-rs
-struct DiagonalTensor {
-    diag: Tensor,   // 1D dense vector [N]
-    // Logically represents an [N, N] diagonal matrix
-}
+Examples:
 
-impl DiagonalTensor {
-    fn to_dense(&self) -> Tensor {
-        einsum("i->ii", &[&self.diag])
-    }
-
-    fn matmul(&self, rhs: &Tensor) -> Tensor {
-        // Efficient: no scatter, no dense diagonal matrix
-        einsum("i,ij->ij", &[&self.diag, rhs])
-    }
-}
+```text
+einsum("ii->", A)              # trace
+einsum("ii->i", A)             # diagonal extraction
+einsum("i->ii", v)             # diagonal embedding
+einsum("ik,k,kj->ij", U, s, V) # SVD-like reconstruction without dense diag
 ```
 
-### BlockDiagonal
-
-```rust
-struct BlockDiagonal {
-    blocks: Vec<Tensor>,  // each block is dense
-    // Logically represents a block-diagonal matrix
-}
-```
-
-### AD through structured types
-
-Differentiation operates at the `TracedTensor` level (dense).
-tensor4all-rs wraps and unwraps:
-
-```
-Forward:
-  DiagonalTensor.diag (1D Tensor)
-    → wrap as TracedTensor
-    → einsum with hyper edge
-    → result (TracedTensor)
-
-AD:
-  differentiate/transpose operate on the dense einsum graph
-  → no structural knowledge needed at the AD level
-```
-
-tensor4all-rs extracts the dense Tensor leaves from structured types
-before entering the AD graph via TracedTensor.
+The operation semantics and contraction planning belong to `tenferro-einsum`.
+The runtime tensor model only provides dense tensor operands and results.
 
 ---
 
-## VI. Summary
+## VII. Linalg Batch Convention
 
-| Layer | Knows about structure? | Types |
-|-------|----------------------|-------|
-| computegraph (graph engine) | No | generic `GraphOp` |
-| tidu (AD transforms) | No | generic `PrimitiveOp` |
-| tenferro | No | `Tensor` (dense), `TracedTensor` |
-| tensor4all-rs | **Yes** | `DiagonalTensor`, `BlockDiagonal`, etc. |
+Linalg ops follow trailing-batch convention: core matrix dims are leftmost and
+batch dims are rightmost. Shape `[M, N, B1, B2, ...]` means `B1*B2*...`
+independent `M x N` matrices. Each batch slice is contiguous in column-major
+memory, enabling zero-copy slicing.
 
-| Operation | Without hyper edge | With hyper edge |
-|-----------|-------------------|-----------------|
-| U Σ Vᵀ | scatter + 2 matmul | einsum 3-input (no scatter) |
-| diag(v) × A | scatter + matmul | einsum 2-input "i,ij->ij" |
-| Tr(A) | extract_diag + sum | einsum "ii->" |
-
-Structural types live in tensor4all-rs. tenferro provides dense
-tensors + einsum with hyper edges. scatter/gather are available but
-rarely needed when einsum handles the structure.
-
----
-
-## IV. Linalg Batch Convention
-
-Linalg ops follow **trailing-batch convention**: core matrix dims are
-leftmost, batch dims are rightmost. Shape `[M, N, B1, B2, ...]` means
-`B1*B2*...` independent M×N matrices. Each batch slice is contiguous in
-col-major memory, enabling zero-copy slicing.
-
-This differs from JAX/NumPy/PyTorch which use leading-batch `[B, M, N]`.
-The choice matches tenferro's col-major storage: rightmost dims have the
-largest stride, so trailing batch dims make each `[M, N]` slice a
+This differs from JAX, NumPy, and PyTorch leading-batch convention
+`[B, M, N]`. The choice matches tenferro's column-major storage: rightmost
+dims have the largest stride, so trailing batch dims make each `[M, N]` slice a
 contiguous block.
 
-When `shape.len() == core_rank`, the op is a plain 2D call with zero
-overhead.
+When `shape.len() == core_rank`, the op is a plain 2D call with zero overhead.
 
 | Op | Input shape | Output shape(s) |
 |---|---|---|
@@ -334,4 +222,20 @@ overhead.
 | `solve` | A `[N, N, B...]`, b `[N, M, B...]` | `[N, M, B...]` |
 
 The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
-(documented in `AGENTS.md` under Column-Major Dimension Ordering).
+(documented in `AGENTS.md` under column-major dimension ordering).
+
+---
+
+## VIII. Source of Truth
+
+Current implementation ownership:
+
+- `tenferro-tensor-core/src/lib.rs` for the host-only data model and
+  metadata-only views
+- `tenferro-tensor/src/types.rs` for runtime dense tensor storage and
+  placement metadata
+- `tenferro-tensor/src/backend.rs` for backend traits
+- `tenferro-runtime/src/*` for graph execution and extension runtime dispatch
+
+If this document conflicts with those files, the implementation wins and this
+document should be updated.

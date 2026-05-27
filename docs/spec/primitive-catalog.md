@@ -1,6 +1,6 @@
 # Primitive Catalog
 
-**Date:** 2026-04-04
+**Date:** 2026-05-28
 **Parent:** `../index.md`
 **Related:** `backend-contract.md`, `tensor-semantics.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
@@ -27,17 +27,17 @@ different senses. For readability, this document separates them explicitly:
 | Layer | Example | Meaning |
 |-------|---------|---------|
 | Surface API | `einsum`, `sum`, `mean`, `grad`, `svd()` | what users call |
-| Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` / `SemiringOp<T>` nodes in a `Fragment`; fragment construction, AD, einsum decomposition |
+| Tenferro IR | `DotGeneral`, `ReduceSum`, `BroadcastInDim` | what may appear as `StdTensorOp` nodes in a `Fragment`; fragment construction, AD, einsum decomposition |
 | Core primitive catalog | `PrimitiveOpKind`, descriptors | internal metadata in `tenferro-core-ops` used by graph, runtime, and backend dispatch |
 | Execution IR | `ExecOp` variants | output of the optimizing compiler; input to runtime/backend dispatch |
 | Backend kernel | BLAS GEMM, cuSOLVER SVD, IREE module, faer routine | how an instruction is executed |
 
-### The 3 IR layers
+### Active IR layers
 
 ```
 ┌─────────────────────────────────────────┐
 │ Tenferro IR                             │
-│ (StdTensorOp / SemiringOp<T>)           │
+│ (StdTensorOp)                           │
 │ Fragment construction, AD, einsum        │
 └──────────────┬──────────────────────────┘
                │ compile_std_to_exec()
@@ -54,8 +54,8 @@ This document uses **three orthogonal classifications**:
    optimizing compiler, backend traits, and execution engine
 2. **Tenferro IR vocabulary** (Section IV): what the graph / AD
    stack talks about at the Tenferro IR level
-3. **standard arithmetic extensions** (Section V): ops available only for
-   ordinary dense numeric types
+3. **additional dense numeric primitives** (Section V): ops outside the minimal
+   graph core but still in the standard dense tensor runtime surface
 
 Important distinctions:
 
@@ -67,7 +67,7 @@ Important distinctions:
 - High-level linalg ops such as `SVD` and `Solve` are standard extension
   operations owned by `tenferro-linalg`; they are not core primitive catalog
   entries.
-- `StdTensorOp` is **flat** (no `SemiringOpKind` wrapping). Most variants
+- `StdTensorOp` is **flat** (no nested operation-kind wrapper). Most variants
   map to core primitive catalog entries. Documented exceptions include
   composite lowerings and `StdTensorOp::Extension` payloads for operation
   families such as linalg, einsum, and FFT.
@@ -118,11 +118,10 @@ The output ordering must be part of the primitive definition because
 
 ### Column-major (Fortran) convention
 
-Execution-produced intermediates and outputs use **column-major (Fortran)
-ordering**. This is the convention for all data produced by the backend
-execution pipeline. Input tensors may be contiguous with arbitrary axis
-ordering; dispatch inspects strides and adjusts backend calls accordingly
-(e.g., BLAS trans flags for transposed inputs).
+Runtime-owned tensors and execution-produced intermediates use **column-major
+(Fortran) ordering**. Metadata-only views may describe non-contiguous access,
+but `ExecProgram` itself does not expose arbitrary layout transforms as a
+backend contract.
 
 ### What tenferro is expected to implement
 
@@ -130,7 +129,7 @@ From this document's point of view, the implementation target is:
 
 - implement the 2-level IR architecture and backend traits defined below
 - implement the AD-closed graph core defined below
-- implement the `Standard arithmetic only` primitives when tenferro claims
+- implement the additional dense numeric primitives when tenferro claims
   standard dense numeric support
 - treat control-flow primitives as future work, not part of the initial
   required set
@@ -140,9 +139,8 @@ From this document's point of view, the implementation target is:
 ## III. Relationship to Backend Execution
 
 The backend pipeline, Execution IR dispatch categories, backend trait
-signatures (`SemiringCore`, `SemiringFastPath`), generic execution engine,
-buffer lifecycle, and memory layout are owned by
-[`backend-contract.md`](backend-contract.md).
+signatures, generic execution engine, buffer lifecycle, and memory layout are
+owned by [`backend-contract.md`](backend-contract.md).
 
 Key relationships:
 
@@ -151,7 +149,6 @@ Key relationships:
 - **Graph IR** uses `StdTensorOp` for core primitives and extension carriers.
 - **Execution IR** uses `ExecOp`, including `ExecOp::Extension` for registered
   operation-family runtimes.
-- **Custom algebra dispatch** is algebra-dependent (see backend-contract.md).
 - **Optimizing compiler**: see [`optimizer-passes.md`](optimizer-passes.md).
 
 ---
@@ -179,7 +176,7 @@ trait GraphOp: Clone + Debug + Hash + Eq + Send + Sync + 'static {
 
 `Operand` is the runtime value type. Defined in
 `computegraph-rs/src/traits.rs`. Contains both algebraic and structural
-methods — computegraph-rs is a tensor computation graph engine, not a
+methods; computegraph-rs is a tensor computation graph engine, not a
 fully generic DAG engine.
 
 ```rust
@@ -200,9 +197,11 @@ pub trait Operand: Clone + Send + Sync + 'static {
 }
 ```
 
-`TensorData` (see [`tensor-semantics.md`](tensor-semantics.md)) provides
-additional buffer access methods (`shape`, `strides`, `data`) needed by the
-execution engine's common infrastructure.
+Runtime tensor storage and placement are described in
+[`tensor-semantics.md`](tensor-semantics.md). The graph-level `Operand`
+contract is separate from backend buffer access; execution dispatch must go
+through the runtime tensor and backend APIs described in
+[`backend-contract.md`](backend-contract.md).
 
 ---
 
@@ -229,29 +228,29 @@ Every op in this table is expected to implement `PrimitiveOp` directly
 `transpose_rule` of any op in this table emit only ops from this table.
 
 **Implementation note:** the boundary between this core set and the
-"Standard arithmetic extensions" (Section V) is primarily an
-**implementation priority** guide, not a formal algebraic boundary. The
-full `StdTensorOp` set (core + extensions) is also AD-closed. The core
-set is distinguished by two properties: (1) it is AD-closed on its own,
-and (2) all ops in it are well-defined for arbitrary semiring algebras
-(not just standard arithmetic), making them available to `SemiringOp<T>`.
+"Additional dense numeric primitives" (Section V) is primarily an
+**implementation priority** guide, not a formal algebraic boundary. The full
+`StdTensorOp` set, together with extension operations that register AD rules,
+is expected to remain AD-closed. The core set is distinguished by two
+properties: (1) it is AD-closed on its own, and (2) all ops in it are required
+by shape, contraction, and reverse-mode accumulation machinery.
 
 #### Algebraic ops
 
 | Primitive | Signature | Definition | Notes |
 |-----------|-----------|------------|-------|
-| `Add` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] + x1[i]` | Same shape on both inputs; no hidden broadcasting. Maps to ⊕ for custom algebras. |
-| `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract. Maps to ⊗ for custom algebras. |
-| `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise. Standard algebra only (semirings lack additive inverse). |
-| `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes. Standard algebra only. |
-| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive; uses ⊕ and ⊗ for custom algebras. Config defined below. |
-| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Uses ⊕ for custom algebras. Rank drops unless a later op restores it. |
+| `Add` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] + x1[i]` | Same shape on both inputs; no hidden broadcasting. |
+| `Mul` | `x0: S, x1: S -> y: S` | `y[i] = x0[i] * x1[i]` | Elementwise multiply; same-shape contract. |
+| `Neg` | `x: S -> y: S` | `y[i] = -x[i]` | Unary elementwise. |
+| `Conj` | `x: S -> y: S` | `y[i] = conj(x[i])` | Identity on real dtypes, conjugation on complex dtypes. |
+| `DotGeneral(config)` | `lhs: A, rhs: B -> out: C` | General tensor contraction over explicit batch axes and contracting axes | Canonical contraction primitive. Config defined below. |
+| `ReduceSum(axes)` | `x: [d0, ..., dn-1] -> y` | `y` is formed by summing `x` over the listed axes | Rank drops unless a later op restores it. |
 
 #### Structural ops
 
-These ops rearrange or select elements without any arithmetic. They are
-well-defined for all algebras and handled by common infrastructure at the
-backend level (not part of the custom backend contract).
+These ops rearrange or select elements without changing the dtype. They are
+handled by the runtime/backend infrastructure described in
+[`backend-contract.md`](backend-contract.md).
 
 | Primitive | Signature | Definition | Notes |
 |-----------|-----------|------------|-------|
@@ -260,7 +259,7 @@ backend level (not part of the custom backend contract).
 | `BroadcastInDim(shape, dims)` | `x: [a0, ..., ak-1] -> y: shape` | Place input axis `j` into output axis `dims[j]`, repeating along the others | Makes all broadcast semantics explicit |
 | `Gather` | `x: S -> y: S'` | Read values from `x` at positions specified by an index tensor | Needed for repeated-index einsum patterns (trace, diagonal extraction). Pure index-based read; no arithmetic. |
 | `GatherDynamicSliceSizes` | `x: S, shape_sources... -> y: S'` | Same read semantics as `Gather`, but `slice_sizes` are `DimExpr` values resolved from runtime input shapes before backend dispatch | Used when AD needs gather window sizes derived from symbolic tensor metadata. Shape-source inputs are non-differentiable. |
-| `Scatter` | `updates: S, x: S' -> y: S'` | Write or accumulate values into `y` at positions specified by an index tensor | Transpose of `Gather`. Accumulation uses ⊕. Needed for AD of `Gather` and for `embed_diag`. |
+| `Scatter` | `updates: S, x: S' -> y: S'` | Write or accumulate values into `y` at positions specified by an index tensor | Transpose of `Gather`. Needed for AD of `Gather` and for `embed_diag`. |
 
 ### DotGeneral config
 
@@ -309,11 +308,12 @@ diagonal extraction in the previous (`dispatch.rs` diagonal plan).
 
 ---
 
-## V. Standard Arithmetic Only
+## V. Additional Dense Numeric Primitives
 
-These primitives are available only for the ordinary dense numeric setting
-(real/complex standard arithmetic). They are not assumed to exist for generic
-semirings such as tropical algebra.
+These primitives are part of the ordinary dense tensor runtime surface. They
+are not in the minimal graph core above, but they are still standard
+`StdTensorOp`/`ExecOp` vocabulary unless explicitly owned by an extension
+crate.
 
 This section should be kept as close as practical to the official StableHLO op
 set, so that tenferro's Tenferro IR primitives lower cleanly to StableHLO.
@@ -356,8 +356,7 @@ this document is updated.
 
 `Gather`, `GatherDynamicSliceSizes`, and `Scatter` are in the AD-closed graph
 core (Section IV) because they are needed for repeated-index einsum patterns
-and symbolic-shape AD, and are well-defined for all algebras. The remaining
-indexing ops are standard-arithmetic only:
+and symbolic-shape AD. The remaining indexing ops are dense tensor primitives:
 
 | Primitive | Definition | Notes |
 |-----------|------------|-------|

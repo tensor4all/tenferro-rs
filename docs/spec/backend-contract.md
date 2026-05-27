@@ -1,6 +1,6 @@
 # Backend Architecture
 
-**Date:** 2026-04-04
+**Date:** 2026-05-28
 **Repos:** tenferro-rs
 **Related:** `../architecture/ad-pipeline.md`, `primitive-catalog.md`, `../reference/stablehlo-primitives.md`, `../reference/jax-primitives.md`
 
@@ -11,7 +11,7 @@
 All computation, primal and derivative, flows through the same execution
 pipeline.
 
-### Standard algebra path
+### Execution path
 
 ```text
 MaterializedGraph
@@ -23,7 +23,8 @@ CompiledProgram<StdTensorOp>
   │ compile_std_to_exec()
   │   - lower StdTensorOp -> ExecOp
   │   - infer dtype and output_shapes
-  │   - run DotDimensionSorter + TransposeFolding
+  │   - run DotDimensionSorter + TransposeFolding + DotDecomposer
+  │   - run DeadCodeElimination
   ▼
 ExecProgram
   │
@@ -34,26 +35,6 @@ ExecProgram
   TensorBackend / BackendSession dispatch
 ```
 
-### Custom algebra path
-
-```text
-MaterializedGraph
-  │
-  │ compile
-  ▼
-CompiledProgram<SemiringOp<Alg>>
-  │
-  │ compile_semiring_to_exec()
-  ▼
-ExecProgram
-  │
-  ▼
-eval_semiring_ir()
-  │
-  ▼
-SemiringBackend<Alg> + shared structural helpers
-```
-
 There is no in-process `StableHloProgram` / `StableHloOp` layer. The current
 runtime contract is centered on `ExecProgram`.
 
@@ -61,8 +42,8 @@ runtime contract is centered on `ExecProgram`.
 
 ## II. Execution IR
 
-`ExecProgram` is the single in-process execution IR shared by standard and
-custom algebra evaluation.
+`ExecProgram` is the single in-process execution IR for standard tensor
+programs and registered extension runtimes.
 
 ```rust
 pub struct ExecProgram {
@@ -116,7 +97,7 @@ variants.
 
 ## III. Lowering Contract
 
-### Standard lowering
+### StdTensorOp lowering
 
 `compile_std_to_exec()` consumes:
 
@@ -133,27 +114,14 @@ For each computegraph instruction it:
 5. runs the compiler passes on the resulting `ExecProgram`
 6. populates `last_use`
 
-### Semiring lowering
-
-`compile_semiring_to_exec()` consumes:
-
-- `CompiledProgram<SemiringOp<Alg>>`
-- input shapes as `Vec<DimExpr>`
-
-The instruction dtype is derived from `Alg::Scalar`, and output shapes come
-from semiring-aware shape inference. The resulting program goes through the
-same pass and liveness pipeline.
-
 ### Current pass pipeline
 
 The active optimizer passes are:
 
 - `DotDimensionSorter`
 - `TransposeFolding`
-
-`DotDecomposer` is not part of the live compiler pipeline yet. The new
-`ExecInstruction::output_shapes` metadata exists specifically to unblock that
-work, which is tracked in `tensor4all/tenferro-rs#729`.
+- `DotDecomposer`
+- `DeadCodeElimination`
 
 `ReductionSimplification` was deleted and is not part of the current backend
 contract.
@@ -264,25 +232,11 @@ It includes:
 execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
-### SemiringBackend
-
-`SemiringBackend<Alg>` is the custom-algebra execution surface.
-
-`eval_semiring_ir()` currently accepts the semiring-compatible subset of
-`ExecOp`:
-
-- `DotGeneral`
-- `Add`
-- `Multiply`
-- `ReduceSum`
-- `Transpose`
-- `Reshape`
-- `BroadcastInDim`
-- `ExtractDiag`
-- `EmbedDiag`
-
-Any other `ExecOp` in a semiring program is a compiler bug and currently
-panics.
+Custom operation families do not add a second backend trait. They lower to
+`ExecOp::Extension` and dispatch through their registered `ExtensionRuntime`.
+The owning extension crate is responsible for deciding whether that runtime
+uses the active `TensorBackend`, a provider-specific library, or an internal
+implementation.
 
 ---
 
