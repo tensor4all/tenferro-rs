@@ -200,16 +200,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 For traced einsum, linalg, and custom operations, add the corresponding
 standard operation crate and register its runtime on the `GraphExecutor`.
 
-## Choosing An API
-
-| Goal | Start with |
-| --- | --- |
-| ndarray-like CPU tensor computation | `Tensor` or `TypedTensor<T>` with `CpuBackend` |
-| Immediate execution plus scalar-loss reverse-mode `backward()` | `EagerTensor` with `EagerRuntime` |
-| Graph reuse, forward-mode / transform AD (`jvp`, `vjp`, `grad`), symbolic inputs, or repeated compile/run | `TracedTensor`, `GraphCompiler`, and `GraphExecutor` |
-| CUDA execution | The same tensor layer plus explicit upload/download on the CUDA backend |
-| Standard linalg, einsum, or FFT | `tenferro-linalg`, `tenferro-einsum`, or `tenferro-fft` |
-
 ## Documentation
 
 **<https://tensor4all.org/tenferro-rs/>**
