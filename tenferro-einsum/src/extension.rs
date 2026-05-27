@@ -18,14 +18,14 @@ use computegraph::types::{LocalValId, OpMode};
 use computegraph::OpEmitter;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
+use tenferro_extension_macros::define_idempotent_rule_registration;
+#[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::{
-    is_extension_rule_registered, register_extension_rule, ExtensionAdRule, ExtensionRegistryError,
-};
+use tenferro_ops::ext_op::ExtensionAdRule;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
@@ -244,16 +244,11 @@ impl ExtensionOp for EinsumExtensionOp {
     }
 }
 
-/// Register the einsum extension AD rule.
 #[cfg(feature = "autodiff")]
-pub(crate) fn ensure_einsum_extension_rule_registered() -> Result<(), ExtensionRegistryError> {
-    if is_extension_rule_registered(EINSUM_EXTENSION_FAMILY_ID) {
-        return Ok(());
-    }
-    match register_extension_rule(Arc::new(EinsumAdRule)) {
-        Ok(()) | Err(ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
-        Err(err) => Err(err),
-    }
+define_idempotent_rule_registration! {
+    register_fn = ensure_einsum_extension_rule_registered,
+    rule_type = EinsumAdRule,
+    visibility = pub(crate),
 }
 
 #[derive(Debug)]

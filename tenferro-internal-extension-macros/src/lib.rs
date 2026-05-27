@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token};
+use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token, Visibility};
 
 #[derive(Debug, Default)]
 struct ExtensionArgs {
@@ -31,6 +31,12 @@ struct RuntimeArgs {
     execute: Path,
     register_fn: Ident,
     backend_bound: Path,
+}
+
+struct RuleRegistrationArgs {
+    register_fn: Ident,
+    rule_type: Path,
+    visibility: Visibility,
 }
 
 impl Parse for ExtensionArgs {
@@ -104,6 +110,42 @@ impl Parse for RuntimeArgs {
     }
 }
 
+impl Parse for RuleRegistrationArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut register_fn = None;
+        let mut rule_type = None;
+        let mut visibility = None;
+
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "register_fn" => register_fn = Some(input.parse()?),
+                "rule_type" => rule_type = Some(input.parse()?),
+                "visibility" => visibility = Some(input.parse()?),
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!(
+                            "unsupported define_idempotent_rule_registration argument {other:?}"
+                        ),
+                    ));
+                }
+            }
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(Self {
+            register_fn: required(register_fn, "register_fn")?,
+            rule_type: required(rule_type, "rule_type")?,
+            visibility: visibility.unwrap_or(Visibility::Inherited),
+        })
+    }
+}
+
 /// Derive an inherent `FAMILY_ID` constant for an extension payload type.
 ///
 /// The required attribute is:
@@ -127,6 +169,15 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
     expand_extension_runtime(args).into()
+}
+
+/// Generate an idempotent process-global extension AD rule registration helper.
+///
+/// The generated function returns `Ok(())` when the rule is already registered.
+#[proc_macro]
+pub fn define_idempotent_rule_registration(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as RuleRegistrationArgs);
+    expand_idempotent_rule_registration(args).into()
 }
 
 fn expand_extension_family_id(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -208,6 +259,26 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
             tenferro_runtime::extension::ExtensionRuntimeRegistryError,
         > {
             executor.registry_mut().register(std::sync::Arc::new(#runtime))
+        }
+    }
+}
+
+fn expand_idempotent_rule_registration(args: RuleRegistrationArgs) -> proc_macro2::TokenStream {
+    let RuleRegistrationArgs {
+        register_fn,
+        rule_type,
+        visibility,
+    } = args;
+
+    quote! {
+        #visibility fn #register_fn() -> std::result::Result<
+            (),
+            tenferro_ops::ExtensionRegistryError,
+        > {
+            match tenferro_ops::register_extension_rule(std::sync::Arc::new(#rule_type)) {
+                Ok(()) | Err(tenferro_ops::ExtensionRegistryError::DuplicateRule { .. }) => Ok(()),
+                Err(err) => Err(err),
+            }
         }
     }
 }
