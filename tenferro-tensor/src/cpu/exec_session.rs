@@ -9,6 +9,7 @@ use crate::config::{
 use crate::{Tensor, TensorRead};
 
 use super::backend::reclaim_typed;
+use super::CpuBackendKind;
 use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
 
 pub(crate) struct CpuExecSession<'a> {
@@ -16,6 +17,7 @@ pub(crate) struct CpuExecSession<'a> {
     pub(crate) ctx: &'a CpuContext,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
+    pub(crate) kind: CpuBackendKind,
 }
 
 /// Simple delegation: no dtype dispatch, no install.
@@ -101,27 +103,50 @@ impl TensorDot for CpuExecSession<'_> {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        #[cfg(feature = "cpu-faer")]
-        if let Some(result) = gemm::dot_general_read_cached(
-            self.buffers,
-            self.gemm_analysis_cache,
-            None,
-            self.ctx,
-            lhs,
-            rhs,
-            config,
-        )? {
-            return Ok(result);
-        }
-        #[cfg(feature = "cpu-blas")]
-        if let Some(result) = gemm::dot_general_read_cached(
-            self.buffers,
-            self.gemm_analysis_cache,
-            None,
-            lhs,
-            rhs,
-            config,
-        )? {
+        let direct = match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    gemm::dot_general_faer_read_cached(
+                        self.buffers,
+                        self.gemm_analysis_cache,
+                        None,
+                        self.ctx,
+                        lhs,
+                        rhs,
+                        config,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    gemm::dot_general_blas_read_cached(
+                        self.buffers,
+                        self.gemm_analysis_cache,
+                        None,
+                        lhs,
+                        rhs,
+                        config,
+                    )?
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    return Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ));
+                }
+            }
+        };
+        if let Some(result) = direct {
             return Ok(result);
         }
 
@@ -150,96 +175,121 @@ impl SessionCachedDot for CpuExecSession<'_> {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::C64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-            )
-            .map(Tensor::C64),
-            _ => Err(crate::Error::DTypeMismatch {
-                op: "dot_general",
-                lhs: lhs.dtype(),
-                rhs: rhs.dtype(),
-            }),
+        match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_faer_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            self.ctx,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::F32),
+                        (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_faer_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            self.ctx,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::F64),
+                        (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_faer_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            self.ctx,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::C32),
+                        (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_faer_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            self.ctx,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::C64),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_blas_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::F32),
+                        (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_blas_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::F64),
+                        (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_blas_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::C32),
+                        (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_blas_cached(
+                            self.buffers,
+                            self.gemm_analysis_cache,
+                            cache_slot,
+                            a,
+                            b,
+                            config,
+                        )
+                        .map(Tensor::C64),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
         }
     }
 
@@ -252,112 +302,153 @@ impl SessionCachedDot for CpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        match (lhs, rhs) {
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-faer")]
-            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                self.ctx,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::C64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::F32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::F64),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::C32),
-            #[cfg(feature = "cpu-blas")]
-            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_with_conj_cached(
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                a,
-                b,
-                config,
-                lhs_conj,
-                rhs_conj,
-            )
-            .map(Tensor::C64),
-            _ => Err(crate::Error::DTypeMismatch {
-                op: "dot_general",
-                lhs: lhs.dtype(),
-                rhs: rhs.dtype(),
-            }),
+        match self.kind {
+            CpuBackendKind::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_faer_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                self.ctx,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::F32)
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_faer_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                self.ctx,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::F64)
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_faer_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                self.ctx,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::C32)
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_faer_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                self.ctx,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::C64)
+                        }
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
+            CpuBackendKind::Blas => {
+                #[cfg(feature = "cpu-blas")]
+                {
+                    match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::F32)
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::F64)
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::C32)
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_blas_with_conj_cached(
+                                self.buffers,
+                                self.gemm_analysis_cache,
+                                cache_slot,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(Tensor::C64)
+                        }
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }
+                }
+                #[cfg(not(feature = "cpu-blas"))]
+                {
+                    Err(super::backend::unavailable_cpu_backend_kind(
+                        self.kind,
+                        "dot_general",
+                    ))
+                }
+            }
         }
     }
 }

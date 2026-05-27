@@ -15,7 +15,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorElementwise, TypedTensor};
 use tidu::{topo_sort_grad_dag, try_backward_dag, EagerOutput, EagerValue, GradNode};
 
 use self::backward::TenferroBackwardCallbacks;
@@ -462,7 +462,7 @@ impl EagerRuntime {
             let next = {
                 let current = slot.lock().unwrap();
                 match current.as_ref() {
-                    Some(existing) => Arc::new(existing.as_ref().add(incoming.as_ref(), backend)?),
+                    Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
                     None => incoming,
                 }
             };

@@ -652,7 +652,7 @@ where
 
 #[cfg(feature = "cpu-faer")]
 #[allow(dead_code)]
-pub(crate) fn dot_general<T>(
+pub(crate) fn dot_general_faer<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     ctx: &crate::cpu::CpuContext,
@@ -663,11 +663,11 @@ pub(crate) fn dot_general<T>(
 where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
-    dot_general_cached(buffers, cache, None, ctx, lhs, rhs, config)
+    dot_general_faer_cached(buffers, cache, None, ctx, lhs, rhs, config)
 }
 
 #[cfg(feature = "cpu-faer")]
-pub(crate) fn dot_general_cached<T>(
+pub(crate) fn dot_general_faer_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -679,14 +679,14 @@ pub(crate) fn dot_general_cached<T>(
 where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
-    dot_general_with_conj_cached(
+    dot_general_faer_with_conj_cached(
         buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
     )
 }
 
 #[cfg(feature = "cpu-faer")]
 #[allow(dead_code)]
-pub(crate) fn dot_general_with_conj<T>(
+pub(crate) fn dot_general_faer_with_conj<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     ctx: &crate::cpu::CpuContext,
@@ -699,13 +699,13 @@ pub(crate) fn dot_general_with_conj<T>(
 where
     T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
 {
-    dot_general_with_conj_cached(
+    dot_general_faer_with_conj_cached(
         buffers, cache, None, ctx, lhs, rhs, config, lhs_conj, rhs_conj,
     )
 }
 
 #[cfg(feature = "cpu-faer")]
-pub(crate) fn dot_general_with_conj_cached<T>(
+pub(crate) fn dot_general_faer_with_conj_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -766,7 +766,7 @@ where
 }
 
 #[cfg(feature = "cpu-faer")]
-pub(crate) fn dot_general_read_cached(
+pub(crate) fn dot_general_faer_read_cached(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -975,7 +975,7 @@ where
 
 #[cfg(feature = "cpu-blas")]
 #[allow(dead_code)]
-pub(crate) fn dot_general<T>(
+pub(crate) fn dot_general_blas<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     lhs: &TypedTensor<T>,
@@ -985,11 +985,11 @@ pub(crate) fn dot_general<T>(
 where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
 {
-    dot_general_cached(buffers, cache, None, lhs, rhs, config)
+    dot_general_blas_cached(buffers, cache, None, lhs, rhs, config)
 }
 
 #[cfg(feature = "cpu-blas")]
-pub(crate) fn dot_general_cached<T>(
+pub(crate) fn dot_general_blas_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -1042,7 +1042,7 @@ where
 
 #[cfg(feature = "cpu-blas")]
 #[allow(dead_code)]
-pub(crate) fn dot_general_with_conj<T>(
+pub(crate) fn dot_general_blas_with_conj<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     lhs: &TypedTensor<T>,
@@ -1054,11 +1054,11 @@ pub(crate) fn dot_general_with_conj<T>(
 where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
 {
-    dot_general_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
+    dot_general_blas_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
 }
 
 #[cfg(feature = "cpu-blas")]
-pub(crate) fn dot_general_with_conj_cached<T>(
+pub(crate) fn dot_general_blas_with_conj_cached<T>(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -1072,7 +1072,7 @@ where
     T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
 {
     if !lhs_conj && !rhs_conj {
-        return dot_general_cached(buffers, cache, cache_slot, lhs, rhs, config);
+        return dot_general_blas_cached(buffers, cache, cache_slot, lhs, rhs, config);
     }
 
     if let Some(result) = typed_blas_gemm_with_conj(
@@ -1128,11 +1128,11 @@ where
     } else {
         rhs
     };
-    dot_general_cached(buffers, cache, cache_slot, lhs_ref, rhs_ref, config)
+    dot_general_blas_cached(buffers, cache, cache_slot, lhs_ref, rhs_ref, config)
 }
 
 #[cfg(feature = "cpu-blas")]
-pub(crate) fn dot_general_read_cached(
+pub(crate) fn dot_general_blas_read_cached(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,

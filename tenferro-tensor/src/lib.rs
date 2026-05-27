@@ -15,63 +15,39 @@
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!("enable at least one CPU backend: cpu-faer or cpu-blas");
 
-#[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
-compile_error!("enable exactly one CPU backend: cpu-faer or cpu-blas");
-
 #[cfg(all(feature = "provider-inject", not(feature = "cpu-blas")))]
 compile_error!("provider-inject requires cpu-blas");
 
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+/// Lightweight backend-independent host tensor data model.
+///
+/// Execution-capable tensors and backends in this crate remain separate from
+/// the host-only core model during the crate-boundary split.
+pub mod core {
+    pub use tenferro_tensor_core::*;
+}
+
+pub use tenferro_tensor_core::{ShapeVec, SliceSpec, StrideVec, TensorRef};
+
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod backend;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod buffer_pool;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod cache;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod config;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod cpu;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod error;
-#[cfg(all(
-    feature = "provider-inject",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-inject")]
 pub mod inject;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod types;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub mod validate;
 
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use backend::{
     default_backend_session, BackendCachedDot, BackendRuntimeCache, BackendSession,
     BackendSessionHost, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
@@ -79,61 +55,25 @@ pub use backend::{
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use cache::{CacheStats, RuntimeCacheControl};
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use config::*;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use error::*;
-#[cfg(all(
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use types::*;
 
-#[cfg(all(
-    feature = "provider-src",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-src")]
 extern crate blas_src as _;
-#[cfg(all(
-    feature = "provider-inject",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-inject")]
 extern crate cblas_inject as _;
-#[cfg(all(
-    feature = "provider-src",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
-#[cfg(all(
-    feature = "provider-inject",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-inject")]
 extern crate lapack_inject as _;
-#[cfg(all(
-    feature = "provider-src",
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 
-#[cfg(all(
-    test,
-    any(feature = "cpu-faer", feature = "cpu-blas"),
-    not(all(feature = "cpu-faer", feature = "cpu-blas"))
-))]
+#[cfg(all(test, any(feature = "cpu-faer", feature = "cpu-blas")))]
 mod tests;

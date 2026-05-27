@@ -50,6 +50,16 @@ jobs:
       - name: Run inject tests for tenferro-tensor
         run: cargo test -p tenferro-tensor --test inject_tests --release --no-default-features --features "cpu-blas,provider-inject"
 
+  tensor-core-deps:
+    name: tensor core dependency boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check host-only tensor-core dependencies
+        run: scripts/check-tensor-core-deps.sh
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

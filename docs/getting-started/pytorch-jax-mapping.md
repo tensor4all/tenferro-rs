@@ -24,10 +24,10 @@ This page is for readers who already know either `torch` or `jax.numpy` and want
 | Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
 | Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
 | Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `tenferro_runtime::tensor::matmul(&a, &b, &mut ctx)` | `tenferro_runtime::traced_tensor::matmul(&a, &b)` |
-| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` | `x.reshape(&shape)` |
-| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` | `x.transpose(&perm)` |
+| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `tenferro_runtime::tensor::reshape(&x, &shape, &mut ctx)` | `x.reshape(&shape)` |
+| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `tenferro_runtime::tensor::transpose(&x, &perm, &mut ctx)` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` | `x.reduce_sum(&axes)` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `tenferro_runtime::tensor::reduce_sum(&x, &axes, &mut ctx)` | `x.reduce_sum(&axes)` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `tenferro_einsum::eager_tensor::einsum(...)` | `tenferro_einsum::traced_tensor::einsum(&mut compiler, ...)` plus `register_runtime` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::svd(&x)?` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `tenferro_linalg::traced_tensor::qr(&x)?` |

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use computegraph::fragment::FragmentBuilder;
 use computegraph::types::{GlobalValKey, LocalValId, OpMode, ValRef};
-use computegraph::OpEmitter;
 
 use crate::ad_support::{LinalgExtensionOp, LinalgOp};
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
@@ -11,6 +10,7 @@ pub(crate) use tenferro_ops::ad::support::{
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_tensor::DType;
 
 mod solve;
 mod support;

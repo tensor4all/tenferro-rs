@@ -254,8 +254,27 @@ Tests follow implementation ownership.
 - Exceptions with dedicated implementations are `reshape` (metadata-only),
   `embed_diagonal`, and indexing ops such as gather, scatter, slice, pad,
   concatenate, and reverse.
-- Exactly one CPU backend must be enabled at build time (`cpu-faer` or
-  `cpu-blas`). Both disabled or both enabled must fail at compile time.
+- CPU provider features are additive. At least one of `cpu-faer` or `cpu-blas`
+  must be enabled; enabling both is valid and must compile. `CpuBackend` owns
+  the runtime provider selection. `CpuBackend::new()` selects the default
+  compiled provider (`cpu-faer` when present), and explicit constructors or
+  application configuration select BLAS/LAPACK when that provider is compiled
+  and linked.
+
+### Tensor Core Data Model
+
+- `tenferro-tensor-core` owns backend-independent host tensor metadata and
+  contiguous host storage: `DType`, `TensorScalar`, host `TypedTensor<T>`,
+  dynamic `Tensor`, typed/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
+  `SliceSpec`, and metadata-only `reshape_view`, `permute_view`, and
+  `slice_view`.
+- `tenferro-tensor-core` must not depend on CUDA, GPU backends, backend buffers,
+  provider selection, or execution backend traits. Its owned `Tensor` must not
+  grow inherent `TensorBackend` execution helpers.
+- Core views must validate bounds eagerly using checked arithmetic. v1 rejects
+  negative strides and non-positive slice steps. Do not implement `PartialEq`
+  for views.
+- `ShapeVec` and `StrideVec` use `SmallVec` with inline rank capacity 8.
 
 ### Faer Integration
 

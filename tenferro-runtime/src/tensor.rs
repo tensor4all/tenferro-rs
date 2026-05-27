@@ -226,6 +226,63 @@ pub fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Resul
     backend.with_backend_session(|exec| exec.dot_general(a, b, &config))
 }
 
+/// Reshape a tensor without changing element order.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # let mut backend = CpuBackend::new();
+/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// let y = tensor::reshape(&x, &[4], &mut backend).unwrap();
+/// assert_eq!(y.shape(), &[4]);
+/// ```
+pub fn reshape(
+    input: &Tensor,
+    shape: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<Tensor> {
+    backend.with_backend_session(|exec| exec.reshape(input, shape))
+}
+
+/// Permute tensor axes.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # let mut backend = CpuBackend::new();
+/// # let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
+/// let y = tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
+/// assert_eq!(y.shape(), &[3, 2]);
+/// ```
+pub fn transpose(
+    input: &Tensor,
+    perm: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<Tensor> {
+    backend.with_backend_session(|exec| exec.transpose(input, perm))
+}
+
+/// Sum a tensor over one or more axes.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # let mut backend = CpuBackend::new();
+/// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+/// let y = tensor::reduce_sum(&x, &[0], &mut backend).unwrap();
+/// assert_eq!(y.shape(), &[2]);
+/// ```
+pub fn reduce_sum(
+    input: &Tensor,
+    axes: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<Tensor> {
+    backend.with_backend_session(|exec| exec.reduce_sum(input, axes))
+}
+
 fn broadcast_binary(
     lhs: &Tensor,
     rhs: &Tensor,

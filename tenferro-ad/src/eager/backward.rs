@@ -257,8 +257,8 @@ impl<B: TensorBackend + 'static> BackwardCallbacks<StdTensorOp>
 
     fn add_operands(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> Arc<Tensor> {
         Arc::new(
-            a.as_ref()
-                .add(b.as_ref(), self.backend)
+            self.backend
+                .add(a.as_ref(), b.as_ref())
                 .unwrap_or_else(|err| panic!("eager cotangent add failed: {}", err)),
         )
     }

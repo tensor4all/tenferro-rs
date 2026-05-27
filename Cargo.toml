@@ -1,7 +1,8 @@
 [workspace]
 members = [
-    # v2 core (6 crates)
+    # v2 core crates
     "tenferro-internal-device",
+    "tenferro-tensor-core",
     "tenferro-tensor",
     "tenferro-gpu",
     "tenferro-runtime",

@@ -6,7 +6,7 @@ use super::{
 #[cfg(feature = "cpu-blas")]
 use super::blas_gemm::BlasGemm;
 #[cfg(feature = "cpu-blas")]
-use super::dot_general;
+use super::dot_general_blas;
 #[cfg(feature = "cpu-faer")]
 use super::faer_gemm::FaerGemm;
 #[cfg(feature = "cpu-blas")]
@@ -167,7 +167,7 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     };
     let mut buffers = BufferPool::new();
     let mut cache = GemmAnalysisCache::default();
-    let out = dot_general(&mut buffers, &mut cache, &lhs, &rhs, &config)
+    let out = dot_general_blas(&mut buffers, &mut cache, &lhs, &rhs, &config)
         .expect("dot_general should succeed");
 
     assert_eq!(out.shape, vec![2, 2]);
