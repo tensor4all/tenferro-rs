@@ -77,4 +77,6 @@ tenferro-runtime = { path = "/path/to/tenferro-rs/tenferro-runtime", features = 
 
 When both are compiled, `CpuBackend::new()` selects faer. Use
 `CpuBackend::with_kind(CpuBackendKind::Blas)` when a linked BLAS/LAPACK
-provider should handle provider-backed kernels.
+provider should handle provider-backed kernels. See
+[Parallelism and Caching](parallelism-and-caching.md) for thread-count and
+cache-retention controls.

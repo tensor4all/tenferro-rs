@@ -42,7 +42,8 @@ website:
           - guides/autodiff.md
           - guides/devices-and-gpu.md
           - guides/memory-order.md
-          - guides/performance.md
+          - text: "Parallelism and Caching"
+            href: guides/parallelism-and-caching.md
           - guides/troubleshooting.md
       - section: "API"
         contents:
