@@ -1,6 +1,7 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::ElementwiseFusionPlan;
-use crate::{ElementwiseFusionInst, ElementwiseFusionOp, TensorBackend};
+use crate::{ElementwiseFusionInst, ElementwiseFusionOp};
+use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion};
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f64,

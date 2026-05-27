@@ -2,7 +2,9 @@ use std::env;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TensorBackend};
+use tenferro_tensor::{
+    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, DotGeneralConfig, Tensor, TensorDot,
+};
 
 const PHYS_DIM: usize = 2;
 const CHIS: &[usize] = &[1, 2, 4, 8, 16, 32];
@@ -150,7 +152,7 @@ fn run_case_normal(
 
 fn run_case_cached(
     backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as TensorBackend>::RuntimeCache,
+    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
     fixtures: &Fixtures,
     configs: &Configs,
     case: PairwiseCase,
@@ -256,7 +258,7 @@ fn bench_pairwise_contraction(c: &mut Criterion) {
                 BenchmarkId::new("cached_analysis_per_call", &case_params),
                 |b| {
                     let mut backend = CpuBackend::with_threads(threads);
-                    let mut cache = <CpuBackend as TensorBackend>::RuntimeCache::default();
+                    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
                     b.iter(|| {
                         let output = run_case_cached(
                             black_box(&mut backend),

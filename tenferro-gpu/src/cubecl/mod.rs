@@ -39,7 +39,7 @@
 //!
 //! ```rust
 //! use tenferro_gpu::cubecl::{CubeclBackend, upload_tensor, download_tensor};
-//! use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
+//! use tenferro_tensor::{Tensor, TensorElementwise, TypedTensor};
 //!
 //! fn main() -> tenferro_tensor::Result<()> {
 //! // 1. Create the GPU backend (device ordinal 0)
@@ -87,7 +87,11 @@ use cubecl_cuda::CudaRuntime;
 use num_complex::{Complex32, Complex64};
 use tenferro_core_ops::PrimitiveOpKind;
 
-use crate::backend::TensorBackend;
+use crate::backend::{
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural,
+};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -1276,9 +1280,11 @@ impl CubeclBackend {
     }
 }
 
-impl TensorBackend for CubeclBackend {
+impl BackendRuntimeCache for CubeclBackend {
     type RuntimeCache = ();
+}
 
+impl TensorElementwise for CubeclBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_binary_float_complex!(
             self,
@@ -1537,7 +1543,9 @@ impl TensorBackend for CubeclBackend {
             _ => Err(ternary_dtype_mismatch(op, input, lower, upper)),
         }
     }
+}
 
+impl TensorAnalytic for CubeclBackend {
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Exp, exp_float)
     }
@@ -1577,7 +1585,9 @@ impl TensorBackend for CubeclBackend {
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         dispatch::dispatch_unary_float_only!(self, input, PrimitiveOpKind::Log1p, log1p_float)
     }
+}
 
+impl TensorStructural for CubeclBackend {
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         match input {
             Tensor::F32(t) => self.transpose_typed(t, perm).map(Tensor::F32),
@@ -1788,7 +1798,9 @@ impl TensorBackend for CubeclBackend {
             Tensor::C64(t) => self.triu_typed(t, k).map(Tensor::C64),
         }
     }
+}
 
+impl TensorReduction for CubeclBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         let op = op_name(
             PrimitiveOpKind::ReduceSum,
@@ -1854,7 +1866,9 @@ impl TensorBackend for CubeclBackend {
             }
         }
     }
+}
 
+impl TensorDot for CubeclBackend {
     fn dot_general(
         &mut self,
         lhs: &Tensor,
@@ -1874,7 +1888,9 @@ impl TensorBackend for CubeclBackend {
     ) -> crate::Result<Tensor> {
         gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
     }
+}
 
+impl TensorIndexing for CubeclBackend {
     fn gather(
         &mut self,
         operand: &Tensor,
@@ -2221,7 +2237,9 @@ impl TensorBackend for CubeclBackend {
             Tensor::C64(t) => self.reverse_typed(t, axes).map(Tensor::C64),
         }
     }
+}
 
+impl TensorDeviceTransfer for CubeclBackend {
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         download_tensor(self.runtime(), tensor)
     }
@@ -2229,7 +2247,9 @@ impl TensorBackend for CubeclBackend {
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         upload_tensor(self.runtime(), tensor)
     }
+}
 
+impl TensorFusion for CubeclBackend {
     fn execute_elementwise_fusion(
         &mut self,
         inputs: &[&Tensor],
@@ -2238,6 +2258,14 @@ impl TensorBackend for CubeclBackend {
         fusion::execute_elementwise_fusion(self, inputs, plan)
     }
 }
+
+impl BackendCachedDot for CubeclBackend {}
+
+impl BackendSessionHost for CubeclBackend {}
+
+impl TensorBuffer for CubeclBackend {}
+
+impl TensorBackend for CubeclBackend {}
 
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     ensure_rank(op, rank, perm.len())?;

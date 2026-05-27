@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use crate::backend::TensorBackend;
+use crate::backend::{BackendSessionHost, TensorIndexing};
 use crate::config::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use crate::cpu::{dynamic_slice, gather, pad, scatter, CpuBackend};
 use crate::types::{Tensor, TypedTensor};

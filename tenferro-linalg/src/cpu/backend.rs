@@ -3,7 +3,7 @@ use crate::backend::LinalgBackend;
 use super::linalg;
 
 use tenferro_tensor::cpu::CpuBackend;
-use tenferro_tensor::{DType, Error, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{DType, Error, Tensor, TensorStructural, TypedTensor};
 
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {

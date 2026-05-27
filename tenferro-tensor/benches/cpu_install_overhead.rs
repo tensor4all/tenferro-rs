@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_tensor::{
     buffer_pool::BufferPool,
     cpu::{CpuBackend, CpuContext},
-    TensorBackend,
+    BackendRuntimeCache,
 };
 
 fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
@@ -43,7 +43,7 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
     group.bench_function("ctx_install_inline_with_buffer_pool_and_cache", |b| {
         let ctx = CpuContext::with_threads(1);
         let mut buffers = BufferPool::new();
-        let mut cache = <CpuBackend as TensorBackend>::RuntimeCache::default();
+        let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
         b.iter(|| {
             let mut taken = std::mem::take(black_box(&mut buffers));
             let (result, returned) = ctx.install(|| {

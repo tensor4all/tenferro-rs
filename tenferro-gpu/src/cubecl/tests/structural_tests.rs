@@ -1,6 +1,6 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::DType;
-use crate::TensorBackend;
+use tenferro_tensor::{TensorIndexing, TensorStructural};
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c64, tensor_f64,

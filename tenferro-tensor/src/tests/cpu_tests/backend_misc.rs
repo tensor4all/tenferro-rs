@@ -4,7 +4,7 @@ use super::*;
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {
     let mut backend = CpuBackend::new();
     assert_eq!(backend.buffer_pool_len(), 0);
-    let t = TensorBackend::add(
+    let t = TensorElementwise::add(
         &mut backend,
         &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
         &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
@@ -188,7 +188,7 @@ fn test_reclaim_buffer_covers_all_dtypes() {
 #[test]
 fn test_install_with_pool_preserves_buffers() {
     let mut backend = CpuBackend::with_threads(1);
-    let t = TensorBackend::add(
+    let t = TensorElementwise::add(
         &mut backend,
         &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0])),
         &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0])),
@@ -214,9 +214,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         };
     }
 
-    impl TensorBackend for DefaultOnlyBackend {
+    impl BackendRuntimeCache for DefaultOnlyBackend {
         type RuntimeCache = ();
+    }
 
+    impl TensorElementwise for DefaultOnlyBackend {
         panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -229,6 +231,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+        }
+
+        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+            CpuBackend::new().conj(input)
+        }
+    }
+
+    impl TensorAnalytic for DefaultOnlyBackend {
+        panic_backend_methods! {
         exp(input: &Tensor) -> crate::Result<Tensor>;
         log(input: &Tensor) -> crate::Result<Tensor>;
         sin(input: &Tensor) -> crate::Result<Tensor>;
@@ -239,6 +250,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         expm1(input: &Tensor) -> crate::Result<Tensor>;
         log1p(input: &Tensor) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorStructural for DefaultOnlyBackend {
+        panic_backend_methods! {
         transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
@@ -247,10 +263,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
         triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorReduction for DefaultOnlyBackend {
+        panic_backend_methods! {
         reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorIndexing for DefaultOnlyBackend {
+        panic_backend_methods! {
         gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
         scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> crate::Result<Tensor>;
         slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
@@ -258,12 +284,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
         pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
-        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;        }
-
-        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().conj(input)
+        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         }
+    }
 
+    impl TensorDot for DefaultOnlyBackend {
         fn dot_general(
             &mut self,
             lhs: &Tensor,
@@ -273,10 +298,22 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             CpuBackend::new().dot_general(lhs, rhs, config)
         }
     }
+
+    impl BackendCachedDot for DefaultOnlyBackend {}
+
+    impl BackendSessionHost for DefaultOnlyBackend {}
+
+    impl TensorDeviceTransfer for DefaultOnlyBackend {}
+
+    impl TensorBuffer for DefaultOnlyBackend {}
+
+    impl TensorFusion for DefaultOnlyBackend {}
+
+    impl TensorBackend for DefaultOnlyBackend {}
 
     struct DefaultOnlyExec;
 
-    impl crate::backend::BackendSession for DefaultOnlyExec {
+    impl TensorElementwise for DefaultOnlyExec {
         panic_backend_methods! {
         add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -289,6 +326,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+        }
+
+        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
+            CpuBackend::new().conj(input)
+        }
+    }
+
+    impl TensorAnalytic for DefaultOnlyExec {
+        panic_backend_methods! {
         exp(input: &Tensor) -> crate::Result<Tensor>;
         log(input: &Tensor) -> crate::Result<Tensor>;
         sin(input: &Tensor) -> crate::Result<Tensor>;
@@ -299,6 +345,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         expm1(input: &Tensor) -> crate::Result<Tensor>;
         log1p(input: &Tensor) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorStructural for DefaultOnlyExec {
+        panic_backend_methods! {
         transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
         broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
@@ -307,10 +358,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
         tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
         triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorReduction for DefaultOnlyExec {
+        panic_backend_methods! {
         reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+        }
+    }
+
+    impl TensorIndexing for DefaultOnlyExec {
+        panic_backend_methods! {
         gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
         scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> crate::Result<Tensor>;
         slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
@@ -318,12 +379,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
         pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
         concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
-        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;        }
-
-        fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-            CpuBackend::new().conj(input)
+        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
         }
+    }
 
+    impl TensorDot for DefaultOnlyExec {
         fn dot_general(
             &mut self,
             lhs: &Tensor,
@@ -332,9 +392,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         ) -> crate::Result<Tensor> {
             CpuBackend::new().dot_general(lhs, rhs, config)
         }
+    }
 
+    impl SessionCachedDot for DefaultOnlyExec {}
+
+    impl TensorBuffer for DefaultOnlyExec {
         fn reclaim_buffer(&mut self, _tensor: Tensor) {}
     }
+
+    impl TensorFusion for DefaultOnlyExec {}
 
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]);
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]);
@@ -350,22 +416,26 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     let mut backend = DefaultOnlyBackend;
     let mut cache = ();
 
-    let direct =
-        TensorBackend::dot_general_cached(&mut backend, &mut cache, Some(0), &lhs, &rhs, &config)
-            .unwrap();
+    let direct = BackendCachedDot::dot_general_cached(
+        &mut backend,
+        &mut cache,
+        Some(0),
+        &lhs,
+        &rhs,
+        &config,
+    )
+    .unwrap();
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[6.0]);
 
     let lhs_folded =
-        TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, false)
-            .unwrap();
+        TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, false).unwrap();
     assert_eq!(lhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
     let both_folded =
-        TensorBackend::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true)
-            .unwrap();
+        TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let read_views = TensorBackend::dot_general_read(
+    let read_views = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
@@ -374,7 +444,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     .unwrap();
     assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let rhs_folded = TensorBackend::dot_general_with_conj_cached(
+    let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
         &mut backend,
         &mut cache,
         Some(1),
@@ -405,7 +475,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         .is_none());
 
     let session_value =
-        TensorBackend::with_backend_session_cached(&mut backend, &mut cache, |exec| {
+        BackendSessionHost::with_backend_session_cached(&mut backend, &mut cache, |exec| {
             let cached = exec
                 .dot_general_cached(Some(2), &lhs, &rhs, &config)
                 .unwrap();
@@ -417,7 +487,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     assert_eq!(session_value, 12.0);
 
     let mut exec = DefaultOnlyExec;
-    let exec_read_tensor = crate::backend::BackendSession::dot_general_read(
+    let exec_read_tensor = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_tensor(&lhs),
         TensorRead::from_tensor(&rhs),
@@ -425,7 +495,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views = crate::backend::BackendSession::dot_general_read(
+    let exec_read_views = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
@@ -433,25 +503,17 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_no_conj = crate::backend::BackendSession::dot_general_with_conj(
-        &mut exec, &lhs, &rhs, &config, false, false,
-    )
-    .unwrap();
+    let exec_no_conj =
+        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_lhs_conj = crate::backend::BackendSession::dot_general_with_conj(
-        &mut exec, &lhs, &rhs, &config, true, false,
-    )
-    .unwrap();
+    let exec_lhs_conj =
+        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, true, false).unwrap();
     assert_eq!(exec_lhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_rhs_conj = crate::backend::BackendSession::dot_general_with_conj(
-        &mut exec, &lhs, &rhs, &config, false, true,
-    )
-    .unwrap();
+    let exec_rhs_conj =
+        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, true).unwrap();
     assert_eq!(exec_rhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_both_conj = crate::backend::BackendSession::dot_general_with_conj(
-        &mut exec, &lhs, &rhs, &config, true, true,
-    )
-    .unwrap();
+    let exec_both_conj =
+        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(exec_both_conj.as_slice::<f64>().unwrap(), &[6.0]);
 }
 

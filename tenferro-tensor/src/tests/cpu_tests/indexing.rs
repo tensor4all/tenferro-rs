@@ -495,7 +495,7 @@ fn test_backend_mul_neg_conj_dispatch() {
     ));
     let mut backend = CpuBackend::new();
 
-    let prod = TensorBackend::mul(&mut backend, &a, &b).unwrap();
+    let prod = TensorElementwise::mul(&mut backend, &a, &b).unwrap();
     assert_eq!(get_f64(&prod, &[0]), 3.0);
     assert_eq!(get_f64(&prod, &[1]), -8.0);
 
@@ -541,7 +541,7 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(triu_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&triu_result, &[1, 0]), 0.0);
 
-    let summed = TensorBackend::reduce_sum(&mut backend, &a, &[0]).unwrap();
+    let summed = TensorReduction::reduce_sum(&mut backend, &a, &[0]).unwrap();
     assert_eq!(summed.shape(), &[2]);
     assert_eq!(get_f64(&summed, &[0]), 3.0);
     assert_eq!(get_f64(&summed, &[1]), 7.0);

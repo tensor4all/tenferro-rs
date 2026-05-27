@@ -1,6 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_tensor::{cpu::CpuBackend, DotGeneralConfig, Tensor, TensorBackend};
+use tenferro_tensor::{
+    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, DotGeneralConfig,
+    Tensor, TensorDot,
+};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -100,7 +103,7 @@ fn inner_fresh_backend_cache(
 
 fn inner_persistent_backend_cache(
     backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as TensorBackend>::RuntimeCache,
+    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
     bra: &[Tensor],
     ket: &[Tensor],
     configs: &LocalPathConfigs,
@@ -135,7 +138,7 @@ fn inner_persistent_backend_cache(
 
 fn inner_single_exec_session(
     backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as TensorBackend>::RuntimeCache,
+    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
     bra: &[Tensor],
     ket: &[Tensor],
     configs: &LocalPathConfigs,
@@ -192,7 +195,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
                 || {
                     (
                         CpuBackend::with_threads(1),
-                        <CpuBackend as TensorBackend>::RuntimeCache::default(),
+                        <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
                     )
                 },
                 |(mut backend, mut cache)| {
@@ -214,7 +217,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
                 || {
                     (
                         CpuBackend::with_threads(1),
-                        <CpuBackend as TensorBackend>::RuntimeCache::default(),
+                        <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
                     )
                 },
                 |(mut backend, mut cache)| {

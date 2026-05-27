@@ -4,8 +4,10 @@ use tenferro_ops::ShapeExtent;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::exec::{eval_exec_ir, ExecInstruction, ExecOp, ExecProgram};
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor, TensorBackend, TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TypedTensor,
 };
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
@@ -103,9 +105,11 @@ impl FakeTensorBackend {
     }
 }
 
-impl TensorBackend for FakeTensorBackend {
+impl BackendRuntimeCache for FakeTensorBackend {
     type RuntimeCache = ();
+}
 
+impl TensorElementwise for FakeTensorBackend {
     fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("add", 1.0)
     }
@@ -157,6 +161,9 @@ impl TensorBackend for FakeTensorBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         self.result("clamp", 12.0)
     }
+}
+
+impl TensorAnalytic for FakeTensorBackend {
     fn exp(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("exp", 13.0)
     }
@@ -187,6 +194,9 @@ impl TensorBackend for FakeTensorBackend {
     fn log1p(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         self.result("log1p", 22.0)
     }
+}
+
+impl TensorStructural for FakeTensorBackend {
     fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("transpose", 23.0)
     }
@@ -226,6 +236,9 @@ impl TensorBackend for FakeTensorBackend {
     fn triu(&mut self, _input: &Tensor, _k: i64) -> tenferro_tensor::Result<Tensor> {
         self.result("triu", 27.75)
     }
+}
+
+impl TensorReduction for FakeTensorBackend {
     fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_sum", 28.0)
     }
@@ -238,6 +251,9 @@ impl TensorBackend for FakeTensorBackend {
     fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reduce_min", 31.0)
     }
+}
+
+impl TensorDot for FakeTensorBackend {
     fn dot_general(
         &mut self,
         _lhs: &Tensor,
@@ -246,6 +262,9 @@ impl TensorBackend for FakeTensorBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         self.result("dot_general", 32.0)
     }
+}
+
+impl TensorIndexing for FakeTensorBackend {
     fn gather(
         &mut self,
         _operand: &Tensor,
@@ -296,10 +315,23 @@ impl TensorBackend for FakeTensorBackend {
     fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> tenferro_tensor::Result<Tensor> {
         self.result("reverse", 39.0)
     }
+}
+
+impl TensorBuffer for FakeTensorBackend {
     fn reclaim_buffer(&mut self, _tensor: Tensor) {
         self.reclaimed += 1;
     }
 }
+
+impl TensorFusion for FakeTensorBackend {}
+
+impl TensorDeviceTransfer for FakeTensorBackend {}
+
+impl BackendCachedDot for FakeTensorBackend {}
+
+impl BackendSessionHost for FakeTensorBackend {}
+
+impl TensorBackend for FakeTensorBackend {}
 
 #[test]
 fn eval_exec_ir_dispatches_tensor_ops_to_backend_methods() {

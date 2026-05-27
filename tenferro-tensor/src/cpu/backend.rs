@@ -4,7 +4,11 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::backend::{BackendSession, TensorBackend};
+use crate::backend::{
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorReduction, TensorStructural,
+};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -427,9 +431,11 @@ impl CpuBackend {
     }
 }
 
-impl TensorBackend for CpuBackend {
+impl BackendRuntimeCache for CpuBackend {
     type RuntimeCache = gemm::GemmAnalysisCache;
+}
 
+impl TensorElementwise for CpuBackend {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
     }
@@ -484,7 +490,9 @@ impl TensorBackend for CpuBackend {
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::clamp_with_pool(buffers, input, lower, upper))
     }
+}
 
+impl TensorAnalytic for CpuBackend {
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| analytic::exp_with_pool(buffers, input))
     }
@@ -524,7 +532,9 @@ impl TensorBackend for CpuBackend {
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| analytic::log1p_with_pool(buffers, input))
     }
+}
 
+impl TensorStructural for CpuBackend {
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
     }
@@ -577,7 +587,9 @@ impl TensorBackend for CpuBackend {
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| structural::triu_with_pool(buffers, input, k))
     }
+}
 
+impl TensorReduction for CpuBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_sum(input, axes))
     }
@@ -593,7 +605,9 @@ impl TensorBackend for CpuBackend {
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_min(input, axes))
     }
+}
 
+impl TensorDot for CpuBackend {
     fn dot_general(
         &mut self,
         lhs: &Tensor,
@@ -601,9 +615,52 @@ impl TensorBackend for CpuBackend {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         let mut cache = gemm::GemmAnalysisCache::default();
-        self.dot_general_cached(&mut cache, None, lhs, rhs, config)
+        BackendCachedDot::dot_general_cached(self, &mut cache, None, lhs, rhs, config)
     }
 
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        #[cfg(feature = "cpu-faer")]
+        let direct = {
+            let ctx = Arc::clone(&self.ctx);
+            self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+                gemm::dot_general_read_cached(buffers, cache, None, ctx.as_ref(), lhs, rhs, config)
+            })?
+        };
+        #[cfg(feature = "cpu-blas")]
+        let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
+            gemm::dot_general_read_cached(buffers, cache, None, lhs, rhs, config)
+        })?;
+        if let Some(result) = direct {
+            return Ok(result);
+        }
+
+        let lhs = lhs.to_tensor();
+        let rhs = rhs.to_tensor();
+        BackendCachedDot::dot_general_cached(self, &mut cache, None, &lhs, &rhs, config)
+    }
+
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        let mut cache = gemm::GemmAnalysisCache::default();
+        BackendCachedDot::dot_general_with_conj_cached(
+            self, &mut cache, None, lhs, rhs, config, lhs_conj, rhs_conj,
+        )
+    }
+}
+
+impl BackendCachedDot for CpuBackend {
     fn dot_general_cached(
         &mut self,
         cache: &mut Self::RuntimeCache,
@@ -666,45 +723,6 @@ impl TensorBackend for CpuBackend {
                 }),
             })
         }
-    }
-
-    fn dot_general_read(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        #[cfg(feature = "cpu-faer")]
-        let direct = {
-            let ctx = Arc::clone(&self.ctx);
-            self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                gemm::dot_general_read_cached(buffers, cache, None, ctx.as_ref(), lhs, rhs, config)
-            })?
-        };
-        #[cfg(feature = "cpu-blas")]
-        let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-            gemm::dot_general_read_cached(buffers, cache, None, lhs, rhs, config)
-        })?;
-        if let Some(result) = direct {
-            return Ok(result);
-        }
-
-        let lhs = lhs.to_tensor();
-        let rhs = rhs.to_tensor();
-        self.dot_general_cached(&mut cache, None, &lhs, &rhs, config)
-    }
-
-    fn dot_general_with_conj(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        self.dot_general_with_conj_cached(&mut cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 
     fn dot_general_with_conj_cached(
@@ -804,7 +822,9 @@ impl TensorBackend for CpuBackend {
             })
         }
     }
+}
 
+impl TensorIndexing for CpuBackend {
     fn gather(
         &mut self,
         operand: &Tensor,
@@ -865,21 +885,20 @@ impl TensorBackend for CpuBackend {
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
+}
 
-    fn with_backend_session<R: Send>(
-        &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+impl BackendSessionHost for CpuBackend {
+    fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
         let mut cache = profile_cpu_session_section("with_backend_session.cache_default", || {
             gemm::GemmAnalysisCache::default()
         });
         self.with_backend_session_cached(&mut cache, f)
     }
 
-    fn with_backend_session_cached<R: Send>(
+    fn with_backend_session_cached<R>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+        f: impl FnOnce(&mut dyn BackendSession) -> R,
     ) -> R {
         if !cpu_session_profile_enabled() {
             let mut buffers = std::mem::take(&mut self.buffers);
@@ -928,7 +947,9 @@ impl TensorBackend for CpuBackend {
         maybe_print_cpu_session_profile();
         result
     }
+}
 
+impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
         match tensor {
             Tensor::F32(t) => reclaim_typed(&mut self.buffers, t),
@@ -941,6 +962,12 @@ impl TensorBackend for CpuBackend {
         }
     }
 }
+
+impl TensorFusion for CpuBackend {}
+
+impl TensorDeviceTransfer for CpuBackend {}
+
+impl TensorBackend for CpuBackend {}
 
 pub(crate) fn reclaim_typed<T: PoolScalar>(pool: &mut BufferPool, typed: TypedTensor<T>) {
     match typed.buffer {

@@ -6,7 +6,7 @@
 //! #[cfg(feature = "cuda")]
 //! {
 //!     use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CubeclBackend};
-//!     use tenferro_tensor::{Tensor, TensorBackend};
+//!     use tenferro_tensor::{Tensor, TensorElementwise};
 //!
 //!     if gpu_available() {
 //!         let mut backend = CubeclBackend::new(0).unwrap();

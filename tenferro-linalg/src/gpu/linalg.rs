@@ -22,7 +22,10 @@ use tenferro_tensor::config::{DotGeneralConfig, SliceConfig};
 // validate_nonsingular_gpu uses backend ops (extract_diagonal, abs, reduce_min)
 // then downloads a single scalar — no bulk host roundtrip.
 use tenferro_gpu::CubeclBuffer;
-use tenferro_tensor::{Buffer, DType, Error, Tensor, TensorBackend, TypedTensor};
+use tenferro_tensor::{
+    Buffer, DType, Error, Tensor, TensorDot, TensorElementwise, TensorReduction, TensorStructural,
+    TypedTensor,
+};
 
 type Result<T> = tenferro_tensor::Result<T>;
 
