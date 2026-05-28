@@ -232,7 +232,7 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
     let out = tenferro_runtime::typed_tensor::add(&lhs, &rhs, &mut backend).unwrap();
 
-    assert_eq!(out.shape, vec![3, 4]);
+    assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
         out.try_into_vec_row_major().unwrap().1,
         vec![11.0, 21.0, 31.0, 41.0, 12.0, 22.0, 32.0, 42.0, 13.0, 23.0, 33.0, 43.0,]

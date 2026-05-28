@@ -10,7 +10,7 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 fn get_f64_scalar(tensor: &Tensor) -> f64 {
     match tensor {
         Tensor::F64(inner) => {
-            assert_eq!(inner.shape.as_slice(), &[] as &[usize]);
+            assert_eq!(inner.shape(), &[] as &[usize]);
             inner.host_data()[0]
         }
         other => panic!("expected F64 tensor, got {:?}", other.dtype()),

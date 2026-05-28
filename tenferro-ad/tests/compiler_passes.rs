@@ -705,7 +705,7 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
         Tensor::F64(inner) => inner,
         other => panic!("expected F64 tensor, got {other:?}"),
     };
-    assert_eq!(typed.shape, vec![2, 3, 5]);
+    assert_eq!(typed.shape(), &[2, 3, 5]);
 
     // Reference: column-major (tenferro storage convention) matmul.
     // For LHS shape [2, 3, 4], flat index = m1 + 2*m2 + 6*k.
