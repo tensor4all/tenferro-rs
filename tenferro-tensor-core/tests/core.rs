@@ -241,6 +241,18 @@ fn mutable_layout_accepts_reversed_non_overlapping_vector() {
 }
 
 #[test]
+fn mutable_layout_accepts_empty_view_before_product_overflow() {
+    let layout = TensorLayout::<DynRank>::from_parts(
+        vec![2, usize::MAX, 0].into(),
+        vec![1, 1, 1].into(),
+        0,
+        0,
+    )
+    .unwrap();
+    layout.validate_mutable_no_overlap().unwrap();
+}
+
+#[test]
 fn constructs_contiguous_col_major_and_validates_count() {
     let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);

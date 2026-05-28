@@ -307,10 +307,10 @@ impl<R: TensorRank> TensorLayout<R> {
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
     pub fn validate_mutable_no_overlap(&self) -> Result<()> {
-        let element_count = checked_product(self.shape())?;
-        if element_count == 0 {
+        if self.shape().iter().any(|&extent| extent == 0) {
             return Ok(());
         }
+        let element_count = checked_product(self.shape())?;
 
         for (&extent, &stride) in self.shape().iter().zip(self.strides()) {
             if extent > 1 && stride == 0 {
