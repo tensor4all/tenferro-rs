@@ -132,8 +132,8 @@ impl TensorDot for CpuExecSession<'_> {
                         self.buffers,
                         self.gemm_analysis_cache,
                         None,
-                        lhs,
-                        rhs,
+                        lhs.clone(),
+                        rhs.clone(),
                         config,
                     )?
                 }

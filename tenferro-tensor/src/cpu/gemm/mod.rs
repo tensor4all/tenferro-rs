@@ -983,7 +983,7 @@ pub(crate) fn dot_general_blas<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     dot_general_blas_cached(buffers, cache, None, lhs, rhs, config)
 }
@@ -998,7 +998,7 @@ pub(crate) fn dot_general_blas_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     if let Some(result) = typed_blas_gemm(
         buffers,
@@ -1052,7 +1052,7 @@ pub(crate) fn dot_general_blas_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem + 'static,
 {
     dot_general_blas_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
 }
@@ -1069,7 +1069,7 @@ pub(crate) fn dot_general_blas_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem + 'static,
 {
     if !lhs_conj && !rhs_conj {
         return dot_general_blas_cached(buffers, cache, cache_slot, lhs, rhs, config);
@@ -1142,7 +1142,7 @@ pub(crate) fn dot_general_blas_read_cached(
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (lhs, rhs) {
+            match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1168,7 +1168,7 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         a,
-                        &b,
+                        b,
                         config,
                     )
                     .map(|result| result.map(crate::Tensor::$wrap));
@@ -1182,7 +1182,7 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache,
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
-                        &a,
+                        a,
                         b,
                         config,
                     )
@@ -1197,8 +1197,8 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache,
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
-                        &a,
-                        &b,
+                        a,
+                        b,
                         config,
                     )
                     .map(|result| result.map(crate::Tensor::$wrap));
@@ -1239,7 +1239,7 @@ fn typed_blas_gemm_with_conj<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
         Some(dims) => dims,
@@ -1343,7 +1343,7 @@ fn typed_blas_gemm<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
         Some(dims) => dims,

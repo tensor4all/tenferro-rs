@@ -835,7 +835,14 @@ impl TensorDot for CpuBackend {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                        gemm::dot_general_blas_read_cached(buffers, cache, None, lhs, rhs, config)
+                        gemm::dot_general_blas_read_cached(
+                            buffers,
+                            cache,
+                            None,
+                            lhs.clone(),
+                            rhs.clone(),
+                            config,
+                        )
                     })?
                 }
                 #[cfg(not(feature = "cpu-blas"))]

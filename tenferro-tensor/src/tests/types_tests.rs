@@ -140,6 +140,49 @@ fn typed_tensor_as_view_preserves_rank_and_layout() {
 }
 
 #[test]
+fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(77, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    );
+
+    let err = tensor.as_view().as_slice().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "TypedTensorView::as_slice",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("download explicitly first"));
+}
+
+#[test]
+fn typed_tensor_view_as_slice_rejects_non_contiguous_layout() {
+    let data = [1_i32, 2, 3, 4];
+    let view = TypedTensorView::from_slice(vec![2], vec![2], 0, &data).unwrap();
+
+    let err = view.as_slice().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "TypedTensorView::as_slice",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("not contiguous column-major"));
+}
+
+#[test]
 fn typed_tensor_view_transpose_is_metadata_only() {
     let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]);
     let view = tensor.as_view().transpose_view([1, 0]).unwrap();
