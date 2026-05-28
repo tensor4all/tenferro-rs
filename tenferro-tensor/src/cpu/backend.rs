@@ -7,13 +7,16 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic,
     TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    TensorIndexing, TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Buffer, CacheStats, Tensor, TensorRead, TypedTensor};
+use crate::{
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
+};
 
 use super::exec_session::CpuExecSession;
 use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
@@ -1247,6 +1250,45 @@ impl TensorBuffer for CpuBackend {
             Tensor::C32(t) => reclaim_typed(&mut self.buffers, t),
             Tensor::C64(t) => reclaim_typed(&mut self.buffers, t),
         }
+    }
+}
+
+impl<T, R> TensorViewCanonicalization<T, R> for CpuBackend
+where
+    T: Clone + 'static,
+    R: TensorRank,
+{
+    fn to_contiguous(
+        &mut self,
+        view: &TypedTensorView<'_, T, R>,
+    ) -> crate::Result<TypedTensor<T, R>> {
+        if view.backend_buffer().is_some() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::to_contiguous",
+                "CPU backend received a backend tensor view; download the tensor to host before CPU view canonicalization",
+            ));
+        }
+        view.to_contiguous()
+    }
+
+    fn copy_from_contiguous(
+        &mut self,
+        src: &TypedTensor<T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+    ) -> crate::Result<()> {
+        if matches!(&src.buffer, Buffer::Backend(_)) {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::copy_from_contiguous",
+                "CPU backend received a backend source tensor; download the tensor to host before CPU view copy-back",
+            ));
+        }
+        if dst.backend_buffer().is_some() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::copy_from_contiguous",
+                "CPU backend received a backend destination view; download the tensor to host before CPU view copy-back",
+            ));
+        }
+        dst.copy_from_contiguous(src)
     }
 }
 

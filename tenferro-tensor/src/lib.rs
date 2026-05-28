@@ -53,7 +53,7 @@ pub use backend::{
     BackendSessionHost, ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan,
     SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural,
+    TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 #[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
 pub use cache::{CacheStats, RuntimeCacheControl};

@@ -76,7 +76,7 @@ use std::any::{Any, TypeId};
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
@@ -99,7 +99,10 @@ use crate::config::{
 };
 use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
-use crate::{Tensor, TypedTensor};
+use crate::{
+    Buffer, ComputeDevice, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRank,
+    TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
+};
 
 #[doc(hidden)]
 pub mod dispatch;
@@ -113,11 +116,12 @@ mod runtime;
 
 use dispatch::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, dtype_mismatch,
-    ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime, launch_binary,
+    ensure_axes_unique, ensure_axis, ensure_rank, ensure_resident_on_runtime,
+    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_binary,
     launch_binary_tensor, launch_compare_bool, launch_nullary_into, launch_select_bool,
     launch_ternary, launch_unary, launch_unary_tensor, launch_unary_tensor_into,
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
-    typed_tensor_binding,
+    typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
 
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -166,6 +170,29 @@ fn checked_dim_product(
                 format!("{role} product overflow for shape {shape:?}"),
             )
         })
+    })
+}
+
+fn view_strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
+    strides
+        .iter()
+        .map(|&stride| {
+            i64::try_from(stride).map_err(|_| {
+                crate::Error::backend_failure(
+                    op,
+                    format!("view stride {stride} exceeds CubeCL i64 metadata limit"),
+                )
+            })
+        })
+        .collect()
+}
+
+fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
+    i64::try_from(offset).map_err(|_| {
+        crate::Error::backend_failure(
+            op,
+            format!("view offset {offset} exceeds CubeCL i64 metadata limit"),
+        )
     })
 }
 
@@ -428,6 +455,131 @@ impl CubeclBackend {
                 );
             },
         )
+    }
+
+    fn alloc_ranked_output<T, R>(
+        &self,
+        shape: &[usize],
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: CubeElement + Clone + Send + Sync + 'static,
+        R: TensorRank,
+    {
+        let len = checked_dim_product(op, "output shape", shape)?;
+        let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!("CubeCL output byte length overflow for shape {shape:?}"),
+            )
+        })?;
+        let handle = self.runtime().client().empty(bytes);
+        let shape = R::shape_from_vec(shape.to_vec().into()).map_err(|err| {
+            crate::Error::InvalidConfig {
+                op,
+                message: format!("output rank mismatch: {err}"),
+            }
+        })?;
+        Ok(TypedTensor::from_buffer_col_major(
+            shape,
+            Buffer::Backend(Arc::new(crate::CubeclBuffer::new(handle, len))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(ComputeDevice {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: self.runtime().device_ordinal(),
+                }),
+            },
+        ))
+    }
+
+    fn to_contiguous_view_typed<T, R>(
+        &self,
+        view: &TypedTensorView<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+        R: TensorRank,
+    {
+        ensure_view_resident_on_runtime(self.runtime(), view, op)?;
+        let output = self.alloc_ranked_output::<T, R>(view.shape(), op)?;
+        let len = output.n_elements();
+        if len == 0 {
+            return Ok(output);
+        }
+        let strides = view_strides_i64(view.strides(), op)?;
+        let base_offset = view_offset_i64(view.offset(), op)?;
+        let output_arg = typed_tensor_array_arg(&output, op)?;
+        let input_arg = typed_view_array_arg(view, op)?;
+        let shape = view.shape().to_vec();
+        unsafe {
+            // SAFETY: The view constructor validated reachable offsets against
+            // the backing allocation, and `ensure_view_resident_on_runtime`
+            // proves this is a CubeCL buffer on this CUDA runtime. The launch
+            // domain covers every logical output element exactly once.
+            structural::view_to_contiguous_kernel::launch_unchecked::<T, CudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(len),
+                cube_dim_1d(),
+                output_arg,
+                input_arg,
+                comptime_sequence(&shape),
+                comptime_sequence(&strides),
+                base_offset,
+            );
+        }
+        Ok(output)
+    }
+
+    fn copy_contiguous_to_view_typed<T, R>(
+        &self,
+        src: &TypedTensor<T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+        op: &'static str,
+    ) -> crate::Result<()>
+    where
+        T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
+        R: TensorRank,
+    {
+        ensure_resident_on_runtime(self.runtime(), src, op)?;
+        ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;
+        if src.shape() != dst.shape() {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!(
+                    "shape mismatch: source {:?} does not match destination {:?}",
+                    src.shape(),
+                    dst.shape()
+                ),
+            });
+        }
+        let len = src.n_elements();
+        if len == 0 {
+            return Ok(());
+        }
+        let strides = view_strides_i64(dst.strides(), op)?;
+        let base_offset = view_offset_i64(dst.offset(), op)?;
+        let src_arg = typed_tensor_array_arg(src, op)?;
+        let dst_arg = typed_view_mut_array_arg(dst, op)?;
+        let shape = dst.shape().to_vec();
+        unsafe {
+            // SAFETY: The source is an owned compact CubeCL tensor on this
+            // runtime. The destination view has validated reachable offsets
+            // and no overlap, and the launch domain covers each source element
+            // and destination logical coordinate exactly once.
+            structural::contiguous_to_view_kernel::launch_unchecked::<T, CudaRuntime>(
+                self.runtime().client(),
+                cube_count_for_len(len),
+                cube_dim_1d(),
+                dst_arg,
+                src_arg,
+                comptime_sequence(&shape),
+                comptime_sequence(&strides),
+                base_offset,
+            );
+        }
+        Ok(())
     }
 
     fn convert_float_to_float<In, Out>(
@@ -2342,6 +2494,64 @@ impl TensorDeviceTransfer for CubeclBackend {
 
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         upload_tensor(self.runtime(), tensor)
+    }
+}
+
+macro_rules! impl_cubecl_view_canonicalization {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl<R> TensorViewCanonicalization<$ty, R> for CubeclBackend
+            where
+                R: TensorRank,
+            {
+                fn to_contiguous(
+                    &mut self,
+                    view: &TypedTensorView<'_, $ty, R>,
+                ) -> crate::Result<TypedTensor<$ty, R>> {
+                    self.to_contiguous_view_typed(view, "CubeclBackend::to_contiguous")
+                }
+
+                fn copy_from_contiguous(
+                    &mut self,
+                    src: &TypedTensor<$ty, R>,
+                    dst: &mut TypedTensorViewMut<'_, $ty, R>,
+                ) -> crate::Result<()> {
+                    self.copy_contiguous_to_view_typed(
+                        src,
+                        dst,
+                        "CubeclBackend::copy_from_contiguous",
+                    )
+                }
+            }
+        )*
+    };
+}
+
+impl_cubecl_view_canonicalization!(f32, f64, i32, i64, Complex32, Complex64);
+
+impl<R> TensorViewCanonicalization<bool, R> for CubeclBackend
+where
+    R: TensorRank,
+{
+    fn to_contiguous(
+        &mut self,
+        _view: &TypedTensorView<'_, bool, R>,
+    ) -> crate::Result<TypedTensor<bool, R>> {
+        Err(unsupported_dtype(
+            "CubeclBackend::to_contiguous",
+            crate::DType::Bool,
+        ))
+    }
+
+    fn copy_from_contiguous(
+        &mut self,
+        _src: &TypedTensor<bool, R>,
+        _dst: &mut TypedTensorViewMut<'_, bool, R>,
+    ) -> crate::Result<()> {
+        Err(unsupported_dtype(
+            "CubeclBackend::copy_from_contiguous",
+            crate::DType::Bool,
+        ))
     }
 }
 

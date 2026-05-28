@@ -1,6 +1,7 @@
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use crate::{RuntimeCacheControl, Tensor, TensorRead};
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
@@ -280,6 +281,41 @@ pub trait TensorIndexing {
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+}
+
+/// Backend-owned canonicalization for typed tensor views.
+///
+/// Implementations must preserve the input placement family. CPU backends
+/// canonicalize host views through explicit host copies and reject backend
+/// buffers with a diagnostic that asks the caller to download first. GPU
+/// backends canonicalize GPU-resident views on the same device and reject host
+/// buffers with an upload hint.
+///
+/// This trait is intentionally separate from [`BackendSession`] so generic
+/// typed methods do not change the object-safety contract of `dyn BackendSession`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{cpu::CpuBackend, TensorViewCanonicalization, TypedTensor};
+///
+/// let mut backend = CpuBackend::new();
+/// let tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+/// let compact = backend.to_contiguous(&tensor.as_view())?;
+/// assert_eq!(compact.as_slice(), &[1, 2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub trait TensorViewCanonicalization<T: Clone + 'static, R: TensorRank> {
+    fn to_contiguous(
+        &mut self,
+        view: &TypedTensorView<'_, T, R>,
+    ) -> crate::Result<TypedTensor<T, R>>;
+
+    fn copy_from_contiguous(
+        &mut self,
+        src: &TypedTensor<T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+    ) -> crate::Result<()>;
 }
 
 /// Optional elementwise fusion execution.

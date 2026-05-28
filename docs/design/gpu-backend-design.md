@@ -145,6 +145,12 @@ and no implicit global shape state.
   logical tensor indexing, such as elementwise kernels and raw dtype conversion
   helpers. A logical indexing kernel may use raw arrays only with a local comment
   explaining why `TensorBinding` cannot express the access pattern.
+- View canonicalization and copy-back kernels are the current exception for
+  logical indexing over raw arrays: `TensorBinding` metadata cannot represent
+  signed arbitrary view strides, so these kernels receive the validated
+  `TensorLayout` shape, signed stride, and offset metadata from the launch
+  boundary and index the CubeCL allocation directly. They must still launch over
+  the full logical output or update domain and must not download to host.
 - Kernel crates must not invent or cache host-side tensor shape snapshots that
   can drift from the `TypedTensor` or `ExecInstruction` metadata. Shape
   validation belongs at the launch/backend boundary before unsafe launch.

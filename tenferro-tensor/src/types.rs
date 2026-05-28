@@ -619,6 +619,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         &self.placement
     }
 
+    /// Return the backend allocation for backend integrations.
+    #[doc(hidden)]
+    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendBuffer<T>>> {
+        match &self.buffer {
+            TensorBufferRef::Host(_) => None,
+            TensorBufferRef::Backend(buffer) => Some(buffer),
+        }
+    }
+
     /// Compute the physical element offset for a logical index.
     ///
     /// # Examples
@@ -1114,6 +1123,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn placement(&self) -> &Placement {
         &self.placement
+    }
+
+    /// Return the backend allocation for backend integrations.
+    #[doc(hidden)]
+    pub fn backend_buffer(&self) -> Option<&Arc<dyn BackendBuffer<T>>> {
+        match &self.buffer {
+            TensorBufferRefMut::Host(_) => None,
+            TensorBufferRefMut::Backend(buffer) => Some(buffer),
+        }
     }
 
     /// Compute the physical element offset for a logical index.

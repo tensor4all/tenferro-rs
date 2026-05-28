@@ -7,7 +7,7 @@ use crate::config::CompareDir;
 use crate::cubecl::CubeclRuntime;
 use crate::types::{
     Buffer, ComputeDevice, CubeclBuffer, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor,
-    TypedTensor,
+    TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -36,7 +36,7 @@ where
 
 #[doc(hidden)]
 pub fn cubecl_buffer<'a, T: 'static>(
-    tensor: &'a TypedTensor<T>,
+    tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     match &tensor.buffer {
@@ -60,6 +60,58 @@ pub fn cubecl_buffer<'a, T: 'static>(
     }
 }
 
+#[doc(hidden)]
+pub fn cubecl_view_buffer<'a, T: 'static>(
+    view: &'a TypedTensorView<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<&'a CubeclBuffer<T>> {
+    let buffer = view.backend_buffer().ok_or_else(|| {
+        crate::Error::backend_failure(
+            op,
+            "expected CubeCL GPU tensor view, got host tensor. \
+                      Use upload_tensor() to transfer to GPU before calling GPU ops.",
+        )
+    })?;
+    buffer
+        .as_any()
+        .downcast_ref::<CubeclBuffer<T>>()
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!(
+                    "expected CubeCL GPU tensor view, got backend buffer family `{}`",
+                    buffer.backend_family()
+                ),
+            )
+        })
+}
+
+#[doc(hidden)]
+pub fn cubecl_view_mut_buffer<'a, T: 'static>(
+    view: &'a TypedTensorViewMut<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<&'a CubeclBuffer<T>> {
+    let buffer = view.backend_buffer().ok_or_else(|| {
+        crate::Error::backend_failure(
+            op,
+            "expected CubeCL GPU tensor view, got host tensor. \
+                      Use upload_tensor() to transfer to GPU before calling GPU ops.",
+        )
+    })?;
+    buffer
+        .as_any()
+        .downcast_ref::<CubeclBuffer<T>>()
+        .ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                format!(
+                    "expected CubeCL GPU tensor view, got backend buffer family `{}`",
+                    buffer.backend_family()
+                ),
+            )
+        })
+}
+
 pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
     let strides = crate::types::col_major_strides(shape)
         .into_iter()
@@ -81,7 +133,7 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
 }
 
 fn validate_cubecl_buffer_len<T>(
-    tensor: &TypedTensor<T>,
+    tensor: &TypedTensor<T, impl TensorRank>,
     buffer: &CubeclBuffer<T>,
     op: &'static str,
 ) -> crate::Result<()> {
@@ -130,7 +182,7 @@ fn validate_raw_ternary_shapes<TA, TB, TC>(
 
 #[doc(hidden)]
 pub fn typed_tensor_binding<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T>,
+    tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<TensorBinding<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
@@ -149,20 +201,46 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 
 pub(crate) fn ensure_resident_on_runtime<T: 'static>(
     rt: &CubeclRuntime,
-    tensor: &TypedTensor<T>,
+    tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<()> {
     cubecl_buffer(tensor, op)?;
-    if !matches!(&tensor.placement.memory_kind, MemoryKind::Device) {
+    ensure_placement_resident_on_runtime(rt, &tensor.placement, op)
+}
+
+pub(crate) fn ensure_view_resident_on_runtime<T: 'static>(
+    rt: &CubeclRuntime,
+    view: &TypedTensorView<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<()> {
+    cubecl_view_buffer(view, op)?;
+    ensure_placement_resident_on_runtime(rt, view.placement(), op)
+}
+
+pub(crate) fn ensure_view_mut_resident_on_runtime<T: 'static>(
+    rt: &CubeclRuntime,
+    view: &TypedTensorViewMut<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<()> {
+    cubecl_view_mut_buffer(view, op)?;
+    ensure_placement_resident_on_runtime(rt, view.placement(), op)
+}
+
+fn ensure_placement_resident_on_runtime(
+    rt: &CubeclRuntime,
+    placement: &Placement,
+    op: &'static str,
+) -> crate::Result<()> {
+    if !matches!(&placement.memory_kind, MemoryKind::Device) {
         return Err(crate::Error::backend_failure(
             op,
             format!(
                 "expected GPU tensor placement, got {:?}",
-                tensor.placement.memory_kind
+                placement.memory_kind
             ),
         ));
     }
-    match &tensor.placement.device {
+    match &placement.device {
         Some(device)
             if device.kind == DeviceKind::Gpu(GpuBackendKind::Cuda)
                 && device.ordinal == rt.device_ordinal() =>
@@ -233,7 +311,7 @@ pub(crate) fn alloc_bool_output(rt: &CubeclRuntime, shape: &[usize]) -> TypedTen
 
 #[doc(hidden)]
 pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
-    tensor: &TypedTensor<T>,
+    tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
@@ -246,8 +324,35 @@ pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
     Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
 }
 
+#[doc(hidden)]
+pub fn typed_view_array_arg<T: CubeElement + Clone>(
+    view: &TypedTensorView<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CudaRuntime>> {
+    let buffer = cubecl_view_buffer(view, op)?;
+
+    // SAFETY: `TensorLayout` validation at view construction proves the
+    // reachable logical offsets are within this backing allocation. Kernels
+    // using this raw array also receive the validated signed layout metadata
+    // because CubeCL TensorBinding cannot express signed view strides.
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+}
+
+#[doc(hidden)]
+pub fn typed_view_mut_array_arg<T: CubeElement + Clone>(
+    view: &TypedTensorViewMut<'_, T, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CudaRuntime>> {
+    let buffer = cubecl_view_mut_buffer(view, op)?;
+
+    // SAFETY: `TypedTensorViewMut` construction validates both reachable
+    // offsets and no-overlap. The raw array length covers the backing
+    // allocation, while the kernel launch domain covers only the logical view.
+    Ok(unsafe { ArrayArg::from_raw_parts(buffer.handle.clone(), buffer.len) })
+}
+
 pub(crate) fn bool_tensor_array_arg(
-    tensor: &TypedTensor<bool>,
+    tensor: &TypedTensor<bool, impl TensorRank>,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
@@ -260,7 +365,7 @@ pub(crate) fn bool_tensor_array_arg(
 }
 
 pub(crate) fn typed_tensor_array_arg_as<T, U>(
-    tensor: &TypedTensor<T>,
+    tensor: &TypedTensor<T, impl TensorRank>,
     len: usize,
     op: &'static str,
 ) -> crate::Result<ArrayArg<CudaRuntime>>
