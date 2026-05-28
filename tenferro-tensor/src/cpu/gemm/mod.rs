@@ -122,13 +122,13 @@ impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     }
 }
 
-impl<T> TypedTensorRead<T> for TypedTensorView<'_, T> {
+impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
     fn shape(&self) -> &[usize] {
-        self.shape
+        self.shape()
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
-        Some(self.data)
+        self.as_slice().ok()
     }
 }
 
@@ -777,7 +777,7 @@ pub(crate) fn dot_general_faer_read_cached(
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (lhs, rhs) {
+            match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -807,7 +807,7 @@ pub(crate) fn dot_general_faer_read_cached(
                         GemmAnalysisCacheKind::Direct,
                         ctx,
                         a,
-                        &b,
+                        b,
                         config,
                         false,
                         false,
@@ -824,7 +824,7 @@ pub(crate) fn dot_general_faer_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         ctx,
-                        &a,
+                        a,
                         b,
                         config,
                         false,
@@ -842,8 +842,8 @@ pub(crate) fn dot_general_faer_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         ctx,
-                        &a,
-                        &b,
+                        a,
+                        b,
                         config,
                         false,
                         false,

@@ -820,8 +820,8 @@ impl TensorDot for CpuBackend {
                             cache,
                             None,
                             ctx.as_ref(),
-                            lhs,
-                            rhs,
+                            lhs.clone(),
+                            rhs.clone(),
                             config,
                         )
                     })?

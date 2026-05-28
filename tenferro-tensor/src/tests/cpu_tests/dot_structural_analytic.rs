@@ -98,7 +98,7 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
     let direct = backend
         .dot_general_read(
             TensorRead::from_tensor(&lhs),
-            TensorRead::from_view(rhs_view),
+            TensorRead::from_view(rhs_view.clone()),
             &config,
         )
         .unwrap();
