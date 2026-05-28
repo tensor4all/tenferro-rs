@@ -182,7 +182,6 @@ pub trait TensorReduction {
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    #[doc(hidden)]
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_sum(input, axes),
@@ -213,7 +212,6 @@ pub trait TensorReduction {
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 12.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    #[doc(hidden)]
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_prod(input, axes),
@@ -244,7 +242,6 @@ pub trait TensorReduction {
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    #[doc(hidden)]
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_max(input, axes),
@@ -275,7 +272,6 @@ pub trait TensorReduction {
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    #[doc(hidden)]
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_min(input, axes),
