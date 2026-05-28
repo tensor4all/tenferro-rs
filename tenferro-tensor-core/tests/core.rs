@@ -23,6 +23,31 @@ fn dynamic_rank_shape_roundtrips_vec() {
 }
 
 #[test]
+fn dynamic_rank_strides_roundtrip_vec() {
+    let strides = <DynRank as TensorRank>::strides_from_vec(vec![1, 2, -1].into()).unwrap();
+    assert_eq!(strides.as_ref(), &[1, 2, -1]);
+    assert_eq!(
+        <DynRank as TensorRank>::strides_into_vec(strides).as_slice(),
+        &[1, 2, -1]
+    );
+}
+
+#[test]
+fn static_rank_shape_and_strides_roundtrip_vecs() {
+    let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into()).unwrap();
+    assert_eq!(
+        <Rank<2> as TensorRank>::shape_into_vec(shape).as_slice(),
+        &[2, 3]
+    );
+
+    let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into()).unwrap();
+    assert_eq!(
+        <Rank<2> as TensorRank>::strides_into_vec(strides).as_slice(),
+        &[1, 2]
+    );
+}
+
+#[test]
 fn static_rank_rejects_wrong_shape_length() {
     let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
     assert!(matches!(

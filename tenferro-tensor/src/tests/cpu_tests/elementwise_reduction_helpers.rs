@@ -78,6 +78,346 @@ fn reduce_sum_accepts_transposed_host_view_input() {
 }
 
 #[test]
+fn reduce_read_views_cover_dtype_and_validation_branches() {
+    let mut backend = CpuBackend::new();
+
+    let f32s = TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<f32>()
+            .unwrap(),
+        &[3.0, 7.0]
+    );
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<f32>()
+            .unwrap(),
+        &[2.0, 4.0]
+    );
+
+    let f64s = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[1.0, 3.0]
+    );
+
+    let i32s = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]);
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<i32>()
+            .unwrap(),
+        &[3, 7]
+    );
+
+    let i64s = TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]);
+    assert_eq!(
+        backend
+            .reduce_prod_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[2, 12]
+    );
+
+    let c32s = TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2],
+        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, -1.0)],
+    );
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<Complex32>()
+            .unwrap(),
+        &[Complex32::new(3.0, 0.0)]
+    );
+
+    let c64s = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+    );
+    assert_eq!(
+        backend
+            .reduce_prod_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[0])
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(3.0, 1.0)]
+    );
+
+    let bools = TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]);
+    assert!(matches!(
+        backend.reduce_sum_read(
+            TensorRead::from_view(TensorView::Bool(bools.as_view())),
+            &[0]
+        ),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_sum",
+            ..
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_prod_read(
+            TensorRead::from_view(TensorView::Bool(bools.as_view())),
+            &[0]
+        ),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_prod",
+            ..
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_max",
+            ..
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_min",
+            ..
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2]),
+        Err(crate::Error::AxisOutOfBounds {
+            op: "reduce_sum",
+            axis: 2,
+            rank: 2
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_prod_read(
+            TensorRead::from_view(TensorView::F64(f64s.as_view())),
+            &[0, 0]
+        ),
+        Err(crate::Error::DuplicateAxis {
+            op: "reduce_prod",
+            axis: 0,
+            role: "axes"
+        })
+    ));
+}
+
+#[test]
+fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
+    let mut backend = CpuBackend::new();
+
+    let f32s = TypedTensor::<f32>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[])
+            .unwrap()
+            .as_slice::<f32>()
+            .unwrap(),
+        &[1.0, 2.0]
+    );
+
+    let f64s = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[1.0, 2.0]
+    );
+
+    let i32s = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[])
+            .unwrap()
+            .as_slice::<i32>()
+            .unwrap(),
+        &[1, 2]
+    );
+
+    let i64s = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![1, 2]);
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[])
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[1, 2]
+    );
+
+    let bools = TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]);
+    assert_eq!(
+        backend
+            .reduce_max_read(
+                TensorRead::from_view(TensorView::Bool(bools.as_view())),
+                &[]
+            )
+            .unwrap()
+            .as_slice::<bool>()
+            .unwrap(),
+        &[true, false]
+    );
+
+    let c32s =
+        TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, -1.0)]);
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[])
+            .unwrap()
+            .as_slice::<Complex32>()
+            .unwrap(),
+        &[Complex32::new(1.0, -1.0)]
+    );
+
+    let c64s =
+        TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(2.0, 3.0)]);
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[])
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(2.0, 3.0)]
+    );
+}
+
+#[test]
+fn reduce_read_tensors_cover_host_dtype_dispatch() {
+    let mut backend = CpuBackend::new();
+
+    let f32s = Tensor::F32(TypedTensor::<f32>::from_vec_col_major(
+        vec![2],
+        vec![2.0, 3.0],
+    ));
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_tensor(&f32s), &[0])
+            .unwrap()
+            .as_slice::<f32>()
+            .unwrap(),
+        &[5.0]
+    );
+    assert_eq!(
+        backend
+            .reduce_max_read(TensorRead::from_tensor(&f32s), &[0])
+            .unwrap()
+            .as_slice::<f32>()
+            .unwrap(),
+        &[3.0]
+    );
+
+    let f64s = Tensor::F64(TypedTensor::<f64>::from_vec_col_major(
+        vec![2],
+        vec![2.0, 3.0],
+    ));
+    assert_eq!(
+        backend
+            .reduce_prod_read(TensorRead::from_tensor(&f64s), &[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[6.0]
+    );
+    assert_eq!(
+        backend
+            .reduce_min_read(TensorRead::from_tensor(&f64s), &[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[2.0]
+    );
+
+    let i32s = Tensor::I32(TypedTensor::<i32>::from_vec_col_major(vec![2], vec![2, 3]));
+    assert_eq!(
+        backend
+            .reduce_prod_read(TensorRead::from_tensor(&i32s), &[0])
+            .unwrap()
+            .as_slice::<i32>()
+            .unwrap(),
+        &[6]
+    );
+    assert!(matches!(
+        backend.reduce_max_read(TensorRead::from_tensor(&i32s), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_max",
+            ..
+        })
+    ));
+
+    let i64s = Tensor::I64(TypedTensor::<i64>::from_vec_col_major(vec![2], vec![2, 3]));
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_tensor(&i64s), &[0])
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[5]
+    );
+    assert!(matches!(
+        backend.reduce_min_read(TensorRead::from_tensor(&i64s), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_min",
+            ..
+        })
+    ));
+
+    let bools = Tensor::Bool(TypedTensor::<bool>::from_vec_col_major(
+        vec![2],
+        vec![true, false],
+    ));
+    assert!(matches!(
+        backend.reduce_sum_read(TensorRead::from_tensor(&bools), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_sum",
+            ..
+        })
+    ));
+    assert!(matches!(
+        backend.reduce_prod_read(TensorRead::from_tensor(&bools), &[0]),
+        Err(crate::Error::BackendFailure {
+            op: "reduce_prod",
+            ..
+        })
+    ));
+
+    let c32s = Tensor::C32(TypedTensor::<Complex32>::from_vec_col_major(
+        vec![2],
+        vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, -1.0)],
+    ));
+    assert_eq!(
+        backend
+            .reduce_sum_read(TensorRead::from_tensor(&c32s), &[0])
+            .unwrap()
+            .as_slice::<Complex32>()
+            .unwrap(),
+        &[Complex32::new(3.0, 0.0)]
+    );
+
+    let c64s = Tensor::C64(TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+    ));
+    assert_eq!(
+        backend
+            .reduce_prod_read(TensorRead::from_tensor(&c64s), &[0])
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        &[Complex64::new(3.0, 1.0)]
+    );
+}
+
+#[test]
 fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![8.0f32, -2.0]));
     let rhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![2.0f32, 5.0]));
