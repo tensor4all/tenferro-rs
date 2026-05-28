@@ -212,6 +212,7 @@ python3 scripts/check-docs-site.py
 # Set CUBECL_DEBUG_LOG=0 to suppress verbose JIT compilation logs.
 # GPU tests are marked #[ignore] so they don't fail on non-GPU machines.
 # Use --ignored to actually run them.
+# If `/usr/local/cuda-12.8` is absent, find an installed CUDA root with `ls -d /usr/local/cuda*`.
 CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.8 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
