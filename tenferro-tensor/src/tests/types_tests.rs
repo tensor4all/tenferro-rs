@@ -201,6 +201,25 @@ fn non_contiguous_host_view_to_contiguous_preserves_column_major_order() {
 }
 
 #[test]
+fn non_contiguous_host_view_to_contiguous_preserves_host_placement() {
+    let placement = Placement {
+        memory_kind: MemoryKind::PinnedHost,
+        device: None,
+    };
+    let tensor = TypedTensor::<i32, Rank<2>>::from_buffer_col_major(
+        [2, 2],
+        Buffer::Host(vec![1, 2, 3, 4]),
+        placement.clone(),
+    );
+    let view = tensor.as_view().transpose_view([1, 0]).unwrap();
+
+    let compact = view.to_contiguous().unwrap();
+
+    assert_eq!(compact.as_slice(), &[1, 3, 2, 4]);
+    assert_eq!(compact.placement, placement);
+}
+
+#[test]
 fn typed_tensor_view_backend_to_contiguous_returns_backend_failure() {
     let tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![2],

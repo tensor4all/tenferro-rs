@@ -702,8 +702,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
 
     /// Materialize this view as compact column-major host tensor storage.
     ///
-    /// This is an explicit copy boundary. Backend buffers return an error
-    /// instead of being downloaded implicitly.
+    /// This is an explicit copy boundary. Host placement metadata is preserved
+    /// on the materialized tensor. Backend buffers return an error instead of
+    /// being downloaded implicitly.
     ///
     /// # Examples
     ///
@@ -730,7 +731,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         )?;
         let shape = R::shape_from_vec(self.shape().to_vec().into())
             .map_err(|err| tensor_layout_error(op, err))?;
-        Ok(TypedTensor::from_vec_col_major(shape, data))
+        Ok(TypedTensor::from_buffer_col_major(
+            shape,
+            Buffer::Host(data),
+            self.placement.clone(),
+        ))
     }
 
     /// Return a metadata-only axis permutation.
@@ -1328,7 +1333,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         }
     }
 
-    /// Return a mutable metadata-only axis permutation.
+    /// Consume this mutable view and return a metadata-only axis permutation.
+    ///
+    /// Use [`TypedTensorViewMut::try_permute_axes`] when the original mutable
+    /// view needs to be reborrowed instead of consumed.
     ///
     /// # Examples
     ///
@@ -1336,7 +1344,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// use tenferro_tensor::{Rank, TypedTensorViewMut};
     ///
     /// let mut data = [1_i32, 2, 3, 4];
-    /// let mut view = TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &mut data)?;
+    /// let view = TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &mut data)?;
     /// let transposed = view.transpose_view([1, 0])?;
     /// assert_eq!(transposed.strides(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1370,7 +1378,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         }
     }
 
-    /// Explicit alias for [`TypedTensorViewMut::transpose_view`].
+    /// Borrow this mutable view and return a metadata-only axis permutation.
+    ///
+    /// Unlike [`TypedTensorViewMut::transpose_view`], this method reborrows
+    /// `self` so the original view remains usable after the returned view is
+    /// dropped.
     ///
     /// # Examples
     ///
@@ -1379,7 +1391,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     ///
     /// let mut data = [1_i32, 2, 3, 4];
     /// let mut view = TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &mut data)?;
-    /// assert_eq!(view.try_permute_axes(&[1, 0])?.shape(), &[2, 2]);
+    /// {
+    ///     let transposed = view.try_permute_axes(&[1, 0])?;
+    ///     assert_eq!(transposed.shape(), &[2, 2]);
+    /// }
+    /// assert_eq!(view.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn try_permute_axes(
