@@ -80,7 +80,7 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         })
 }
 
-fn validate_cubecl_buffer_len<T: Clone>(
+fn validate_cubecl_buffer_len<T>(
     tensor: &TypedTensor<T>,
     buffer: &CubeclBuffer<T>,
     op: &'static str,
@@ -98,7 +98,7 @@ fn validate_cubecl_buffer_len<T: Clone>(
     Ok(())
 }
 
-fn validate_raw_unary_shapes<TIn: Clone>(
+fn validate_raw_unary_shapes<TIn>(
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
@@ -106,7 +106,7 @@ fn validate_raw_unary_shapes<TIn: Clone>(
     ensure_same_shape(op, input.shape(), out_shape)
 }
 
-fn validate_raw_binary_shapes<TLhs: Clone, TRhs: Clone>(
+fn validate_raw_binary_shapes<TLhs, TRhs>(
     lhs: &TypedTensor<TLhs>,
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
@@ -116,7 +116,7 @@ fn validate_raw_binary_shapes<TLhs: Clone, TRhs: Clone>(
     ensure_same_shape(op, rhs.shape(), out_shape)
 }
 
-fn validate_raw_ternary_shapes<TA: Clone, TB: Clone, TC: Clone>(
+fn validate_raw_ternary_shapes<TA, TB, TC>(
     a: &TypedTensor<TA>,
     b: &TypedTensor<TB>,
     c: &TypedTensor<TC>,
@@ -189,7 +189,7 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
 }
 
 #[doc(hidden)]
-pub fn typed_from_cubecl<T: Clone + Send + Sync + 'static>(
+pub fn typed_from_cubecl<T: Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
     device_ordinal: usize,

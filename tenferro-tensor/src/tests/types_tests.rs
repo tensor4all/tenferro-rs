@@ -13,6 +13,9 @@ use crate::Error;
 
 mod strided_dynamic;
 
+#[derive(Debug)]
+struct NonCloneElement;
+
 fn tensor_scalar_roundtrip<T>(shape: Vec<usize>, data: Vec<T>)
 where
     T: TensorScalar + PartialEq + std::fmt::Debug,
@@ -430,6 +433,27 @@ fn backend_buffers_panic_when_host_access_is_requested() {
         let _ = mutable_tensor.host_data_mut();
     }));
     assert!(host_data_mut.is_err());
+}
+
+#[test]
+fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
+    let placement = Placement {
+        memory_kind: MemoryKind::Other("backend".to_string()),
+        device: None,
+    };
+    let tensor = TypedTensor::<NonCloneElement>::from_buffer_col_major(
+        vec![2, 3],
+        Buffer::Backend(Arc::new(BufferHandle::<NonCloneElement>::new_with_len(
+            9, 6,
+        ))),
+        placement,
+    );
+
+    assert_eq!(tensor.shape(), &[2, 3]);
+    assert_eq!(tensor.rank(), 2);
+    assert_eq!(tensor.n_elements(), 6);
+    assert_eq!(tensor.layout().strides(), &[1, 2]);
+    assert!(tensor.into_layout().is_compact_col_major());
 }
 
 #[test]

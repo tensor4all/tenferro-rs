@@ -68,7 +68,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
 }
 
-fn matrix_dims<T: Clone>(
+fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
@@ -82,7 +82,7 @@ fn matrix_dims<T: Clone>(
     Ok((input.shape()[0], input.shape()[1]))
 }
 
-fn square_matrix_dim<T: Clone>(
+fn square_matrix_dim<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<usize> {
@@ -404,7 +404,7 @@ fn split_shape_core_and_batch<'a>(
     Ok(shape.split_at(core_rank))
 }
 
-fn split_core_and_batch<'a, T: Clone>(
+fn split_core_and_batch<'a, T>(
     input: &'a TypedTensor<T>,
     core_rank: usize,
     op: &'static str,
@@ -412,7 +412,7 @@ fn split_core_and_batch<'a, T: Clone>(
     split_shape_core_and_batch(input.shape(), core_rank, op)
 }
 
-fn matrix_core_and_batch<'a, T: Clone>(
+fn matrix_core_and_batch<'a, T>(
     input: &'a TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize, &'a [usize])> {
@@ -420,7 +420,7 @@ fn matrix_core_and_batch<'a, T: Clone>(
     Ok((matrix_shape[0], matrix_shape[1], batch_shape))
 }
 
-fn square_core_and_batch<'a, T: Clone>(
+fn square_core_and_batch<'a, T>(
     input: &'a TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, &'a [usize])> {

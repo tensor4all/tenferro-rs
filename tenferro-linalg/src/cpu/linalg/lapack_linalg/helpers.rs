@@ -1,7 +1,7 @@
 use tenferro_tensor::buffer_pool::BufferPool;
 use tenferro_tensor::{Tensor, TypedTensor};
 
-pub(crate) fn matrix_dims<T: Clone>(
+pub(crate) fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
@@ -15,7 +15,7 @@ pub(crate) fn matrix_dims<T: Clone>(
     Ok((input.shape()[0], input.shape()[1]))
 }
 
-pub(crate) fn square_matrix_dim<T: Clone>(
+pub(crate) fn square_matrix_dim<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<usize> {
@@ -40,7 +40,7 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
     tensor
 }
 
-pub(crate) fn split_core_and_batch_result<'a, T: Clone>(
+pub(crate) fn split_core_and_batch_result<'a, T>(
     input: &'a TypedTensor<T>,
     core_rank: usize,
     op: &'static str,
@@ -55,7 +55,7 @@ pub(crate) fn split_core_and_batch_result<'a, T: Clone>(
     Ok(input.shape().split_at(core_rank))
 }
 
-pub(crate) fn matrix_core_and_batch_result<'a, T: Clone>(
+pub(crate) fn matrix_core_and_batch_result<'a, T>(
     input: &'a TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize, &'a [usize])> {
@@ -63,7 +63,7 @@ pub(crate) fn matrix_core_and_batch_result<'a, T: Clone>(
     Ok((matrix_shape[0], matrix_shape[1], batch_shape))
 }
 
-pub(crate) fn square_core_and_batch_result<'a, T: Clone>(
+pub(crate) fn square_core_and_batch_result<'a, T>(
     input: &'a TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, &'a [usize])> {

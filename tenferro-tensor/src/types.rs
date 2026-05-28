@@ -1117,37 +1117,7 @@ impl<T: Clone + One + Zero, R: TensorRank> TypedTensor<T, R> {
     }
 }
 
-impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
-    /// Create a tensor from a column-major buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// assert_eq!(t.get(&[1, 0]), &2.0);
-    /// ```
-    pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
-        typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
-    }
-
-    /// Create a tensor from a row-major buffer.
-    ///
-    /// The data is converted into tenferro's column-major physical storage.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// assert_eq!(t.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
-    /// ```
-    pub fn from_vec_row_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
-        typed_tensor_from_vec_row_major(shape, data)
-    }
-
+impl<T, R: TensorRank> TypedTensor<T, R> {
     /// Create a tensor from an existing buffer and compact column-major layout.
     ///
     /// This preserves the owned tensor invariant that layout metadata is
@@ -1186,54 +1156,6 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
             buffer,
             layout,
             placement,
-        }
-    }
-
-    /// Consume this tensor and return its owned column-major host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// let (shape, data) = t.try_into_vec_col_major().unwrap();
-    /// assert_eq!(shape, vec![2]);
-    /// assert_eq!(data, vec![1.0, 2.0]);
-    /// ```
-    pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let shape = self.shape().to_vec();
-        match self.buffer {
-            Buffer::Host(data) => Ok((shape, data)),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "try_into_vec_col_major",
-                "backend buffers cannot be exported as host Vec",
-            )),
-        }
-    }
-
-    /// Consume this tensor and return an owned row-major host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
-    /// let (_, data) = t.try_into_vec_row_major().unwrap();
-    /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
-    /// ```
-    pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let shape = self.shape().to_vec();
-        match self.buffer {
-            Buffer::Host(data) => {
-                let data = col_major_to_row_major(&shape, data);
-                Ok((shape, data))
-            }
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
-                "try_into_vec_row_major",
-                "backend buffers cannot be exported as host Vec",
-            )),
         }
     }
 
@@ -1307,6 +1229,86 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn into_layout(self) -> TensorLayout<R> {
         self.layout
+    }
+}
+
+impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
+    /// Create a tensor from a column-major buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(t.get(&[1, 0]), &2.0);
+    /// ```
+    pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
+        typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
+    }
+
+    /// Create a tensor from a row-major buffer.
+    ///
+    /// The data is converted into tenferro's column-major physical storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(t.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    pub fn from_vec_row_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
+        typed_tensor_from_vec_row_major(shape, data)
+    }
+
+    /// Consume this tensor and return its owned column-major host buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let (shape, data) = t.try_into_vec_col_major().unwrap();
+    /// assert_eq!(shape, vec![2]);
+    /// assert_eq!(data, vec![1.0, 2.0]);
+    /// ```
+    pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let shape = self.shape().to_vec();
+        match self.buffer {
+            Buffer::Host(data) => Ok((shape, data)),
+            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+                "try_into_vec_col_major",
+                "backend buffers cannot be exported as host Vec",
+            )),
+        }
+    }
+
+    /// Consume this tensor and return an owned row-major host buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]);
+    /// let (_, data) = t.try_into_vec_row_major().unwrap();
+    /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let shape = self.shape().to_vec();
+        match self.buffer {
+            Buffer::Host(data) => {
+                let data = col_major_to_row_major(&shape, data);
+                Ok((shape, data))
+            }
+            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+                "try_into_vec_row_major",
+                "backend buffers cannot be exported as host Vec",
+            )),
+        }
     }
 
     /// Borrow the host buffer.

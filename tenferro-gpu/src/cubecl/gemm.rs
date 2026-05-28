@@ -315,7 +315,7 @@ where
     )
 }
 
-fn build_layout<T: Clone>(
+fn build_layout<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -471,7 +471,7 @@ fn validate_role_disjoint(
     Ok(())
 }
 
-fn validate_dot_general<T: Clone>(
+fn validate_dot_general<T>(
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,

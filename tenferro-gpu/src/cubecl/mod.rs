@@ -2721,7 +2721,7 @@ fn scatter_launch_meta(
     })
 }
 
-fn concatenate_output_shape<T: Clone>(
+fn concatenate_output_shape<T>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<Vec<usize>> {
