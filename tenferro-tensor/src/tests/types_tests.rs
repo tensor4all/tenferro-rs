@@ -131,6 +131,55 @@ fn typed_tensor_static_rank_constructs_compact_layout() {
 }
 
 #[test]
+fn typed_tensor_try_into_rank_validates_rank() {
+    let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+
+    let err = tensor.try_into_rank::<3>().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            expected: 3,
+            actual: 2,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
+    let placement = Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal: 2,
+        }),
+    };
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2, 3],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(42, 6))),
+        placement.clone(),
+    );
+
+    let ranked = tensor.try_into_rank::<2>().unwrap();
+
+    assert_eq!(ranked.shape(), &[2, 3]);
+    assert_eq!(ranked.layout().strides(), &[1, 2]);
+    assert_eq!(ranked.placement, placement);
+    match &ranked.buffer {
+        Buffer::Backend(buffer) => {
+            assert_eq!(buffer.len(), 6);
+            let handle = buffer
+                .as_any()
+                .downcast_ref::<BufferHandle<f64>>()
+                .expect("opaque test handle");
+            assert_eq!(handle.id, 42);
+        }
+        Buffer::Host(_) => panic!("expected backend buffer"),
+    }
+}
+
+#[test]
 fn typed_tensor_as_view_preserves_rank_and_layout() {
     let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let view = tensor.as_view();

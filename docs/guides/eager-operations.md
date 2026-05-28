@@ -48,8 +48,12 @@ let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0,
 
 // Static dtype (`TypedTensor`)
 let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let ranked: TypedTensor<f64, Rank<2>> = b.clone().try_into_rank::<2>().unwrap();
+let ranked: TypedTensor<f64, Rank<2>> = match b.clone().try_into_rank::<2>() {
+    Ok(ranked) => ranked,
+    Err(err) => panic!("unexpected rank mismatch: {err}"),
+};
 assert_eq!(ranked.shape(), &[2, 3]);
+assert!(b.clone().try_into_rank::<3>().is_err());
 
 // Convert between layers for a specific dtype.
 let c = Tensor::F64(b.clone());
