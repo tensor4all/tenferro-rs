@@ -25,6 +25,12 @@
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
 
+mod layout;
+mod rank;
+
+pub use layout::TensorLayout;
+pub use rank::{DynRank, Rank, TensorRank};
+
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
 /// # Examples

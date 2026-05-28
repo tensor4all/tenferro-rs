@@ -1,7 +1,33 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor_core::{
-    col_major_strides, DType, Error, SliceSpec, Tensor, TensorRef, TypedTensor, TypedTensorView,
+    col_major_strides, DType, DynRank, Error, Rank, SliceSpec, Tensor, TensorLayout, TensorRank,
+    TensorRef, TypedTensor, TypedTensorView,
 };
+
+#[test]
+fn dynamic_rank_shape_roundtrips_vec() {
+    let shape = <DynRank as TensorRank>::shape_from_vec(vec![2, 3].into()).unwrap();
+    assert_eq!(shape.as_ref(), &[2, 3]);
+    assert_eq!(
+        <DynRank as TensorRank>::shape_into_vec(shape).as_slice(),
+        &[2, 3]
+    );
+}
+
+#[test]
+fn static_rank_rejects_wrong_shape_length() {
+    let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
+    assert!(err.to_string().contains("rank"));
+}
+
+#[test]
+fn compact_layout_for_static_rank_has_column_major_strides() {
+    let layout = TensorLayout::<Rank<2>>::compact([2, 3]).unwrap();
+    assert_eq!(layout.shape(), &[2, 3]);
+    assert_eq!(layout.strides(), &[1, 2]);
+    assert_eq!(layout.offset(), 0);
+    assert!(layout.is_compact_col_major());
+}
 
 #[test]
 fn constructs_contiguous_col_major_and_validates_count() {
