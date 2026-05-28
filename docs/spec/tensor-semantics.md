@@ -174,7 +174,7 @@ documented in [`backend-contract.md`](backend-contract.md).
 
 ## V. Dense Tensor Boundary
 
-`tenferro::Tensor` is a dense runtime tensor. It does not carry structural
+`tenferro_tensor::Tensor` is a dense runtime tensor. It does not carry structural
 metadata such as diagonal, symmetric, block-diagonal, or sparse layout tags.
 
 This is a deliberate boundary:

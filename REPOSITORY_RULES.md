@@ -258,10 +258,12 @@ Tests follow implementation ownership.
 - Public indexing and slicing APIs must validate rank, bounds, steps, output
   shape, and empty/singleton boundary behavior at the API boundary or planning
   boundary.
-- Signed strides and negative slice steps are valid when reachable-range
-  validation proves every logical element maps inside the backing allocation.
-  Zero step remains invalid. Do not reject negative strides solely because they
-  are negative.
+- Tensor layout metadata and runtime typed views may use signed strides and
+  negative slice steps when reachable-range validation proves every logical
+  element maps inside the backing allocation. Zero step remains invalid. Do not
+  reject negative strides solely because they are negative. Narrower adapter
+  APIs may document stricter compatibility limits, but those limits must be
+  explicit at the API boundary.
 - After validation, hot loops and kernels should not repeat the same range
   checks per element. Carry validated shape/stride/offset metadata into the
   inner implementation instead.
