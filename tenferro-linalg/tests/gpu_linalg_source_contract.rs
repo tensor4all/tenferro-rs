@@ -10,6 +10,16 @@ fn linalg_source() -> String {
     .unwrap_or_else(|err| panic!("GPU linalg source should be readable: {err}"))
 }
 
+fn gpu_mod_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("gpu")
+            .join("mod.rs"),
+    )
+    .unwrap_or_else(|err| panic!("GPU linalg module source should be readable: {err}"))
+}
+
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -94,4 +104,21 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
         "GPU LU must not rebuild P/L/U/parity through a full device-to-host-to-device roundtrip:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let svd_view_source = source_section(&source, "fn svd_view", "fn qr");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.svd(&input)",
+    ] {
+        assert!(
+            svd_view_source.contains(needle),
+            "CubeCL svd_view should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
 }

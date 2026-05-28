@@ -1,16 +1,61 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{
-    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, Error, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural, TensorView,
-    TypedTensor,
+    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer,
+    BufferHandle, CompareDir, DType, DotGeneralConfig, Error, GatherConfig, MemoryKind, PadConfig,
+    Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TensorView, TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
+}
+
+fn opaque_backend_placement() -> Placement {
+    Placement {
+        memory_kind: MemoryKind::Device,
+        device: None,
+    }
+}
+
+fn backend_f64_tensor(shape: Vec<usize>, handle_id: u64) -> Tensor {
+    let len = shape.iter().product();
+    Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
+        shape,
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
+        opaque_backend_placement(),
+    ))
+}
+
+fn assert_backend_download_error<T>(result: tenferro_tensor::Result<T>, expected_op: &'static str) {
+    let err = match result {
+        Ok(_) => panic!("expected {expected_op} to reject backend buffer"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op,
+            ref message,
+        } if op == expected_op && message.contains("download")
+    ));
+}
+
+fn assert_no_panic_backend_download_error<T>(
+    expected_op: &'static str,
+    f: impl FnOnce() -> tenferro_tensor::Result<T>,
+) {
+    let result = catch_unwind(AssertUnwindSafe(f));
+
+    assert!(
+        result.is_ok(),
+        "{expected_op} should return Err for backend buffers, not panic"
+    );
+    assert_backend_download_error(result.unwrap(), expected_op);
 }
 
 #[test]
@@ -141,6 +186,40 @@ fn default_svd_view_returns_explicit_backend_boundary_error() {
             ref message,
         } if message.contains("borrowed tensor views")
     ));
+}
+
+#[test]
+fn cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading() {
+    let a = backend_f64_tensor(vec![2, 2], 101);
+    let b = backend_f64_tensor(vec![2, 1], 102);
+    let mut backend = CpuBackend::new();
+
+    assert_no_panic_backend_download_error("cholesky", || backend.cholesky(&a));
+    assert_no_panic_backend_download_error("triangular_solve", || {
+        backend.triangular_solve(&a, &b, true, true, false, false)
+    });
+    assert_no_panic_backend_download_error("lu", || backend.lu(&a));
+    assert_no_panic_backend_download_error("full_piv_lu", || backend.full_piv_lu(&a));
+    assert_no_panic_backend_download_error("full_piv_lu_solve", || {
+        backend.full_piv_lu_solve(&a, &b, false)
+    });
+    assert_no_panic_backend_download_error("svd", || backend.svd(&a));
+    assert_no_panic_backend_download_error("qr", || backend.qr(&a));
+    assert_no_panic_backend_download_error("eigh", || backend.eigh(&a));
+    assert_no_panic_backend_download_error("eig", || backend.eig(&a));
+    assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
+}
+
+#[test]
+fn cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths() {
+    let a = f64_tensor(vec![0, 0], Vec::new());
+    let b = backend_f64_tensor(vec![0, 1], 103);
+    let mut backend = CpuBackend::new();
+
+    assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
+    assert_no_panic_backend_download_error("full_piv_lu_solve", || {
+        backend.full_piv_lu_solve(&a, &b, false)
+    });
 }
 
 #[test]

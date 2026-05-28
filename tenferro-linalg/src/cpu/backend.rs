@@ -9,6 +9,7 @@ use tenferro_tensor::{
 
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("cholesky", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -63,6 +64,8 @@ impl LinalgBackend for CpuBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("triangular_solve", a)?;
+        ensure_host_tensor("triangular_solve", b)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -177,6 +180,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("lu", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -223,6 +227,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("full_piv_lu", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -274,6 +279,8 @@ impl LinalgBackend for CpuBackend {
         b: &Tensor,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("full_piv_lu_solve", a)?;
+        ensure_host_tensor("full_piv_lu_solve", b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
@@ -371,6 +378,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("svd", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -445,6 +453,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("qr", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -491,6 +500,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("eigh", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -537,6 +547,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("eig", input)?;
         if !matches!(
             input,
             Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
@@ -569,6 +580,8 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("solve", a)?;
+        ensure_host_tensor("solve", b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
@@ -640,6 +653,31 @@ impl LinalgBackend for CpuBackend {
             Ok(result)
         }
     }
+}
+
+fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
+    match input {
+        Tensor::F32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::F64(t) => ensure_host_typed_tensor(op, t),
+        Tensor::I32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::I64(t) => ensure_host_typed_tensor(op, t),
+        Tensor::Bool(t) => ensure_host_typed_tensor(op, t),
+        Tensor::C32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::C64(t) => ensure_host_typed_tensor(op, t),
+    }
+}
+
+fn ensure_host_typed_tensor<T: 'static>(
+    op: &'static str,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<()> {
+    if input.as_view().backend_buffer().is_some() {
+        return Err(Error::backend_failure(
+            op,
+            "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
+        ));
+    }
+    Ok(())
 }
 
 fn has_zero_dim(shape: &[usize]) -> bool {

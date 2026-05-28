@@ -874,7 +874,7 @@ pub(crate) fn eager_einsum_subscripts(
 ///
 /// Owned tensors and borrowed host views share this entry point. Backends may
 /// consume views directly when their execution model supports it, or
-/// materialize/upload them inside the execution session.
+/// canonicalize them within the existing placement inside the execution session.
 #[cfg(test)]
 pub(crate) fn eager_einsum_read_subscripts(
     ctx: &mut impl TensorBackend,

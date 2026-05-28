@@ -2305,6 +2305,28 @@ impl<'a> TensorView<'a> {
         }
     }
 
+    /// Materialize this host view into an owned tensor.
+    ///
+    /// This method has no backend context and does not download backend
+    /// buffers. Use a backend-specific `TensorViewCanonicalization` method or
+    /// an explicit device transfer before materializing backend views on the
+    /// host.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on a backend-backed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1.0_f64, 2.0];
+    /// let view = TensorView::f64(&[2], &data)?;
+    /// let tensor = view.to_tensor();
+    /// assert_eq!(tensor.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn to_tensor(&self) -> Tensor {
         match self {
             Self::F32(t) => match materialize_typed_view_col_major(t, "TensorView::to_tensor") {
@@ -2369,6 +2391,28 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Convert an owned tensor reference or host view into an owned tensor.
+    ///
+    /// This method clones owned tensor inputs and materializes host views. It
+    /// has no backend context and does not download backend buffers. Use a
+    /// backend-specific `TensorViewCanonicalization` method or an explicit
+    /// device transfer before materializing backend views on the host.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on a backend-backed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{TensorRead, TensorView};
+    ///
+    /// let data = [1_i32, 2, 3];
+    /// let read = TensorRead::from_view(TensorView::i32(&[3], &data)?);
+    /// let tensor = read.to_tensor();
+    /// assert_eq!(tensor.shape(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn to_tensor(&self) -> Tensor {
         match self {
             Self::Tensor(tensor) => (*tensor).clone(),
