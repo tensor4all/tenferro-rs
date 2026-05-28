@@ -300,7 +300,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(input.shape()[2..]);
+    let batch_total = batch_count(&input.shape()[2..]);
     let first_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(n, OP, "lda")?;
     let n_i32 = as_i32(n, OP, "n")?;
@@ -411,7 +411,7 @@ where
     let n_rhs = as_i32(cols, OP, "n")?;
     let alpha = T::one();
 
-    for batch in 0..batch_count(b.shape()[2..]) {
+    for batch in 0..batch_count(&b.shape()[2..]) {
         let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), batch * a_stride) };
         let batch_b = unsafe { batch_ptr::<T>(out_ptr, batch * out_stride) };
         unsafe {
@@ -462,7 +462,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(input.shape()[2..]);
+    let batch_total = batch_count(&input.shape()[2..]);
     let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(m, OP, "lda")?;
     let m_i32 = as_i32(m, OP, "m")?;
@@ -472,7 +472,7 @@ where
         .getrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, a_ptr, lda, OP)?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let mut pivot_shape = vec![k];
-    pivot_shape.extend_from_slice(input.shape()[2..]);
+    pivot_shape.extend_from_slice(&input.shape()[2..]);
     let pivots = alloc_output::<u32>(backend.runtime(), &pivot_shape);
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
     let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
@@ -511,7 +511,7 @@ where
         }
     }
 
-    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, input.shape()[2..])
+    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, &input.shape()[2..])
 }
 
 fn svd_typed<T>(
@@ -526,7 +526,7 @@ where
     backend.runtime().set_current_cuda_context(OP)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
-    let batch_shape = input.shape()[2..];
+    let batch_shape = &input.shape()[2..];
     let mut u_shape = vec![m, k];
     u_shape.extend_from_slice(batch_shape);
     let mut s_shape = vec![k];
@@ -621,7 +621,7 @@ where
     backend.runtime().set_current_cuda_context(OP)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
-    let batch_shape = input.shape()[2..];
+    let batch_shape = &input.shape()[2..];
     let mut q_shape = vec![m, k];
     q_shape.extend_from_slice(batch_shape);
     let mut r_shape = vec![k, n];
@@ -730,7 +730,7 @@ where
 
     backend.runtime().set_current_cuda_context(OP)?;
     let n = square_matrix_dim(OP, input.shape())?;
-    let batch_shape = input.shape()[2..];
+    let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
     values_shape.extend_from_slice(batch_shape);
     if has_zero_dim(input.shape()) {
@@ -977,8 +977,9 @@ fn upload_host_tensor<T>(rt: &CubeclRuntime, tensor: TypedTensor<T>) -> Result<T
 where
     T: CubeElement + Clone + Send + Sync + 'static,
 {
+    let shape = tensor.shape().to_vec();
     let (shape, data) = match tensor.buffer {
-        Buffer::Host(data) => (tensor.shape().to_vec(), data),
+        Buffer::Host(data) => (shape, data),
         Buffer::Backend(_) => {
             return Err(Error::backend_failure(
                 "cubecl_linalg",
