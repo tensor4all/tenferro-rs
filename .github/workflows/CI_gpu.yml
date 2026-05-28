@@ -111,7 +111,7 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const ref = context.sha;
+            const ref = context.payload.pull_request.head.sha;
             const deadline = Date.now() + 85 * 60 * 1000;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
