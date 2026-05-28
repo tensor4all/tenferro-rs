@@ -48,6 +48,51 @@ fn compact_layout_for_static_rank_has_column_major_strides() {
 }
 
 #[test]
+fn transpose_view_permutes_layout_metadata() {
+    let layout = TensorLayout::<Rank<2>>::compact([2, 3]).unwrap();
+    let transposed = layout.transpose_view([1, 0]).unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(transposed.strides(), &[2, 1]);
+    assert_eq!(transposed.offset(), 0);
+}
+
+#[test]
+fn slice_view_supports_negative_step() {
+    let layout = TensorLayout::<Rank<1>>::compact([4]).unwrap();
+    let sliced = layout
+        .slice_view(
+            [SliceSpec {
+                start: 3,
+                end: -1,
+                step: -2,
+            }],
+            4,
+        )
+        .unwrap();
+    assert_eq!(sliced.shape(), &[2]);
+    assert_eq!(sliced.strides(), &[-2]);
+    assert_eq!(sliced.offset(), 3);
+}
+
+#[test]
+fn reshape_view_as_requires_compact_layout() {
+    let layout = TensorLayout::<Rank<2>>::compact([2, 3]).unwrap();
+    let reshaped = layout.reshape_view_as::<Rank<1>>([6], 6).unwrap();
+    assert_eq!(reshaped.shape(), &[6]);
+    assert_eq!(reshaped.strides(), &[1]);
+}
+
+#[test]
+fn broadcast_in_dim_view_uses_zero_strides_for_broadcast_axes() {
+    let layout = TensorLayout::<Rank<1>>::compact([3]).unwrap();
+    let broadcast = layout
+        .broadcast_in_dim_view::<Rank<2>>([2, 3], [1], 3)
+        .unwrap();
+    assert_eq!(broadcast.shape(), &[2, 3]);
+    assert_eq!(broadcast.strides(), &[0, 1]);
+}
+
+#[test]
 fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
     let err =
         TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0, 6).unwrap_err();

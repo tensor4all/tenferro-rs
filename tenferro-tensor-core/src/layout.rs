@@ -1,4 +1,7 @@
-use crate::{col_major_strides, DynRank, Error, Result, TensorRank};
+use crate::{
+    checked_product, col_major_strides, validate_permutation, DynRank, Error, Result, ShapeVec,
+    SliceSpec, StrideVec, TensorRank,
+};
 
 pub(crate) fn reachable_offset_range(
     shape: &[usize],
@@ -60,6 +63,90 @@ pub(crate) fn validate_reachable_bounds(
             }
         }
     }
+}
+
+fn layout_from_vecs<R: TensorRank>(
+    shape: ShapeVec,
+    strides: StrideVec,
+    offset: isize,
+    buffer_len: usize,
+) -> Result<TensorLayout<R>> {
+    TensorLayout::from_parts(
+        R::shape_from_vec(shape)?,
+        R::strides_from_vec(strides)?,
+        offset,
+        buffer_len,
+    )
+}
+
+fn positive_ceil_div(numerator: isize, denominator: isize) -> Result<usize> {
+    debug_assert!(numerator >= 0);
+    debug_assert!(denominator > 0);
+    let extent = if numerator == 0 {
+        0
+    } else {
+        1 + (numerator - 1) / denominator
+    };
+    usize::try_from(extent).map_err(|_| Error::IntegerOverflow)
+}
+
+fn normalize_slice(slice: SliceSpec, axis_len: usize) -> Result<(isize, usize)> {
+    if slice.step == 0 {
+        return Err(Error::InvalidSliceStep { step: slice.step });
+    }
+
+    let axis_len = isize::try_from(axis_len).map_err(|_| Error::IntegerOverflow)?;
+    if slice.step > 0 {
+        let start = if slice.start < 0 {
+            slice
+                .start
+                .checked_add(axis_len)
+                .ok_or(Error::IntegerOverflow)?
+        } else {
+            slice.start
+        };
+        let end = if slice.end < 0 {
+            slice
+                .end
+                .checked_add(axis_len)
+                .ok_or(Error::IntegerOverflow)?
+        } else {
+            slice.end
+        };
+        if start < 0 || start > axis_len || end < 0 || end > axis_len {
+            return Err(Error::InvalidSliceBounds {
+                start: slice.start,
+                end: slice.end,
+                axis_len: usize::try_from(axis_len).map_err(|_| Error::IntegerOverflow)?,
+            });
+        }
+        if start >= end {
+            return Ok((start, 0));
+        }
+        return Ok((start, positive_ceil_div(end - start, slice.step)?));
+    }
+
+    let start = if slice.start < 0 {
+        slice
+            .start
+            .checked_add(axis_len)
+            .ok_or(Error::IntegerOverflow)?
+    } else {
+        slice.start
+    };
+    let end = slice.end;
+    if start < 0 || start >= axis_len || end < -1 || end >= axis_len {
+        return Err(Error::InvalidSliceBounds {
+            start: slice.start,
+            end: slice.end,
+            axis_len: usize::try_from(axis_len).map_err(|_| Error::IntegerOverflow)?,
+        });
+    }
+    if start <= end {
+        return Ok((start, 0));
+    }
+    let step = slice.step.checked_neg().ok_or(Error::IntegerOverflow)?;
+    Ok((start, positive_ceil_div(start - end, step)?))
 }
 
 /// Storage-neutral tensor layout metadata.
@@ -192,5 +279,176 @@ impl<R: TensorRank> TensorLayout<R> {
         col_major_strides(self.shape())
             .map(|strides| strides.as_slice() == self.strides())
             .unwrap_or(false)
+    }
+
+    /// Return a metadata-only axis permutation of this layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{Rank, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
+    /// let transposed = layout.transpose_view([1, 0])?;
+    /// assert_eq!(transposed.shape(), &[3, 2]);
+    /// assert_eq!(transposed.strides(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> Result<Self> {
+        let axes = axes.as_ref();
+        validate_permutation(self.shape().len(), axes)?;
+        let shape = axes
+            .iter()
+            .map(|&axis| self.shape()[axis])
+            .collect::<ShapeVec>();
+        let strides = axes
+            .iter()
+            .map(|&axis| self.strides()[axis])
+            .collect::<StrideVec>();
+        Ok(Self {
+            shape: R::shape_from_vec(shape)?,
+            strides: R::strides_from_vec(strides)?,
+            offset: self.offset,
+        })
+    }
+
+    /// Return a metadata-only slice of this layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{Rank, SliceSpec, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<Rank<1>>::compact([4])?;
+    /// let view = layout.slice_view([SliceSpec { start: 3, end: -1, step: -2 }], 4)?;
+    /// assert_eq!(view.shape(), &[2]);
+    /// assert_eq!(view.strides(), &[-2]);
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    pub fn slice_view(&self, spec: impl AsRef<[SliceSpec]>, buffer_len: usize) -> Result<Self> {
+        let spec = spec.as_ref();
+        if spec.len() != self.shape().len() {
+            return Err(Error::RankMismatch {
+                expected: self.shape().len(),
+                actual: spec.len(),
+            });
+        }
+
+        let mut shape = ShapeVec::new();
+        let mut strides = StrideVec::new();
+        let mut offset = self.offset;
+        for ((&axis_len, &stride), &slice) in self
+            .shape()
+            .iter()
+            .zip(self.strides().iter())
+            .zip(spec.iter())
+        {
+            let (start, extent) = normalize_slice(slice, axis_len)?;
+            let start_offset = start.checked_mul(stride).ok_or(Error::IntegerOverflow)?;
+            offset = offset
+                .checked_add(start_offset)
+                .ok_or(Error::IntegerOverflow)?;
+            shape.push(extent);
+            strides.push(
+                stride
+                    .checked_mul(slice.step)
+                    .ok_or(Error::IntegerOverflow)?,
+            );
+        }
+        layout_from_vecs(shape, strides, offset, buffer_len)
+    }
+
+    /// Return a metadata-only reshape of this compact column-major layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{Rank, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
+    /// let reshaped = layout.reshape_view_as::<Rank<1>>([6], 6)?;
+    /// assert_eq!(reshaped.shape(), &[6]);
+    /// assert_eq!(reshaped.strides(), &[1]);
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    pub fn reshape_view_as<R2: TensorRank>(
+        &self,
+        shape: R2::Shape,
+        buffer_len: usize,
+    ) -> Result<TensorLayout<R2>> {
+        if !self.is_compact_col_major() {
+            return Err(Error::NonContiguousViewAsSlice);
+        }
+        let from = checked_product(self.shape())?;
+        let to = checked_product(shape.as_ref())?;
+        if from != to {
+            return Err(Error::ReshapeElementCountMismatch { from, to });
+        }
+        let strides = R2::strides_from_vec(col_major_strides(shape.as_ref())?)?;
+        TensorLayout::from_parts(shape, strides, self.offset, buffer_len)
+    }
+
+    /// Return a metadata-only explicit broadcast of this layout into a target rank.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{Rank, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<Rank<1>>::compact([3])?;
+    /// let broadcast = layout.broadcast_in_dim_view::<Rank<2>>([2, 3], [1], 3)?;
+    /// assert_eq!(broadcast.shape(), &[2, 3]);
+    /// assert_eq!(broadcast.strides(), &[0, 1]);
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    pub fn broadcast_in_dim_view<R2: TensorRank>(
+        &self,
+        shape: R2::Shape,
+        broadcast_dims: impl AsRef<[usize]>,
+        buffer_len: usize,
+    ) -> Result<TensorLayout<R2>> {
+        let broadcast_dims = broadcast_dims.as_ref();
+        if broadcast_dims.len() != self.shape().len() {
+            return Err(Error::RankMismatch {
+                expected: self.shape().len(),
+                actual: broadcast_dims.len(),
+            });
+        }
+
+        let output_rank = shape.as_ref().len();
+        let mut seen = vec![false; output_rank];
+        let mut strides = StrideVec::new();
+        strides.resize(output_rank, 0);
+        for (input_axis, &output_axis) in broadcast_dims.iter().enumerate() {
+            if output_axis >= output_rank {
+                return Err(Error::AxisOutOfBounds {
+                    axis: output_axis,
+                    rank: output_rank,
+                });
+            }
+            if seen[output_axis] {
+                return Err(Error::DuplicateAxis { axis: output_axis });
+            }
+            seen[output_axis] = true;
+
+            let input_extent = self.shape()[input_axis];
+            let output_extent = shape.as_ref()[output_axis];
+            if input_extent != output_extent && input_extent != 1 {
+                return Err(Error::ShapeDataLengthMismatch {
+                    expected: input_extent,
+                    actual: output_extent,
+                });
+            }
+            if input_extent == output_extent {
+                strides[output_axis] = self.strides()[input_axis];
+            }
+        }
+
+        TensorLayout::from_parts(
+            shape,
+            R2::strides_from_vec(strides)?,
+            self.offset,
+            buffer_len,
+        )
     }
 }
