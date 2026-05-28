@@ -295,9 +295,11 @@ Tests follow implementation ownership.
 - `tenferro-tensor-core` must not depend on CUDA, GPU backends, backend buffers,
   provider selection, or execution backend traits. Its owned `Tensor` must not
   grow inherent `TensorBackend` execution helpers.
-- Core views must validate bounds eagerly using checked arithmetic. v1 rejects
-  negative strides and non-positive slice steps. Do not implement `PartialEq`
-  for views.
+- Core views and layouts must validate bounds eagerly using checked arithmetic.
+  `TensorLayout` metadata views may use signed strides and negative slice steps
+  when reachable-range validation succeeds; zero step remains invalid. Existing
+  borrowed host view slice APIs remain positive-step-only for now. Do not
+  implement `PartialEq` for views.
 - `ShapeVec` and `StrideVec` use `SmallVec` with inline rank capacity 8.
 
 ### Faer Integration
