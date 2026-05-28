@@ -14,9 +14,10 @@ This document specifies the current dense tensor data model split between
 
 The split is intentional:
 
-- `tenferro-tensor-core` is a lightweight host-only data model and view layer.
-- `tenferro-tensor` adds runtime tensor storage, placement metadata, backend
-  traits, CPU backends, and core execution kernels.
+- `tenferro-tensor-core` is a lightweight rank/layout metadata and host-only
+  adapter layer.
+- `tenferro-tensor` adds runtime tensor storage, placement metadata, typed
+  views, backend traits, CPU backends, and core execution kernels.
 
 `tenferro-tensor-core` must not require computation backends, GPU runtimes,
 provider selection, graph execution, or AD. Crates that need only dtype tags,
@@ -55,11 +56,10 @@ storage. The view operations are metadata-only:
 - `slice_view`
 
 Views may be non-contiguous. `as_slice()` succeeds only when the view is
-slice-contiguous for the borrowed storage. `TensorLayout` metadata-only slicing
-supports negative steps and signed strides when reachable-range validation
-succeeds. Existing borrowed host view slice APIs, including
-`HostTensorView::slice_view` and `TensorView::slice_view`, remain
-positive-step-only for now.
+slice-contiguous for the borrowed storage. `TensorLayout` and borrowed host
+view slicing support signed strides and negative steps when reachable-range
+validation proves every logical element maps inside the backing allocation.
+Zero step remains invalid.
 
 ---
 
@@ -71,9 +71,9 @@ and scalar model, then adds runtime storage and backend placement.
 The current typed runtime tensor shape is:
 
 ```rust
-pub struct TypedTensor<T> {
+pub struct TypedTensor<T, R = DynRank> {
     pub buffer: Buffer<T>,
-    pub shape: Vec<usize>,
+    layout: TensorLayout<R>,
     pub placement: Placement,
 }
 
@@ -122,13 +122,17 @@ pub struct Placement {
 }
 ```
 
-Host buffers are contiguous column-major tensors. Backend buffers are opaque to
-the runtime tensor layer; the backend that owns the concrete handle is
-responsible for downcasting and execution.
+Owned runtime tensors are compact column-major tensors. Arbitrary strides,
+offsets, transposes, slices, and reverse layouts live on `TypedTensorView`,
+`TypedTensorViewMut`, or `TensorLayout` metadata until an explicit
+same-placement canonicalization boundary. Backend buffers are opaque to the
+runtime tensor layer; the backend that owns the concrete handle is responsible
+for downcasting and execution.
 
 `tenferro-tensor` owns:
 
-- runtime dense tensor types
+- runtime dense tensor types, including `TypedTensor<T, R = DynRank>` and
+  dynamic-rank `Tensor`
 - backend traits
 - CPU backend implementations
 - core execution kernels
