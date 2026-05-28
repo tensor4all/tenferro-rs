@@ -12,7 +12,7 @@ use crate::{
 
 #[test]
 fn cubecl_metadata_uses_dense_column_major_strides() {
-    assert_eq!(cubecl_shape_and_strides(&[]), (vec![], vec![]));
+    assert_eq!(cubecl_shape_and_strides(&[]), (vec![1], vec![1]));
     assert_eq!(
         cubecl_shape_and_strides(&[2, 3, 4]),
         (vec![2, 3, 4], vec![1, 2, 6])

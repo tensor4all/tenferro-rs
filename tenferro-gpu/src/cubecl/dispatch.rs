@@ -113,6 +113,13 @@ pub fn cubecl_view_mut_buffer<'a, T: 'static>(
 }
 
 pub(crate) fn cubecl_shape_and_strides(shape: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    // CubeCL CUDA kernels still receive a dynamic metadata pointer for tensor
+    // args. Rank-0 tensors need one dense metadata element so that launch
+    // argument layout stays consistent, while tenferro keeps the public shape
+    // as `[]` and passes the logical rank separately where needed.
+    if shape.is_empty() {
+        return (vec![1], vec![1]);
+    }
     let strides = crate::types::col_major_strides(shape)
         .into_iter()
         .map(|stride| stride as usize)
