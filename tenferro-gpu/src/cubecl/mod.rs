@@ -510,9 +510,9 @@ impl CubeclBackend {
         }
         let strides = view_strides_i64(view.strides(), op)?;
         let base_offset = view_offset_i64(view.offset(), op)?;
-        let output_arg = typed_tensor_array_arg(&output, op)?;
+        let output_arg = typed_tensor_binding(&output, op)?;
         let input_arg = typed_view_array_arg(view, op)?;
-        let shape = view.shape().to_vec();
+        let rank = view.shape().len();
         unsafe {
             // SAFETY: The view constructor validated reachable offsets against
             // the backing allocation, and `ensure_view_resident_on_runtime`
@@ -522,11 +522,11 @@ impl CubeclBackend {
                 self.runtime().client(),
                 cube_count_for_len(len),
                 cube_dim_1d(),
-                output_arg,
+                output_arg.into_tensor_arg(),
                 input_arg,
-                comptime_sequence(&shape),
                 comptime_sequence(&strides),
                 base_offset,
+                rank,
             );
         }
         Ok(output)
@@ -560,9 +560,9 @@ impl CubeclBackend {
         }
         let strides = view_strides_i64(dst.strides(), op)?;
         let base_offset = view_offset_i64(dst.offset(), op)?;
-        let src_arg = typed_tensor_array_arg(src, op)?;
+        let src_arg = typed_tensor_binding(src, op)?;
         let dst_arg = typed_view_mut_array_arg(dst, op)?;
-        let shape = dst.shape().to_vec();
+        let rank = dst.shape().len();
         unsafe {
             // SAFETY: The source is an owned compact CubeCL tensor on this
             // runtime. The destination view has validated reachable offsets
@@ -573,10 +573,10 @@ impl CubeclBackend {
                 cube_count_for_len(len),
                 cube_dim_1d(),
                 dst_arg,
-                src_arg,
-                comptime_sequence(&shape),
+                src_arg.into_tensor_arg(),
                 comptime_sequence(&strides),
                 base_offset,
+                rank,
             );
         }
         Ok(())

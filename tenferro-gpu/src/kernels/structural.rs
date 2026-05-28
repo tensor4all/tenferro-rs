@@ -6,17 +6,17 @@ use crate::kernels::helpers::{
 };
 
 #[cube]
-fn strided_view_offset(
+fn strided_view_offset_from_tensor<E: CubePrimitive>(
     mut flat: usize,
-    #[comptime] shape: Sequence<usize>,
+    logical: &Tensor<E>,
     #[comptime] strides: Sequence<i64>,
     base_offset: i64,
+    #[comptime] rank: usize,
 ) -> usize {
-    let rank = shape.len();
     let mut offset = base_offset;
     #[unroll]
     for axis in 0..rank {
-        let dim = comptime! { *shape.index(axis) };
+        let dim = logical.shape(axis);
         let coordinate = flat % dim;
         flat /= dim;
         let stride = comptime! { *strides.index(axis) };
@@ -34,14 +34,14 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
 
 #[cube(launch_unchecked)]
 pub fn view_to_contiguous_kernel<E: CubePrimitive>(
-    out: &mut Array<E>,
+    out: &mut Tensor<E>,
     input: &Array<E>,
-    #[comptime] shape: Sequence<usize>,
     #[comptime] strides: Sequence<i64>,
     base_offset: i64,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let src = strided_view_offset(ABSOLUTE_POS, shape, strides, base_offset);
+        let src = strided_view_offset_from_tensor(ABSOLUTE_POS, out, strides, base_offset, rank);
         out[ABSOLUTE_POS] = input[src];
     }
 }
@@ -49,13 +49,14 @@ pub fn view_to_contiguous_kernel<E: CubePrimitive>(
 #[cube(launch_unchecked)]
 pub fn contiguous_to_view_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
-    src: &Array<E>,
-    #[comptime] shape: Sequence<usize>,
+    src: &Tensor<E>,
     #[comptime] strides: Sequence<i64>,
     base_offset: i64,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < src.len() {
-        let dst_offset = strided_view_offset(ABSOLUTE_POS, shape, strides, base_offset);
+        let dst_offset =
+            strided_view_offset_from_tensor(ABSOLUTE_POS, src, strides, base_offset, rank);
         dst[dst_offset] = src[ABSOLUTE_POS];
     }
 }
