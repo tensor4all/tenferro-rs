@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     Buffer, BufferHandle, DotGeneralConfig, Error, MemoryKind, Placement, Tensor, TensorDot,
-    TensorRead, TensorView, TensorViewCanonicalization, TypedTensor,
+    TensorRead, TensorReduction, TensorView, TensorViewCanonicalization, TypedTensor,
 };
 
 fn opaque_backend_placement() -> Placement {
@@ -10,6 +10,26 @@ fn opaque_backend_placement() -> Placement {
         memory_kind: MemoryKind::Device,
         device: None,
     }
+}
+
+fn backend_tensor_f64(handle_id: u64, len: usize) -> Tensor {
+    Tensor::F64(TypedTensor::<f64>::from_buffer_col_major(
+        vec![len],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(handle_id, len))),
+        opaque_backend_placement(),
+    ))
+}
+
+fn assert_backend_download_error(result: crate::Result<Tensor>, expected_op: &'static str) {
+    let err = result.unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op,
+            ref message,
+        } if op == expected_op && message.contains("download")
+    ));
 }
 
 #[test]
@@ -89,4 +109,27 @@ fn cpu_dot_general_read_rejects_backend_view_without_panic() {
             ref message,
         } if message.contains("download")
     ));
+}
+
+#[test]
+fn cpu_reduce_read_rejects_backend_tensors_with_empty_axes() {
+    let mut backend = crate::cpu::CpuBackend::new();
+    let input = backend_tensor_f64(10, 2);
+
+    assert_backend_download_error(
+        backend.reduce_sum_read(TensorRead::from_tensor(&input), &[]),
+        "reduce_sum",
+    );
+    assert_backend_download_error(
+        backend.reduce_prod_read(TensorRead::from_tensor(&input), &[]),
+        "reduce_prod",
+    );
+    assert_backend_download_error(
+        backend.reduce_max_read(TensorRead::from_tensor(&input), &[]),
+        "reduce_max",
+    );
+    assert_backend_download_error(
+        backend.reduce_min_read(TensorRead::from_tensor(&input), &[]),
+        "reduce_min",
+    );
 }

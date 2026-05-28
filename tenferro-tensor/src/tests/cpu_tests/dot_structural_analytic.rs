@@ -145,6 +145,36 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
 }
 
+#[cfg(feature = "cpu-blas")]
+#[test]
+fn test_dot_general_read_blas_negative_stride_view_falls_back() {
+    let lhs_source =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let lhs_view = lhs_source
+        .as_view()
+        .try_slice_axis(1, StridedSliceSpec::reverse())
+        .unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
+
+    let out = backend
+        .dot_general_read(
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        )
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[68.0, 92.0, 95.0, 128.0]);
+}
+
 #[test]
 fn test_dot_general_inner_product_returns_rank0_scalar() {
     let a = Tensor::F64(TypedTensor::from_vec_col_major(

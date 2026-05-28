@@ -1313,10 +1313,10 @@ where
     let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
     let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
 
-    let a_ok = a_rs == 1 || a_cs == 1;
-    let b_ok = b_rs == 1 || b_cs == 1;
-    let c_ok = c_rs == 1;
-    if !a_ok || !b_ok || !c_ok {
+    if !blas_lhs_layout_supported(dims.m, dims.k, a_rs, a_cs)
+        || !blas_rhs_layout_supported(dims.k, dims.n, b_rs, b_cs)
+        || !blas_output_layout_supported(dims.m, c_rs, c_cs)
+    {
         return Ok(None);
     }
     // `BlasGemm::strided_gemm_with_conj` maps row-contiguous operands to
@@ -1419,10 +1419,10 @@ where
     let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
     let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
 
-    let a_ok = a_rs == 1 || a_cs == 1;
-    let b_ok = b_rs == 1 || b_cs == 1;
-    let c_ok = c_rs == 1;
-    if !a_ok || !b_ok || !c_ok {
+    if !blas_lhs_layout_supported(dims.m, dims.k, a_rs, a_cs)
+        || !blas_rhs_layout_supported(dims.k, dims.n, b_rs, b_cs)
+        || !blas_output_layout_supported(dims.m, c_rs, c_cs)
+    {
         return Ok(None);
     }
 
@@ -1480,6 +1480,44 @@ fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> 
     } else {
         stride
     }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_lhs_layout_supported(m: usize, k: usize, row_stride: isize, col_stride: isize) -> bool {
+    if row_stride == 1 {
+        blas_leading_stride_supported(col_stride, m)
+    } else if col_stride == 1 {
+        blas_leading_stride_supported(row_stride, k)
+    } else {
+        false
+    }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_rhs_layout_supported(k: usize, n: usize, row_stride: isize, col_stride: isize) -> bool {
+    if row_stride == 1 {
+        blas_leading_stride_supported(col_stride, k)
+    } else if col_stride == 1 {
+        blas_leading_stride_supported(row_stride, n)
+    } else {
+        false
+    }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_output_layout_supported(m: usize, row_stride: isize, col_stride: isize) -> bool {
+    row_stride == 1 && blas_leading_stride_supported(col_stride, m)
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_leading_stride_supported(stride: isize, minimum: usize) -> bool {
+    if stride <= 0 {
+        return false;
+    }
+    let Ok(stride_usize) = usize::try_from(stride) else {
+        return false;
+    };
+    stride_usize >= minimum && i32::try_from(stride).is_ok()
 }
 
 #[cfg(test)]

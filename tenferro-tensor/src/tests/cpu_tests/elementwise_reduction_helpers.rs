@@ -18,6 +18,52 @@ fn elementwise_add_accepts_transposed_host_view_input() {
 }
 
 #[test]
+fn elementwise_add_read_promotes_rank0_f64_view_with_c64_tensor() {
+    let scalar = TypedTensor::<f64>::from_vec_col_major(vec![], vec![2.0]);
+    let rhs = Tensor::C64(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, -1.0), Complex64::new(-3.0, 0.5)],
+    ));
+    let mut backend = CpuBackend::new();
+
+    let out = backend
+        .add_read(
+            TensorRead::from_view(TensorView::F64(scalar.as_view())),
+            TensorRead::from_tensor(&rhs),
+        )
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, -1.0), Complex64::new(-1.0, 0.5)]
+    );
+}
+
+#[test]
+fn elementwise_add_read_promotes_c32_tensor_with_rank0_f32_view() {
+    let lhs = Tensor::C32(TypedTensor::from_vec_col_major(
+        vec![2],
+        vec![Complex32::new(1.0, -1.0), Complex32::new(-3.0, 0.5)],
+    ));
+    let scalar = TypedTensor::<f32>::from_vec_col_major(vec![], vec![2.0]);
+    let mut backend = CpuBackend::new();
+
+    let out = backend
+        .add_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(TensorView::F32(scalar.as_view())),
+        )
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(
+        out.as_slice::<Complex32>().unwrap(),
+        &[Complex32::new(3.0, -1.0), Complex32::new(-1.0, 0.5)]
+    );
+}
+
+#[test]
 fn reduce_sum_accepts_transposed_host_view_input() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = a.as_view().transpose_view([1, 0]).unwrap();

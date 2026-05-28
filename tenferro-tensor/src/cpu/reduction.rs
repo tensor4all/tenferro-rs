@@ -3,7 +3,7 @@ use std::ops::{Add, Mul};
 use num_traits::{Float, One, Zero};
 use strided_kernel::reduce_axis;
 
-use super::{typed_view, typed_view_from_view};
+use super::{typed_host_data, typed_view, typed_view_from_view};
 use crate::types::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
@@ -24,6 +24,25 @@ fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result
     Ok(())
 }
 
+fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
+    macro_rules! ensure {
+        ($tensor:expr) => {{
+            typed_host_data(op, $tensor)?;
+            Ok(())
+        }};
+    }
+
+    match input {
+        Tensor::F32(t) => ensure!(t),
+        Tensor::F64(t) => ensure!(t),
+        Tensor::I32(t) => ensure!(t),
+        Tensor::I64(t) => ensure!(t),
+        Tensor::Bool(t) => ensure!(t),
+        Tensor::C32(t) => ensure!(t),
+        Tensor::C64(t) => ensure!(t),
+    }
+}
+
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_reduce_sum(t, axes)?)),
@@ -41,7 +60,10 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 
 pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => reduce_sum(input, axes),
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor("reduce_sum", input)?;
+            reduce_sum(input, axes)
+        }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
             &t,
             axes,
@@ -114,7 +136,10 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 
 pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => reduce_prod(input, axes),
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor("reduce_prod", input)?;
+            reduce_prod(input, axes)
+        }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
             &t,
             axes,
@@ -190,13 +215,19 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
     if axes.is_empty() {
         return match input {
-            TensorRead::Tensor(input) => Ok(input.clone()),
+            TensorRead::Tensor(input) => {
+                ensure_host_tensor("reduce_max", input)?;
+                Ok(input.clone())
+            }
             TensorRead::View(input) => view_to_contiguous_tensor(input),
         };
     }
 
     match input {
-        TensorRead::Tensor(input) => reduce_max(input, axes),
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor("reduce_max", input)?;
+            reduce_max(input, axes)
+        }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
             &t,
             axes,
@@ -240,13 +271,19 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
 pub(crate) fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
     if axes.is_empty() {
         return match input {
-            TensorRead::Tensor(input) => Ok(input.clone()),
+            TensorRead::Tensor(input) => {
+                ensure_host_tensor("reduce_min", input)?;
+                Ok(input.clone())
+            }
             TensorRead::View(input) => view_to_contiguous_tensor(input),
         };
     }
 
     match input {
-        TensorRead::Tensor(input) => reduce_min(input, axes),
+        TensorRead::Tensor(input) => {
+            ensure_host_tensor("reduce_min", input)?;
+            reduce_min(input, axes)
+        }
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::F32(typed_reduce_view(
             &t,
             axes,
