@@ -9,7 +9,8 @@
       "cargo test (blas inject)",
       "coverage",
       "docs-site",
-      "CI gate (PR workspace tests)"
+      "CI gate (PR workspace tests)",
+      "CI GPU gate"
     ]
   },
   "pages": {
