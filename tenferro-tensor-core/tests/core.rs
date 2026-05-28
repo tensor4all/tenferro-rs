@@ -17,7 +17,25 @@ fn dynamic_rank_shape_roundtrips_vec() {
 #[test]
 fn static_rank_rejects_wrong_shape_length() {
     let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
-    assert!(err.to_string().contains("rank"));
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            expected: 2,
+            actual: 3
+        }
+    ));
+}
+
+#[test]
+fn static_rank_rejects_wrong_stride_length() {
+    let err = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2, 3].into()).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            expected: 2,
+            actual: 3
+        }
+    ));
 }
 
 #[test]
@@ -27,6 +45,50 @@ fn compact_layout_for_static_rank_has_column_major_strides() {
     assert_eq!(layout.strides(), &[1, 2]);
     assert_eq!(layout.offset(), 0);
     assert!(layout.is_compact_col_major());
+}
+
+#[test]
+fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
+    let err =
+        TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::RankMismatch {
+            expected: 2,
+            actual: 1
+        }
+    ));
+}
+
+#[test]
+fn scalar_layout_with_static_rank_zero_is_compact() {
+    let layout = TensorLayout::<Rank<0>>::compact([]).unwrap();
+    assert_eq!(layout.shape(), &[]);
+    assert_eq!(layout.strides(), &[]);
+    assert_eq!(layout.offset(), 0);
+    assert!(layout.is_compact_col_major());
+}
+
+#[test]
+fn non_compact_layout_reports_false() {
+    let layout = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0).unwrap();
+    assert_eq!(layout.shape(), &[2, 3]);
+    assert_eq!(layout.strides(), &[2, 1]);
+    assert!(!layout.is_compact_col_major());
+}
+
+#[test]
+fn compact_layout_reports_stride_overflow() {
+    let err = TensorLayout::<Rank<2>>::compact([usize::MAX, 2]).unwrap_err();
+    assert!(matches!(err, Error::IntegerOverflow));
+}
+
+#[test]
+fn layout_from_parts_preserves_offset() {
+    let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7).unwrap();
+    assert_eq!(layout.shape(), &[3]);
+    assert_eq!(layout.strides(), &[1]);
+    assert_eq!(layout.offset(), 7);
 }
 
 #[test]
