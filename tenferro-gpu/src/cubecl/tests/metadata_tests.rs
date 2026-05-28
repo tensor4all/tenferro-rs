@@ -1,5 +1,4 @@
 use cubecl::stream_id::StreamId;
-use std::sync::Arc;
 
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
@@ -108,15 +107,15 @@ fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
         StreamId::current(),
         (len * core::mem::size_of::<f32>()) as u64,
     );
-    TypedTensor {
-        buffer: Buffer::Backend(Arc::new(CubeclBuffer::new(handle, len))),
+    TypedTensor::from_buffer_col_major(
         shape,
-        placement: Placement {
+        Buffer::Backend(std::sync::Arc::new(CubeclBuffer::new(handle, len))),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(ComputeDevice {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },
-    }
+    )
 }

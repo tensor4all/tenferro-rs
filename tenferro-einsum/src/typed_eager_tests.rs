@@ -140,7 +140,7 @@ fn typed_einsum_f64() {
 
     let result = typed_eager_einsum(&mut ctx, &[&lhs, &rhs], "ij,jk->ik").unwrap();
 
-    assert_eq!(result.shape, vec![2, 2]);
+    assert_eq!(result.shape(), &[2, 2]);
     assert_eq!(result.as_slice(), &[22.0, 28.0, 49.0, 64.0]);
 }
 
@@ -218,7 +218,7 @@ fn typed_einsum_f64_three_operands() {
 
     let result = typed_eager_einsum(&mut ctx, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
 
-    assert_eq!(result.shape, vec![2, 2]);
+    assert_eq!(result.shape(), &[2, 2]);
     assert_eq!(result.as_slice(), &[152.0, 200.0, 385.0, 508.0]);
 }
 

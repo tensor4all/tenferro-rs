@@ -116,15 +116,15 @@ fn missing_tangent_base_key(key: &GlobalValKey<StdTensorOp>) -> Option<GlobalVal
 
 fn zero_like_tensor(input: &Tensor) -> Tensor {
     match input {
-        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape.clone())),
-        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape.clone())),
-        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape.clone())),
-        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::F32(tensor) => Tensor::F32(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::F64(tensor) => Tensor::F64(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::I32(tensor) => Tensor::I32(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::I64(tensor) => Tensor::I64(TypedTensor::zeros(tensor.shape().to_vec())),
         Tensor::Bool(tensor) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            tensor.shape.clone(),
+            tensor.shape().to_vec(),
             vec![false; tensor.n_elements()],
         )),
-        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape.clone())),
-        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape.clone())),
+        Tensor::C32(tensor) => Tensor::C32(TypedTensor::zeros(tensor.shape().to_vec())),
+        Tensor::C64(tensor) => Tensor::C64(TypedTensor::zeros(tensor.shape().to_vec())),
     }
 }

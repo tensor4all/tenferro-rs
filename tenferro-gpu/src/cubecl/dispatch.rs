@@ -80,12 +80,12 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         })
 }
 
-fn validate_cubecl_buffer_len<T>(
+fn validate_cubecl_buffer_len<T: Clone>(
     tensor: &TypedTensor<T>,
     buffer: &CubeclBuffer<T>,
     op: &'static str,
 ) -> crate::Result<()> {
-    let expected_len = checked_shape_product(op, &tensor.shape)?;
+    let expected_len = checked_shape_product(op, tensor.shape())?;
     if expected_len != buffer.len {
         return Err(crate::Error::backend_failure(
             op,
@@ -98,34 +98,34 @@ fn validate_cubecl_buffer_len<T>(
     Ok(())
 }
 
-fn validate_raw_unary_shapes<TIn>(
+fn validate_raw_unary_shapes<TIn: Clone>(
     input: &TypedTensor<TIn>,
     out_shape: &[usize],
     op: &'static str,
 ) -> crate::Result<()> {
-    ensure_same_shape(op, &input.shape, out_shape)
+    ensure_same_shape(op, input.shape(), out_shape)
 }
 
-fn validate_raw_binary_shapes<TLhs, TRhs>(
+fn validate_raw_binary_shapes<TLhs: Clone, TRhs: Clone>(
     lhs: &TypedTensor<TLhs>,
     rhs: &TypedTensor<TRhs>,
     out_shape: &[usize],
     op: &'static str,
 ) -> crate::Result<()> {
-    ensure_same_shape(op, &lhs.shape, out_shape)?;
-    ensure_same_shape(op, &rhs.shape, out_shape)
+    ensure_same_shape(op, lhs.shape(), out_shape)?;
+    ensure_same_shape(op, rhs.shape(), out_shape)
 }
 
-fn validate_raw_ternary_shapes<TA, TB, TC>(
+fn validate_raw_ternary_shapes<TA: Clone, TB: Clone, TC: Clone>(
     a: &TypedTensor<TA>,
     b: &TypedTensor<TB>,
     c: &TypedTensor<TC>,
     out_shape: &[usize],
     op: &'static str,
 ) -> crate::Result<()> {
-    ensure_same_shape(op, &a.shape, out_shape)?;
-    ensure_same_shape(op, &b.shape, out_shape)?;
-    ensure_same_shape(op, &c.shape, out_shape)
+    ensure_same_shape(op, a.shape(), out_shape)?;
+    ensure_same_shape(op, b.shape(), out_shape)?;
+    ensure_same_shape(op, c.shape(), out_shape)
 }
 
 #[doc(hidden)]
@@ -135,7 +135,7 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 ) -> crate::Result<TensorBinding<CudaRuntime>> {
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
-    let (shape, strides) = cubecl_shape_and_strides(&tensor.shape);
+    let (shape, strides) = cubecl_shape_and_strides(tensor.shape());
 
     // SAFETY: `buffer.handle` references the CubeCL allocation for `tensor`.
     // The checked invariant above proves `buffer.len` equals the dense
@@ -189,22 +189,22 @@ pub(crate) fn ensure_resident_on_runtime<T: 'static>(
 }
 
 #[doc(hidden)]
-pub fn typed_from_cubecl<T: Send + Sync + 'static>(
+pub fn typed_from_cubecl<T: Clone + Send + Sync + 'static>(
     shape: Vec<usize>,
     buffer: CubeclBuffer<T>,
     device_ordinal: usize,
 ) -> TypedTensor<T> {
-    TypedTensor {
-        buffer: Buffer::Backend(Arc::new(buffer)),
+    TypedTensor::from_buffer_col_major(
         shape,
-        placement: Placement {
+        Buffer::Backend(Arc::new(buffer)),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(ComputeDevice {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
-    }
+    )
 }
 
 #[doc(hidden)]
@@ -761,7 +761,7 @@ macro_rules! launch_binary_elementwise_kernel {
             $backend.runtime(),
             $lhs,
             $rhs,
-            &$lhs.shape,
+            $lhs.shape(),
             $op,
             |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
                 crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(
@@ -778,7 +778,7 @@ macro_rules! launch_unary_elementwise_kernel {
         launch_unary(
             $backend.runtime(),
             $input,
-            &$input.shape,
+            $input.shape(),
             $op,
             |client, count, dim, out, input_arg| unsafe {
                 crate::kernels::elementwise::$kernel::launch_unchecked::<$scalar, CudaRuntime>(

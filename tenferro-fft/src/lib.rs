@@ -264,34 +264,34 @@ impl ExtensionOpTrait for FftOp {
         let output = match (self.kind, inputs[0]) {
             (FftKind::C2C { forward }, Tensor::C64(input)) => {
                 Tensor::C64(TypedTensor::from_vec_col_major(
-                    output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
+                    output_shape_c2c(input.shape(), self.axis, self.n)?,
                     execute_c2c(input, self.axis, self.n, forward, self.norm)?,
                 ))
             }
             (FftKind::C2C { forward }, Tensor::C32(input)) => {
                 Tensor::C32(TypedTensor::from_vec_col_major(
-                    output_shape_c2c(input.shape.as_slice(), self.axis, self.n)?,
+                    output_shape_c2c(input.shape(), self.axis, self.n)?,
                     execute_c2c(input, self.axis, self.n, forward, self.norm)?,
                 ))
             }
             (FftKind::R2C { onesided }, Tensor::F64(input)) => {
                 Tensor::C64(TypedTensor::from_vec_col_major(
-                    output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
+                    output_shape_r2c(input.shape(), self.axis, self.n, onesided)?,
                     execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
                 ))
             }
             (FftKind::R2C { onesided }, Tensor::F32(input)) => {
                 Tensor::C32(TypedTensor::from_vec_col_major(
-                    output_shape_r2c(input.shape.as_slice(), self.axis, self.n, onesided)?,
+                    output_shape_r2c(input.shape(), self.axis, self.n, onesided)?,
                     execute_r2c(input, self.axis, self.n, onesided, self.norm)?,
                 ))
             }
             (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
-                output_shape_c2r(input.shape.as_slice(), self.axis, self.n)?,
+                output_shape_c2r(input.shape(), self.axis, self.n)?,
                 execute_c2r(input, self.axis, self.n, self.norm)?,
             )),
             (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
-                output_shape_c2r(input.shape.as_slice(), self.axis, self.n)?,
+                output_shape_c2r(input.shape(), self.axis, self.n)?,
                 execute_c2r(input, self.axis, self.n, self.norm)?,
             )),
             (kind, other) => {
@@ -727,7 +727,7 @@ fn execute_c2c<T>(
 where
     T: FftNum + Float + FromPrimitive,
 {
-    let in_shape = input.shape.as_slice();
+    let in_shape = input.shape();
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
@@ -772,7 +772,7 @@ fn execute_r2c<T>(
 where
     T: FftNum + Float + FromPrimitive,
 {
-    let in_shape = input.shape.as_slice();
+    let in_shape = input.shape();
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_r2c(in_shape, axis, n, onesided)?;
     let out_axis_len = out_shape[axis];
@@ -812,7 +812,7 @@ fn execute_c2r<T>(
 where
     T: FftNum + Float + FromPrimitive,
 {
-    let in_shape = input.shape.as_slice();
+    let in_shape = input.shape();
     let out_shape = output_shape_c2r(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
     let expected_half = out_axis_len / 2 + 1;

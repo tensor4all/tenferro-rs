@@ -353,8 +353,8 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        validate_permutation("transpose", perm, input.shape.len())?;
-        let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape[axis]).collect();
+        validate_permutation("transpose", perm, input.shape().len())?;
+        let output_shape: Vec<usize> = perm.iter().map(|&axis| input.shape()[axis]).collect();
         launch_unary_tensor(
             self.runtime(),
             input,
@@ -382,7 +382,7 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        validate_broadcast_in_dim(input.shape.as_slice(), shape, dims)?;
+        validate_broadcast_in_dim(input.shape(), shape, dims)?;
         launch_unary_tensor(
             self.runtime(),
             input,
@@ -410,11 +410,11 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        ensure_axes_unique("reverse", "axes", axes, input.shape.len())?;
+        ensure_axes_unique("reverse", "axes", axes, input.shape().len())?;
         launch_unary_tensor(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "reverse",
             |client, count, dim, out, input_arg| unsafe {
                 structural::reverse_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -424,7 +424,7 @@ impl CubeclBackend {
                     out.into_tensor_arg(),
                     input_arg.into_tensor_arg(),
                     comptime_sequence(axes),
-                    input.shape.len(),
+                    input.shape().len(),
                 );
             },
         )
@@ -441,7 +441,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_float_to_float::launch_unchecked::<Out, In, CudaRuntime>(
@@ -555,7 +555,7 @@ impl CubeclBackend {
         OutFloat: CubeElement + Clone,
     {
         let n = input.n_elements();
-        let output = alloc_output::<OutComplex>(self.runtime(), &input.shape);
+        let output = alloc_output::<OutComplex>(self.runtime(), input.shape());
         if n == 0 {
             return Ok(output);
         }
@@ -579,7 +579,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_c32_to_f32::launch_unchecked::<CudaRuntime>(
@@ -596,7 +596,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_c32_to_f64::launch_unchecked::<CudaRuntime>(
@@ -613,7 +613,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_c64_to_f32::launch_unchecked::<CudaRuntime>(
@@ -630,7 +630,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_c64_to_f64::launch_unchecked::<CudaRuntime>(
@@ -651,7 +651,7 @@ impl CubeclBackend {
         launch_unary(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "convert",
             |client, count, dim, out, input_arg| unsafe {
                 structural::convert_complex_to_complex::launch_unchecked::<Out, In, CudaRuntime>(
@@ -671,7 +671,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         let (output_shape, diag_output_axis) =
-            extract_diagonal_shape(input.shape.as_slice(), axis_a, axis_b)?;
+            extract_diagonal_shape(input.shape(), axis_a, axis_b)?;
         launch_unary_tensor(
             self.runtime(),
             input,
@@ -687,7 +687,7 @@ impl CubeclBackend {
                     axis_a,
                     axis_b,
                     diag_output_axis,
-                    input.shape.len(),
+                    input.shape().len(),
                     output_shape.len(),
                 );
             },
@@ -703,7 +703,7 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        let output_shape = embed_diagonal_shape(input.shape.as_slice(), axis_a, axis_b)?;
+        let output_shape = embed_diagonal_shape(input.shape(), axis_a, axis_b)?;
         let output = alloc_output::<T>(self.runtime(), &output_shape);
         launch_nullary_into(
             self.runtime(),
@@ -733,7 +733,7 @@ impl CubeclBackend {
                     input_arg.into_tensor_arg(),
                     axis_a,
                     axis_b,
-                    input.shape.len(),
+                    input.shape().len(),
                     output_shape.len(),
                 );
             },
@@ -746,17 +746,17 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        if input.shape.len() < 2 {
+        if input.shape().len() < 2 {
             return Err(crate::Error::RankMismatch {
                 op: "tril",
                 expected: 2,
-                actual: input.shape.len(),
+                actual: input.shape().len(),
             });
         }
         launch_unary_tensor(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "tril",
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::tril_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -776,17 +776,17 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        if input.shape.len() < 2 {
+        if input.shape().len() < 2 {
             return Err(crate::Error::RankMismatch {
                 op: "triu",
                 expected: 2,
-                actual: input.shape.len(),
+                actual: input.shape().len(),
             });
         }
         launch_unary_tensor(
             self.runtime(),
             input,
-            &input.shape,
+            input.shape(),
             "triu",
             |client, count, dim, out, input_arg| unsafe {
                 diagonal::triu_kernel::launch_unchecked::<T, CudaRuntime>(
@@ -815,7 +815,7 @@ impl CubeclBackend {
     where
         T: CubeElement + Clone,
     {
-        let output_shape = reduction_keepdims_shape(&input.shape, axis);
+        let output_shape = reduction_keepdims_shape(input.shape(), axis);
         let output = alloc_output::<T>(self.runtime(), &output_shape);
         if output.n_elements() == 0 {
             return Ok(output);
@@ -838,12 +838,12 @@ impl CubeclBackend {
     where
         T: CubeElement + Clone,
     {
-        ensure_axes_unique(op, "axes", axes, input.shape.len())?;
+        ensure_axes_unique(op, "axes", axes, input.shape().len())?;
         if axes.is_empty() {
             return Ok(input.clone());
         }
 
-        let final_shape = reduction_output_shape(input.shape.as_slice(), axes);
+        let final_shape = reduction_output_shape(input.shape(), axes);
         let mut sorted_axes = axes.to_vec();
         sorted_axes.sort_unstable();
 
@@ -1040,7 +1040,7 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        let output_shape = validate_slice(input.shape.as_slice(), config)?;
+        let output_shape = validate_slice(input.shape(), config)?;
         launch_unary_tensor(
             self.runtime(),
             input,
@@ -1070,16 +1070,16 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
-        ensure_rank("dynamic_slice", input.shape.len(), slice_sizes.len())?;
-        ensure_rank("dynamic_slice", 1, starts.shape.len())?;
-        if starts.shape[0] != input.shape.len() {
+        ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
+        ensure_rank("dynamic_slice", 1, starts.shape().len())?;
+        if starts.shape()[0] != input.shape().len() {
             return Err(crate::Error::RankMismatch {
                 op: "dynamic_slice",
-                expected: input.shape.len(),
-                actual: starts.shape[0],
+                expected: input.shape().len(),
+                actual: starts.shape()[0],
             });
         }
-        for (axis, (&window, &dim)) in slice_sizes.iter().zip(&input.shape).enumerate() {
+        for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
             if window > dim {
                 return Err(crate::Error::InvalidConfig {
                     op: "dynamic_slice",
@@ -1115,7 +1115,7 @@ impl CubeclBackend {
     where
         T: CubeElement + CubePrimitive + Clone,
     {
-        let output_shape = pad_output_shape(input.shape.as_slice(), config)?;
+        let output_shape = pad_output_shape(input.shape(), config)?;
         launch_unary_tensor(
             self.runtime(),
             input,
@@ -1163,11 +1163,11 @@ impl CubeclBackend {
                         input_arg.into_tensor_arg(),
                         axis,
                         offset,
-                        input.shape.len(),
+                        input.shape().len(),
                     );
                 },
             )?;
-            offset += input.shape[axis];
+            offset += input.shape()[axis];
         }
         Ok(output)
     }
@@ -1182,7 +1182,7 @@ impl CubeclBackend {
         T: CubeElement + CubePrimitive + Clone,
         I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
-        let meta = gather_launch_meta(&operand.shape, &start_indices.shape, config)?;
+        let meta = gather_launch_meta(operand.shape(), start_indices.shape(), config)?;
         launch_binary_tensor(
             self.runtime(),
             operand,
@@ -1202,9 +1202,9 @@ impl CubeclBackend {
                     comptime_sequence(&config.start_index_map),
                     comptime_sequence(&config.slice_sizes),
                     config.index_vector_dim,
-                    operand.shape.len(),
+                    operand.shape().len(),
                     meta.output_shape.len(),
-                    start_indices.shape.len(),
+                    start_indices.shape().len(),
                 );
             },
         )
@@ -1222,12 +1222,12 @@ impl CubeclBackend {
         I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         let meta = scatter_launch_meta(
-            &operand.shape,
-            &scatter_indices.shape,
-            &updates.shape,
+            operand.shape(),
+            scatter_indices.shape(),
+            updates.shape(),
             config,
         )?;
-        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        let output = alloc_output::<T>(self.runtime(), operand.shape());
         if output.n_elements() == 0 {
             return Ok(output);
         }
@@ -1278,9 +1278,9 @@ impl CubeclBackend {
                 comptime_sequence(&config.update_window_dims),
                 comptime_sequence(&config.scatter_dims_to_operand_dims),
                 config.index_vector_dim,
-                operand.shape.len(),
-                updates.shape.len(),
-                scatter_indices.shape.len(),
+                operand.shape().len(),
+                updates.shape().len(),
+                scatter_indices.shape().len(),
             );
         }
         Ok(output)
@@ -1299,12 +1299,12 @@ impl CubeclBackend {
         I: CubeElement + CubePrimitive + CubeNumeric + Clone,
     {
         let meta = scatter_launch_meta(
-            &operand.shape,
-            &scatter_indices.shape,
-            &updates.shape,
+            operand.shape(),
+            scatter_indices.shape(),
+            updates.shape(),
             config,
         )?;
-        let output = alloc_output::<T>(self.runtime(), &operand.shape);
+        let output = alloc_output::<T>(self.runtime(), operand.shape());
         if output.n_elements() == 0 {
             return Ok(output);
         }
@@ -1367,9 +1367,9 @@ impl CubeclBackend {
                 comptime_sequence(&config.update_window_dims),
                 comptime_sequence(&config.scatter_dims_to_operand_dims),
                 config.index_vector_dim,
-                operand.shape.len(),
-                updates.shape.len(),
-                scatter_indices.shape.len(),
+                operand.shape().len(),
+                updates.shape().len(),
+                scatter_indices.shape().len(),
             );
         }
         Ok(output)
@@ -1433,7 +1433,7 @@ impl TensorElementwise for CubeclBackend {
             Tensor::C32(tensor) => launch_unary(
                 self.runtime(),
                 tensor,
-                &tensor.shape,
+                tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
                     elementwise::conj_complex::launch_unchecked::<Complex32, CudaRuntime>(
@@ -1445,7 +1445,7 @@ impl TensorElementwise for CubeclBackend {
             Tensor::C64(tensor) => launch_unary(
                 self.runtime(),
                 tensor,
-                &tensor.shape,
+                tensor.shape(),
                 op,
                 |client, count, dim, out, input_arg| unsafe {
                     elementwise::conj_complex::launch_unchecked::<Complex64, CudaRuntime>(
@@ -1506,7 +1506,7 @@ impl TensorElementwise for CubeclBackend {
                 self.runtime(),
                 lhs,
                 rhs,
-                &lhs.shape,
+                lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
                     elementwise::compare_float_bool::launch_unchecked::<f32, CudaRuntime>(
@@ -1525,7 +1525,7 @@ impl TensorElementwise for CubeclBackend {
                 self.runtime(),
                 lhs,
                 rhs,
-                &lhs.shape,
+                lhs.shape(),
                 op,
                 |client, count, dim, out, lhs_arg, rhs_arg| unsafe {
                     elementwise::compare_float_bool::launch_unchecked::<f64, CudaRuntime>(
@@ -1564,7 +1564,7 @@ impl TensorElementwise for CubeclBackend {
                     pred,
                     on_true,
                     on_false,
-                    &pred.shape,
+                    pred.shape(),
                     op,
                     |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
                         elementwise::select_bool_float::launch_unchecked::<f32, CudaRuntime>(
@@ -1580,7 +1580,7 @@ impl TensorElementwise for CubeclBackend {
                     pred,
                     on_true,
                     on_false,
-                    &pred.shape,
+                    pred.shape(),
                     op,
                     |client, count, dim, out, pred_arg, true_arg, false_arg| unsafe {
                         elementwise::select_bool_float::launch_unchecked::<f64, CudaRuntime>(
@@ -1609,7 +1609,7 @@ impl TensorElementwise for CubeclBackend {
                 input,
                 lower,
                 upper,
-                &input.shape,
+                input.shape(),
                 op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
                     elementwise::clamp_float::launch_unchecked::<f32, CudaRuntime>(
@@ -1623,7 +1623,7 @@ impl TensorElementwise for CubeclBackend {
                 input,
                 lower,
                 upper,
-                &input.shape,
+                input.shape(),
                 op,
                 |client, count, dim, out, input_arg, lower_arg, upper_arg| unsafe {
                     elementwise::clamp_float::launch_unchecked::<f64, CudaRuntime>(
@@ -1707,41 +1707,41 @@ impl TensorStructural for CubeclBackend {
             });
         }
         match input {
-            Tensor::F32(t) => Ok(Tensor::F32(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::F64(t) => Ok(Tensor::F64(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::I32(t) => Ok(Tensor::I32(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::I64(t) => Ok(Tensor::I64(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::Bool(t) => Ok(Tensor::Bool(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::C32(t) => Ok(Tensor::C32(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
-            Tensor::C64(t) => Ok(Tensor::C64(TypedTensor {
-                buffer: t.buffer.clone(),
-                shape: shape.to_vec(),
-                placement: t.placement.clone(),
-            })),
+            Tensor::F32(t) => Ok(Tensor::F32(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::F64(t) => Ok(Tensor::F64(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::I32(t) => Ok(Tensor::I32(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::I64(t) => Ok(Tensor::I64(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::Bool(t) => Ok(Tensor::Bool(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::C32(t) => Ok(Tensor::C32(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
+            Tensor::C64(t) => Ok(Tensor::C64(TypedTensor::from_buffer_col_major(
+                shape.to_vec(),
+                t.buffer.clone(),
+                t.placement.clone(),
+            ))),
         }
     }
 
@@ -2477,11 +2477,15 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
     if len != tensor_len {
         return Err(crate::Error::backend_failure(op, format!(
                 "cannot reshape CubeCL output metadata from {:?} ({tensor_len} elements) to {:?} ({len} elements)",
-                tensor.shape, shape
+                tensor.shape(), shape
             )));
     }
 
-    Ok(TypedTensor { shape, ..tensor })
+    Ok(TypedTensor::from_buffer_col_major(
+        shape,
+        tensor.buffer,
+        tensor.placement,
+    ))
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {
@@ -2717,25 +2721,25 @@ fn scatter_launch_meta(
     })
 }
 
-fn concatenate_output_shape<T>(
+fn concatenate_output_shape<T: Clone>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<Vec<usize>> {
     let first = inputs[0];
-    let rank = first.shape.len();
+    let rank = first.shape().len();
     ensure_axis("concatenate", axis, rank)?;
-    let mut out_shape = first.shape.clone();
+    let mut out_shape = first.shape().to_vec();
     let mut axis_extent = 0usize;
     for input in inputs {
-        ensure_rank("concatenate", rank, input.shape.len())?;
+        ensure_rank("concatenate", rank, input.shape().len())?;
         for dim in 0..rank {
             if dim == axis {
-                axis_extent += input.shape[dim];
-            } else if input.shape[dim] != first.shape[dim] {
+                axis_extent += input.shape()[dim];
+            } else if input.shape()[dim] != first.shape()[dim] {
                 return Err(crate::Error::ShapeMismatch {
                     op: "concatenate",
-                    lhs: first.shape.clone(),
-                    rhs: input.shape.clone(),
+                    lhs: first.shape().to_vec(),
+                    rhs: input.shape().to_vec(),
                 });
             }
         }

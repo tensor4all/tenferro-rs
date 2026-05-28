@@ -539,7 +539,7 @@ pub(crate) fn full_piv_lu<T: LapackFullPivLu>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "full_piv_lu")?;
         let parity_elements = batch_element_count("full_piv_lu", batch_shape)?;
         return Ok(vec![
@@ -579,7 +579,7 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch_result(a, "full_piv_lu_solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "full_piv_lu_solve")?;
         if b_rows != n {
@@ -597,7 +597,7 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));

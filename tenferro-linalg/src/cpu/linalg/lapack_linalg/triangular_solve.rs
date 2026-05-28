@@ -196,7 +196,7 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch_result(a, "triangular_solve")?;
         let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, "triangular_solve")?;
         let rhs_core_dim = if left_side { b_rows } else { b_cols };
@@ -215,7 +215,7 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));

@@ -290,9 +290,9 @@ where
     const OP: &str = "cholesky";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let n = square_matrix_dim(OP, &input.shape)?;
-    if has_zero_dim(&input.shape) {
-        return Ok(alloc_output(backend.runtime(), &input.shape));
+    let n = square_matrix_dim(OP, input.shape())?;
+    if has_zero_dim(input.shape()) {
+        return Ok(alloc_output(backend.runtime(), input.shape()));
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
@@ -300,7 +300,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(&input.shape[2..]);
+    let batch_total = batch_count(input.shape()[2..]);
     let first_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(n, OP, "lda")?;
     let n_i32 = as_i32(n, OP, "n")?;
@@ -368,10 +368,10 @@ where
     const OP: &str = "triangular_solve";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let n = square_matrix_dim(OP, &a.shape)?;
-    validate_triangular_rhs(OP, &a.shape, &b.shape, left_side)?;
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
-        return Ok(alloc_output(backend.runtime(), &b.shape));
+    let n = square_matrix_dim(OP, a.shape())?;
+    validate_triangular_rhs(OP, a.shape(), b.shape(), left_side)?;
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
+        return Ok(alloc_output(backend.runtime(), b.shape()));
     }
 
     let out = clone_device_tensor(backend.runtime(), b, OP)?;
@@ -401,8 +401,8 @@ where
     } else {
         CublasDiagType::NonUnit
     };
-    let rows = b.shape[0];
-    let cols = b.shape[1];
+    let rows = b.shape()[0];
+    let cols = b.shape()[1];
     let a_stride = n * n;
     let out_stride = rows * cols;
     let lda = as_i32(n, OP, "lda")?;
@@ -411,7 +411,7 @@ where
     let n_rhs = as_i32(cols, OP, "n")?;
     let alpha = T::one();
 
-    for batch in 0..batch_count(&b.shape[2..]) {
+    for batch in 0..batch_count(b.shape()[2..]) {
         let batch_a = unsafe { batch_const_ptr::<T>(a_ptr.cast_const(), batch * a_stride) };
         let batch_b = unsafe { batch_ptr::<T>(out_ptr, batch * out_stride) };
         unsafe {
@@ -451,10 +451,10 @@ where
     const OP: &str = "lu";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let (m, n) = matrix_dims(OP, &input.shape)?;
+    let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
-    if has_zero_dim(&input.shape) {
-        return zero_sized_lu_outputs(backend.runtime(), input.shape.as_slice());
+    if has_zero_dim(input.shape()) {
+        return zero_sized_lu_outputs(backend.runtime(), input.shape());
     }
 
     let work = clone_device_tensor(backend.runtime(), input, OP)?;
@@ -462,7 +462,7 @@ where
     let stream = raw_stream(backend.runtime(), OP)?;
     handles.cusolver().set_stream(stream, OP)?;
 
-    let batch_total = batch_count(&input.shape[2..]);
+    let batch_total = batch_count(input.shape()[2..]);
     let a_ptr = typed_device_ptr(backend.runtime(), &work, OP)?;
     let lda = as_i32(m, OP, "lda")?;
     let m_i32 = as_i32(m, OP, "m")?;
@@ -472,7 +472,7 @@ where
         .getrf_buffer_size(T::DATA_TYPE, m_i32, n_i32, a_ptr, lda, OP)?;
     let workspace = alloc_workspace_elems::<T>(backend.runtime(), lwork, OP)?;
     let mut pivot_shape = vec![k];
-    pivot_shape.extend_from_slice(&input.shape[2..]);
+    pivot_shape.extend_from_slice(input.shape()[2..]);
     let pivots = alloc_output::<u32>(backend.runtime(), &pivot_shape);
     let info = alloc_output::<i32>(backend.runtime(), &[batch_total]);
     let pivots_ptr = typed_device_ptr(backend.runtime(), &pivots, OP)?;
@@ -511,7 +511,7 @@ where
         }
     }
 
-    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, &input.shape[2..])
+    build_lu_outputs_device(backend.runtime(), &work, &pivots, m, n, input.shape()[2..])
 }
 
 fn svd_typed<T>(
@@ -524,16 +524,16 @@ where
     const OP: &str = "svd";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let (m, n) = matrix_dims(OP, &input.shape)?;
+    let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
-    let batch_shape = &input.shape[2..];
+    let batch_shape = input.shape()[2..];
     let mut u_shape = vec![m, k];
     u_shape.extend_from_slice(batch_shape);
     let mut s_shape = vec![k];
     s_shape.extend_from_slice(batch_shape);
     let mut vt_shape = vec![k, n];
     vt_shape.extend_from_slice(batch_shape);
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         return Ok((
             alloc_output(backend.runtime(), &u_shape),
             alloc_output(backend.runtime(), &s_shape),
@@ -619,14 +619,14 @@ where
     const OP: &str = "qr";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let (m, n) = matrix_dims(OP, &input.shape)?;
+    let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
-    let batch_shape = &input.shape[2..];
+    let batch_shape = input.shape()[2..];
     let mut q_shape = vec![m, k];
     q_shape.extend_from_slice(batch_shape);
     let mut r_shape = vec![k, n];
     r_shape.extend_from_slice(batch_shape);
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         return Ok((
             alloc_output(backend.runtime(), &q_shape),
             alloc_output(backend.runtime(), &r_shape),
@@ -714,7 +714,7 @@ where
         check_solver_info(OP, "cusolverDn*orgqr", host_info[0])?;
     }
 
-    let r_input = backend.slice_typed(&work, &matrix_slice_config(&input.shape, k, n))?;
+    let r_input = backend.slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
     let r = backend.triu_typed(&r_input, 0)?;
     Ok((q, r))
 }
@@ -729,14 +729,14 @@ where
     const OP: &str = "eigh";
 
     backend.runtime().set_current_cuda_context(OP)?;
-    let n = square_matrix_dim(OP, &input.shape)?;
-    let batch_shape = &input.shape[2..];
+    let n = square_matrix_dim(OP, input.shape())?;
+    let batch_shape = input.shape()[2..];
     let mut values_shape = vec![n];
     values_shape.extend_from_slice(batch_shape);
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         return Ok((
             alloc_output(backend.runtime(), &values_shape),
-            alloc_output(backend.runtime(), &input.shape),
+            alloc_output(backend.runtime(), input.shape()),
         ));
     }
 
@@ -845,7 +845,7 @@ where
             work_arg.into_tensor_arg(),
             pivots_arg,
             k,
-            lu.shape.len(),
+            lu.shape().len(),
         );
     }
     client.flush().map_err(|err| {
@@ -957,7 +957,7 @@ fn clone_device_tensor<T>(
 where
     T: CubeElement + CubePrimitive + Copy + Clone,
 {
-    let out = alloc_output(rt, &tensor.shape);
+    let out = alloc_output(rt, tensor.shape());
     if out.n_elements() == 0 {
         return Ok(out);
     }
@@ -978,7 +978,7 @@ where
     T: CubeElement + Clone + Send + Sync + 'static,
 {
     let (shape, data) = match tensor.buffer {
-        Buffer::Host(data) => (tensor.shape, data),
+        Buffer::Host(data) => (tensor.shape().to_vec(), data),
         Buffer::Backend(_) => {
             return Err(Error::backend_failure(
                 "cubecl_linalg",
@@ -1010,7 +1010,7 @@ where
         .read_one(buffer.handle.clone())
         .map_err(|err| Error::backend_failure(op, format!("failed to download tensor: {err:?}")))?;
     Ok(TypedTensor::from_vec_col_major(
-        tensor.shape.clone(),
+        tensor.shape().to_vec(),
         T::from_bytes(&bytes).to_vec(),
     ))
 }
@@ -1162,16 +1162,16 @@ unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_voi
 
 fn zeros_like_tensor(input: &Tensor) -> Tensor {
     match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())),
         Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape.clone(),
+            t.shape().to_vec(),
             vec![false; t.n_elements()],
         )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
     }
 }
 

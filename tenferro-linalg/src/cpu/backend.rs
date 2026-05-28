@@ -636,16 +636,16 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 
 fn zeros_like_tensor(input: &Tensor) -> Tensor {
     match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())),
         Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape.clone(),
+            t.shape().to_vec(),
             vec![false; t.n_elements()],
         )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
     }
 }
 

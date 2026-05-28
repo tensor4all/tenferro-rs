@@ -100,17 +100,17 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
     };
 
     let handle = client.create_from_slice(T::as_bytes(host_data));
-    Ok(TypedTensor {
-        buffer: Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
-        shape: typed.shape.clone(),
-        placement: Placement {
+    Ok(TypedTensor::from_buffer_col_major(
+        typed.shape().to_vec(),
+        Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(ComputeDevice {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
-    })
+    ))
 }
 
 fn download_typed<T: CubeElement + Clone + 'static>(
@@ -131,7 +131,10 @@ fn download_typed<T: CubeElement + Clone + 'static>(
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = T::from_bytes(&bytes).to_vec();
-    Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
+    Ok(TypedTensor::from_vec_col_major(
+        typed.shape().to_vec(),
+        data,
+    ))
 }
 
 fn upload_bool(
@@ -154,17 +157,17 @@ fn upload_bool(
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
     let handle = client.create_from_slice(&bytes);
-    Ok(TypedTensor {
-        buffer: Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
-        shape: typed.shape.clone(),
-        placement: Placement {
+    Ok(TypedTensor::from_buffer_col_major(
+        typed.shape().to_vec(),
+        Buffer::Backend(Arc::new(CubeclBuffer::new(handle, host_data.len()))),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(ComputeDevice {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
         },
-    })
+    ))
 }
 
 fn download_bool(
@@ -185,7 +188,10 @@ fn download_bool(
         .read_one(handle)
         .map_err(|err| crate::Error::backend_failure("download", format!("{err:?}")))?;
     let data = bytes.iter().map(|&byte| byte != 0).collect();
-    Ok(TypedTensor::from_vec_col_major(typed.shape.clone(), data))
+    Ok(TypedTensor::from_vec_col_major(
+        typed.shape().to_vec(),
+        data,
+    ))
 }
 
 fn cubecl_handle(tensor: &Tensor) -> crate::Result<cubecl_runtime::server::Handle> {

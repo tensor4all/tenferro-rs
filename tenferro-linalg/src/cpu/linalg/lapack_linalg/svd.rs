@@ -130,7 +130,7 @@ pub(crate) fn svd<T: LapackSvd>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
         let m = matrix_shape[0];
         let n = matrix_shape[1];
