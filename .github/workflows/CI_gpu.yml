@@ -216,6 +216,8 @@ jobs:
               python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['cuda']['version'].rsplit('.', 1)[0])" "${root}/version.json" 2>/dev/null || true
             elif [ -f "${root}/version.txt" ]; then
               sed -n 's/.*CUDA Version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${root}/version.txt" | head -1
+            else
+              basename "${root}" | sed -n 's/^cuda-\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p'
             fi
           }
 
@@ -241,6 +243,10 @@ jobs:
           accept_cuda_toolkit() {
             local candidate="$1"
             if [ ! -d "${candidate}" ]; then
+              return 1
+            fi
+            if [ ! -d "${candidate}/lib64" ] && [ ! -d "${candidate}/targets/x86_64-linux/lib" ]; then
+              echo "Skipping CUDA toolkit at ${candidate} (library directory not found)."
               return 1
             fi
             local version
