@@ -21,7 +21,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
-  CUDA_RUNTIME_VERSION: "12.6"
+  CUDA_RUNTIME_VERSION: "12.8"
   CUTENSOR_VERSION: "2.6.0.4"
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
-          echo "key=cuda-archive-v2-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+          echo "key=cuda-archive-v3-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
       - name: Cache CUDA test archive
         uses: actions/cache@v4
         id: cuda_archive_cache
@@ -55,17 +55,18 @@ jobs:
       - name: Build CUDA test archive
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         env:
-          # cubecl-cuda's build.rs reads cudarc's CUDA_VERSION. Without this, cudarc's
-          # fallback-latest path can enable cuda_12080 cfgs while bindings stay at cuda-12060.
-          CUDARC_CUDA_VERSION: "12060"
+          # cubecl-cuda's build.rs reads cudarc's CUDA_VERSION. Match workspace cudarc
+          # cuda-12080 bindings so compile-time cfgs and NVRTC symbols stay aligned.
+          CUDARC_CUDA_VERSION: "12080"
         run: |
           set -euo pipefail
           cargo nextest archive \
             --release \
-            --offline \
+            --locked \
             --archive-file "${CUDA_ARCHIVE}" \
             -p tenferro-gpu \
             -p tenferro-ad \
+            -p tenferro-linalg \
             --features cuda
       - name: Verify CUDA test archive
         env:
@@ -118,7 +119,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/cuda-runtime-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v2
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v3
       - name: Configure CUDA runtime libraries
         run: |
           set -euo pipefail
@@ -154,16 +155,24 @@ jobs:
 
           if [ -z "${cuda_path}" ]; then
             echo "Installing minimal CUDA ${CUDA_RUNTIME_VERSION} runtime packages without driver packages..."
+            if ! ls /etc/apt/sources.list.d/cuda*.list >/dev/null 2>&1; then
+              tmpdir="$(mktemp -d)"
+              curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+                -o "${tmpdir}/cuda-keyring.deb" \
+                https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+              sudo dpkg -i "${tmpdir}/cuda-keyring.deb"
+              rm -rf "${tmpdir}"
+            fi
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              cuda-cudart-12-6 \
-              cuda-cudart-dev-12-6 \
-              cuda-nvrtc-12-6 \
-              cuda-nvrtc-dev-12-6 \
-              libcublas-12-6 \
-              libcusolver-12-6 \
-              libcusparse-12-6 \
-              libnvjitlink-12-6
+              cuda-cudart-12-8 \
+              cuda-cudart-dev-12-8 \
+              cuda-nvrtc-12-8 \
+              cuda-nvrtc-dev-12-8 \
+              libcublas-12-8 \
+              libcusolver-12-8 \
+              libcusparse-12-8 \
+              libnvjitlink-12-8
             for candidate in "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" /usr/local/cuda; do
               if [ -d "${candidate}" ]; then
                 cuda_path="${candidate}"
