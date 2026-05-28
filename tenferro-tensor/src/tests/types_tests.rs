@@ -192,6 +192,126 @@ fn typed_tensor_view_transpose_is_metadata_only() {
 }
 
 #[test]
+fn non_contiguous_host_view_to_contiguous_preserves_column_major_order() {
+    let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 3], vec![1, 2, 3, 4, 5, 6]);
+    let view = tensor.as_view().transpose_view([1, 0]).unwrap();
+    let compact = view.to_contiguous().unwrap();
+    assert_eq!(compact.shape(), &[3, 2]);
+    assert_eq!(compact.as_slice(), &[1, 3, 5, 2, 4, 6]);
+}
+
+#[test]
+fn typed_tensor_view_backend_to_contiguous_returns_backend_failure() {
+    let tensor = TypedTensor::<i32>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(78, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    );
+
+    let err = tensor.as_view().to_contiguous().unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "TypedTensorView::to_contiguous",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("download explicitly first"));
+}
+
+#[test]
+fn mutable_host_copy_back_writes_strided_output() {
+    let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
+    {
+        let mut out = tensor.as_view_mut().transpose_view([1, 0]).unwrap();
+        let scratch = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+        out.copy_from_contiguous(&scratch).unwrap();
+    }
+    assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
+}
+
+#[test]
+fn mutable_host_copy_back_rejects_shape_mismatch() {
+    let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
+    let scratch = TypedTensor::<i32, Rank<2>>::from_vec_col_major([4, 1], vec![1, 2, 3, 4]);
+    let mut out = tensor.as_view_mut().transpose_view([1, 0]).unwrap();
+
+    let err = out.copy_from_contiguous(&scratch).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "TypedTensorViewMut::copy_from_contiguous",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("shape mismatch"));
+}
+
+#[test]
+fn mutable_host_copy_back_rejects_backend_source() {
+    let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]);
+    let scratch = TypedTensor::<i32>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(79, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    );
+    let mut out = tensor.as_view_mut();
+
+    let err = out.copy_from_contiguous(&scratch).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "TypedTensorViewMut::copy_from_contiguous",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("download explicitly first"));
+}
+
+#[test]
+fn mutable_typed_tensor_view_backend_copy_from_contiguous_returns_backend_failure() {
+    let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<i32>::new_with_len(80, 2))),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    );
+    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    let mut out = tensor.as_view_mut();
+
+    let err = out.copy_from_contiguous(&scratch).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "TypedTensorViewMut::copy_from_contiguous",
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("download explicitly first"));
+}
+
+#[test]
 fn mutable_typed_tensor_view_rejects_overlapping_layout() {
     let mut data = vec![1_i32, 2, 3, 4];
     assert!(TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 1], 0, &mut data).is_err());

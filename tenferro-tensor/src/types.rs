@@ -700,6 +700,39 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         contiguous_layout_slice(self.layout(), data, "TypedTensorView::as_slice")
     }
 
+    /// Materialize this view as compact column-major host tensor storage.
+    ///
+    /// This is an explicit copy boundary. Backend buffers return an error
+    /// instead of being downloaded implicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    ///
+    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+    /// let transposed = tensor.as_view().transpose_view([1, 0])?;
+    /// let compact = transposed.to_contiguous()?;
+    /// assert_eq!(compact.as_slice(), &[1, 3, 2, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn to_contiguous(&self) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: Clone,
+    {
+        let op = "TypedTensorView::to_contiguous";
+        let data = materialize_view_buffer_col_major(
+            self.shape(),
+            self.strides(),
+            self.offset(),
+            &self.buffer,
+            op,
+        )?;
+        let shape = R::shape_from_vec(self.shape().to_vec().into())
+            .map_err(|err| tensor_layout_error(op, err))?;
+        Ok(TypedTensor::from_vec_col_major(shape, data))
+    }
+
     /// Return a metadata-only axis permutation.
     ///
     /// # Examples
@@ -1168,6 +1201,85 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         self.get_mut(indices)
     }
 
+    /// Copy compact column-major host tensor values into this mutable view.
+    ///
+    /// This is an explicit copy-back boundary. Backend source or destination
+    /// buffers return an error instead of transferring data implicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    ///
+    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]);
+    /// let src = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]);
+    /// tensor.as_view_mut().transpose_view([1, 0])?.copy_from_contiguous(&src)?;
+    /// assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn copy_from_contiguous(&mut self, src: &TypedTensor<T, R>) -> crate::Result<()>
+    where
+        T: Clone,
+    {
+        let op = "TypedTensorViewMut::copy_from_contiguous";
+        if self.shape() != src.shape() {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: format!(
+                    "shape mismatch: destination {:?} does not match source {:?}",
+                    self.shape(),
+                    src.shape()
+                ),
+            });
+        }
+
+        let src_data = match &src.buffer {
+            Buffer::Host(data) => contiguous_layout_slice(src.layout(), data, op)?,
+            Buffer::Backend(_) => {
+                return Err(crate::Error::backend_failure(
+                    op,
+                    "source backend buffer cannot be copied through host memory; download explicitly first",
+                ))
+            }
+        };
+
+        let shape = self.shape().to_vec();
+        let strides = self.strides().to_vec();
+        let offset = self.offset();
+        let dst_data = match &mut self.buffer {
+            TensorBufferRefMut::Host(data) => data,
+            TensorBufferRefMut::Backend(_) => {
+                return Err(crate::Error::backend_failure(
+                    op,
+                    "destination backend buffer cannot be updated through host memory; download explicitly first",
+                ))
+            }
+        };
+
+        let mut src_iter = src_data.iter();
+        for_each_layout_offset_col_major(&shape, &strides, offset, op, |offset| {
+            let value = src_iter.next().ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: "source tensor ended before destination view".to_string(),
+            })?;
+            let dst = dst_data
+                .get_mut(offset)
+                .ok_or_else(|| crate::Error::InvalidConfig {
+                    op,
+                    message: "destination view offset is outside host buffer".to_string(),
+                })?;
+            *dst = value.clone();
+            Ok(())
+        })?;
+        if src_iter.next().is_some() {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "source tensor has elements remaining after destination copy".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Borrow this mutable view as a read-only view.
     ///
     /// # Examples
@@ -1230,25 +1342,28 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn transpose_view(
-        &mut self,
+        self,
         axes: impl AsRef<[usize]>,
-    ) -> crate::Result<TypedTensorViewMut<'_, T, R>> {
-        let layout = self
-            .layout
+    ) -> crate::Result<TypedTensorViewMut<'a, T, R>> {
+        let Self {
+            buffer,
+            layout,
+            placement,
+        } = self;
+        let layout = layout
             .transpose_view(axes)
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
         layout
             .validate_mutable_no_overlap()
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
-        let placement = self.placement.clone();
-        match &mut self.buffer {
+        match buffer {
             TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(&mut *data),
+                buffer: TensorBufferRefMut::Host(data),
                 layout,
                 placement,
             }),
             TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+                buffer: TensorBufferRefMut::Backend(buffer),
                 layout,
                 placement,
             }),
@@ -1271,7 +1386,26 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
         &mut self,
         axes: &[usize],
     ) -> crate::Result<TypedTensorViewMut<'_, T, R>> {
-        self.transpose_view(axes)
+        let layout = self
+            .layout
+            .transpose_view(axes)
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
+        let placement = self.placement.clone();
+        match &mut self.buffer {
+            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
+                buffer: TensorBufferRefMut::Host(&mut *data),
+                layout,
+                placement,
+            }),
+            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
+                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
+                layout,
+                placement,
+            }),
+        }
     }
 
     /// Return a mutable metadata-only slice using one [`StridedSliceSpec`] per axis.
@@ -2271,6 +2405,85 @@ fn checked_view_offset(
     usize::try_from(offset).ok()
 }
 
+fn for_each_layout_offset_col_major(
+    shape: &[usize],
+    strides: &[isize],
+    base_offset: isize,
+    op: &'static str,
+    mut f: impl FnMut(usize) -> crate::Result<()>,
+) -> crate::Result<()> {
+    if shape.len() != strides.len() {
+        return Err(crate::Error::InvalidConfig {
+            op,
+            message: format!(
+                "shape rank {} does not match stride rank {}",
+                shape.len(),
+                strides.len()
+            ),
+        });
+    }
+
+    if shape.iter().any(|&dim| dim == 0) {
+        return Ok(());
+    }
+
+    let mut offset = base_offset;
+    if shape.is_empty() {
+        let offset = usize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
+            op,
+            message: "view offset is negative".to_string(),
+        })?;
+        return f(offset);
+    }
+
+    let mut index = vec![0; shape.len()];
+    loop {
+        let physical = usize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
+            op,
+            message: "view offset is negative".to_string(),
+        })?;
+        f(physical)?;
+
+        let mut axis = 0;
+        loop {
+            index[axis] += 1;
+            offset =
+                offset
+                    .checked_add(strides[axis])
+                    .ok_or_else(|| crate::Error::InvalidConfig {
+                        op,
+                        message: "view offset overflows".to_string(),
+                    })?;
+            if index[axis] < shape[axis] {
+                break;
+            }
+
+            let extent = isize::try_from(shape[axis]).map_err(|_| crate::Error::InvalidConfig {
+                op,
+                message: "shape extent does not fit in isize".to_string(),
+            })?;
+            let rewind =
+                strides[axis]
+                    .checked_mul(extent)
+                    .ok_or_else(|| crate::Error::InvalidConfig {
+                        op,
+                        message: "stride rewind overflows".to_string(),
+                    })?;
+            offset = offset
+                .checked_sub(rewind)
+                .ok_or_else(|| crate::Error::InvalidConfig {
+                    op,
+                    message: "view offset rewind overflows".to_string(),
+                })?;
+            index[axis] = 0;
+            axis += 1;
+            if axis == shape.len() {
+                return Ok(());
+            }
+        }
+    }
+}
+
 fn reachable_layout_span(
     shape: &[usize],
     strides: &[isize],
@@ -2396,6 +2609,36 @@ fn contiguous_layout_slice<'a, T, R: TensorRank>(
             op,
             message: "contiguous view range is outside host buffer".to_string(),
         })
+}
+
+fn materialize_view_buffer_col_major<T: Clone>(
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    buffer: &TensorBufferRef<'_, T>,
+    op: &'static str,
+) -> crate::Result<Vec<T>> {
+    let source = match buffer {
+        TensorBufferRef::Host(data) => *data,
+        TensorBufferRef::Backend(_) => return Err(crate::Error::backend_failure(
+            op,
+            "backend buffers cannot be materialized through host memory; download explicitly first",
+        )),
+    };
+
+    let n_elements = checked_view_element_count(shape, op)?;
+    let mut out = Vec::with_capacity(n_elements);
+    for_each_layout_offset_col_major(shape, strides, offset, op, |physical| {
+        let value = source
+            .get(physical)
+            .ok_or_else(|| crate::Error::InvalidConfig {
+                op,
+                message: "view offset is outside host buffer".to_string(),
+            })?;
+        out.push(value.clone());
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 fn relaxed_col_major_contiguous(
@@ -2667,23 +2910,13 @@ pub(crate) fn materialize_typed_view_col_major<T: Clone + 'static, R: TensorRank
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
 ) -> crate::Result<TypedTensor<T>> {
-    let n_elements = checked_view_element_count(view.shape(), op)?;
-    let mut data = Vec::with_capacity(n_elements);
-    let mut error = None;
-    for_each_index(view.shape(), |index| match view.get(index) {
-        Some(value) => data.push(value.clone()),
-        None => {
-            if error.is_none() {
-                error = Some(crate::Error::InvalidConfig {
-                    op,
-                    message: format!("validated index {index:?} was not reachable"),
-                });
-            }
-        }
-    });
-    if let Some(error) = error {
-        return Err(error);
-    }
+    let data = materialize_view_buffer_col_major(
+        view.shape(),
+        view.strides(),
+        view.offset(),
+        &view.buffer,
+        op,
+    )?;
     Ok(TypedTensor::from_vec_col_major(view.shape().to_vec(), data))
 }
 
