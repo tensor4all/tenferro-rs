@@ -80,6 +80,26 @@ fn reshape_view_as_requires_compact_layout() {
     let reshaped = layout.reshape_view_as::<Rank<1>>([6], 6).unwrap();
     assert_eq!(reshaped.shape(), &[6]);
     assert_eq!(reshaped.strides(), &[1]);
+
+    let non_compact = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0, 6).unwrap();
+    let err = non_compact.reshape_view_as::<Rank<1>>([6], 6).unwrap_err();
+    assert!(matches!(err, Error::NonContiguousViewAsSlice));
+}
+
+#[test]
+fn slice_view_rejects_zero_step_with_exact_error() {
+    let layout = TensorLayout::<Rank<1>>::compact([4]).unwrap();
+    let err = layout
+        .slice_view(
+            [SliceSpec {
+                start: 0,
+                end: 4,
+                step: 0,
+            }],
+            4,
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidSliceStep { step: 0 }));
 }
 
 #[test]

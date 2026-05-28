@@ -89,7 +89,7 @@ pub enum Error {
     DuplicateAxis { axis: usize },
     #[error("invalid permutation length: expected {expected}, actual {actual}")]
     InvalidPermutationLength { expected: usize, actual: usize },
-    #[error("invalid slice step {step}; v1 requires a positive step")]
+    #[error("invalid slice step {step}; zero is invalid and this API may require a positive step")]
     InvalidSliceStep { step: isize },
     #[error(
         "slice bounds are invalid or unsupported: start={start}, end={end}, axis_len={axis_len}"
@@ -219,7 +219,11 @@ impl_scalar!(bool, bool, DType::Bool, Bool);
 impl_scalar!(Complex32, f32, DType::C32, C32);
 impl_scalar!(Complex64, f64, DType::C64, C64);
 
-/// Explicit positive-step slice descriptor.
+/// Explicit slice descriptor.
+///
+/// A zero step is invalid. Individual slice APIs may impose stricter sign
+/// restrictions; for example, borrowed host view slices currently require a
+/// positive step, while layout metadata slices support negative steps.
 ///
 /// # Examples
 ///
