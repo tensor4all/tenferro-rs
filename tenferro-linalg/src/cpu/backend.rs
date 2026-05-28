@@ -3,7 +3,10 @@ use crate::backend::LinalgBackend;
 use super::linalg;
 
 use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
-use tenferro_tensor::{DType, Error, Tensor, TensorStructural, TypedTensor};
+use tenferro_tensor::{
+    DType, Error, Tensor, TensorRead, TensorStructural, TensorView, TensorViewCanonicalization,
+    TypedTensor,
+};
 
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -410,6 +413,41 @@ impl LinalgBackend for CpuBackend {
                 {
                     Err(unsupported_provider("svd", self.kind()))
                 }
+            }
+        }
+    }
+
+    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorRead::Tensor(input) => self.svd(input),
+            TensorRead::View(input) => self.svd_view(input),
+        }
+    }
+
+    fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.svd(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.svd(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.svd(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.svd(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("svd", input.dtype()))
             }
         }
     }

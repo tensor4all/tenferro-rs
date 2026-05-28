@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn svd_canonicalizes_transposed_host_view_before_lapack() {
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]);
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().svd_view(TensorView::F64(view)).unwrap();
+
+    assert_eq!(outputs[1].shape(), &[2]);
+}
+
+#[test]
 fn test_batched_cholesky() {
     let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];

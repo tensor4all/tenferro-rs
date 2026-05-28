@@ -13,7 +13,7 @@ pub mod structural;
 use strided_kernel::{col_major_strides, StridedArray, StridedView};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::{Buffer, TypedTensor};
+use crate::{Buffer, TensorRank, TypedTensor, TypedTensorView};
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::{CpuBackend, CpuBackendKind};
@@ -56,6 +56,22 @@ pub(crate) fn typed_view<'a, T: Copy>(
         }
         Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
     }
+}
+
+pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
+    op: &'static str,
+    view: &TypedTensorView<'a, T, R>,
+) -> crate::Result<StridedView<'a, T>> {
+    if view.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    StridedView::new(
+        view.as_physical_slice(),
+        view.shape(),
+        view.strides(),
+        view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))
 }
 
 /// Create an output array WITHOUT initializing element values.

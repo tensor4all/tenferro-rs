@@ -48,6 +48,8 @@ struct GemmDims {
 struct GemmAnalysisPlan {
     lhs_shape: SmallVec<[usize; 8]>,
     rhs_shape: SmallVec<[usize; 8]>,
+    lhs_strides: SmallVec<[isize; 8]>,
+    rhs_strides: SmallVec<[isize; 8]>,
     config: GemmConfigKey,
     dims: Option<GemmDims>,
 }
@@ -82,6 +84,8 @@ impl GemmAnalysisPlan {
     {
         self.lhs_shape.as_slice() == lhs.shape()
             && self.rhs_shape.as_slice() == rhs.shape()
+            && self.lhs_strides.as_slice() == lhs.strides().as_slice()
+            && self.rhs_strides.as_slice() == rhs.strides().as_slice()
             && self.config.matches(config)
     }
 }
@@ -106,12 +110,22 @@ impl GemmConfigKey {
 
 trait TypedTensorRead<T> {
     fn shape(&self) -> &[usize];
+    fn strides(&self) -> SmallVec<[isize; 8]>;
+    fn offset(&self) -> isize;
     fn host_data_opt(&self) -> Option<&[T]>;
 }
 
 impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
         self.layout().shape()
+    }
+
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        col_major_strides(self.shape()).into_iter().collect()
+    }
+
+    fn offset(&self) -> isize {
+        0
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
@@ -127,14 +141,34 @@ impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
         self.shape()
     }
 
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        self.strides().iter().copied().collect()
+    }
+
+    fn offset(&self) -> isize {
+        self.offset()
+    }
+
     fn host_data_opt(&self) -> Option<&[T]> {
-        self.as_slice().ok()
+        if self.backend_buffer().is_some() {
+            None
+        } else {
+            Some(self.as_physical_slice())
+        }
     }
 }
 
 impl<T: Clone> TypedTensorRead<T> for std::borrow::Cow<'_, TypedTensor<T>> {
     fn shape(&self) -> &[usize] {
         self.as_ref().shape()
+    }
+
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        self.as_ref().strides()
+    }
+
+    fn offset(&self) -> isize {
+        self.as_ref().offset()
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
@@ -208,6 +242,8 @@ impl GemmAnalysisCache {
         kind: GemmAnalysisCacheKind,
         lhs_shape: SmallVec<[usize; 8]>,
         rhs_shape: SmallVec<[usize; 8]>,
+        lhs_strides: SmallVec<[isize; 8]>,
+        rhs_strides: SmallVec<[isize; 8]>,
         config: GemmConfigKey,
         dims: Option<GemmDims>,
     ) {
@@ -222,6 +258,8 @@ impl GemmAnalysisCache {
             GemmAnalysisPlan {
                 lhs_shape,
                 rhs_shape,
+                lhs_strides,
+                rhs_strides,
                 config,
                 dims,
             },
@@ -283,6 +321,8 @@ fn gemm_analysis_plan_retained_bytes(plan: &GemmAnalysisPlan) -> usize {
     size_of::<GemmAnalysisPlan>()
         + smallvec_retained_bytes(&plan.lhs_shape)
         + smallvec_retained_bytes(&plan.rhs_shape)
+        + smallvec_retained_bytes(&plan.lhs_strides)
+        + smallvec_retained_bytes(&plan.rhs_strides)
         + gemm_config_key_retained_bytes(&plan.config)
         + plan.dims.as_ref().map_or(0, gemm_dims_retained_bytes)
 }
@@ -445,6 +485,10 @@ fn checked_batch_offset(batch: usize, stride: isize) -> Option<isize> {
     batch.checked_mul(stride)
 }
 
+fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Option<isize> {
+    base.checked_add(checked_batch_offset(batch, stride)?)
+}
+
 fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
     let mut order: SmallVec<[usize; 8]> = (0..strides.len()).collect();
     order.sort_by_key(|&idx| strides[idx].unsigned_abs());
@@ -518,8 +562,8 @@ where
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides: SmallVec<[isize; 8]> = col_major_strides(lhs_shape).into_iter().collect();
-    let rhs_strides: SmallVec<[isize; 8]> = col_major_strides(rhs_shape).into_iter().collect();
+    let lhs_strides = lhs.strides();
+    let rhs_strides = rhs.strides();
 
     let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims
@@ -643,6 +687,8 @@ where
             cache_kind,
             lhs.shape().iter().copied().collect(),
             rhs.shape().iter().copied().collect(),
+            lhs.strides(),
+            rhs.strides(),
             GemmConfigKey::from_config(config),
             dims.clone(),
         );
@@ -911,15 +957,17 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: this GEMM path uses beta = 0 and overwrites every output element.
     let mut out_data: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
@@ -1285,6 +1333,8 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0 when
     // the BLAS layout can represent the requested conjugation.
@@ -1292,9 +1342,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
@@ -1382,15 +1432,17 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0.
     let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;

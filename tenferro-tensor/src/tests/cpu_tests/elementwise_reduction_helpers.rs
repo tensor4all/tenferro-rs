@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn elementwise_add_accepts_transposed_host_view_input() {
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = a.as_view().transpose_view([1, 0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let out = backend
+        .add_read(
+            TensorRead::from_view(TensorView::F64(b.clone())),
+            TensorRead::from_view(TensorView::F64(b)),
+        )
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 6.0, 4.0, 8.0]);
+}
+
+#[test]
+fn reduce_sum_accepts_transposed_host_view_input() {
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let b = a.as_view().transpose_view([1, 0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let out = backend
+        .reduce_sum_read(TensorRead::from_view(TensorView::F64(b)), &[0])
+        .unwrap();
+
+    assert_eq!(out.shape(), &[2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
 fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
     let lhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![8.0f32, -2.0]));
     let rhs_f32 = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![2.0f32, 5.0]));

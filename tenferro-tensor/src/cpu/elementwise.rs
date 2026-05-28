@@ -7,10 +7,13 @@ use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
 use crate::{
     buffer_pool::{BufferPool, PoolScalar},
     config::CompareDir,
-    types::{ConjElem, Tensor, TypedTensor},
+    types::{ConjElem, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView},
 };
 
-use super::{tensor_from_array, typed_array_uninit_from_pool, typed_host_data, typed_view};
+use super::{
+    tensor_from_array, typed_array_uninit_from_pool, typed_host_data, typed_view,
+    typed_view_from_view,
+};
 
 macro_rules! dispatch_ternary_result_with_pool {
     ($op:literal, $a:expr, $b:expr, $c:expr, |$x:ident, $y:ident, $z:ident| $body:expr) => {
@@ -202,6 +205,57 @@ pub(crate) fn add_with_pool(
             rhs: rhs.dtype(),
         }),
     }
+}
+
+pub(crate) fn add_read_with_pool(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    if let (TensorRead::Tensor(lhs), TensorRead::Tensor(rhs)) = (&lhs, &rhs) {
+        return add_with_pool(buffers, lhs, rhs);
+    }
+
+    macro_rules! dispatch {
+        ($variant:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(Tensor::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    let a = a.as_view();
+                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, &a, b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::Tensor(Tensor::$variant(b)),
+                ) => {
+                    let b = b.as_view();
+                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, a, &b)?));
+                }
+                (
+                    TensorRead::View(TensorView::$variant(a)),
+                    TensorRead::View(TensorView::$variant(b)),
+                ) => {
+                    return Ok(Tensor::$variant(typed_add_view_with_pool(buffers, a, b)?));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch!(F32);
+    dispatch!(F64);
+    dispatch!(I32);
+    dispatch!(I64);
+    dispatch!(C32);
+    dispatch!(C64);
+
+    Err(crate::Error::DTypeMismatch {
+        op: "add",
+        lhs: lhs.dtype(),
+        rhs: rhs.dtype(),
+    })
 }
 
 pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
@@ -552,6 +606,58 @@ where
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
             x + scalar
         })
+        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else {
+        Err(crate::Error::ShapeMismatch {
+            op: "add",
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
+        })
+    }
+}
+
+pub(crate) fn typed_add_view_with_pool<T, L, R>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensorView<'_, T, L>,
+    rhs: &TypedTensorView<'_, T, R>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + Zero + Add<Output = T> + PoolScalar + 'static,
+    L: TensorRank,
+    R: TensorRank,
+{
+    if lhs.shape() == rhs.shape() {
+        // SAFETY: zip_map2_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("add", lhs)?,
+            &typed_view_from_view("add", rhs)?,
+            |x, y| x + y,
+        )
+        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_view_from_view("add", lhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("add", rhs)?,
+            |x| scalar + x,
+        )
+        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        Ok(tensor_from_array(out))
+    } else if rhs.shape().is_empty() {
+        let scalar = typed_view_from_view("add", rhs)?.get(&[]);
+        // SAFETY: map_into overwrites every output element.
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
+        map_into(
+            &mut out.view_mut(),
+            &typed_view_from_view("add", lhs)?,
+            |x| x + scalar,
+        )
         .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
     } else {

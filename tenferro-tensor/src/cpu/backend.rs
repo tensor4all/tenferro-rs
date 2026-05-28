@@ -627,6 +627,10 @@ impl TensorElementwise for CpuBackend {
         self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
     }
 
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::mul_with_pool(buffers, lhs, rhs))
     }
@@ -781,16 +785,32 @@ impl TensorReduction for CpuBackend {
         self.install(|| reduction::reduce_sum(input, axes))
     }
 
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_sum_read(input, axes))
+    }
+
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_prod(input, axes))
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_prod_read(input, axes))
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_max(input, axes))
     }
 
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_max_read(input, axes))
+    }
+
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_min(input, axes))
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_min_read(input, axes))
     }
 }
 

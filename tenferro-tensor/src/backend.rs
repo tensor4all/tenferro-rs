@@ -37,6 +37,40 @@ tenferro_core_ops::define_elementwise_fusion_op!();
 /// ```
 pub trait TensorElementwise {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+
+    /// Elementwise addition accepting either owned tensors or borrowed views.
+    ///
+    /// Backends that implement this method must not silently move data across
+    /// devices. A backend that cannot consume views should return an explicit
+    /// backend error rather than materializing or transferring implicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     cpu::CpuBackend, TensorElementwise, TensorRead, TensorView, TypedTensor,
+    /// };
+    ///
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let view = TensorView::F64(tensor.as_view());
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend.add_read(
+    ///     TensorRead::from_view(view.clone()),
+    ///     TensorRead::from_view(view),
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.add(lhs, rhs),
+            _ => Err(crate::Error::backend_failure(
+                "add",
+                "backend does not accept borrowed tensor views at this execution boundary",
+            )),
+        }
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -129,9 +163,56 @@ pub trait TensorStructural {
 /// ```
 pub trait TensorReduction {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        match input.as_tensor() {
+            Some(input) => self.reduce_sum(input, axes),
+            None => Err(crate::Error::backend_failure(
+                "reduce_sum",
+                "backend does not accept borrowed tensor views at this execution boundary",
+            )),
+        }
+    }
+
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        match input.as_tensor() {
+            Some(input) => self.reduce_prod(input, axes),
+            None => Err(crate::Error::backend_failure(
+                "reduce_prod",
+                "backend does not accept borrowed tensor views at this execution boundary",
+            )),
+        }
+    }
+
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        match input.as_tensor() {
+            Some(input) => self.reduce_max(input, axes),
+            None => Err(crate::Error::backend_failure(
+                "reduce_max",
+                "backend does not accept borrowed tensor views at this execution boundary",
+            )),
+        }
+    }
+
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+
+    #[doc(hidden)]
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        match input.as_tensor() {
+            Some(input) => self.reduce_min(input, axes),
+            None => Err(crate::Error::backend_failure(
+                "reduce_min",
+                "backend does not accept borrowed tensor views at this execution boundary",
+            )),
+        }
+    }
 }
 
 /// Dot-general operations.

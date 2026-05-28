@@ -4,13 +4,13 @@ use strided_kernel::{col_major_strides, copy_into, map_into, Identity, StridedVi
 
 use crate::{
     buffer_pool::{BufferPool, PoolScalar},
-    types::{flat_to_multi, Tensor, TypedTensor},
+    types::{flat_to_multi, Tensor, TensorRank, TypedTensor, TypedTensorView},
     DType,
 };
 
 use super::{
     cpu_backend_buffer_error, tensor_from_array, typed_array_uninit, typed_array_uninit_from_pool,
-    typed_view,
+    typed_view, typed_view_from_view,
 };
 
 fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -361,6 +361,25 @@ pub fn typed_transpose<T: Copy + Clone>(
     copy_view_to_array("transpose", out, &permuted)
 }
 
+fn typed_transpose_view_impl<T, R>(
+    view: &TypedTensorView<'_, T, R>,
+    perm: &[usize],
+    make_out: impl FnOnce(&[usize]) -> strided_kernel::StridedArray<T>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + 'static,
+    R: TensorRank,
+{
+    validate_permutation("transpose", perm, view.shape().len())?;
+    let src = typed_view_from_view("transpose", view)?;
+    let permuted = src
+        .permute(perm)
+        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
+    // SAFETY: copy_into overwrites every output element.
+    let out = make_out(permuted.dims());
+    copy_view_to_array("transpose", out, &permuted)
+}
+
 pub(crate) fn typed_transpose_with_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
@@ -369,14 +388,21 @@ pub(crate) fn typed_transpose_with_pool<T>(
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
-    validate_permutation("transpose", perm, tensor.shape().len())?;
-    let src = host_view("transpose", tensor)?;
-    let permuted = src
-        .permute(perm)
-        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
-    // SAFETY: copy_into overwrites every output element.
-    let out = unsafe { typed_array_uninit_from_pool(buffers, permuted.dims()) };
-    copy_view_to_array("transpose", out, &permuted)
+    typed_transpose_view_with_pool(buffers, &tensor.as_view(), perm)
+}
+
+pub(crate) fn typed_transpose_view_with_pool<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    perm: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: TensorRank,
+{
+    typed_transpose_view_impl(view, perm, |shape| unsafe {
+        typed_array_uninit_from_pool(buffers, shape)
+    })
 }
 
 pub fn typed_reshape<T: Clone + 'static>(
