@@ -1,4 +1,5 @@
 use cubecl::stream_id::StreamId;
+use std::panic;
 
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
@@ -52,54 +53,46 @@ fn cuda_extension_cache_is_type_indexed_and_lazy() {
 }
 
 #[test]
-fn typed_tensor_binding_rejects_shape_buffer_len_mismatch() {
-    let tensor = cubecl_tensor_with_len(vec![2, 3], 5);
+fn typed_tensor_binding_accepts_valid_backend_metadata() {
+    let tensor = cubecl_tensor_with_len(vec![2, 3], 6);
 
-    let err = typed_tensor_binding(&tensor, "metadata_test").unwrap_err();
-
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "metadata_test");
-            assert!(message.contains("expected shape product 6"));
-            assert!(message.contains("actual CubeclBuffer::len 5"));
-        }
-        other => panic!("expected BackendFailure, got {other:?}"),
-    }
+    typed_tensor_binding(&tensor, "metadata_test").unwrap();
+    typed_tensor_array_arg(&tensor, "metadata_test").unwrap();
 }
 
 #[test]
-fn typed_tensor_array_arg_rejects_shape_buffer_len_mismatch() {
-    let tensor = cubecl_tensor_with_len(vec![2, 3], 5);
+fn from_buffer_col_major_rejects_backend_buffer_len_mismatch() {
+    let panic = constructor_panic_message(vec![2, 3], 5);
 
-    let err = match typed_tensor_array_arg(&tensor, "metadata_test") {
-        Ok(_) => panic!("expected typed_tensor_array_arg to reject buffer length mismatch"),
-        Err(err) => err,
-    };
-
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "metadata_test");
-            assert!(message.contains("expected shape product 6"));
-            assert!(message.contains("actual CubeclBuffer::len 5"));
-        }
-        other => panic!("expected BackendFailure, got {other:?}"),
-    }
+    assert!(panic.contains("from_buffer_col_major"));
+    assert!(panic.contains("data length 5 does not match shape product 6"));
 }
 
 #[test]
-fn typed_tensor_binding_rejects_shape_product_overflow() {
-    let tensor = cubecl_tensor_with_len(vec![usize::MAX, 2], 1);
+fn from_buffer_col_major_rejects_shape_product_overflow() {
+    let panic = constructor_panic_message(vec![usize::MAX, 2], 1);
 
-    let err = typed_tensor_binding(&tensor, "metadata_test").unwrap_err();
+    assert!(
+        panic.contains("attempt to multiply with overflow")
+            || panic.contains("invalid compact tensor layout")
+            || panic.contains("from_buffer_col_major: data length"),
+        "unexpected panic message: {panic}"
+    );
+}
 
-    match err {
-        crate::Error::BackendFailure { op, message } => {
-            assert_eq!(op, "metadata_test");
-            assert!(message.contains("shape product overflow"));
-            assert!(message.contains("["));
-        }
-        other => panic!("expected BackendFailure, got {other:?}"),
+fn constructor_panic_message(shape: Vec<usize>, len: usize) -> String {
+    let panic = panic::catch_unwind(|| {
+        let _ = cubecl_tensor_with_len(shape, len);
+    })
+    .expect_err("expected TypedTensor::from_buffer_col_major to reject invalid metadata");
+
+    if let Some(message) = panic.downcast_ref::<String>() {
+        return message.clone();
     }
+    if let Some(message) = panic.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    "non-string panic payload".to_string()
 }
 
 fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
