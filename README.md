@@ -42,16 +42,21 @@ tenferro-gpu = { path = "tenferro-gpu", features = ["cuda"] }
 tenferro-linalg = { path = "tenferro-linalg", features = ["autodiff", "cuda"] }
 ```
 
-Start with `Tensor` and `CpuBackend` for ndarray-like CPU work. Move to
-`EagerTensor` when you want immediate execution with optional `backward()`, and
-move to `TracedTensor` when you need graph reuse, transform AD, or repeated
-compile/run execution. CUDA is available as an explicit backend/device choice
-for supported operations.
+Start with `TypedTensor<T, R>` for no-AD work when the scalar type is known at
+compile time. Use `Tensor` and `CpuBackend` when dtype should remain dynamic or
+when you want dtype-erased backend dispatch. Move to `EagerTensor` when you
+want immediate execution with optional `backward()`, and move to `TracedTensor`
+when you need graph reuse, transform AD, or repeated compile/run execution.
+CUDA is available as an explicit backend/device choice for supported
+operations.
 
 ## Direct Tensor Execution
 
 This is the closest entry point for users coming from ndarray: create concrete
 tensors, pass a backend context to operations, and get concrete tensors back.
+This example uses `Tensor` to show dtype-erased backend dispatch. If the scalar
+type is fixed in your Rust code, prefer `TypedTensor<T, R>` and the typed
+operation entry points described in the tensor operations guide.
 
 ```rust
 use tenferro_runtime::{tensor, CpuBackend, Tensor};
