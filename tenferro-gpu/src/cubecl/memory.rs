@@ -117,13 +117,6 @@ fn download_typed<T: CubeElement + Clone + 'static>(
     client: &ComputeClient<CudaRuntime>,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
-    if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        ));
-    }
-
     let handle = match &typed.buffer {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
@@ -133,6 +126,13 @@ fn download_typed<T: CubeElement + Clone + 'static>(
         }
         Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
+
+    if typed.n_elements() == 0 {
+        return Ok(TypedTensor::from_vec_col_major(
+            typed.shape().to_vec(),
+            Vec::new(),
+        ));
+    }
 
     let bytes = client
         .read_one(handle)
@@ -181,13 +181,6 @@ fn download_bool(
     client: &ComputeClient<CudaRuntime>,
     typed: &TypedTensor<bool>,
 ) -> crate::Result<TypedTensor<bool>> {
-    if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        ));
-    }
-
     let handle = match &typed.buffer {
         Buffer::Host(_) => {
             return Err(crate::Error::backend_failure(
@@ -197,6 +190,13 @@ fn download_bool(
         }
         Buffer::Backend(buffer) => cubecl_handle_from_backend(buffer.as_ref(), "download")?,
     };
+
+    if typed.n_elements() == 0 {
+        return Ok(TypedTensor::from_vec_col_major(
+            typed.shape().to_vec(),
+            Vec::new(),
+        ));
+    }
 
     let bytes = client
         .read_one(handle)

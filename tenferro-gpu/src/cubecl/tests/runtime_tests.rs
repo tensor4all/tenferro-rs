@@ -4,7 +4,7 @@ use cubecl_cuda::CudaRuntime as CubeclCudaRuntime;
 
 use crate::cubecl::memory::{device_ptr, download_tensor, upload_tensor};
 use crate::cubecl::{gpu_available, CubeclBackend, CubeclRuntime};
-use crate::Tensor;
+use crate::{Error, Tensor};
 use tenferro_tensor::TensorElementwise;
 
 #[cube(launch_unchecked)]
@@ -97,6 +97,36 @@ gpu_test!(test_upload_download_bool, {
         back.as_slice::<bool>().unwrap(),
         host.as_slice::<bool>().unwrap()
     );
+});
+
+gpu_test!(test_download_empty_host_f64_rejects_before_fast_path, {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new());
+
+    let err = download_tensor(&rt, &host).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "download",
+            ref message,
+        } if message.contains("expected CubeCL buffer")
+    ));
+});
+
+gpu_test!(test_download_empty_host_bool_rejects_before_fast_path, {
+    let rt = CubeclRuntime::new(0).unwrap();
+    let host = Tensor::from_vec_col_major(vec![0], Vec::<bool>::new());
+
+    let err = download_tensor(&rt, &host).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "download",
+            ref message,
+        } if message.contains("expected CubeCL buffer")
+    ));
 });
 
 gpu_test!(test_upload_download_c64, {
