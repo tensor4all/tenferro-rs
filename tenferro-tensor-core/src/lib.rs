@@ -107,6 +107,8 @@ pub enum Error {
     DTypeMismatch { expected: DType, actual: DType },
     #[error("view metadata is out of borrowed-slice bounds")]
     ViewOutOfBounds,
+    #[error("mutable tensor layout may overlap physical elements")]
+    OverlappingMutableLayout,
     #[error("integer overflow while validating tensor metadata")]
     IntegerOverflow,
 }

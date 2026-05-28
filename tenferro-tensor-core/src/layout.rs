@@ -2,6 +2,15 @@ use crate::{
     checked_product, col_major_strides, validate_permutation, DynRank, Error, Result, ShapeVec,
     SliceSpec, StrideVec, TensorRank,
 };
+use smallvec::SmallVec;
+use std::collections::HashSet;
+
+/// Maximum logical elements for exact mutable-overlap validation.
+///
+/// Larger layouts must pass the sufficient stride-span proof. This keeps the
+/// fallback bounded because it enumerates logical elements and stores visited
+/// physical offsets.
+const MUTABLE_NO_OVERLAP_EXACT_ELEMENT_LIMIT: usize = 4096;
 
 pub(crate) fn reachable_offset_range(
     shape: &[usize],
@@ -279,6 +288,98 @@ impl<R: TensorRank> TensorLayout<R> {
         col_major_strides(self.shape())
             .map(|strides| strides.as_slice() == self.strides())
             .unwrap_or(false)
+    }
+
+    /// Validate that the layout can be used for mutable access without aliasing.
+    ///
+    /// Empty logical views are accepted. Non-empty layouts are accepted when a
+    /// conservative stride-span proof succeeds, or when exact enumeration of a
+    /// small bounded view proves that all logical elements map to distinct
+    /// physical offsets.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor_core::{DynRank, TensorLayout};
+    ///
+    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3)?;
+    /// layout.validate_mutable_no_overlap()?;
+    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// ```
+    pub fn validate_mutable_no_overlap(&self) -> Result<()> {
+        let element_count = checked_product(self.shape())?;
+        if element_count == 0 {
+            return Ok(());
+        }
+
+        for (&extent, &stride) in self.shape().iter().zip(self.strides()) {
+            if extent > 1 && stride == 0 {
+                return Err(Error::OverlappingMutableLayout);
+            }
+        }
+
+        let mut axes = self
+            .shape()
+            .iter()
+            .zip(self.strides())
+            .filter(|&(&extent, _)| extent > 1)
+            .map(|(&extent, &stride)| (extent, stride.unsigned_abs()))
+            .collect::<SmallVec<[(usize, usize); 8]>>();
+        axes.sort_by_key(|&(_, stride)| stride);
+
+        let mut span = 0usize;
+        for (extent, stride) in axes {
+            if stride <= span {
+                return self.validate_mutable_no_overlap_exact_or_reject(element_count);
+            }
+            span = span
+                .checked_add(
+                    (extent - 1)
+                        .checked_mul(stride)
+                        .ok_or(Error::IntegerOverflow)?,
+                )
+                .ok_or(Error::IntegerOverflow)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_mutable_no_overlap_exact_or_reject(&self, element_count: usize) -> Result<()> {
+        if element_count > MUTABLE_NO_OVERLAP_EXACT_ELEMENT_LIMIT {
+            return Err(Error::OverlappingMutableLayout);
+        }
+
+        let mut seen = HashSet::with_capacity(element_count);
+        let rank = self.shape().len();
+        let mut indices = vec![0usize; rank];
+
+        loop {
+            let mut physical_offset = self.offset;
+            for (&index, &stride) in indices.iter().zip(self.strides()) {
+                let index = isize::try_from(index).map_err(|_| Error::IntegerOverflow)?;
+                let delta = index.checked_mul(stride).ok_or(Error::IntegerOverflow)?;
+                physical_offset = physical_offset
+                    .checked_add(delta)
+                    .ok_or(Error::IntegerOverflow)?;
+            }
+
+            if !seen.insert(physical_offset) {
+                return Err(Error::OverlappingMutableLayout);
+            }
+
+            let mut axis = 0;
+            while axis < rank {
+                indices[axis] += 1;
+                if indices[axis] < self.shape()[axis] {
+                    break;
+                }
+                indices[axis] = 0;
+                axis += 1;
+            }
+            if axis == rank {
+                return Ok(());
+            }
+        }
     }
 
     /// Return a metadata-only axis permutation of this layout.

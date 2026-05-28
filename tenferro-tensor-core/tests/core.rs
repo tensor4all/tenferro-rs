@@ -221,6 +221,26 @@ fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
 }
 
 #[test]
+fn mutable_layout_rejects_zero_stride_broadcast() {
+    let layout = TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![0].into(), 0, 1).unwrap();
+    assert!(layout.validate_mutable_no_overlap().is_err());
+}
+
+#[test]
+fn mutable_layout_rejects_overlapping_strides() {
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![2, 2].into(), vec![1, 1].into(), 0, 4).unwrap();
+    assert!(layout.validate_mutable_no_overlap().is_err());
+}
+
+#[test]
+fn mutable_layout_accepts_reversed_non_overlapping_vector() {
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3).unwrap();
+    layout.validate_mutable_no_overlap().unwrap();
+}
+
+#[test]
 fn constructs_contiguous_col_major_and_validates_count() {
     let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);
