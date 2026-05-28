@@ -56,10 +56,16 @@ storage. The view operations are metadata-only:
 - `slice_view`
 
 Views may be non-contiguous. `as_slice()` succeeds only when the view is
-slice-contiguous for the borrowed storage. `TensorLayout` and borrowed host
-view slicing support signed strides and negative steps when reachable-range
-validation proves every logical element maps inside the backing allocation.
-Zero step remains invalid.
+slice-contiguous for the borrowed storage. `TensorLayout` metadata slicing
+supports signed strides and negative steps when reachable-range validation
+proves every logical element maps inside the backing allocation. Zero step
+remains invalid.
+
+The current `tenferro-tensor-core` host adapters
+`HostTensorView::slice_view` and `TensorView::slice_view` are a narrower
+positive-step compatibility surface. Runtime views in `tenferro-tensor`
+(`TypedTensorView` and `TypedTensorViewMut`) use the general reachable-range
+contract for negative-step metadata views.
 
 ---
 
