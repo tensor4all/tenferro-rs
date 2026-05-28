@@ -223,14 +223,20 @@ fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
 #[test]
 fn mutable_layout_rejects_zero_stride_broadcast() {
     let layout = TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![0].into(), 0, 1).unwrap();
-    assert!(layout.validate_mutable_no_overlap().is_err());
+    assert!(matches!(
+        layout.validate_mutable_no_overlap(),
+        Err(Error::OverlappingMutableLayout)
+    ));
 }
 
 #[test]
 fn mutable_layout_rejects_overlapping_strides() {
     let layout =
         TensorLayout::<DynRank>::from_parts(vec![2, 2].into(), vec![1, 1].into(), 0, 4).unwrap();
-    assert!(layout.validate_mutable_no_overlap().is_err());
+    assert!(matches!(
+        layout.validate_mutable_no_overlap(),
+        Err(Error::OverlappingMutableLayout)
+    ));
 }
 
 #[test]
@@ -250,6 +256,36 @@ fn mutable_layout_accepts_empty_view_before_product_overflow() {
     )
     .unwrap();
     layout.validate_mutable_no_overlap().unwrap();
+}
+
+#[test]
+fn mutable_layout_exact_fallback_accepts_small_ambiguous_non_overlapping_layout() {
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![3, 2].into(), vec![2, 3].into(), 0, 8).unwrap();
+    layout.validate_mutable_no_overlap().unwrap();
+}
+
+#[test]
+fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![4097, 2].into(), vec![2, 4097].into(), 0, 12_290)
+            .unwrap();
+    assert!(matches!(
+        layout.validate_mutable_no_overlap(),
+        Err(Error::OverlappingMutableLayout)
+    ));
+}
+
+#[test]
+fn mutable_layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
+    let huge_extent = isize::MAX as usize + 1;
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![huge_extent, 3].into(), vec![0, 1].into(), 0, 3)
+            .unwrap();
+    assert!(matches!(
+        layout.validate_mutable_no_overlap(),
+        Err(Error::OverlappingMutableLayout)
+    ));
 }
 
 #[test]

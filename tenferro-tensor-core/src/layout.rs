@@ -310,13 +310,14 @@ impl<R: TensorRank> TensorLayout<R> {
         if self.shape().iter().any(|&extent| extent == 0) {
             return Ok(());
         }
-        let element_count = checked_product(self.shape())?;
 
         for (&extent, &stride) in self.shape().iter().zip(self.strides()) {
             if extent > 1 && stride == 0 {
                 return Err(Error::OverlappingMutableLayout);
             }
         }
+
+        let element_count = checked_product(self.shape())?;
 
         let mut axes = self
             .shape()
