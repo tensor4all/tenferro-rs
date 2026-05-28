@@ -288,8 +288,8 @@ Tests follow implementation ownership.
 ### Tensor Core Data Model
 
 - `tenferro-tensor-core` owns backend-independent host tensor metadata and
-  contiguous host storage: `DType`, `TensorScalar`, host `TypedTensor<T>`,
-  dynamic `Tensor`, typed/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
+  contiguous host storage: `DType`, `TensorScalar`, `HostTensor<T>`,
+  dynamic `Tensor`, host/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
   `SliceSpec`, and metadata-only `reshape_view`, `permute_view`, and
   `slice_view`.
 - `tenferro-tensor-core` must not depend on CUDA, GPU backends, backend buffers,

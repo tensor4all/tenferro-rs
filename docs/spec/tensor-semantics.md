@@ -35,9 +35,9 @@ Current public concepts:
 - `DType`: runtime dtype tags for `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`,
   and `C64`.
 - `TensorScalar`: sealed scalar trait for supported scalar types.
-- `TypedTensor<T>`: owned typed host tensor with contiguous column-major data.
+- `HostTensor<T>`: owned typed host tensor with contiguous column-major data.
 - `Tensor`: dynamic host tensor enum over the supported scalar types.
-- `TypedTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
+- `HostTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
 - `TensorRef<'a>`: borrowed dynamic tensor reference.
 - `ShapeVec` and `StrideVec`: compact shape and signed-stride vectors.
 - `SliceSpec`: explicit slice descriptor. A zero step is invalid.
@@ -58,7 +58,7 @@ Views may be non-contiguous. `as_slice()` succeeds only when the view is
 slice-contiguous for the borrowed storage. `TensorLayout` metadata-only slicing
 supports negative steps and signed strides when reachable-range validation
 succeeds. Existing borrowed host view slice APIs, including
-`TypedTensorView::slice_view` and `TensorView::slice_view`, remain
+`HostTensorView::slice_view` and `TensorView::slice_view`, remain
 positive-step-only for now.
 
 ---
