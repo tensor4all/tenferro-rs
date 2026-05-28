@@ -13,10 +13,11 @@ enters the CPU backend, the CPU work completes, and the returned value is
 host-readable.
 
 This is the easiest model for debugging and for ordinary no-AD numeric code.
-Use `TypedTensor<T>` or `Tensor` when no gradient state is needed. Use
-`EagerTensor` when you want immediate forward execution through an
-`EagerRuntime`, and make tensors tracked when you want PyTorch-style
-scalar-loss `backward()`.
+Use `TypedTensor<T, R>` or `Tensor` when no gradient state is needed.
+`TypedTensor<T, R>` may be host-backed or backend-backed; `Tensor` is the
+dtype-erased dynamic-rank form. Use `EagerTensor` when you want immediate
+forward execution through an `EagerRuntime`, and make tensors tracked when you
+want PyTorch-style scalar-loss `backward()`.
 
 ## Eager GPU
 
@@ -50,4 +51,4 @@ Eager and traced serve different workflows on the same tensor stack.
 | Scalar-loss reverse-mode AD with gradient accumulation | tracked `EagerTensor` variables |
 | Transform AD and higher-order AD | `TracedTensor` |
 | Reuse the same computation many times | `GraphCompiler` + `GraphExecutor<B>` |
-| Keep no-AD code simple | `TypedTensor<T>` or `Tensor` |
+| Keep no-AD code simple | `TypedTensor<T, R>` or `Tensor` |

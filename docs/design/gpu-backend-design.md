@@ -107,16 +107,18 @@ Local GPU test runs should also set:
 
 ## Kernel Metadata Contract
 
-Runtime tensors are dense contiguous column-major tensors. The shape determines
+Owned runtime tensors are compact column-major tensors. The shape determines
 the logical layout; dense column-major strides are `[1, d_0, d_0 * d_1, ...]`.
-See [backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
+Arbitrary strides live on `TypedTensorView`/`TypedTensorViewMut` or
+`TensorLayout` metadata until an explicit same-placement canonicalization
+boundary. See
+[backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
 for the runtime layout contract.
 
-Host tensors with `MemoryOrder::RowMajor` are supported at the GPU transfer
-boundary by canonicalizing their owned host buffer to dense column-major during
-`upload_tensor()` / `upload_host_tensor()`. Device tensors themselves remain
-column-major. This keeps existing CubeCL kernels correct, including raw linear
-buffer kernels that do not consume tensor stride metadata.
+Host row-major import helpers canonicalize input into owned column-major host
+tensors before transfer. Device tensors themselves remain column-major. This
+keeps existing CubeCL kernels correct, including raw linear buffer kernels that
+do not consume tensor stride metadata.
 
 CubeCL kernels that perform logical tensor indexing must receive tensor
 metadata through CubeCL tensor metadata. There is no hidden row-major fallback
@@ -188,6 +190,10 @@ tenferro follows the PyTorch convention: no implicit CPU/GPU transfer at tensor
 API boundaries. Callers upload tensors before GPU backend operations and
 download results explicitly when host access is needed.
 
+Same-placement canonicalization is allowed: host views may be copied into host
+compact tensors, and CUDA views may be copied into CUDA compact tensors. It is
+not a transfer mechanism.
+
 ```rust,ignore
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use tenferro_tensor::{Tensor, TensorBackend};
@@ -212,7 +218,7 @@ Error behavior:
 | Case | Behavior |
 | --- | --- |
 | GPU op receives a CPU tensor | `Error::BackendFailure` with an upload hint |
-| CPU op receives a GPU tensor | panic, treated as a programming error |
+| CPU op receives a GPU tensor | `Error::BackendFailure` with a download hint for `Result` APIs |
 | `TypedTensor::host_data()` on a GPU buffer | panic with a diagnostic |
 
 ## Implemented Coverage

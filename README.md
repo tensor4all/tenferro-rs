@@ -6,9 +6,18 @@ general-purpose tensor workflows.
 It is inspired by JAX and PyTorch: eager and traced execution, automatic
 differentiation, GPU backends, and extensible operation families. At the same
 time, it is designed to remain usable in lightweight settings. If you only need
-an ndarray-like host tensor data model, `tenferro-tensor-core` provides tensor
-and view types without requiring AD, GPU runtimes, linalg backends, or provider
-linking.
+an ndarray-like host tensor data model, `tenferro-tensor-core` provides
+rank/layout metadata and host-only tensor adapters without requiring AD, GPU
+runtimes, linalg backends, or provider linking.
+
+Runtime tensors live in `tenferro-tensor` and downstream runtime crates.
+`TypedTensor<T, R = DynRank>` is the fixed-dtype tensor type; it may hold host
+storage or backend-owned storage depending on placement. The dtype-erased
+`Tensor` enum stays dynamic-rank. Owned runtime tensors are compact
+column-major, while arbitrary strides live on `TypedTensorView` and
+`TypedTensorViewMut`. Compact-only operations may canonicalize views within the
+same placement, but tenferro never silently transfers tensor payloads between
+CPU and GPU.
 
 Higher-level crates opt into execution, AD, CUDA, BLAS/LAPACK, and operation
 families explicitly. Standard operation families such as linalg, einsum, and

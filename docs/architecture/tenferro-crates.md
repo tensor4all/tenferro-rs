@@ -28,8 +28,8 @@ The design goal is to keep these concerns separate:
 
 | Crate | Role |
 |---|---|
-| `tenferro-tensor-core` | Host-only tensor data model, dtype tags, scalar trait, and metadata-only views |
-| `tenferro-tensor` | Dense runtime tensors, backend traits, CPU backend, and core execution kernels |
+| `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar trait, and host-only tensor adapters |
+| `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, backend traits, CPU backend, and core execution kernels |
 | `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, extension runtime registration, and extension cache storage |
 | `tenferro-ad` | Eager runtime, eager tensors, and traced AD extension traits |
@@ -60,15 +60,15 @@ Layer 3: tenferro-runtime
          first-class operation-family crates
 
 Layer 2: tenferro-tensor
-         dense runtime tensors, backend traits, CPU backend,
-         core execution kernels
+         runtime TypedTensor<T, R>/Tensor values, typed views,
+         backend traits, CPU backend, core execution kernels
 
          tenferro-gpu
          CubeCL/CUDA backend and GPU transfer helpers
 
 Layer 1: tenferro-tensor-core
-         host-only tensor data model, dtype tags, scalar trait,
-         metadata-only views
+         rank/layout metadata, dtype tags, scalar trait,
+         host-only tensor adapters
 
 Internal: tenferro-core-ops
           core primitive operation catalog
@@ -119,8 +119,11 @@ Rules:
 
 - `tenferro-tensor-core` must remain backend-independent and must not depend on
   GPU, BLAS/LAPACK provider crates, backend buffers, runtime caches, or AD.
-- `tenferro-tensor` owns concrete runtime tensor values and CPU execution, but
-  not CubeCL/CUDA implementation details.
+- `tenferro-tensor-core` must not expose public `TypedTensor` aliases.
+  Backend-capable typed tensors are owned by `tenferro-tensor`.
+- `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed
+  views, backend traits, and CPU execution, but not CubeCL/CUDA implementation
+  details.
 - `tenferro-gpu` owns GPU backend implementation and transfer helpers.
 - `tenferro-runtime` owns graph construction, compilation, execution, extension
   runtime registration, and extension cache ownership.

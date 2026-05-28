@@ -162,7 +162,7 @@ pub struct DLTensor {
     pub ndim: i32,
     pub dtype: DLDataType,
     pub shape: *mut i64,
-    pub strides: *mut i64,   // NULL = row-major contiguous
+    pub strides: *mut i64,   // tenferro exports explicit column-major strides
     pub byte_offset: u64,
 }
 

@@ -14,9 +14,15 @@ CPU execution, and backend-parametric concrete tensor kernels.
 
 ### Tensor Values
 
-- `Tensor` dynamic dtype wrapper for `F32`, `F64`, `I64`, `C32`, and `C64`.
-- `TypedTensor<T>` typed dense tensor payload.
-- Host buffers by default; CubeCL device buffers behind the `cubecl` feature.
+- `Tensor` dynamic dtype wrapper for `F32`, `F64`, `I32`, `I64`, `Bool`,
+  `C32`, and `C64`. It remains dynamic-rank.
+- `TypedTensor<T, R = DynRank>` typed runtime tensor payload with optional
+  compile-time rank metadata.
+- `TypedTensorView` and `TypedTensorViewMut` carry arbitrary strides, offsets,
+  and metadata-only layout transforms.
+- Owned tensors are compact column-major and may hold host buffers or
+  backend-owned buffers. Compact-only boundaries may canonicalize views within
+  the same placement, but they do not silently transfer between CPU and GPU.
 
 ### Backend Surface
 

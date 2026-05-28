@@ -230,22 +230,31 @@ pub enum Buffer<T> {
     Backend(Arc<dyn BackendBuffer<T>>),
 }
 
-/// Contiguous column-major typed tensor storage.
+/// Runtime typed tensor storage with compile-time scalar type and rank metadata.
+///
+/// Owned tensors are compact column-major. Arbitrary strides and metadata-only
+/// layout changes are represented by [`TypedTensorView`] and
+/// [`TypedTensorViewMut`]. The buffer may be host-backed or backend-backed;
+/// host-inspection methods do not download backend buffers implicitly.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensor::{Rank, TypedTensor};
+/// use tenferro_tensor::{Rank, Tensor, TypedTensor};
 ///
 /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 /// assert_eq!(t.shape(), &[2, 2]);
 ///
 /// let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]);
 /// assert_eq!(static_rank.rank(), 2);
+///
+/// let dynamic = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
+/// assert_eq!(dynamic.shape(), &[2, 2]);
 /// ```
 ///
 /// The `R` parameter stores rank metadata. It defaults to dynamic rank
 /// (`DynRank`); use [`Rank<N>`](Rank) for compile-time rank validation.
+/// The dtype-erased [`Tensor`] enum remains dynamic-rank.
 #[derive(Clone, Debug)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
     pub buffer: Buffer<T>,
@@ -711,9 +720,10 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
 
     /// Materialize this view as compact column-major host tensor storage.
     ///
-    /// This is an explicit copy boundary. Host placement metadata is preserved
-    /// on the materialized tensor. Backend buffers return an error instead of
-    /// being downloaded implicitly.
+    /// This is an explicit same-placement copy boundary. Host placement
+    /// metadata is preserved on the materialized tensor. Backend buffers return
+    /// an error here instead of being downloaded implicitly; backend-specific
+    /// compacting paths must stay on that backend.
     ///
     /// # Examples
     ///
@@ -2027,6 +2037,10 @@ impl TensorScalar for Complex32 {
 
 /// Dynamic tensor enum over the supported scalar types.
 ///
+/// The enum keeps dtype dynamic and rank dynamic. Use
+/// [`TypedTensor<T, R>`](TypedTensor) directly when the scalar type or rank
+/// should be represented in Rust's type system.
+///
 /// # Examples
 ///
 /// ```rust
@@ -2034,6 +2048,9 @@ impl TensorScalar for Complex32 {
 ///
 /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
 /// assert_eq!(t.shape(), &[2]);
+///
+/// let erased = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]);
+/// assert_eq!(erased.shape().len(), 2);
 /// ```
 #[derive(Clone, Debug)]
 pub enum Tensor {
@@ -3094,6 +3111,34 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             layout,
             placement,
         }
+    }
+
+    /// Convert this tensor into static rank metadata after validating its rank.
+    ///
+    /// The buffer and placement are preserved. This method changes only the
+    /// compile-time rank marker on the owned compact column-major tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    ///
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+    /// let ranked: TypedTensor<f64, Rank<2>> = tensor.try_into_rank::<2>()?;
+    /// assert_eq!(ranked.shape(), &[2, 3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_into_rank<const N: usize>(self) -> crate::Result<TypedTensor<T, Rank<N>>> {
+        let op = "TypedTensor::try_into_rank";
+        let shape = <Rank<N> as TensorRank>::shape_from_vec(self.shape().to_vec().into())
+            .map_err(|err| tensor_layout_error(op, err))?;
+        let layout =
+            TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))?;
+        Ok(TypedTensor {
+            buffer: self.buffer,
+            layout,
+            placement: self.placement,
+        })
     }
 
     /// Number of elements in the tensor.

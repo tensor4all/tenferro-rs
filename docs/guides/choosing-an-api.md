@@ -8,30 +8,35 @@ backend/device placement.
 
 ![Decision tree for choosing a tensor model](../assets/tensor-layer-decision.svg)
 
-For most non-AD projects, `TypedTensor<T>` or `Tensor` should come first. Move
-to `EagerTensor` when you want immediate execution under an `EagerRuntime`;
-make tensors tracked only when the workflow needs scalar-loss `backward()`.
-Move to `TracedTensor` when the workflow needs graph transforms.
+For most non-AD projects, `TypedTensor<T, R>` or `Tensor` should come first.
+Move to `EagerTensor` when you want immediate execution under an
+`EagerRuntime`; make tensors tracked only when the workflow needs scalar-loss
+`backward()`. Move to `TracedTensor` when the workflow needs graph transforms.
 
 Quick reference:
 
 | If your project needs | Start with |
 | --- | --- |
-| No autodiff, scalar type known at compile time | `TypedTensor<T>` |
+| No autodiff, scalar type known at compile time | `TypedTensor<T, R>` |
 | No autodiff, dtype selected at runtime | `Tensor` |
 | Immediate forward execution in one runtime, optionally scalar-loss `backward()` | `EagerTensor` + `EagerRuntime` |
 | JAX-like `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
 
 ## Data Layer
 
-`TypedTensor<T>` owns dense tensor data with a compile-time scalar type. It is
-the simplest layer for fixed-dtype no-AD code and for applications that want
-ordinary Rust type checking around scalar values.
+`TypedTensor<T, R = DynRank>` owns runtime tensor data with a compile-time
+scalar type and optional compile-time rank marker. It can be host-backed or
+backend-backed, and owned values are compact column-major. Arbitrary strides
+belong to `TypedTensorView` and `TypedTensorViewMut`.
 
 `Tensor` owns the same kind of dense data, but wraps supported scalar types in
-a runtime dtype enum. Use it when dtype must be selected dynamically, when you
-want the broad concrete tensor operation surface, or when you need to pass CPU
-or CUDA tensors through backend dispatch.
+a runtime dtype enum and remains dynamic-rank. Use it when dtype must be
+selected dynamically, when you want the broad concrete tensor operation
+surface, or when you need to pass CPU or CUDA tensors through backend dispatch.
+
+`tenferro-tensor-core` is lower-level: it owns rank/layout metadata and
+host-only adapters such as `HostTensor<T>`, not the backend-capable
+`TypedTensor<T, R>`.
 
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.
@@ -64,6 +69,9 @@ eager, and traced workflows. CPU/GPU transfer is explicit:
 - keep intermediate tensors on CUDA while doing CUDA work,
 - download only when the host must inspect values,
 - do not expect an unsupported CUDA operation to silently fall back to CPU.
+
+Compact-only operations may canonicalize views within the same placement.
+They do not silently upload CPU tensors or download CUDA tensors.
 
 The current CUDA operation and dtype table is in
 [Devices and GPU](devices-and-gpu.md).

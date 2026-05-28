@@ -3,11 +3,13 @@
 //! `tenferro-tensor-core` owns backend-independent tensor metadata and
 //! host-resident contiguous tensor storage. It does not own execution backends,
 //! backend buffers, GPU handles, provider selection, or materializing kernels.
+//! Runtime/backend-capable `TypedTensor<T, R>` lives in `tenferro-tensor`.
+//! This crate exposes rank/layout metadata plus host-only tensor adapters.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_tensor_core::{SliceSpec, HostTensor};
+//! use tenferro_tensor_core::{HostTensor, Rank, SliceSpec, TensorLayout};
 //!
 //! let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 //! let view = tensor
@@ -19,6 +21,10 @@
 //!
 //! assert_eq!(view.shape(), &[2, 2]);
 //! assert_eq!(view.as_slice()?, &[3.0, 4.0, 5.0, 6.0]);
+//!
+//! let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
+//! let transposed = layout.transpose_view([1, 0])?;
+//! assert_eq!(transposed.shape(), &[3, 2]);
 //! # Ok::<(), tenferro_tensor_core::Error>(())
 //! ```
 
@@ -224,9 +230,9 @@ impl_scalar!(Complex64, f64, DType::C64, C64);
 
 /// Explicit slice descriptor.
 ///
-/// A zero step is invalid. Individual slice APIs may impose stricter sign
-/// restrictions; for example, borrowed host view slices currently require a
-/// positive step, while layout metadata slices support negative steps.
+/// A zero step is invalid. Layout metadata APIs support signed steps when
+/// reachable-range validation proves the view stays inside the backing
+/// allocation.
 ///
 /// # Examples
 ///
