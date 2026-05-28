@@ -43,6 +43,19 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &source[start_idx..end_idx]
 }
 
+fn assert_before(section: &str, earlier: &str, later: &str) {
+    let earlier_idx = section
+        .find(earlier)
+        .unwrap_or_else(|| panic!("source section should contain {earlier:?}"));
+    let later_idx = section
+        .find(later)
+        .unwrap_or_else(|| panic!("source section should contain {later:?}"));
+    assert!(
+        earlier_idx < later_idx,
+        "{earlier:?} should appear before {later:?}"
+    );
+}
+
 #[test]
 fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
     for path in [
@@ -121,4 +134,77 @@ fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
             "CubeCL svd_view should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
+}
+
+#[test]
+fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs() {
+    let source = linalg_source();
+
+    for (start, end, residency_check) in [
+        (
+            "fn cholesky_typed",
+            "fn triangular_solve_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn lu_typed",
+            "fn svd_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn svd_typed",
+            "fn qr_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn qr_typed",
+            "fn eigh_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn eigh_typed",
+            "fn validate_nonsingular_gpu",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+    ] {
+        let section = source_section(&source, start, end);
+        assert_before(section, residency_check, "if has_zero_dim");
+    }
+
+    let triangular = source_section(&source, "fn triangular_solve_typed", "fn lu_typed");
+    assert_before(
+        triangular,
+        "ensure_cubecl_resident_typed(OP, a)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        triangular,
+        "ensure_cubecl_resident_typed(OP, b)?;",
+        "if has_zero_dim",
+    );
+
+    let solve = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
+    assert_before(
+        solve,
+        "ensure_supported_linalg_pair(OP, a, b)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        solve,
+        "ensure_cubecl_resident_tensor(OP, a)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        solve,
+        "ensure_cubecl_resident_tensor(OP, b)?;",
+        "if has_zero_dim",
+    );
+    assert!(
+        solve.contains("zero_like_linalg_device_tensor(backend.runtime(), b, OP)"),
+        "GPU solve zero-dim fast path should allocate the result on the GPU"
+    );
+    assert!(
+        !source.contains("fn zeros_like_tensor"),
+        "GPU linalg should not build host zero tensors for device fast paths"
+    );
 }

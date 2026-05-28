@@ -72,6 +72,40 @@ fn unsupported_linalg_dtype(op: &'static str, input: &Tensor) -> Error {
     Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype()))
 }
 
+fn ensure_supported_linalg_pair(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> Result<()> {
+    if lhs.dtype() != rhs.dtype() {
+        return Err(Error::DTypeMismatch {
+            op,
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        });
+    }
+    match lhs {
+        Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(unsupported_linalg_dtype(op, lhs)),
+    }
+}
+
+fn ensure_cubecl_resident_tensor(op: &'static str, input: &Tensor) -> Result<()> {
+    match input {
+        Tensor::F32(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::F64(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::I32(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::I64(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::Bool(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::C32(t) => ensure_cubecl_resident_typed(op, t),
+        Tensor::C64(t) => ensure_cubecl_resident_typed(op, t),
+    }
+}
+
+fn ensure_cubecl_resident_typed<T: 'static>(
+    op: &'static str,
+    input: &TypedTensor<T>,
+) -> Result<()> {
+    cubecl_buffer(input, op)?;
+    Ok(())
+}
+
 fn linalg_handles(
     backend: &CubeclBackend,
 ) -> Result<CudaExtensionCacheGuard<'_, CudaLinalgHandles>> {
@@ -254,8 +288,14 @@ pub(super) fn eig(_backend: &mut CubeclBackend, _input: &Tensor) -> Result<Vec<T
 }
 
 pub(super) fn solve(backend: &mut CubeclBackend, a: &Tensor, b: &Tensor) -> Result<Tensor> {
+    const OP: &str = "solve";
+
+    backend.runtime().set_current_cuda_context(OP)?;
+    ensure_supported_linalg_pair(OP, a, b)?;
+    ensure_cubecl_resident_tensor(OP, a)?;
+    ensure_cubecl_resident_tensor(OP, b)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return Ok(zeros_like_tensor(b));
+        return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
     }
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -290,6 +330,7 @@ where
     const OP: &str = "cholesky";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     if has_zero_dim(input.shape()) {
         return Ok(alloc_output(backend.runtime(), input.shape()));
@@ -368,6 +409,8 @@ where
     const OP: &str = "triangular_solve";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, a)?;
+    ensure_cubecl_resident_typed(OP, b)?;
     let n = square_matrix_dim(OP, a.shape())?;
     validate_triangular_rhs(OP, a.shape(), b.shape(), left_side)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
@@ -451,6 +494,7 @@ where
     const OP: &str = "lu";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
@@ -524,6 +568,7 @@ where
     const OP: &str = "svd";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     let batch_shape = &input.shape()[2..];
@@ -619,6 +664,7 @@ where
     const OP: &str = "qr";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     let batch_shape = &input.shape()[2..];
@@ -729,6 +775,7 @@ where
     const OP: &str = "eigh";
 
     backend.runtime().set_current_cuda_context(OP)?;
+    ensure_cubecl_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
@@ -1161,18 +1208,19 @@ unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_voi
     base.cast::<T>().add(offset).cast()
 }
 
-fn zeros_like_tensor(input: &Tensor) -> Tensor {
+fn zero_like_linalg_device_tensor(
+    rt: &CubeclRuntime,
+    input: &Tensor,
+    op: &'static str,
+) -> Result<Tensor> {
     match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape().to_vec(),
-            vec![false; t.n_elements()],
-        )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::F32(t) => Ok(Tensor::F32(alloc_output(rt, t.shape()))),
+        Tensor::F64(t) => Ok(Tensor::F64(alloc_output(rt, t.shape()))),
+        Tensor::C32(t) => Ok(Tensor::C32(alloc_output(rt, t.shape()))),
+        Tensor::C64(t) => Ok(Tensor::C64(alloc_output(rt, t.shape()))),
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
+            Err(unsupported_linalg_dtype(op, input))
+        }
     }
 }
 
