@@ -661,7 +661,7 @@ pub(crate) fn dot_general_faer<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_cached(buffers, cache, None, ctx, lhs, rhs, config)
 }
@@ -677,7 +677,7 @@ pub(crate) fn dot_general_faer_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
@@ -697,7 +697,7 @@ pub(crate) fn dot_general_faer_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, None, ctx, lhs, rhs, config, lhs_conj, rhs_conj,
@@ -717,7 +717,7 @@ pub(crate) fn dot_general_faer_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     if let Some(result) = typed_faer_gemm(
         buffers,
@@ -887,7 +887,7 @@ fn typed_faer_gemm<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
         return Ok(None);

@@ -117,7 +117,7 @@ fn copy_view_to_array<T: Copy + Clone>(
 
 fn zeroed_tensor_from_pool<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> TypedTensor<T>
 where
-    T: Zero + Clone + PoolScalar,
+    T: Zero + Clone + PoolScalar + 'static,
 {
     filled_tensor_from_pool(buffers, shape, T::zero())
 }
@@ -128,7 +128,7 @@ fn filled_tensor_from_pool<T>(
     fill: T,
 ) -> TypedTensor<T>
 where
-    T: Copy + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar + 'static,
 {
     let len = shape.iter().product();
     // SAFETY: every element is initialized with `fill` before returning.
@@ -143,7 +143,7 @@ fn clone_host_tensor_from_pool<T>(
     tensor: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + PoolScalar,
+    T: Copy + PoolScalar + 'static,
 {
     let input = match &tensor.buffer {
         crate::Buffer::Host(data) => data,
@@ -367,7 +367,7 @@ pub(crate) fn typed_transpose_with_pool<T>(
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar + 'static,
 {
     validate_permutation("transpose", perm, tensor.shape().len())?;
     let src = host_view("transpose", tensor)?;
@@ -379,7 +379,7 @@ where
     copy_view_to_array("transpose", out, &permuted)
 }
 
-pub fn typed_reshape<T: Clone>(
+pub fn typed_reshape<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -547,7 +547,7 @@ pub(crate) fn typed_embed_diagonal_with_pool<T>(
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Zero + Clone + PoolScalar + 'static,
 {
     typed_embed_diagonal_impl(tensor, axis_a, axis_b, |shape| {
         zeroed_tensor_from_pool(buffers, shape)
@@ -617,7 +617,7 @@ pub(crate) fn typed_tril_with_pool<T>(
     k: i64,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Zero + Clone + PoolScalar + 'static,
 {
     typed_triangular_mask_with_fill_pool(buffers, tensor, k, false, T::zero())
 }
@@ -635,7 +635,7 @@ pub(crate) fn typed_triu_with_pool<T>(
     k: i64,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Zero + Clone + PoolScalar,
+    T: Copy + Zero + Clone + PoolScalar + 'static,
 {
     typed_triangular_mask_with_fill_pool(buffers, tensor, k, true, T::zero())
 }
@@ -702,7 +702,7 @@ fn typed_triangular_mask_with_fill_pool<T>(
     fill: T,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar + 'static,
 {
     if tensor.shape().len() < 2 {
         return Err(crate::Error::RankMismatch {

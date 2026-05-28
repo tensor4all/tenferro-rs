@@ -16,9 +16,10 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
 }
 
 fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
+    let len = shape.iter().product();
     Tensor::F64(TypedTensor::from_buffer_col_major(
         shape,
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, len))),
         Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {

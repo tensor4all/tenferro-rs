@@ -6,7 +6,7 @@ use num_complex::{Complex32, Complex64};
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ConjElem, DType, DeviceId, DeviceKind,
     GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec, StridedTensorView,
-    StridedTensorViewMut, Tensor, TensorLayout, TensorRead, TensorScalar, TensorView,
+    StridedTensorViewMut, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorView,
     TypedStridedTensorView, TypedStridedTensorViewMut, TypedTensor, TypedTensorView,
 };
 use crate::Error;
@@ -137,6 +137,38 @@ fn typed_tensor_owned_layout_is_always_compact() {
 }
 
 #[test]
+fn typed_tensor_backend_buffer_layout_length_mismatch_panics() {
+    let mismatched = catch_unwind(AssertUnwindSafe(|| {
+        TypedTensor::<f64>::from_buffer_col_major(
+            vec![1],
+            Buffer::Backend(Arc::new(BufferHandle::<f64>::new(9))),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: Some(DeviceId {
+                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        );
+    }));
+
+    assert!(mismatched.is_err());
+}
+
+#[test]
+fn typed_tensor_static_rank_shape_conversion_reports_rank_mismatch() {
+    let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        tenferro_tensor_core::Error::RankMismatch {
+            expected: 2,
+            actual: 3
+        }
+    ));
+}
+
+#[test]
 fn tensor_owned_export_returns_column_major_buffer() {
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let ptr = data.as_ptr();
@@ -159,12 +191,13 @@ fn tensor_owned_export_reports_dtype_mismatch() {
 
 #[test]
 fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
-    let handle: Arc<dyn crate::types::BackendBuffer<f64>> = Arc::new(BufferHandle::<f64>::new(42));
+    let handle: Arc<dyn crate::types::BackendBuffer<f64>> =
+        Arc::new(BufferHandle::<f64>::new_with_len(42, 2));
 
     assert_eq!(format!("{handle:?}"), "BufferHandle { id: 42 }");
     assert_eq!(handle.backend_family(), "opaque");
-    assert_eq!(handle.len(), 0);
-    assert!(handle.is_empty());
+    assert_eq!(handle.len(), 2);
+    assert!(!handle.is_empty());
     assert!(handle.as_any().is::<BufferHandle<f64>>());
 
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
@@ -380,7 +413,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 1))),
         placement.clone(),
     );
     assert_eq!(tensor.placement.device.as_ref().unwrap().ordinal, 0);
@@ -390,7 +423,7 @@ fn backend_buffers_panic_when_host_access_is_requested() {
 
     let mut mutable_tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
-        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(8))),
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 1))),
         placement,
     );
     let host_data_mut = catch_unwind(AssertUnwindSafe(|| {

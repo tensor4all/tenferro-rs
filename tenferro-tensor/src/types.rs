@@ -109,6 +109,10 @@ pub struct Placement {
 
 /// Backend-owned buffer handle.
 ///
+/// `BufferHandle::new` creates an empty opaque handle. Use
+/// [`BufferHandle::new_with_len`] when test or adapter code needs to model a
+/// non-empty backend allocation.
+///
 /// # Examples
 ///
 /// ```rust
@@ -119,6 +123,7 @@ pub struct Placement {
 #[derive(Clone)]
 pub struct BufferHandle<T> {
     pub id: u64,
+    len: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -140,10 +145,27 @@ impl<T> BufferHandle<T> {
     ///
     /// let handle = BufferHandle::<f64>::new(1);
     /// assert_eq!(handle.id, 1);
+    /// assert_eq!(tenferro_tensor::BackendBuffer::len(&handle), 0);
     /// ```
     pub fn new(id: u64) -> Self {
+        Self::new_with_len(id, 0)
+    }
+
+    /// Create a new backend buffer handle with a logical element count.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendBuffer, BufferHandle};
+    ///
+    /// let handle = BufferHandle::<f64>::new_with_len(1, 4);
+    /// assert_eq!(handle.id, 1);
+    /// assert_eq!(BackendBuffer::len(&handle), 4);
+    /// ```
+    pub fn new_with_len(id: u64, len: usize) -> Self {
         Self {
             id,
+            len,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -161,14 +183,15 @@ impl<T> BufferHandle<T> {
 /// use std::sync::Arc;
 /// use tenferro_tensor::{BackendBuffer, BufferHandle};
 ///
-/// let buffer: Arc<dyn BackendBuffer<f64>> = Arc::new(BufferHandle::<f64>::new(7));
+/// let buffer: Arc<dyn BackendBuffer<f64>> = Arc::new(BufferHandle::<f64>::new_with_len(7, 2));
 /// assert_eq!(buffer.backend_family(), "opaque");
+/// assert_eq!(buffer.len(), 2);
 /// ```
 pub trait BackendBuffer<T>: Debug + Send + Sync + 'static {
     /// Stable backend family identifier.
     fn backend_family(&self) -> &'static str;
 
-    /// Number of logical elements in the backend allocation, when known.
+    /// Number of logical elements in the backend allocation.
     fn len(&self) -> usize;
 
     /// Returns `true` when the backend allocation is empty.
@@ -186,7 +209,7 @@ impl<T: Send + Sync + 'static> BackendBuffer<T> for BufferHandle<T> {
     }
 
     fn len(&self) -> usize {
-        0
+        self.len
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -214,11 +237,17 @@ pub enum Buffer<T> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensor::TypedTensor;
+/// use tenferro_tensor::{Rank, TypedTensor};
 ///
 /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
 /// assert_eq!(t.shape(), &[2, 2]);
+///
+/// let static_rank = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0; 4]);
+/// assert_eq!(static_rank.rank(), 2);
 /// ```
+///
+/// The `R` parameter stores rank metadata. It defaults to dynamic rank
+/// (`DynRank`); use [`Rank<N>`](Rank) for compile-time rank validation.
 #[derive(Clone, Debug)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
     pub buffer: Buffer<T>,
@@ -1143,11 +1172,16 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
         shape: impl Into<R::Shape>,
         buffer: Buffer<T>,
         placement: Placement,
-    ) -> Self {
+    ) -> Self
+    where
+        T: 'static,
+    {
         let layout = compact_layout(shape, "from_buffer_col_major");
-        if let Buffer::Host(data) = &buffer {
-            checked_shape_len(layout.shape(), data.len(), "from_buffer_col_major");
-        }
+        let len = match &buffer {
+            Buffer::Host(data) => data.len(),
+            Buffer::Backend(data) => data.len(),
+        };
+        checked_shape_len(layout.shape(), len, "from_buffer_col_major");
         Self {
             buffer,
             layout,
