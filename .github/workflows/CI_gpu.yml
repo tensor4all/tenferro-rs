@@ -62,7 +62,6 @@ jobs:
           set -euo pipefail
           cargo nextest archive \
             --release \
-            --locked \
             --archive-file "${CUDA_ARCHIVE}" \
             -p tenferro-gpu \
             -p tenferro-ad \
