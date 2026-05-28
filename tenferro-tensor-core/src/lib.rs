@@ -974,7 +974,7 @@ impl<'a, T> HostTensorView<'a, T> {
         )
     }
 
-    /// Return a metadata-only axis permutation of this view.
+    /// Return a metadata-only transposed view with axes in the requested order.
     ///
     /// # Examples
     ///
@@ -982,12 +982,12 @@ impl<'a, T> HostTensorView<'a, T> {
     /// use tenferro_tensor_core::HostTensor;
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
-    /// let view = tensor.as_view().permute_view(&[1, 0])?;
+    /// let view = tensor.as_view().transpose_view(&[1, 0])?;
     /// assert_eq!(view.shape(), &[3, 2]);
     /// assert_eq!(view.strides(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn permute_view(&self, axes: &[usize]) -> Result<Self> {
+    pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
         validate_permutation(self.rank(), axes)?;
         let shape = axes
             .iter()
@@ -1394,7 +1394,7 @@ impl<'a> TensorView<'a> {
         Ok(impl_dynamic_view!(self, reshape_view(shape) => view))
     }
 
-    /// Return a metadata-only axis permutation of this dynamic view.
+    /// Return a metadata-only transposed dynamic view with axes in the requested order.
     ///
     /// # Examples
     ///
@@ -1402,11 +1402,11 @@ impl<'a> TensorView<'a> {
     /// use tenferro_tensor_core::Tensor;
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 2], vec![1_i64, 2])?;
-    /// assert_eq!(tensor.as_view().permute_view(&[1, 0])?.shape(), &[2, 1]);
+    /// assert_eq!(tensor.as_view().transpose_view(&[1, 0])?.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn permute_view(&self, axes: &[usize]) -> Result<Self> {
-        Ok(impl_dynamic_view!(self, permute_view(axes) => view))
+    pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
+        Ok(impl_dynamic_view!(self, transpose_view(axes) => view))
     }
 
     /// Return a metadata-only positive-step slice of this dynamic view.

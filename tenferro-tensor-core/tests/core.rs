@@ -338,14 +338,14 @@ fn reshape_view_requires_compact_col_major_but_allows_nonzero_offset() {
 }
 
 #[test]
-fn permute_view_only_reorders_metadata() {
+fn transpose_view_only_reorders_metadata() {
     let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i64; 6]).unwrap();
-    let view = tensor.as_view().permute_view(&[1, 0]).unwrap();
+    let view = tensor.as_view().transpose_view(&[1, 0]).unwrap();
     assert_eq!(view.shape(), &[3, 2]);
     assert_eq!(view.strides(), &[2, 1]);
     assert_eq!(view.offset(), 0);
     assert!(matches!(
-        tensor.as_view().permute_view(&[0, 0]).unwrap_err(),
+        tensor.as_view().transpose_view(&[0, 0]).unwrap_err(),
         Error::DuplicateAxis { axis: 0 }
     ));
 }
@@ -584,7 +584,7 @@ fn dynamic_row_major_and_view_metadata_ops_cover_all_variants() {
     assert_eq!(tensor.shape(), &[1, 2]);
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[10, 20]);
 
-    let permuted = tensor.as_view().permute_view(&[1, 0]).unwrap();
+    let permuted = tensor.as_view().transpose_view(&[1, 0]).unwrap();
     assert_eq!(permuted.shape(), &[2, 1]);
 
     let sliced = tensor
@@ -620,14 +620,14 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
     let view = tensor.as_view();
     assert!(view.is_contiguous_col_major());
     assert!(matches!(
-        view.permute_view(&[0]).unwrap_err(),
+        view.transpose_view(&[0]).unwrap_err(),
         Error::InvalidPermutationLength {
             expected: 2,
             actual: 1
         }
     ));
     assert!(matches!(
-        view.permute_view(&[0, 2]).unwrap_err(),
+        view.transpose_view(&[0, 2]).unwrap_err(),
         Error::AxisOutOfBounds { axis: 2, rank: 2 }
     ));
     assert!(matches!(

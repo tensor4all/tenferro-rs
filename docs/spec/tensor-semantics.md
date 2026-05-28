@@ -52,7 +52,7 @@ Core views describe shape, signed strides, and an offset into borrowed host
 storage. The view operations are metadata-only:
 
 - `reshape_view`
-- `permute_view`
+- `transpose_view`
 - `slice_view`
 
 Views may be non-contiguous. `as_slice()` succeeds only when the view is

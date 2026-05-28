@@ -6,8 +6,8 @@ use num_complex::{Complex32, Complex64};
 use crate::types::{
     col_major_strides, flat_to_multi, materialize_typed_view_col_major, Buffer, BufferHandle,
     ConjElem, DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank,
-    StridedSliceSpec, StridedTensorView, StridedTensorViewMut, Tensor, TensorLayout, TensorRank,
-    TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorView,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use crate::Error;
 
@@ -765,12 +765,12 @@ fn tensor_shape_and_dtype_cover_all_variants() {
 fn typed_tensor_view_validates_shape_and_exposes_slice() {
     let shape = [2, 2];
     let data = [1.0_f64, 2.0, 3.0, 4.0];
-    let view = TypedTensorView::new(&shape, &data).unwrap();
+    let view = TypedTensorView::from_col_major(&shape, &data).unwrap();
 
     assert_eq!(view.shape(), &[2, 2]);
     assert_eq!(view.as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let err = TypedTensorView::new(&shape, &data[..3]).unwrap_err();
+    let err = TypedTensorView::from_col_major(&shape, &data[..3]).unwrap_err();
     assert!(matches!(err, Error::InvalidConfig { .. }));
 }
 
@@ -828,7 +828,7 @@ fn strided_tensor_view_materializes_sliced_host_layouts() {
         &[1, 4, 2, 5, 3, 6]
     );
 
-    let transposed = view.try_permute_axes(&[1, 0]).unwrap();
+    let transposed = view.transpose_view([1, 0]).unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(
         materialize_typed_view_col_major(&transposed, "test")
@@ -863,20 +863,22 @@ fn strided_tensor_view_materializes_sliced_host_layouts() {
 }
 
 #[test]
-fn dynamic_strided_tensor_view_covers_i32_and_bool() {
+fn tensor_view_covers_strided_i32_and_bool() {
     let i32_data = [1_i32, 2, 3, 4];
-    let i32_view = StridedTensorView::i32(&[2, 2], &[2, 1], 0, &i32_data).unwrap();
+    let i32_view =
+        TensorView::I32(TypedTensorView::from_slice([2, 2], [2, 1], 0, &i32_data).unwrap());
     assert_eq!(i32_view.dtype(), DType::I32);
     assert_eq!(
-        i32_view.to_tensor().unwrap().as_slice::<i32>().unwrap(),
+        i32_view.to_tensor().as_slice::<i32>().unwrap(),
         &[1, 3, 2, 4]
     );
 
     let bool_data = [false, true, true];
-    let bool_view = StridedTensorView::bool(&[3], &[-1], 2, &bool_data).unwrap();
+    let bool_view =
+        TensorView::Bool(TypedTensorView::from_slice([3], [-1], 2, &bool_data).unwrap());
     assert_eq!(bool_view.dtype(), DType::Bool);
     assert_eq!(
-        bool_view.to_tensor().unwrap().as_slice::<bool>().unwrap(),
+        bool_view.to_tensor().as_slice::<bool>().unwrap(),
         &[true, true, false]
     );
 }
@@ -894,9 +896,10 @@ fn strided_tensor_view_mut_updates_sliced_host_layouts() {
     assert_eq!(view.get(&[1, 2]), Some(&60));
 
     {
-        let mut transposed = view.try_permute_axes(&[1, 0]).unwrap();
+        let mut transposed = view.transpose_view([1, 0]).unwrap();
         *transposed.get_mut(&[2, 1]).unwrap() = 600;
     }
+    let mut view = TypedTensorViewMut::from_slice(&[2, 3], &[3, 1], 0, &mut row_major).unwrap();
     assert_eq!(view.get(&[1, 2]), Some(&600));
 
     {
@@ -966,36 +969,32 @@ fn strided_tensor_view_mut_multi_slice_returns_option() {
 }
 
 #[test]
-fn dynamic_strided_tensor_view_mut_covers_i32_and_bool() {
+fn typed_tensor_view_mut_covers_i32_and_bool_strided_layouts() {
     let mut i32_data = [1_i32, 2, 3, 4];
-    let mut i32_view = StridedTensorViewMut::i32(&[2, 2], &[2, 1], 0, &mut i32_data).unwrap();
-    assert_eq!(i32_view.dtype(), DType::I32);
-    match &mut i32_view {
-        StridedTensorViewMut::I32(view) => *view.get_mut(&[1, 1]).unwrap() = 40,
-        _ => unreachable!(),
-    }
+    let mut i32_view = TypedTensorViewMut::from_slice([2, 2], [2, 1], 0, &mut i32_data).unwrap();
+    *i32_view.get_mut(&[1, 1]).unwrap() = 40;
     assert_eq!(
-        i32_view.to_tensor().unwrap().as_slice::<i32>().unwrap(),
+        materialize_typed_view_col_major(&i32_view.as_read_only(), "test")
+            .unwrap()
+            .as_slice(),
         &[1, 3, 2, 40]
     );
 
     let mut bool_data = [false, true, true];
-    let mut bool_view = StridedTensorViewMut::bool(&[3], &[-1], 2, &mut bool_data).unwrap();
-    assert_eq!(bool_view.dtype(), DType::Bool);
-    match &mut bool_view {
-        StridedTensorViewMut::Bool(view) => *view.get_mut(&[2]).unwrap() = true,
-        _ => unreachable!(),
-    }
+    let mut bool_view = TypedTensorViewMut::from_slice([3], [-1], 2, &mut bool_data).unwrap();
+    *bool_view.get_mut(&[2]).unwrap() = true;
     assert_eq!(
-        bool_view.to_tensor().unwrap().as_slice::<bool>().unwrap(),
+        materialize_typed_view_col_major(&bool_view.as_read_only(), "test")
+            .unwrap()
+            .as_slice(),
         &[true, true, true]
     );
 }
 
 #[test]
-fn dynamic_strided_tensor_view_mut_multi_slice_returns_option() {
+fn typed_tensor_view_mut_multi_slice_returns_option_for_strided_layouts() {
     let mut data = [1_i32, 2, 3, 4];
-    let mut view = StridedTensorViewMut::i32(&[4], &[1], 0, &mut data).unwrap();
+    let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
     {
         let (left, right) = view
             .try_multi_slice_mut(
@@ -1071,15 +1070,15 @@ fn strided_tensor_view_slice_permute_and_reshape_cover_boundaries() {
     let view = TypedTensorView::from_slice(&[2, 3], &[3, 1], 0, &data).unwrap();
 
     assert!(matches!(
-        view.try_permute_axes(&[0]),
+        view.transpose_view([0]),
         Err(Error::RankMismatch { .. })
     ));
     assert!(matches!(
-        view.try_permute_axes(&[2, 0]),
+        view.transpose_view([2, 0]),
         Err(Error::AxisOutOfBounds { .. })
     ));
     assert!(matches!(
-        view.try_permute_axes(&[0, 0]),
+        view.transpose_view([0, 0]),
         Err(Error::DuplicateAxis { .. })
     ));
 

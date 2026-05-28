@@ -11,7 +11,7 @@ mod accessors;
 mod shape_packing;
 mod strided_view;
 
-pub use strided_view::{StridedSliceSpec, StridedTensorView, StridedTensorViewMut};
+pub use strided_view::StridedSliceSpec;
 
 /// Memory location for tensor storage.
 ///
@@ -394,22 +394,6 @@ pub struct TypedTensorView<'a, T, R: TensorRank = DynRank> {
 }
 
 impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
-    /// Create a borrowed compact column-major host view.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensorView;
-    ///
-    /// let data = [1_i32, 2];
-    /// let view = TypedTensorView::new(&[2], &data)?;
-    /// assert_eq!(view.as_slice()?, &[1, 2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn new(shape: &'a [usize], data: &'a [T]) -> crate::Result<Self> {
-        Self::from_col_major(shape, data)
-    }
-
     /// Create a borrowed dynamic-rank view over compact column-major host data.
     ///
     /// # Examples
@@ -780,22 +764,6 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             layout,
             placement: self.placement.clone(),
         })
-    }
-
-    /// Explicit alias for [`TypedTensorView::transpose_view`].
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{Rank, TypedTensorView};
-    ///
-    /// let data = [1_i32, 2, 3, 4];
-    /// let view = TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &data)?;
-    /// assert_eq!(view.try_permute_axes(&[1, 0])?.strides(), &[2, 1]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_permute_axes(&self, axes: &[usize]) -> crate::Result<Self> {
-        self.transpose_view(axes)
     }
 
     /// Return a metadata-only slice using one [`StridedSliceSpec`] per axis.
@@ -1363,9 +1331,6 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
 
     /// Consume this mutable view and return a metadata-only axis permutation.
     ///
-    /// Use [`TypedTensorViewMut::try_permute_axes`] when the original mutable
-    /// view needs to be reborrowed instead of consumed.
-    ///
     /// # Examples
     ///
     /// ```rust
@@ -1400,52 +1365,6 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             }),
             TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
                 buffer: TensorBufferRefMut::Backend(buffer),
-                layout,
-                placement,
-            }),
-        }
-    }
-
-    /// Borrow this mutable view and return a metadata-only axis permutation.
-    ///
-    /// Unlike [`TypedTensorViewMut::transpose_view`], this method reborrows
-    /// `self` so the original view remains usable after the returned view is
-    /// dropped.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{Rank, TypedTensorViewMut};
-    ///
-    /// let mut data = [1_i32, 2, 3, 4];
-    /// let mut view = TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &mut data)?;
-    /// {
-    ///     let transposed = view.try_permute_axes(&[1, 0])?;
-    ///     assert_eq!(transposed.shape(), &[2, 2]);
-    /// }
-    /// assert_eq!(view.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn try_permute_axes(
-        &mut self,
-        axes: &[usize],
-    ) -> crate::Result<TypedTensorViewMut<'_, T, R>> {
-        let layout = self
-            .layout
-            .transpose_view(axes)
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
-        layout
-            .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::transpose_view", err))?;
-        let placement = self.placement.clone();
-        match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Host(&mut *data),
-                layout,
-                placement,
-            }),
-            TensorBufferRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
-                buffer: TensorBufferRefMut::Backend(Arc::clone(buffer)),
                 layout,
                 placement,
             }),
@@ -2216,31 +2135,31 @@ impl From<TypedTensor<Complex<f32>>> for Tensor {
 
 impl<'a> TensorView<'a> {
     pub fn f32(shape: &'a [usize], data: &'a [f32]) -> crate::Result<Self> {
-        Ok(Self::F32(TypedTensorView::new(shape, data)?))
+        Ok(Self::F32(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn f64(shape: &'a [usize], data: &'a [f64]) -> crate::Result<Self> {
-        Ok(Self::F64(TypedTensorView::new(shape, data)?))
+        Ok(Self::F64(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn i64(shape: &'a [usize], data: &'a [i64]) -> crate::Result<Self> {
-        Ok(Self::I64(TypedTensorView::new(shape, data)?))
+        Ok(Self::I64(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn i32(shape: &'a [usize], data: &'a [i32]) -> crate::Result<Self> {
-        Ok(Self::I32(TypedTensorView::new(shape, data)?))
+        Ok(Self::I32(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn bool(shape: &'a [usize], data: &'a [bool]) -> crate::Result<Self> {
-        Ok(Self::Bool(TypedTensorView::new(shape, data)?))
+        Ok(Self::Bool(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
-        Ok(Self::C32(TypedTensorView::new(shape, data)?))
+        Ok(Self::C32(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn c64(shape: &'a [usize], data: &'a [Complex64]) -> crate::Result<Self> {
-        Ok(Self::C64(TypedTensorView::new(shape, data)?))
+        Ok(Self::C64(TypedTensorView::from_col_major(shape, data)?))
     }
 
     pub fn dtype(&self) -> DType {
