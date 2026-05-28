@@ -103,6 +103,29 @@ fn slice_view_rejects_zero_step_with_exact_error() {
 }
 
 #[test]
+fn slice_view_rejects_invalid_normalized_bounds_with_exact_error() {
+    let layout = TensorLayout::<Rank<1>>::compact([4]).unwrap();
+    let err = layout
+        .slice_view(
+            [SliceSpec {
+                start: 3,
+                end: -2,
+                step: -1,
+            }],
+            4,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidSliceBounds {
+            start: 3,
+            end: -2,
+            axis_len: 4
+        }
+    ));
+}
+
+#[test]
 fn broadcast_in_dim_view_uses_zero_strides_for_broadcast_axes() {
     let layout = TensorLayout::<Rank<1>>::compact([3]).unwrap();
     let broadcast = layout

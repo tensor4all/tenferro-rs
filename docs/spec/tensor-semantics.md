@@ -40,7 +40,7 @@ Current public concepts:
 - `TypedTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
 - `TensorRef<'a>`: borrowed dynamic tensor reference.
 - `ShapeVec` and `StrideVec`: compact shape and signed-stride vectors.
-- `SliceSpec`: explicit positive-step slice descriptor.
+- `SliceSpec`: explicit slice descriptor. A zero step is invalid.
 
 Core tensors are host-resident and backend-independent. They have no device
 placement, no backend-owned buffers, no GPU handles, and no execution methods.
@@ -55,9 +55,11 @@ storage. The view operations are metadata-only:
 - `slice_view`
 
 Views may be non-contiguous. `as_slice()` succeeds only when the view is
-slice-contiguous for the borrowed storage. For v1, `SliceSpec` requires a
-positive step; negative strides and non-positive steps are intentionally
-rejected until the view contract is extended.
+slice-contiguous for the borrowed storage. `TensorLayout` metadata-only slicing
+supports negative steps and signed strides when reachable-range validation
+succeeds. Existing borrowed host view slice APIs, including
+`TypedTensorView::slice_view` and `TensorView::slice_view`, remain
+positive-step-only for now.
 
 ---
 
