@@ -1,7 +1,7 @@
 name: CI_gpu
 
 # Build CUDA test archives on a standard GitHub-hosted runner (no CUDA toolkit required;
-# GPU libraries are loaded at runtime via dlopen), then execute only ignored GPU tests on
+# GPU libraries are loaded at runtime via dlopen), then execute CUDA-feature GPU tests on
 # the org larger GPU runner `ubuntu-gpu` to minimize GPU billing.
 
 on:
@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
-          echo "key=cuda-archive-v3-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+          echo "key=cuda-archive-v4-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
       - name: Cache CUDA test archive
         uses: actions/cache@v4
         id: cuda_archive_cache
@@ -63,6 +63,7 @@ jobs:
           cargo nextest archive \
             --release \
             --archive-file "${CUDA_ARCHIVE}" \
+            -p tenferro-internal-device \
             -p tenferro-gpu \
             -p tenferro-ad \
             -p tenferro-linalg \
@@ -128,20 +129,70 @@ jobs:
           fi
           nvidia-smi
 
+          cuda_toolkit_version() {
+            local root="$1"
+            if [ -f "${root}/version.json" ]; then
+              python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['cuda']['version'].rsplit('.', 1)[0])" "${root}/version.json" 2>/dev/null || true
+            elif [ -f "${root}/version.txt" ]; then
+              sed -n 's/.*CUDA Version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${root}/version.txt" | head -1
+            fi
+          }
+
+          cuda_version_ge() {
+            local version="$1"
+            local min_version="$2"
+            if [ -z "${version}" ]; then
+              return 1
+            fi
+            local ver_major="${version%%.*}"
+            local ver_minor="${version#*.}"
+            local min_major="${min_version%%.*}"
+            local min_minor="${min_version#*.}"
+            if [ "${ver_major}" -gt "${min_major}" ]; then
+              return 0
+            fi
+            if [ "${ver_major}" -lt "${min_major}" ]; then
+              return 1
+            fi
+            [ "${ver_minor}" -ge "${min_minor}" ]
+          }
+
+          accept_cuda_toolkit() {
+            local candidate="$1"
+            if [ ! -d "${candidate}" ]; then
+              return 1
+            fi
+            local version
+            version="$(cuda_toolkit_version "${candidate}")"
+            if cuda_version_ge "${version}" "${CUDA_RUNTIME_VERSION}"; then
+              cuda_path="${candidate}"
+              echo "Using CUDA toolkit at ${candidate} (version ${version})."
+              return 0
+            fi
+            if [ -n "${version}" ]; then
+              echo "Skipping CUDA toolkit at ${candidate} (found ${version}, need >= ${CUDA_RUNTIME_VERSION})."
+            else
+              echo "Skipping CUDA toolkit at ${candidate} (version metadata not found, need >= ${CUDA_RUNTIME_VERSION})."
+            fi
+            return 1
+          }
+
           cuda_runtime_cache="${RUNNER_TEMP}/cuda-runtime-${CUDA_RUNTIME_VERSION}"
-          cuda_path="${CUDA_PATH:-}"
+          cuda_path=""
+          if [ -n "${CUDA_PATH:-}" ]; then
+            accept_cuda_toolkit "${CUDA_PATH}" || cuda_path=""
+          fi
           if [ -z "${cuda_path}" ] && command -v nvcc >/dev/null 2>&1; then
-            cuda_path="$(dirname "$(dirname "$(command -v nvcc)")")"
+            accept_cuda_toolkit "$(dirname "$(dirname "$(command -v nvcc)")")" || true
           fi
           if [ -z "${cuda_path}" ]; then
             for candidate in \
-              /usr/local/cuda-${CUDA_RUNTIME_VERSION} \
+              "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" \
               /usr/local/cuda \
               /usr/local/cuda-13.1 \
               /usr/local/cuda-13 \
               /usr/local/cuda-12; do
-              if [ -d "${candidate}" ]; then
-                cuda_path="${candidate}"
+              if accept_cuda_toolkit "${candidate}"; then
                 break
               fi
             done
@@ -172,9 +223,9 @@ jobs:
               libcusolver-12-8 \
               libcusparse-12-8 \
               libnvjitlink-12-8
+            cuda_path=""
             for candidate in "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" /usr/local/cuda; do
-              if [ -d "${candidate}" ]; then
-                cuda_path="${candidate}"
+              if accept_cuda_toolkit "${candidate}"; then
                 break
               fi
             done
@@ -260,7 +311,7 @@ jobs:
           echo "${cuda_path}/bin" >> "${GITHUB_PATH}"
           echo "LD_LIBRARY_PATH=${cuda_library_path}:$(dirname "${cutensor_path}"):${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
           echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
-      - name: Run ignored CUDA tests from archive
+      - name: Run CUDA tests from archive
         env:
           NEXTEST_TEST_THREADS: "1"
         run: |
@@ -268,7 +319,7 @@ jobs:
           cargo nextest run \
             --archive-file "${CUDA_ARCHIVE}" \
             --workspace-remap "${GITHUB_WORKSPACE}" \
-            --run-ignored only \
+            --run-ignored all \
             --no-fail-fast \
             -j 1
 
