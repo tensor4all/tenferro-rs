@@ -50,7 +50,7 @@ fn compact_layout_for_static_rank_has_column_major_strides() {
 #[test]
 fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
     let err =
-        TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0).unwrap_err();
+        TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0, 6).unwrap_err();
     assert!(matches!(
         err,
         Error::RankMismatch {
@@ -71,7 +71,7 @@ fn scalar_layout_with_static_rank_zero_is_compact() {
 
 #[test]
 fn non_compact_layout_reports_false() {
-    let layout = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0).unwrap();
+    let layout = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0, 6).unwrap();
     assert_eq!(layout.shape(), &[2, 3]);
     assert_eq!(layout.strides(), &[2, 1]);
     assert!(!layout.is_compact_col_major());
@@ -85,10 +85,51 @@ fn compact_layout_reports_stride_overflow() {
 
 #[test]
 fn layout_from_parts_preserves_offset() {
-    let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7).unwrap();
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7, 10).unwrap();
     assert_eq!(layout.shape(), &[3]);
     assert_eq!(layout.strides(), &[1]);
     assert_eq!(layout.offset(), 7);
+}
+
+#[test]
+fn layout_accepts_negative_stride_when_reachable_range_is_in_bounds() {
+    let layout =
+        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 2, 3).unwrap();
+    assert_eq!(layout.shape(), &[3]);
+    assert_eq!(layout.strides(), &[-1]);
+    assert_eq!(layout.offset(), 2);
+}
+
+#[test]
+fn layout_rejects_negative_stride_when_reachable_range_is_out_of_bounds() {
+    assert!(TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![-1].into(), 1, 3).is_err());
+}
+
+#[test]
+fn layout_rejects_positive_stride_when_max_offset_exceeds_buffer_len() {
+    assert!(TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![2].into(), 0, 3).is_err());
+}
+
+#[test]
+fn layout_accepts_empty_shape_offsets_at_buffer_boundaries() {
+    let at_start =
+        TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 0, 3).unwrap();
+    assert_eq!(at_start.offset(), 0);
+
+    let at_end = TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 3, 3).unwrap();
+    assert_eq!(at_end.offset(), 3);
+
+    assert!(TensorLayout::<DynRank>::from_parts(vec![0].into(), vec![1].into(), 4, 3).is_err());
+}
+
+#[test]
+fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
+    assert!(matches!(
+        TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![isize::MAX].into(), 0, 3)
+            .unwrap_err(),
+        Error::IntegerOverflow
+    ));
 }
 
 #[test]
@@ -210,8 +251,26 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
         TypedTensorView::from_slice(vec![usize::MAX, 2], vec![1, 2], 0, &data).unwrap_err(),
         Error::IntegerOverflow
     ));
+
+    let reversed = TypedTensorView::from_slice(vec![3], vec![-1], 2, &data).unwrap();
+    assert_eq!(reversed.shape(), &[3]);
+    assert_eq!(reversed.strides(), &[-1]);
+    assert_eq!(reversed.offset(), 2);
     assert!(matches!(
-        TypedTensorView::from_slice(vec![1], vec![-1], 0, &data).unwrap_err(),
+        TypedTensorView::from_slice(vec![3], vec![-1], 1, &data).unwrap_err(),
+        Error::ViewOutOfBounds
+    ));
+}
+
+#[test]
+fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
+    let data = [1_i32, 2, 3];
+    let empty = TypedTensorView::from_slice(vec![0], vec![-1], 3, &data).unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(empty.as_slice().unwrap(), &[]);
+
+    assert!(matches!(
+        TypedTensorView::from_slice(vec![0], vec![1], 4, &data).unwrap_err(),
         Error::ViewOutOfBounds
     ));
 }

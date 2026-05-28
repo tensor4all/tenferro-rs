@@ -1,5 +1,67 @@
 use crate::{col_major_strides, DynRank, Error, Result, TensorRank};
 
+pub(crate) fn reachable_offset_range(
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+) -> Result<Option<(isize, isize)>> {
+    if shape.iter().any(|&extent| extent == 0) {
+        return Ok(None);
+    }
+
+    let mut min = offset;
+    let mut max = offset;
+    for (&extent, &stride) in shape.iter().zip(strides) {
+        let last = isize::try_from(extent.saturating_sub(1)).map_err(|_| Error::IntegerOverflow)?;
+        let delta = last.checked_mul(stride).ok_or(Error::IntegerOverflow)?;
+        if delta < 0 {
+            min = min.checked_add(delta).ok_or(Error::IntegerOverflow)?;
+        } else {
+            max = max.checked_add(delta).ok_or(Error::IntegerOverflow)?;
+        }
+    }
+    Ok(Some((min, max)))
+}
+
+pub(crate) fn validate_reachable_bounds(
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    buffer_len: usize,
+) -> Result<()> {
+    if shape.len() != strides.len() {
+        return Err(Error::RankMismatch {
+            expected: shape.len(),
+            actual: strides.len(),
+        });
+    }
+
+    match reachable_offset_range(shape, strides, offset)? {
+        Some((min, max)) => {
+            if min < 0 {
+                return Err(Error::ViewOutOfBounds);
+            }
+            let max = usize::try_from(max).map_err(|_| Error::IntegerOverflow)?;
+            if max < buffer_len {
+                Ok(())
+            } else {
+                Err(Error::ViewOutOfBounds)
+            }
+        }
+        None => {
+            if offset < 0 {
+                return Err(Error::ViewOutOfBounds);
+            }
+            let offset = usize::try_from(offset).map_err(|_| Error::IntegerOverflow)?;
+            if offset <= buffer_len {
+                Ok(())
+            } else {
+                Err(Error::ViewOutOfBounds)
+            }
+        }
+    }
+}
+
 /// Storage-neutral tensor layout metadata.
 ///
 /// # Examples
@@ -40,24 +102,29 @@ impl<R: TensorRank> TensorLayout<R> {
         })
     }
 
-    /// Create a layout from shape, strides, and element offset.
+    /// Create a layout from shape, strides, element offset, and backing buffer length.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorLayout};
     ///
-    /// let layout = TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1, 2].into(), 0)?;
+    /// let layout = TensorLayout::<DynRank>::from_parts(
+    ///     vec![2, 3].into(),
+    ///     vec![1, 2].into(),
+    ///     0,
+    ///     6,
+    /// )?;
     /// assert!(layout.is_compact_col_major());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn from_parts(shape: R::Shape, strides: R::Strides, offset: isize) -> Result<Self> {
-        if shape.as_ref().len() != strides.as_ref().len() {
-            return Err(Error::RankMismatch {
-                expected: shape.as_ref().len(),
-                actual: strides.as_ref().len(),
-            });
-        }
+    pub fn from_parts(
+        shape: R::Shape,
+        strides: R::Strides,
+        offset: isize,
+        buffer_len: usize,
+    ) -> Result<Self> {
+        validate_reachable_bounds(shape.as_ref(), strides.as_ref(), offset, buffer_len)?;
         Ok(Self {
             shape,
             strides,
@@ -102,7 +169,7 @@ impl<R: TensorRank> TensorLayout<R> {
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorLayout};
     ///
-    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 2)?;
+    /// let layout = TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 2, 5)?;
     /// assert_eq!(layout.offset(), 2);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```

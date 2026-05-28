@@ -546,41 +546,7 @@ fn validate_view_bounds<T>(
     strides: &[isize],
     offset: isize,
 ) -> Result<()> {
-    if shape.len() != strides.len() {
-        return Err(Error::RankMismatch {
-            expected: shape.len(),
-            actual: strides.len(),
-        });
-    }
-    if offset < 0 || strides.iter().any(|&stride| stride < 0) {
-        return Err(Error::ViewOutOfBounds);
-    }
-    let offset = usize::try_from(offset).map_err(|_| Error::IntegerOverflow)?;
-    if shape.iter().any(|&extent| extent == 0) {
-        return if offset <= data.len() {
-            Ok(())
-        } else {
-            Err(Error::ViewOutOfBounds)
-        };
-    }
-
-    let mut max_offset = offset;
-    for (&extent, &stride) in shape.iter().zip(strides) {
-        let stride = usize::try_from(stride).map_err(|_| Error::IntegerOverflow)?;
-        let axis_span = extent
-            .checked_sub(1)
-            .ok_or(Error::IntegerOverflow)?
-            .checked_mul(stride)
-            .ok_or(Error::IntegerOverflow)?;
-        max_offset = max_offset
-            .checked_add(axis_span)
-            .ok_or(Error::IntegerOverflow)?;
-    }
-    if max_offset < data.len() {
-        Ok(())
-    } else {
-        Err(Error::ViewOutOfBounds)
-    }
+    layout::validate_reachable_bounds(shape, strides, offset, data.len())
 }
 
 fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> bool {
