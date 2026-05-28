@@ -164,6 +164,24 @@ pub trait TensorStructural {
 pub trait TensorReduction {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
+    /// Sum elements across axes from an owned tensor or borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
+    /// };
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend.reduce_sum_read(
+    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
+    ///     &[0],
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     #[doc(hidden)]
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -177,6 +195,24 @@ pub trait TensorReduction {
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
+    /// Multiply elements across axes from an owned tensor or borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
+    /// };
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend.reduce_prod_read(
+    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
+    ///     &[0],
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 12.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     #[doc(hidden)]
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -190,6 +226,24 @@ pub trait TensorReduction {
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
+    /// Take maximum values across axes from an owned tensor or borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
+    /// };
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend.reduce_max_read(
+    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
+    ///     &[0],
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     #[doc(hidden)]
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -203,6 +257,24 @@ pub trait TensorReduction {
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
+    /// Take minimum values across axes from an owned tensor or borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{
+    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
+    /// };
+    ///
+    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    /// let mut backend = CpuBackend::new();
+    /// let out = backend.reduce_min_read(
+    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
+    ///     &[0],
+    /// )?;
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     #[doc(hidden)]
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {

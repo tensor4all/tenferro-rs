@@ -10,7 +10,10 @@ use crate::{Tensor, TensorRead};
 
 use super::backend::reclaim_typed;
 use super::CpuBackendKind;
-use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
+use super::{
+    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
+    CpuContext,
+};
 
 pub(crate) struct CpuExecSession<'a> {
     #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
@@ -174,8 +177,8 @@ impl TensorDot for CpuExecSession<'_> {
             return Ok(result);
         }
 
-        let lhs = lhs.to_tensor();
-        let rhs = rhs.to_tensor();
+        let lhs = materialize_tensor_read("dot_general", lhs)?;
+        let rhs = materialize_tensor_read("dot_general", rhs)?;
         self.dot_general_cached(None, &lhs, &rhs, config)
     }
 

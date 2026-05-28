@@ -13,7 +13,7 @@ pub mod structural;
 use strided_kernel::{col_major_strides, StridedArray, StridedView};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::{Buffer, TensorRank, TypedTensor, TypedTensorView};
+use crate::{Buffer, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 pub use affinity::{available_parallelism, process_cpu_affinity_count};
 pub use backend::{CpuBackend, CpuBackendKind};
@@ -72,6 +72,56 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
         view.offset(),
     )
     .map_err(|err| crate::Error::backend_failure(op, err))
+}
+
+pub(crate) fn materialize_tensor_read(
+    op: &'static str,
+    input: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(tensor) => clone_host_tensor_read(op, tensor),
+        TensorRead::View(view) => materialize_tensor_view(op, view),
+    }
+}
+
+fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Tensor> {
+    macro_rules! clone_host {
+        ($variant:ident, $tensor:expr) => {{
+            typed_host_data(op, $tensor)?;
+            Ok(Tensor::$variant($tensor.clone()))
+        }};
+    }
+
+    match tensor {
+        Tensor::F32(tensor) => clone_host!(F32, tensor),
+        Tensor::F64(tensor) => clone_host!(F64, tensor),
+        Tensor::I32(tensor) => clone_host!(I32, tensor),
+        Tensor::I64(tensor) => clone_host!(I64, tensor),
+        Tensor::Bool(tensor) => clone_host!(Bool, tensor),
+        Tensor::C32(tensor) => clone_host!(C32, tensor),
+        Tensor::C64(tensor) => clone_host!(C64, tensor),
+    }
+}
+
+fn materialize_tensor_view(op: &'static str, view: TensorView<'_>) -> crate::Result<Tensor> {
+    macro_rules! materialize {
+        ($variant:ident, $view:expr) => {{
+            if $view.backend_buffer().is_some() {
+                return Err(cpu_backend_buffer_error(op));
+            }
+            Ok(Tensor::$variant($view.to_contiguous()?))
+        }};
+    }
+
+    match view {
+        TensorView::F32(view) => materialize!(F32, view),
+        TensorView::F64(view) => materialize!(F64, view),
+        TensorView::I32(view) => materialize!(I32, view),
+        TensorView::I64(view) => materialize!(I64, view),
+        TensorView::Bool(view) => materialize!(Bool, view),
+        TensorView::C32(view) => materialize!(C32, view),
+        TensorView::C64(view) => materialize!(C64, view),
+    }
 }
 
 /// Create an output array WITHOUT initializing element values.

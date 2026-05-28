@@ -19,7 +19,10 @@ use crate::{
 };
 
 use super::exec_session::CpuExecSession;
-use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
+use super::{
+    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
+    CpuContext,
+};
 
 #[derive(Debug, Default, Clone)]
 struct CpuSessionProfileEntry {
@@ -878,8 +881,8 @@ impl TensorDot for CpuBackend {
             return Ok(result);
         }
 
-        let lhs = lhs.to_tensor();
-        let rhs = rhs.to_tensor();
+        let lhs = materialize_tensor_read("dot_general", lhs)?;
+        let rhs = materialize_tensor_read("dot_general", rhs)?;
         BackendCachedDot::dot_general_cached(self, &mut cache, None, &lhs, &rhs, config)
     }
 

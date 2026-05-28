@@ -1,4 +1,4 @@
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorView};
+use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 
 /// Backend surface required by the linalg extension runtime.
 ///
@@ -34,17 +34,6 @@ pub trait LinalgBackend: TensorBackend {
     ) -> tenferro_tensor::Result<Tensor>;
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
-    #[doc(hidden)]
-    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        match input.as_tensor() {
-            Some(input) => self.svd(input),
-            None => Err(tenferro_tensor::Error::backend_failure(
-                "svd",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
-    }
-
     /// Compute a singular value decomposition from a borrowed tensor view.
     ///
     /// Backends may canonicalize the view inside the same placement family, but
@@ -64,8 +53,11 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        self.svd_read(TensorRead::from_view(input))
+    fn svd_view(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "svd",
+            "backend does not accept borrowed tensor views at this execution boundary",
+        ))
     }
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;

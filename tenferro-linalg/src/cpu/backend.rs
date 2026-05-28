@@ -4,8 +4,7 @@ use super::linalg;
 
 use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::{
-    DType, Error, Tensor, TensorRead, TensorStructural, TensorView, TensorViewCanonicalization,
-    TypedTensor,
+    DType, Error, Tensor, TensorStructural, TensorView, TensorViewCanonicalization, TypedTensor,
 };
 
 impl LinalgBackend for CpuBackend {
@@ -414,13 +413,6 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("svd", self.kind()))
                 }
             }
-        }
-    }
-
-    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        match input {
-            TensorRead::Tensor(input) => self.svd(input),
-            TensorRead::View(input) => self.svd_view(input),
         }
     }
 
