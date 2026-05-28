@@ -4,6 +4,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
+
 mod accessors;
 mod shape_packing;
 mod strided_view;
@@ -215,12 +217,12 @@ pub enum Buffer<T> {
 /// use tenferro_tensor::TypedTensor;
 ///
 /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-/// assert_eq!(t.shape, vec![2, 2]);
+/// assert_eq!(t.shape(), &[2, 2]);
 /// ```
 #[derive(Clone, Debug)]
-pub struct TypedTensor<T> {
+pub struct TypedTensor<T, R: TensorRank = DynRank> {
     pub buffer: Buffer<T>,
-    pub shape: Vec<usize>,
+    layout: TensorLayout<R>,
     pub placement: Placement,
 }
 
@@ -903,6 +905,13 @@ fn checked_shape_len(shape: &[usize], data_len: usize, op: &str) {
     );
 }
 
+fn compact_layout<R: TensorRank>(shape: impl Into<R::Shape>, op: &str) -> TensorLayout<R> {
+    match TensorLayout::compact(shape.into()) {
+        Ok(layout) => layout,
+        Err(err) => panic!("{op}: invalid compact tensor layout: {err}"),
+    }
+}
+
 fn row_major_offset(shape: &[usize], indices: &[usize]) -> usize {
     let mut stride = 1;
     let mut offset = 0;
@@ -996,7 +1005,58 @@ pub(crate) fn default_placement() -> Placement {
     }
 }
 
-impl<T: Clone + Zero> TypedTensor<T> {
+fn typed_tensor_from_vec_col_major<T, R: TensorRank>(
+    shape: impl Into<R::Shape>,
+    data: Vec<T>,
+    op: &str,
+) -> TypedTensor<T, R> {
+    let layout = compact_layout(shape, op);
+    checked_shape_len(layout.shape(), data.len(), op);
+    TypedTensor {
+        buffer: Buffer::Host(data),
+        layout,
+        placement: default_placement(),
+    }
+}
+
+fn typed_tensor_from_vec_row_major<T: Clone, R: TensorRank>(
+    shape: impl Into<R::Shape>,
+    data: Vec<T>,
+) -> TypedTensor<T, R> {
+    let layout = compact_layout(shape, "from_vec_row_major");
+    let data = row_major_to_col_major(layout.shape(), data);
+    TypedTensor {
+        buffer: Buffer::Host(data),
+        layout,
+        placement: default_placement(),
+    }
+}
+
+fn typed_tensor_zeros<T: Clone + Zero, R: TensorRank>(
+    shape: impl Into<R::Shape>,
+) -> TypedTensor<T, R> {
+    let layout = compact_layout(shape, "zeros");
+    let n: usize = layout.shape().iter().product();
+    TypedTensor {
+        buffer: Buffer::Host(vec![T::zero(); n]),
+        layout,
+        placement: default_placement(),
+    }
+}
+
+fn typed_tensor_ones<T: Clone + One + Zero, R: TensorRank>(
+    shape: impl Into<R::Shape>,
+) -> TypedTensor<T, R> {
+    let layout = compact_layout(shape, "ones");
+    let n: usize = layout.shape().iter().product();
+    TypedTensor {
+        buffer: Buffer::Host(vec![T::one(); n]),
+        layout,
+        placement: default_placement(),
+    }
+}
+
+impl<T: Clone + Zero, R: TensorRank> TypedTensor<T, R> {
     /// Allocate a zero-filled tensor.
     ///
     /// # Examples
@@ -1007,17 +1067,12 @@ impl<T: Clone + Zero> TypedTensor<T> {
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]);
     /// assert_eq!(t.n_elements(), 6);
     /// ```
-    pub fn zeros(shape: Vec<usize>) -> Self {
-        let n: usize = shape.iter().product();
-        Self {
-            buffer: Buffer::Host(vec![T::zero(); n]),
-            shape,
-            placement: default_placement(),
-        }
+    pub fn zeros(shape: impl Into<R::Shape>) -> Self {
+        typed_tensor_zeros(shape)
     }
 }
 
-impl<T: Clone + One + Zero> TypedTensor<T> {
+impl<T: Clone + One + Zero, R: TensorRank> TypedTensor<T, R> {
     /// Allocate a one-filled tensor.
     ///
     /// # Examples
@@ -1028,17 +1083,12 @@ impl<T: Clone + One + Zero> TypedTensor<T> {
     /// let t = TypedTensor::<f64>::ones(vec![2]);
     /// assert_eq!(t.host_data(), &[1.0, 1.0]);
     /// ```
-    pub fn ones(shape: Vec<usize>) -> Self {
-        let n: usize = shape.iter().product();
-        Self {
-            buffer: Buffer::Host(vec![T::one(); n]),
-            shape,
-            placement: default_placement(),
-        }
+    pub fn ones(shape: impl Into<R::Shape>) -> Self {
+        typed_tensor_ones(shape)
     }
 }
 
-impl<T: Clone> TypedTensor<T> {
+impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// Create a tensor from a column-major buffer.
     ///
     /// # Examples
@@ -1049,13 +1099,8 @@ impl<T: Clone> TypedTensor<T> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.get(&[1, 0]), &2.0);
     /// ```
-    pub fn from_vec_col_major(shape: Vec<usize>, data: Vec<T>) -> Self {
-        checked_shape_len(&shape, data.len(), "from_vec_col_major");
-        Self {
-            buffer: Buffer::Host(data),
-            shape,
-            placement: default_placement(),
-        }
+    pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
+        typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
 
     /// Create a tensor from a row-major buffer.
@@ -1070,9 +1115,44 @@ impl<T: Clone> TypedTensor<T> {
     /// let t = TypedTensor::<f64>::from_vec_row_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     /// assert_eq!(t.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
-    pub fn from_vec_row_major(shape: Vec<usize>, data: Vec<T>) -> Self {
-        let data = row_major_to_col_major(&shape, data);
-        Self::from_vec_col_major(shape, data)
+    pub fn from_vec_row_major(shape: impl Into<R::Shape>, data: Vec<T>) -> Self {
+        typed_tensor_from_vec_row_major(shape, data)
+    }
+
+    /// Create a tensor from an existing buffer and compact column-major layout.
+    ///
+    /// This preserves the owned tensor invariant that layout metadata is
+    /// compact column-major, including for backend-owned buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Buffer, Placement, TypedTensor};
+    ///
+    /// let tensor = TypedTensor::<f64>::from_buffer_col_major(
+    ///     vec![2],
+    ///     Buffer::Host(vec![1.0, 2.0]),
+    ///     Placement {
+    ///         memory_kind: tenferro_tensor::MemoryKind::UnpinnedHost,
+    ///         device: None,
+    ///     },
+    /// );
+    /// assert_eq!(tensor.shape(), &[2]);
+    /// ```
+    pub fn from_buffer_col_major(
+        shape: impl Into<R::Shape>,
+        buffer: Buffer<T>,
+        placement: Placement,
+    ) -> Self {
+        let layout = compact_layout(shape, "from_buffer_col_major");
+        if let Buffer::Host(data) = &buffer {
+            checked_shape_len(layout.shape(), data.len(), "from_buffer_col_major");
+        }
+        Self {
+            buffer,
+            layout,
+            placement,
+        }
     }
 
     /// Consume this tensor and return its owned column-major host buffer.
@@ -1088,8 +1168,9 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(data, vec![1.0, 2.0]);
     /// ```
     pub fn try_into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let shape = self.shape().to_vec();
         match self.buffer {
-            Buffer::Host(data) => Ok((self.shape, data)),
+            Buffer::Host(data) => Ok((shape, data)),
             Buffer::Backend(_) => Err(crate::Error::backend_failure(
                 "try_into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
@@ -1109,9 +1190,9 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0]);
     /// ```
     pub fn try_into_vec_row_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
+        let shape = self.shape().to_vec();
         match self.buffer {
             Buffer::Host(data) => {
-                let shape = self.shape;
                 let data = col_major_to_row_major(&shape, data);
                 Ok((shape, data))
             }
@@ -1133,7 +1214,65 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.n_elements(), 6);
     /// ```
     pub fn n_elements(&self) -> usize {
-        self.shape.iter().product()
+        self.shape().iter().product()
+    }
+
+    /// Tensor shape.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// assert_eq!(t.shape(), &[2]);
+    /// ```
+    pub fn shape(&self) -> &[usize] {
+        self.layout.shape()
+    }
+
+    /// Tensor rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// assert_eq!(t.rank(), 2);
+    /// ```
+    pub fn rank(&self) -> usize {
+        self.shape().len()
+    }
+
+    /// Tensor layout metadata.
+    ///
+    /// Owned typed tensors are always compact column-major layouts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
+    /// assert_eq!(t.layout().strides(), &[1, 2]);
+    /// ```
+    pub fn layout(&self) -> &TensorLayout<R> {
+        &self.layout
+    }
+
+    /// Consume this tensor and return its layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// assert!(t.into_layout().is_compact_col_major());
+    /// ```
+    pub fn into_layout(self) -> TensorLayout<R> {
+        self.layout
     }
 
     /// Borrow the host buffer.
@@ -1199,7 +1338,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.linear_offset(&[1, 2]), 5);
     /// ```
     pub fn linear_offset(&self, indices: &[usize]) -> usize {
-        linear_offset(&self.shape, indices)
+        linear_offset(self.shape(), indices)
     }
 
     /// Borrow a single element by multi-index.
@@ -1310,13 +1449,13 @@ impl Tensor {
     /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
-            Tensor::F32(t) => &t.shape,
-            Tensor::F64(t) => &t.shape,
-            Tensor::I32(t) => &t.shape,
-            Tensor::I64(t) => &t.shape,
-            Tensor::Bool(t) => &t.shape,
-            Tensor::C32(t) => &t.shape,
-            Tensor::C64(t) => &t.shape,
+            Tensor::F32(t) => t.shape(),
+            Tensor::F64(t) => t.shape(),
+            Tensor::I32(t) => t.shape(),
+            Tensor::I64(t) => t.shape(),
+            Tensor::Bool(t) => t.shape(),
+            Tensor::C32(t) => t.shape(),
+            Tensor::C64(t) => t.shape(),
         }
     }
 

@@ -50,8 +50,8 @@ pub(crate) fn typed_view<'a, T: Copy>(
 ) -> crate::Result<StridedView<'a, T>> {
     match &tensor.buffer {
         Buffer::Host(data) => {
-            let strides = col_major_strides(&tensor.shape);
-            StridedView::new(data, &tensor.shape, &strides, 0)
+            let strides = col_major_strides(tensor.shape());
+            StridedView::new(data, tensor.shape(), &strides, 0)
                 .map_err(|err| crate::Error::backend_failure(op, err))
         }
         Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),

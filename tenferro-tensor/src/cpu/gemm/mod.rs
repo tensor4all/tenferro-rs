@@ -109,9 +109,9 @@ trait TypedTensorRead<T> {
     fn host_data_opt(&self) -> Option<&[T]>;
 }
 
-impl<T> TypedTensorRead<T> for TypedTensor<T> {
+impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
-        &self.shape
+        self.layout().shape()
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
@@ -734,7 +734,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -898,11 +898,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
@@ -966,11 +966,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out_data),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out_data),
+        default_placement(),
+    )))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -1012,7 +1012,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -1089,7 +1089,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -1251,11 +1251,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1323,11 +1323,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out),
+        default_placement(),
+    )))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -1355,11 +1355,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1414,11 +1414,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out),
+        default_placement(),
+    )))
 }
 
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {

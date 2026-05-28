@@ -159,7 +159,7 @@ macro_rules! define_unary_analytic_op {
         where
             T: UnaryAnalyticElem + PoolScalar,
         {
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
             map_into(
                 &mut out.view_mut(),
                 &typed_view(stringify!($typed_fn), input)?,
@@ -241,14 +241,14 @@ fn typed_pow_with_pool<T>(
 where
     T: PowElem + PoolScalar,
 {
-    if lhs.shape != rhs.shape {
+    if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "pow",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         });
     }
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("pow", lhs)?,

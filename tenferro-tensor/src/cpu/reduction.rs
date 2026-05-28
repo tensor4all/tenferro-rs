@@ -101,13 +101,13 @@ where
     M: Fn(T) -> T + Copy,
     R: Fn(T, T) -> T + Copy,
 {
-    validate_axes(label, axes, input.shape.len())?;
+    validate_axes(label, axes, input.shape().len())?;
     if axes.is_empty() {
         return Ok(input.clone());
     }
 
     let output_shape: Vec<usize> = input
-        .shape
+        .shape()
         .iter()
         .enumerate()
         .filter(|(axis, _)| !axes.contains(axis))

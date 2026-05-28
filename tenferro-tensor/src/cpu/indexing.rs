@@ -127,7 +127,7 @@ fn clone_host_tensor_from_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
-    let mut out = pooled_uninit_tensor(buffers, tensor.shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, tensor.shape().to_vec());
     out.host_data_mut()
         .copy_from_slice(typed_host_data(op, tensor)?);
     Ok(out)
@@ -320,7 +320,8 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let rank = input.shape.len();
+    let input_shape = input.shape();
+    let rank = input_shape.len();
     if config.starts.len() != rank {
         return Err(crate::Error::RankMismatch {
             op: "slice",
@@ -344,7 +345,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
     }
 
     let out_shape: Vec<usize> = input
-        .shape
+        .shape()
         .iter()
         .enumerate()
         .map(|(axis, &dim)| {
@@ -430,7 +431,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
     let first = inputs[0];
-    let rank = first.shape.len();
+    let first_shape = first.shape();
+    let rank = first_shape.len();
     if axis >= rank {
         return Err(crate::Error::AxisOutOfBounds {
             op: "concatenate",
@@ -439,24 +441,25 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
         });
     }
 
-    let mut out_shape = first.shape.clone();
+    let mut out_shape = first_shape.to_vec();
     let mut axis_extent = 0usize;
     for input in inputs {
-        if input.shape.len() != rank {
+        let input_shape = input.shape();
+        if input_shape.len() != rank {
             return Err(crate::Error::RankMismatch {
                 op: "concatenate",
                 expected: rank,
-                actual: input.shape.len(),
+                actual: input_shape.len(),
             });
         }
         for dim in 0..rank {
             if dim == axis {
-                axis_extent += input.shape[dim];
-            } else if input.shape[dim] != first.shape[dim] {
+                axis_extent += input_shape[dim];
+            } else if input_shape[dim] != first_shape[dim] {
                 return Err(crate::Error::ShapeMismatch {
                     op: "concatenate",
-                    lhs: first.shape.clone(),
-                    rhs: input.shape.clone(),
+                    lhs: first_shape.to_vec(),
+                    rhs: input_shape.to_vec(),
                 });
             }
         }
@@ -466,7 +469,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     let segment_ends: Vec<usize> = inputs
         .iter()
         .scan(0usize, |sum, input| {
-            *sum += input.shape[axis];
+            *sum += input.shape()[axis];
             Some(*sum)
         })
         .collect();
@@ -505,7 +508,8 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
     input: &TypedTensor<T>,
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let rank = input.shape.len();
+    let input_shape = input.shape();
+    let rank = input_shape.len();
     let mut reverse_axis = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
@@ -518,15 +522,15 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
         reverse_axis[axis] = true;
     }
 
-    let mut out = pooled_uninit_tensor(buffers, input.shape.clone());
+    let mut out = pooled_uninit_tensor(buffers, input_shape.to_vec());
     let mut out_idx = vec![0usize; rank];
     let mut in_idx = vec![0usize; rank];
 
     for flat in 0..out.n_elements() {
-        flat_to_multi(flat, &input.shape, &mut out_idx);
+        flat_to_multi(flat, input_shape, &mut out_idx);
         for axis in 0..rank {
             in_idx[axis] = if reverse_axis[axis] {
-                input.shape[axis] - 1 - out_idx[axis]
+                input_shape[axis] - 1 - out_idx[axis]
             } else {
                 out_idx[axis]
             };
@@ -570,14 +574,14 @@ fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
     match tensor {
         Tensor::I32(t) => Ok(IndexTensor {
-            shape: t.shape.clone(),
+            shape: t.shape().to_vec(),
             values: typed_host_data("index_tensor", t)?
                 .iter()
                 .map(|&value| value as i64)
                 .collect(),
         }),
         Tensor::I64(t) => Ok(IndexTensor {
-            shape: t.shape.clone(),
+            shape: t.shape().to_vec(),
             values: typed_host_data("index_tensor", t)?.to_vec(),
         }),
         Tensor::F32(t) => {
@@ -586,7 +590,7 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 .map(|&value| f32_index_to_i64(value))
                 .collect();
             Ok(IndexTensor {
-                shape: t.shape.clone(),
+                shape: t.shape().to_vec(),
                 values: values?,
             })
         }
@@ -596,7 +600,7 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 .map(|&value| f64_index_to_i64(value))
                 .collect();
             Ok(IndexTensor {
-                shape: t.shape.clone(),
+                shape: t.shape().to_vec(),
                 values: values?,
             })
         }
@@ -746,7 +750,8 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
     start_indices: &IndexTensor,
     config: &GatherConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let rank = operand.shape.len();
+    let operand_shape = operand.shape();
+    let rank = operand_shape.len();
     if config.slice_sizes.len() != rank {
         return Err(crate::Error::RankMismatch {
             op: "gather",
@@ -871,7 +876,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
         let _ = clamp_window_start(
             "gather",
             0,
-            operand.shape[operand_dim],
+            operand_shape[operand_dim],
             config.slice_sizes[operand_dim],
         )?;
         let _ = component;
@@ -909,7 +914,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
             operand_idx[operand_dim] = clamp_window_start(
                 "gather",
                 start,
-                operand.shape[operand_dim],
+                operand_shape[operand_dim],
                 config.slice_sizes[operand_dim],
             )?;
         }
@@ -934,7 +939,9 @@ fn typed_scatter<T>(
 where
     T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
-    let op_rank = operand.shape.len();
+    let operand_shape = operand.shape();
+    let updates_shape = updates.shape();
+    let op_rank = operand_shape.len();
     for &dim in &config.inserted_window_dims {
         if dim >= op_rank {
             return Err(crate::Error::AxisOutOfBounds {
@@ -1007,7 +1014,7 @@ where
         });
     }
 
-    let update_rank = updates.shape.len();
+    let update_rank = updates_shape.len();
     let expected_batch_rank = update_rank
         .checked_sub(config.update_window_dims.len())
         .ok_or_else(|| crate::Error::InvalidConfig {
@@ -1061,13 +1068,13 @@ where
         let mut batch_axis = 0usize;
         for axis in 0..update_rank {
             if !is_update_window_dim[axis] {
-                if updates.shape[axis] != batch_shape[batch_axis] {
+                if updates_shape[axis] != batch_shape[batch_axis] {
                     return Err(crate::Error::InvalidConfig {
                         op: "scatter",
                         message: format!(
                             "updates batch dim {} extent {} does not match index batch dim {} extent {}",
                             axis,
-                            updates.shape[axis],
+                            updates_shape[axis],
                             batch_axis,
                             batch_shape[batch_axis]
                         ),
@@ -1081,7 +1088,7 @@ where
     let mut window_shape = vec![1usize; op_rank];
     let mut window_shape_updates = vec![0usize; config.update_window_dims.len()];
     for (pos, &update_axis) in config.update_window_dims.iter().enumerate() {
-        let dim = updates.shape[update_axis];
+        let dim = updates_shape[update_axis];
         window_shape_updates[pos] = dim;
         window_shape[window_dims[pos]] = dim;
     }
@@ -1123,7 +1130,7 @@ where
         }
 
         for axis in 0..op_rank {
-            if operand_base[axis] + window_shape[axis] > operand.shape[axis] {
+            if operand_base[axis] + window_shape[axis] > operand_shape[axis] {
                 window_fits = false;
                 break;
             }
@@ -1169,10 +1176,11 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     starts: &IndexTensor,
     slice_sizes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    if slice_sizes.len() != input.shape.len() {
+    let input_shape = input.shape();
+    if slice_sizes.len() != input_shape.len() {
         return Err(crate::Error::RankMismatch {
             op: "dynamic_slice",
-            expected: input.shape.len(),
+            expected: input_shape.len(),
             actual: slice_sizes.len(),
         });
     }
@@ -1182,23 +1190,23 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
             message: "starts must be a rank-1 tensor".into(),
         });
     }
-    if starts.values.len() != input.shape.len() {
+    if starts.values.len() != input_shape.len() {
         return Err(crate::Error::InvalidConfig {
             op: "dynamic_slice",
             message: format!(
                 "starts length {} must match input rank {}",
                 starts.values.len(),
-                input.shape.len()
+                input_shape.len()
             ),
         });
     }
 
-    let mut clamped_starts = vec![0usize; input.shape.len()];
-    for axis in 0..input.shape.len() {
+    let mut clamped_starts = vec![0usize; input_shape.len()];
+    for axis in 0..input_shape.len() {
         clamped_starts[axis] = clamp_window_start(
             "dynamic_slice",
             starts.values[axis],
-            input.shape[axis],
+            input_shape[axis],
             slice_sizes[axis],
         )?;
     }
@@ -1225,11 +1233,13 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
     update: &TypedTensor<T>,
     starts: &IndexTensor,
 ) -> crate::Result<TypedTensor<T>> {
-    if update.shape.len() != operand.shape.len() {
+    let operand_shape = operand.shape();
+    let update_shape = update.shape();
+    if update_shape.len() != operand_shape.len() {
         return Err(crate::Error::RankMismatch {
             op: "dynamic_update_slice",
-            expected: operand.shape.len(),
-            actual: update.shape.len(),
+            expected: operand_shape.len(),
+            actual: update_shape.len(),
         });
     }
     if starts.shape.len() != 1 {
@@ -1238,34 +1248,34 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
             message: "starts must be a rank-1 tensor".into(),
         });
     }
-    if starts.values.len() != operand.shape.len() {
+    if starts.values.len() != operand_shape.len() {
         return Err(crate::Error::InvalidConfig {
             op: "dynamic_update_slice",
             message: format!(
                 "starts length {} must match operand rank {}",
                 starts.values.len(),
-                operand.shape.len()
+                operand_shape.len()
             ),
         });
     }
 
-    let mut clamped_starts = vec![0usize; operand.shape.len()];
-    for axis in 0..operand.shape.len() {
+    let mut clamped_starts = vec![0usize; operand_shape.len()];
+    for axis in 0..operand_shape.len() {
         clamped_starts[axis] = clamp_window_start(
             "dynamic_update_slice",
             starts.values[axis],
-            operand.shape[axis],
-            update.shape[axis],
+            operand_shape[axis],
+            update_shape[axis],
         )?;
     }
 
     let mut out = clone_host_tensor_from_pool(buffers, "dynamic_update_slice", operand)?;
-    let mut update_idx = vec![0usize; update.shape.len()];
-    let mut operand_idx = vec![0usize; operand.shape.len()];
+    let mut update_idx = vec![0usize; update_shape.len()];
+    let mut operand_idx = vec![0usize; operand_shape.len()];
 
     for flat in 0..update.n_elements() {
-        flat_to_multi(flat, &update.shape, &mut update_idx);
-        for axis in 0..update.shape.len() {
+        flat_to_multi(flat, update_shape, &mut update_idx);
+        for axis in 0..update_shape.len() {
             operand_idx[axis] = clamped_starts[axis] + update_idx[axis];
         }
         *out.get_mut(&operand_idx) = *update.get(&update_idx);
@@ -1288,7 +1298,8 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     config: &PadConfig,
     fill: T,
 ) -> crate::Result<TypedTensor<T>> {
-    let rank = input.shape.len();
+    let input_shape = input.shape();
+    let rank = input_shape.len();
     if config.edge_padding_low.len() != rank {
         return Err(crate::Error::RankMismatch {
             op: "pad",
@@ -1311,18 +1322,18 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
         });
     }
 
-    let mut out_shape = Vec::with_capacity(input.shape.len());
-    for axis in 0..input.shape.len() {
+    let mut out_shape = Vec::with_capacity(input_shape.len());
+    for axis in 0..input_shape.len() {
         if config.interior_padding[axis] < 0 {
             return Err(crate::Error::InvalidConfig {
                 op: "pad",
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
-        let base = if input.shape[axis] == 0 {
+        let base = if input_shape[axis] == 0 {
             0
         } else {
-            (input.shape[axis] as i64 - 1) * (config.interior_padding[axis] + 1) + 1
+            (input_shape[axis] as i64 - 1) * (config.interior_padding[axis] + 1) + 1
         };
         let dim = config.edge_padding_low[axis] + config.edge_padding_high[axis] + base;
         out_shape.push(
@@ -1334,13 +1345,13 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     }
 
     let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill);
-    let mut input_idx = vec![0usize; input.shape.len()];
-    let mut out_idx = vec![0usize; input.shape.len()];
+    let mut input_idx = vec![0usize; input_shape.len()];
+    let mut out_idx = vec![0usize; input_shape.len()];
 
     for flat in 0..input.n_elements() {
-        flat_to_multi(flat, &input.shape, &mut input_idx);
+        flat_to_multi(flat, input_shape, &mut input_idx);
         let mut in_bounds = true;
-        for axis in 0..input.shape.len() {
+        for axis in 0..input_shape.len() {
             let out_pos = config.edge_padding_low[axis]
                 + input_idx[axis] as i64 * (config.interior_padding[axis] + 1);
             if !(0..out_shape[axis] as i64).contains(&out_pos) {

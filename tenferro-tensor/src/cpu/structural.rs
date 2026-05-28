@@ -98,8 +98,8 @@ fn host_view<'a, T: Copy>(
 ) -> crate::Result<StridedView<'a, T, Identity>> {
     match &tensor.buffer {
         crate::Buffer::Host(data) => {
-            let strides = col_major_strides(&tensor.shape);
-            StridedView::new(data, &tensor.shape, &strides, 0)
+            let strides = col_major_strides(tensor.shape());
+            StridedView::new(data, tensor.shape(), &strides, 0)
                 .map_err(|err| crate::Error::backend_failure(op, err))
         }
         crate::Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
@@ -152,11 +152,11 @@ where
     // SAFETY: copy_from_slice initializes every element before returning.
     let mut data = unsafe { T::pool_acquire(buffers, input.len()) };
     data.copy_from_slice(input);
-    Ok(TypedTensor {
-        buffer: crate::Buffer::Host(data),
-        shape: tensor.shape.clone(),
-        placement: tensor.placement.clone(),
-    })
+    Ok(TypedTensor::from_buffer_col_major(
+        tensor.shape().to_vec(),
+        crate::Buffer::Host(data),
+        tensor.placement.clone(),
+    ))
 }
 
 pub fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
@@ -351,7 +351,7 @@ pub fn typed_transpose<T: Copy + Clone>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    validate_permutation("transpose", perm, tensor.shape.len())?;
+    validate_permutation("transpose", perm, tensor.shape().len())?;
     let src = host_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
@@ -369,7 +369,7 @@ pub(crate) fn typed_transpose_with_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
-    validate_permutation("transpose", perm, tensor.shape.len())?;
+    validate_permutation("transpose", perm, tensor.shape().len())?;
     let src = host_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
@@ -383,20 +383,20 @@ pub fn typed_reshape<T: Clone>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let old_n: usize = tensor.shape.iter().product();
+    let old_n: usize = tensor.shape().iter().product();
     let new_n: usize = shape.iter().product();
     if old_n != new_n {
         return Err(crate::Error::ShapeMismatch {
             op: "reshape",
-            lhs: tensor.shape.clone(),
+            lhs: tensor.shape().to_vec(),
             rhs: shape.to_vec(),
         });
     }
-    Ok(TypedTensor {
-        buffer: tensor.buffer.clone(),
-        shape: shape.to_vec(),
-        placement: tensor.placement.clone(),
-    })
+    Ok(TypedTensor::from_buffer_col_major(
+        shape.to_vec(),
+        tensor.buffer.clone(),
+        tensor.placement.clone(),
+    ))
 }
 
 pub fn typed_broadcast_in_dim<T: Copy + Clone>(
@@ -432,11 +432,11 @@ fn typed_broadcast_in_dim_impl<T>(
 where
     T: Copy + Clone,
 {
-    validate_rank("broadcast_in_dim", tensor.shape.len(), dims.len())?;
+    validate_rank("broadcast_in_dim", tensor.shape().len(), dims.len())?;
     let mut seen = vec![false; shape.len()];
     let mut base_dims = vec![1usize; shape.len()];
     let mut base_strides = vec![0isize; shape.len()];
-    let source_strides = col_major_strides(&tensor.shape);
+    let source_strides = col_major_strides(tensor.shape());
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
         if seen[dst_axis] {
@@ -447,12 +447,12 @@ where
             });
         }
         seen[dst_axis] = true;
-        let source_dim = tensor.shape[src_axis];
+        let source_dim = tensor.shape()[src_axis];
         let target_dim = shape[dst_axis];
         if source_dim != target_dim && source_dim != 1 {
             return Err(crate::Error::ShapeMismatch {
                 op: "broadcast_in_dim",
-                lhs: tensor.shape.clone(),
+                lhs: tensor.shape().to_vec(),
                 rhs: shape.to_vec(),
             });
         }
@@ -484,7 +484,7 @@ where
     T: Copy + Clone + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &tensor.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, tensor.shape()) };
     map_into(&mut out.view_mut(), &typed_view("convert", tensor)?, f)
         .map_err(|err| crate::Error::backend_failure("convert", err))?;
     Ok(tensor_from_array(out))
@@ -495,8 +495,8 @@ pub fn typed_extract_diagonal<T: Copy + Clone>(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    validate_axis("extract_diagonal", axis_a, tensor.shape.len())?;
-    validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
+    validate_axis("extract_diagonal", axis_a, tensor.shape().len())?;
+    validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
     let diag = host_view("extract_diagonal", tensor)?
@@ -518,8 +518,8 @@ pub(crate) fn typed_extract_diagonal_with_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
-    validate_axis("extract_diagonal", axis_a, tensor.shape.len())?;
-    validate_axis("extract_diagonal", axis_b, tensor.shape.len())?;
+    validate_axis("extract_diagonal", axis_a, tensor.shape().len())?;
+    validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
     let diag = host_view("extract_diagonal", tensor)?
@@ -563,22 +563,22 @@ fn typed_embed_diagonal_impl<T>(
 where
     T: Copy + Clone,
 {
-    validate_axis("embed_diagonal", axis_a, tensor.shape.len())?;
-    if axis_b > tensor.shape.len() {
+    validate_axis("embed_diagonal", axis_a, tensor.shape().len())?;
+    if axis_b > tensor.shape().len() {
         return Err(crate::Error::AxisOutOfBounds {
             op: "embed_diagonal",
             axis: axis_b,
-            rank: tensor.shape.len(),
+            rank: tensor.shape().len(),
         });
     }
 
-    let n = tensor.shape[axis_a];
-    let mut out_shape = tensor.shape.clone();
+    let n = tensor.shape()[axis_a];
+    let mut out_shape = tensor.shape().to_vec();
     out_shape.insert(axis_b, n);
     let mut out = make_zeroed(out_shape);
 
-    let in_rank = tensor.shape.len();
-    let out_rank = out.shape.len();
+    let in_rank = tensor.shape().len();
+    let out_rank = out.shape().len();
     let mut in_idx = vec![0usize; in_rank];
     let mut out_idx = vec![0usize; out_rank];
 
@@ -588,7 +588,7 @@ where
     };
 
     for flat in 0..tensor.n_elements() {
-        flat_to_multi(flat, &tensor.shape, &mut in_idx);
+        flat_to_multi(flat, tensor.shape(), &mut in_idx);
         let diag_val = in_idx[axis_a];
         let mut src_axis = 0usize;
         for out_axis in 0..out_rank {
@@ -645,21 +645,21 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
     k: i64,
     upper: bool,
 ) -> crate::Result<TypedTensor<T>> {
-    if tensor.shape.len() < 2 {
+    if tensor.shape().len() < 2 {
         return Err(crate::Error::RankMismatch {
             op: if upper { "triu" } else { "tril" },
             expected: 2,
-            actual: tensor.shape.len(),
+            actual: tensor.shape().len(),
         });
     }
 
-    let rows = tensor.shape[0];
-    let cols = tensor.shape[1];
-    if tensor.shape.contains(&0) {
+    let rows = tensor.shape()[0];
+    let cols = tensor.shape()[1];
+    if tensor.shape().contains(&0) {
         return Ok(tensor.clone());
     }
 
-    let batch_count: usize = tensor.shape[2..].iter().product();
+    let batch_count: usize = tensor.shape()[2..].iter().product();
     let block_size = rows * cols;
     let mut out = tensor.clone();
     let data = match &mut out.buffer {
@@ -704,21 +704,21 @@ fn typed_triangular_mask_with_fill_pool<T>(
 where
     T: Copy + Clone + PoolScalar,
 {
-    if tensor.shape.len() < 2 {
+    if tensor.shape().len() < 2 {
         return Err(crate::Error::RankMismatch {
             op: if upper { "triu" } else { "tril" },
             expected: 2,
-            actual: tensor.shape.len(),
+            actual: tensor.shape().len(),
         });
     }
 
-    let rows = tensor.shape[0];
-    let cols = tensor.shape[1];
-    if tensor.shape.contains(&0) {
+    let rows = tensor.shape()[0];
+    let cols = tensor.shape()[1];
+    if tensor.shape().contains(&0) {
         return Ok(tensor.clone());
     }
 
-    let batch_count: usize = tensor.shape[2..].iter().product();
+    let batch_count: usize = tensor.shape()[2..].iter().product();
     let block_size = rows * cols;
     let mut out =
         clone_host_tensor_from_pool(buffers, if upper { "triu" } else { "tril" }, tensor)?;

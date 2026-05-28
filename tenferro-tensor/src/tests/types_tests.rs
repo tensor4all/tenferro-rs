@@ -5,9 +5,9 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, Buffer, BufferHandle, ConjElem, DType, DeviceId, DeviceKind,
-    GpuBackendKind, MemoryKind, Placement, StridedSliceSpec, StridedTensorView,
-    StridedTensorViewMut, Tensor, TensorRead, TensorScalar, TensorView, TypedStridedTensorView,
-    TypedStridedTensorViewMut, TypedTensor, TypedTensorView,
+    GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec, StridedTensorView,
+    StridedTensorViewMut, Tensor, TensorLayout, TensorRead, TensorScalar, TensorView,
+    TypedStridedTensorView, TypedStridedTensorViewMut, TypedTensor, TypedTensorView,
 };
 use crate::Error;
 
@@ -109,7 +109,7 @@ fn gpu_placement_is_metadata_only() {
 
 #[test]
 fn typed_tensor_rank_zero_access_and_mutation_work() {
-    let mut tensor = TypedTensor::from_vec_col_major(vec![], vec![7.0_f64]);
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![], vec![7.0_f64]);
 
     assert_eq!(tensor.n_elements(), 1);
     assert_eq!(tensor.linear_offset(&[]), 0);
@@ -117,6 +117,23 @@ fn typed_tensor_rank_zero_access_and_mutation_work() {
 
     *tensor.get_mut(&[]) = 9.5;
     assert_eq!(tensor.host_data(), &[9.5]);
+}
+
+#[test]
+fn typed_tensor_static_rank_constructs_compact_layout() {
+    let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(tensor.shape(), &[2, 2]);
+    assert_eq!(tensor.layout().strides(), &[1, 2]);
+    assert!(tensor.layout().is_compact_col_major());
+}
+
+#[test]
+fn typed_tensor_owned_layout_is_always_compact() {
+    let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]);
+    assert_eq!(
+        tensor.layout(),
+        &TensorLayout::compact(vec![3].into()).unwrap()
+    );
 }
 
 #[test]
@@ -150,17 +167,17 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     assert!(handle.is_empty());
     assert!(handle.as_any().is::<BufferHandle<f64>>());
 
-    let tensor = TypedTensor {
-        buffer: Buffer::Backend(Arc::clone(&handle)),
-        shape: vec![2],
-        placement: Placement {
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::clone(&handle)),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },
-    };
+    );
     let col_err = tensor.clone().try_into_vec_col_major().unwrap_err();
     let row_err = tensor.try_into_vec_row_major().unwrap_err();
 
@@ -181,7 +198,7 @@ fn typed_tensor_explicit_memory_order_constructors_match_logical_matrix() {
     let col =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
-    assert_eq!(row.shape, vec![2, 3]);
+    assert_eq!(row.shape(), &[2, 3]);
     assert_eq!(row.as_slice(), col.as_slice());
     assert_eq!(row.get(&[0, 0]), &1.0);
     assert_eq!(row.get(&[1, 0]), &4.0);
@@ -221,7 +238,7 @@ fn tensor_explicit_memory_order_roundtrips_dynamic_dtype() {
 #[test]
 fn col_major_typed_tensor_uses_logical_indices() {
     let tensor =
-        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
     assert_eq!(*tensor.get(&[0, 2]), 3.0);
     assert_eq!(*tensor.get(&[1, 0]), 4.0);
@@ -237,13 +254,13 @@ fn typed_tensor_linear_offsets_cover_higher_rank_shapes() {
 #[test]
 fn typed_tensor_iterators_follow_physical_buffer_order() {
     let tensor =
-        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
     assert_eq!(
         tensor.iter().copied().collect::<Vec<_>>(),
         vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
     );
 
-    let mut tensor = TypedTensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
+    let mut tensor = TypedTensor::<i64>::from_vec_col_major(vec![3], vec![1_i64, 2, 3]);
     for value in tensor.iter_mut() {
         *value *= 2;
     }
@@ -271,7 +288,7 @@ fn tensor_iterators_are_typed_by_requested_scalar() {
 #[test]
 fn typed_tensor_checked_and_unchecked_accessors_work() {
     let mut tensor =
-        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]);
 
     assert_eq!(tensor.as_physical_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
     assert_eq!(tensor.try_get(&[1, 2]), Some(&6.0));
@@ -292,14 +309,14 @@ fn typed_tensor_checked_and_unchecked_accessors_work() {
 
 #[test]
 fn typed_tensor_rank_fixed_accessors_use_column_major_offsets() {
-    let mut col2 = TypedTensor::from_vec_col_major(vec![2, 3], vec![1_i64, 2, 3, 4, 5, 6]);
+    let mut col2 = TypedTensor::<i64>::from_vec_col_major(vec![2, 3], vec![1_i64, 2, 3, 4, 5, 6]);
 
     assert_eq!(col2.linear_offset2(1, 2), 5);
     assert_eq!(*col2.get2(1, 2), 6);
     *col2.get_mut2(0, 1) = 30;
     assert_eq!(col2.as_physical_slice()[2], 30);
 
-    let mut col3 = TypedTensor::from_vec_col_major(vec![2, 3, 2], (0_i64..12).collect());
+    let mut col3 = TypedTensor::<i64>::from_vec_col_major(vec![2, 3, 2], (0_i64..12).collect());
 
     assert_eq!(col3.linear_offset3(1, 2, 1), 11);
     assert_eq!(*col3.get3(1, 2, 1), 11);
@@ -361,21 +378,21 @@ fn backend_buffers_panic_when_host_access_is_requested() {
             ordinal: 0,
         }),
     };
-    let tensor = TypedTensor {
-        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
-        shape: vec![1],
-        placement: placement.clone(),
-    };
+    let tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![1],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        placement.clone(),
+    );
     assert_eq!(tensor.placement.device.as_ref().unwrap().ordinal, 0);
 
     let host_data = catch_unwind(AssertUnwindSafe(|| tensor.host_data()));
     assert!(host_data.is_err());
 
-    let mut mutable_tensor = TypedTensor {
-        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(8))),
-        shape: vec![1],
+    let mut mutable_tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![1],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(8))),
         placement,
-    };
+    );
     let host_data_mut = catch_unwind(AssertUnwindSafe(|| {
         let _ = mutable_tensor.host_data_mut();
     }));

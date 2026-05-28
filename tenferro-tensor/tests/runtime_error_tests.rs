@@ -16,17 +16,17 @@ fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
 }
 
 fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
-    Tensor::F64(TypedTensor {
-        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+    Tensor::F64(TypedTensor::from_buffer_col_major(
         shape,
-        placement: Placement {
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(DeviceId {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },
-    })
+    ))
 }
 
 #[test]

@@ -180,19 +180,19 @@ pub(crate) fn add_with_pool(
         (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_add_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_add_with_pool(buffers, a, b)?)),
-        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
             Ok(Tensor::C32(typed_add_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
             Ok(Tensor::C32(typed_add_with_pool(buffers, a, &scalar)?))
         }
-        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("add", a)?[0]);
             Ok(Tensor::C64(typed_add_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("add", b)?[0]);
             Ok(Tensor::C64(typed_add_with_pool(buffers, a, &scalar)?))
         }
@@ -220,19 +220,19 @@ pub(crate) fn mul_with_pool(
         (Tensor::I64(a), Tensor::I64(b)) => Ok(Tensor::I64(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_mul_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_mul_with_pool(buffers, a, b)?)),
-        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
             Ok(Tensor::C32(typed_mul_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
             Ok(Tensor::C32(typed_mul_with_pool(buffers, a, &scalar)?))
         }
-        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("mul", a)?[0]);
             Ok(Tensor::C64(typed_mul_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("mul", b)?[0]);
             Ok(Tensor::C64(typed_mul_with_pool(buffers, a, &scalar)?))
         }
@@ -258,19 +258,19 @@ pub(crate) fn div_with_pool(
         (Tensor::F64(a), Tensor::F64(b)) => Ok(Tensor::F64(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_div_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_div_with_pool(buffers, a, b)?)),
-        (Tensor::F32(a), Tensor::C32(b)) if a.shape.is_empty() => {
+        (Tensor::F32(a), Tensor::C32(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
             Ok(Tensor::C32(typed_div_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C32(a), Tensor::F32(b)) if b.shape.is_empty() => {
+        (Tensor::C32(a), Tensor::F32(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
             Ok(Tensor::C32(typed_div_with_pool(buffers, a, &scalar)?))
         }
-        (Tensor::F64(a), Tensor::C64(b)) if a.shape.is_empty() => {
+        (Tensor::F64(a), Tensor::C64(b)) if a.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("div", a)?[0]);
             Ok(Tensor::C64(typed_div_with_pool(buffers, &scalar, b)?))
         }
-        (Tensor::C64(a), Tensor::F64(b)) if b.shape.is_empty() => {
+        (Tensor::C64(a), Tensor::F64(b)) if b.shape().is_empty() => {
             let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0]);
             Ok(Tensor::C64(typed_div_with_pool(buffers, a, &scalar)?))
         }
@@ -525,9 +525,9 @@ pub(crate) fn typed_add_with_pool<T>(
 where
     T: Copy + Clone + Zero + Add<Output = T> + PoolScalar,
 {
-    if lhs.shape == rhs.shape {
+    if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view("add", lhs)?,
@@ -536,19 +536,19 @@ where
         )
         .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
-    } else if lhs.shape.is_empty() {
+    } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("add", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
             scalar + x
         })
         .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
         Ok(tensor_from_array(out))
-    } else if rhs.shape.is_empty() {
+    } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("add", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
             x + scalar
         })
@@ -557,8 +557,8 @@ where
     } else {
         Err(crate::Error::ShapeMismatch {
             op: "add",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         })
     }
 }
@@ -578,9 +578,9 @@ pub(crate) fn typed_mul_with_pool<T>(
 where
     T: Copy + Clone + Zero + Mul<Output = T> + PoolScalar,
 {
-    if lhs.shape == rhs.shape {
+    if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view("mul", lhs)?,
@@ -589,19 +589,19 @@ where
         )
         .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
-    } else if lhs.shape.is_empty() {
+    } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("mul", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("mul", rhs)?, |x| {
             scalar * x
         })
         .map_err(|err| crate::Error::backend_failure("mul", err))?;
         Ok(tensor_from_array(out))
-    } else if rhs.shape.is_empty() {
+    } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("mul", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("mul", lhs)?, |x| {
             x * scalar
         })
@@ -610,8 +610,8 @@ where
     } else {
         Err(crate::Error::ShapeMismatch {
             op: "mul",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         })
     }
 }
@@ -631,9 +631,9 @@ pub(crate) fn typed_div_with_pool<T>(
 where
     T: Copy + Clone + Zero + Div<Output = T> + PoolScalar,
 {
-    if lhs.shape == rhs.shape {
+    if lhs.shape() == rhs.shape() {
         // SAFETY: zip_map2_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         zip_map2_into(
             &mut out.view_mut(),
             &typed_view("div", lhs)?,
@@ -642,19 +642,19 @@ where
         )
         .map_err(|err| crate::Error::backend_failure("div", err))?;
         Ok(tensor_from_array(out))
-    } else if lhs.shape.is_empty() {
+    } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("div", lhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &rhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("div", rhs)?, |x| {
             scalar / x
         })
         .map_err(|err| crate::Error::backend_failure("div", err))?;
         Ok(tensor_from_array(out))
-    } else if rhs.shape.is_empty() {
+    } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("div", rhs)?[0];
         // SAFETY: map_into overwrites every output element.
-        let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+        let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
         map_into(&mut out.view_mut(), &typed_view("div", lhs)?, |x| {
             x / scalar
         })
@@ -663,8 +663,8 @@ where
     } else {
         Err(crate::Error::ShapeMismatch {
             op: "div",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         })
     }
 }
@@ -684,7 +684,7 @@ where
     T: Copy + Clone + Zero + Neg<Output = T> + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
         .map_err(|err| crate::Error::backend_failure("neg", err))?;
     Ok(tensor_from_array(out))
@@ -705,7 +705,7 @@ where
     T: Copy + Clone + Zero + ConjElem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view("conj", input)?, |x| {
         x.conj_elem()
     })
@@ -729,7 +729,7 @@ where
     T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.abs_elem()
     })
@@ -753,7 +753,7 @@ where
     T: Tier2Elem + PoolScalar,
 {
     // SAFETY: map_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     map_into(&mut out.view_mut(), &typed_view("sign", input)?, |x| {
         x.sign_elem()
     })
@@ -780,15 +780,15 @@ pub(crate) fn typed_maximum_with_pool<T>(
 where
     T: Tier2Elem + PoolScalar,
 {
-    if lhs.shape != rhs.shape {
+    if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "maximum",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("maximum", lhs)?,
@@ -818,15 +818,15 @@ pub(crate) fn typed_minimum_with_pool<T>(
 where
     T: Tier2Elem + PoolScalar,
 {
-    if lhs.shape != rhs.shape {
+    if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "minimum",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("minimum", lhs)?,
@@ -858,15 +858,15 @@ pub(crate) fn typed_compare_with_pool<T>(
 where
     T: CompareElem,
 {
-    if lhs.shape != rhs.shape {
+    if lhs.shape() != rhs.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "compare",
-            lhs: lhs.shape.clone(),
-            rhs: rhs.shape.clone(),
+            lhs: lhs.shape().to_vec(),
+            rhs: rhs.shape().to_vec(),
         });
     }
     // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &lhs.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) };
     zip_map2_into(
         &mut out.view_mut(),
         &typed_view("compare", lhs)?,
@@ -886,22 +886,22 @@ pub(crate) fn typed_select_with_pool<T>(
 where
     T: Copy + PoolScalar,
 {
-    if pred.shape != on_true.shape {
+    if pred.shape() != on_true.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "select",
-            lhs: pred.shape.clone(),
-            rhs: on_true.shape.clone(),
+            lhs: pred.shape().to_vec(),
+            rhs: on_true.shape().to_vec(),
         });
     }
-    if pred.shape != on_false.shape {
+    if pred.shape() != on_false.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "select",
-            lhs: pred.shape.clone(),
-            rhs: on_false.shape.clone(),
+            lhs: pred.shape().to_vec(),
+            rhs: on_false.shape().to_vec(),
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &pred.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view("select", pred)?,
@@ -922,22 +922,22 @@ pub(crate) fn typed_clamp_with_pool<T>(
 where
     T: Tier2Elem + PoolScalar,
 {
-    if input.shape != lower.shape {
+    if input.shape() != lower.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "clamp",
-            lhs: input.shape.clone(),
-            rhs: lower.shape.clone(),
+            lhs: input.shape().to_vec(),
+            rhs: lower.shape().to_vec(),
         });
     }
-    if input.shape != upper.shape {
+    if input.shape() != upper.shape() {
         return Err(crate::Error::ShapeMismatch {
             op: "clamp",
-            lhs: input.shape.clone(),
-            rhs: upper.shape.clone(),
+            lhs: input.shape().to_vec(),
+            rhs: upper.shape().to_vec(),
         });
     }
     // SAFETY: zip_map3_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, &input.shape) };
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) };
     zip_map3_into(
         &mut out.view_mut(),
         &typed_view("clamp", input)?,

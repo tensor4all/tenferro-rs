@@ -72,17 +72,17 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     t: &TypedTensor<T>,
 ) -> Result<()> {
-    if t.shape.len() < 2 {
+    if t.shape().len() < 2 {
         return Err(Error::RankMismatch {
             op: "solve",
             expected: 2,
-            actual: t.shape.len(),
+            actual: t.shape().len(),
         });
     }
-    let rows = t.shape[0];
-    let cols = t.shape[1];
+    let rows = t.shape()[0];
+    let cols = t.shape()[1];
     let n = rows.min(cols);
-    let batch_total: usize = t.shape[2..].iter().product();
+    let batch_total: usize = t.shape()[2..].iter().product();
     let batch_total = batch_total.max(1);
     let slice_size = rows * cols;
     for batch_idx in 0..batch_total {

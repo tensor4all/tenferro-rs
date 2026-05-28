@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_zeros_ones() {
     let z = TypedTensor::<f64>::zeros(vec![2, 3]);
-    assert_eq!(z.shape, vec![2, 3]);
+    assert_eq!(z.shape(), &[2, 3]);
     assert_eq!(z.n_elements(), 6);
     for i in 0..2 {
         for j in 0..3 {
@@ -168,7 +168,7 @@ fn test_mul_rank0_complex_scalar_broadcasts_over_complex_tensor() {
 #[test]
 fn test_rank0_typed_tensor_behaves_like_scalar() {
     let mut zeros = TypedTensor::<f64>::zeros(vec![]);
-    assert_eq!(zeros.shape, Vec::<usize>::new());
+    assert_eq!(zeros.shape(), &[] as &[usize]);
     assert_eq!(zeros.n_elements(), 1);
     assert_eq!(zeros.linear_offset(&[]), 0);
     assert_eq!(zeros.get(&[]), &0.0);
@@ -177,12 +177,12 @@ fn test_rank0_typed_tensor_behaves_like_scalar() {
     assert_eq!(zeros.host_data(), &[2.5]);
 
     let ones = TypedTensor::<f64>::ones(vec![]);
-    assert_eq!(ones.shape, Vec::<usize>::new());
+    assert_eq!(ones.shape(), &[] as &[usize]);
     assert_eq!(ones.n_elements(), 1);
     assert_eq!(ones.get(&[]), &1.0);
 
     let scalar = TypedTensor::<f64>::from_vec_col_major(vec![], vec![7.0]);
-    assert_eq!(scalar.shape, Vec::<usize>::new());
+    assert_eq!(scalar.shape(), &[] as &[usize]);
     assert_eq!(scalar.n_elements(), 1);
     assert_eq!(scalar.linear_offset(&[]), 0);
     assert_eq!(scalar.get(&[]), &7.0);

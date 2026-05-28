@@ -88,7 +88,7 @@ fn gemm_analysis_cache_keeps_direct_and_canonical_candidates_separate() {
     assert!(direct.is_none());
 
     let (_lhs_perm, rhs_perm, canonical_config) =
-        canonical_gemm_layout(&config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(&config, lhs.shape().len(), rhs.shape().len());
     assert_eq!(rhs_perm.as_slice(), &[1, 0]);
     let rhs_canonical = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]);
     let canonical = analyse_gemm_cached(
@@ -170,7 +170,7 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     let out = dot_general_blas(&mut buffers, &mut cache, &lhs, &rhs, &config)
         .expect("dot_general should succeed");
 
-    assert_eq!(out.shape, vec![2, 2]);
+    assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.host_data(), &[89.0, 116.0, 98.0, 128.0]);
 }
 

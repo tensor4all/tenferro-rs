@@ -1,4 +1,4 @@
-use super::{linear_offset, Tensor, TensorScalar, TypedTensor};
+use super::{linear_offset, Tensor, TensorRank, TensorScalar, TypedTensor};
 
 fn try_linear_offset(shape: &[usize], indices: &[usize]) -> Option<usize> {
     if indices.len() != shape.len() {
@@ -64,7 +64,7 @@ fn linear_offset3_unchecked(shape: &[usize], i: usize, j: usize, k: usize) -> us
     i + shape[0] * (j + shape[1] * k)
 }
 
-impl<T: Clone> TypedTensor<T> {
+impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// View the tensor data as a flat slice in physical memory order.
     ///
     /// This is an explicit alias for [`TypedTensor::as_slice`].
@@ -139,7 +139,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.linear_offset2(1, 2), 5);
     /// ```
     pub fn linear_offset2(&self, i: usize, j: usize) -> usize {
-        linear_offset2(&self.shape, i, j)
+        linear_offset2(self.shape(), i, j)
     }
 
     /// Compute the linear physical-buffer offset for a rank-3 logical index.
@@ -153,7 +153,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.linear_offset3(1, 2, 1), 11);
     /// ```
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> usize {
-        linear_offset3(&self.shape, i, j, k)
+        linear_offset3(self.shape(), i, j, k)
     }
 
     /// Try to borrow a single element by multi-index.
@@ -170,7 +170,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.try_get(&[2]), None);
     /// ```
     pub fn try_get(&self, indices: &[usize]) -> Option<&T> {
-        let off = try_linear_offset(&self.shape, indices)?;
+        let off = try_linear_offset(self.shape(), indices)?;
         self.host_data().get(off)
     }
 
@@ -223,7 +223,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(unsafe { *t.get_unchecked(&[1]) }, 2.0);
     /// ```
     pub unsafe fn get_unchecked(&self, indices: &[usize]) -> &T {
-        let off = linear_offset_unchecked(&self.shape, indices);
+        let off = linear_offset_unchecked(self.shape(), indices);
         unsafe { self.host_data().get_unchecked(off) }
     }
 
@@ -241,7 +241,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.as_slice(), &[2.0]);
     /// ```
     pub fn try_get_mut(&mut self, indices: &[usize]) -> Option<&mut T> {
-        let off = try_linear_offset(&self.shape, indices)?;
+        let off = try_linear_offset(self.shape(), indices)?;
         self.host_data_mut().get_mut(off)
     }
 
@@ -299,7 +299,7 @@ impl<T: Clone> TypedTensor<T> {
     /// assert_eq!(t.as_slice(), &[2.0]);
     /// ```
     pub unsafe fn get_unchecked_mut(&mut self, indices: &[usize]) -> &mut T {
-        let off = linear_offset_unchecked(&self.shape, indices);
+        let off = linear_offset_unchecked(self.shape(), indices);
         unsafe { self.host_data_mut().get_unchecked_mut(off) }
     }
 }
