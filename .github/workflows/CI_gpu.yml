@@ -126,15 +126,6 @@ jobs:
             echo "nvidia-smi not found; the ubuntu-gpu larger runner image should include NVIDIA drivers."
             exit 1
           fi
-
-          echo "=== Loading NVIDIA kernel modules ==="
-          sudo modprobe nvidia
-          sudo modprobe nvidia_uvm
-
-          echo "=== GPU devices ==="
-          ls -la /dev/nvidia* 2>/dev/null || echo "No /dev/nvidia* devices yet"
-
-          echo "=== NVIDIA driver status ==="
           nvidia-smi
 
           cuda_runtime_cache="${RUNNER_TEMP}/cuda-runtime-${CUDA_RUNTIME_VERSION}"
