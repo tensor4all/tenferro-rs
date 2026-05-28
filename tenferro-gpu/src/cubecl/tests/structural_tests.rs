@@ -1,5 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use crate::{DType, MemoryKind, Tensor};
+use crate::{DType, Error, MemoryKind, Tensor, TypedTensor};
 use tenferro_tensor::{
     GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorStructural, TensorViewCanonicalization,
 };
@@ -265,6 +265,129 @@ fn cuda_to_contiguous_preserves_negative_stride_view() {
 
     let actual = download(&gpu, &Tensor::I32(compact));
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[4, 3, 2, 1]);
+}
+
+#[test]
+#[ignore]
+fn cuda_to_contiguous_rank_zero_scalar_stays_on_cuda() {
+    let mut gpu = gpu_backend();
+    let input = tensor_i32(vec![], vec![7]);
+    let gpu_input = upload(&gpu, &input);
+    let Tensor::I32(gpu_tensor) = gpu_input else {
+        panic!("expected i32 tensor");
+    };
+
+    let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
+
+    assert_eq!(compact.shape(), &[] as &[usize]);
+    assert_eq!(compact.placement.memory_kind, MemoryKind::Device);
+    let actual = download(&gpu, &Tensor::I32(compact));
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[7]);
+}
+
+#[test]
+#[ignore]
+fn cuda_to_contiguous_empty_view_stays_on_cuda() {
+    let mut gpu = gpu_backend();
+    let input = tensor_i32(vec![0, 3], vec![]);
+    let gpu_input = upload(&gpu, &input);
+    let Tensor::I32(gpu_tensor) = gpu_input else {
+        panic!("expected i32 tensor");
+    };
+
+    let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
+
+    assert_eq!(compact.shape(), &[0, 3]);
+    assert_eq!(compact.placement.memory_kind, MemoryKind::Device);
+    let actual = download(&gpu, &Tensor::I32(compact));
+    assert_eq!(actual.shape(), &[0, 3]);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[] as &[i32]);
+}
+
+#[test]
+#[ignore]
+fn cuda_to_contiguous_bool_view_returns_backend_failure() {
+    let mut gpu = gpu_backend();
+    let input = tensor_bool(vec![2], vec![true, false]);
+    let gpu_input = upload(&gpu, &input);
+    let Tensor::Bool(gpu_tensor) = gpu_input else {
+        panic!("expected bool tensor");
+    };
+
+    let err = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CubeclBackend::to_contiguous",
+            ref message,
+        } if message.contains("unsupported dtype")
+    ));
+}
+
+#[test]
+#[ignore]
+fn cuda_to_contiguous_host_view_returns_upload_hint() {
+    let mut gpu = gpu_backend();
+    let host = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+
+    let err = gpu.to_contiguous(&host.as_view()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CubeclBackend::to_contiguous",
+            ref message,
+        } if message.contains("upload_tensor()")
+    ));
+}
+
+#[test]
+#[ignore]
+fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
+    let mut gpu = gpu_backend();
+    let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
+    let dst_host = tensor_i32(vec![2], vec![0, 0]);
+    let mut gpu_dst = upload(&gpu, &dst_host);
+    let Tensor::I32(dst) = &mut gpu_dst else {
+        panic!("expected i32 tensor");
+    };
+
+    let err = gpu
+        .copy_from_contiguous(&src, &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CubeclBackend::copy_from_contiguous",
+            ref message,
+        } if message.contains("upload_tensor()")
+    ));
+}
+
+#[test]
+#[ignore]
+fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2], vec![1, 2]);
+    let gpu_src = upload(&gpu, &src_host);
+    let Tensor::I32(src) = &gpu_src else {
+        panic!("expected i32 tensor");
+    };
+    let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]);
+
+    let err = gpu
+        .copy_from_contiguous(src, &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CubeclBackend::copy_from_contiguous",
+            ref message,
+        } if message.contains("upload_tensor()")
+    ));
 }
 
 #[test]
