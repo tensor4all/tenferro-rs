@@ -814,7 +814,7 @@ fn tensor_view_covers_dtype_shape_and_materialization() {
 }
 
 #[test]
-fn strided_tensor_view_materializes_sliced_host_layouts() {
+fn typed_tensor_view_materializes_sliced_host_layouts() {
     let row_major = [1_i32, 2, 3, 4, 5, 6];
     let view = TypedTensorView::from_slice(&[2, 3], &[3, 1], 0, &row_major).unwrap();
 
@@ -1065,7 +1065,7 @@ fn strided_tensor_view_validation_covers_error_edges() {
 }
 
 #[test]
-fn strided_tensor_view_slice_permute_and_reshape_cover_boundaries() {
+fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     let data = [1_i32, 2, 3, 4, 5, 6];
     let view = TypedTensorView::from_slice(&[2, 3], &[3, 1], 0, &data).unwrap();
 

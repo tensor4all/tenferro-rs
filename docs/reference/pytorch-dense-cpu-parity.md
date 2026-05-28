@@ -40,7 +40,7 @@ Status labels in the matrix use:
 
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
-| Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `view`, `permute`, `broadcast`, and `diagonal` are zero-copy tensor views, while `reshape` now follows PyTorch-style view-or-copy semantics; AD coverage is not yet documented as a first-class family surface |
+| Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | tenferro exposes metadata-only view APIs such as `transpose_view`, `slice_view`, `reshape_view`, broadcast views, and diagonal views; AD coverage is not yet documented as a first-class family surface |
 | Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the prim surface, and semiring execution now routes directly through the family contracts; the remaining gap is GPU capability breadth, not legacy layering |
 | Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
@@ -65,7 +65,10 @@ Status labels in the matrix use:
 
 Owned by `tenferro-tensor`:
 
-- `permute`, `transpose`, `reshape`, `view`, `expand`
+- PyTorch-style `permute`/`transpose` map to tenferro metadata-only
+  `transpose_view`
+- `reshape_view`, `slice_view`, view construction, and broadcast/expand-style
+  views
 - `diagonal`, `select`, `narrow`
 - `view_as_real`, `view_as_complex`
 
@@ -155,10 +158,11 @@ and execution. The remaining gap is breadth, not existence:
 
 ### 2. Structural reorder now lives in `tenferro-tensor`
 
-The current design keeps `permute` in `tenferro-tensor` as a view and uses
-`MakeContiguous` as the execution boundary. The old materializing `Permute`
-primitive has now been removed from `tenferro-prims`, which aligns the public
-substrate with the intended semiring-core design.
+The current design keeps axis reordering in `tenferro-tensor` as metadata-only
+`transpose_view` operations and uses explicit contiguous/canonicalization
+boundaries for execution. The old materializing `Permute` primitive has now
+been removed from `tenferro-prims`, which aligns the public substrate with the
+intended semiring-core design.
 
 ### 3. `tenferro-linalg` is public/composite in design and production, but backend breadth is uneven
 

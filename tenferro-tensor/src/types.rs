@@ -1983,6 +1983,24 @@ pub enum Tensor {
 }
 
 /// Dynamic read-only borrowed tensor view.
+///
+/// `TensorView` keeps dtype erased while borrowing typed view metadata and
+/// storage. Use [`TypedTensorView`] directly when the scalar type is statically
+/// known.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, TensorView, TypedTensorView};
+///
+/// let data = [1_i32, 2, 3, 4];
+/// let typed = TypedTensorView::from_slice([2, 2], [1, 2], 0, &data)?;
+/// let view = TensorView::I32(typed);
+///
+/// assert_eq!(view.dtype(), DType::I32);
+/// assert_eq!(view.shape(), &[2, 2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Clone, Debug)]
 pub enum TensorView<'a> {
     F32(TypedTensorView<'a, f32>),
@@ -1995,6 +2013,21 @@ pub enum TensorView<'a> {
 }
 
 /// Read-only tensor input accepted by synchronous eager kernels.
+///
+/// `TensorRead` lets kernels accept either an owned tensor reference or a
+/// borrowed [`TensorView`] without forcing callers to materialize first.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DType, Tensor, TensorRead};
+///
+/// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+/// let read = TensorRead::from_tensor(&tensor);
+///
+/// assert_eq!(read.dtype(), DType::F64);
+/// assert_eq!(read.shape(), &[2]);
+/// ```
 #[derive(Clone, Debug)]
 pub enum TensorRead<'a> {
     Tensor(&'a Tensor),
@@ -2134,30 +2167,116 @@ impl From<TypedTensor<Complex<f32>>> for Tensor {
 }
 
 impl<'a> TensorView<'a> {
+    /// Create a dynamic `f32` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1.0_f32, 2.0];
+    /// let view = TensorView::f32(&[2], &data)?;
+    /// assert_eq!(view.dtype(), DType::F32);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn f32(shape: &'a [usize], data: &'a [f32]) -> crate::Result<Self> {
         Ok(Self::F32(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `f64` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1.0_f64, 2.0];
+    /// let view = TensorView::f64(&[2], &data)?;
+    /// assert_eq!(view.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn f64(shape: &'a [usize], data: &'a [f64]) -> crate::Result<Self> {
         Ok(Self::F64(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `i64` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1_i64, 2];
+    /// let view = TensorView::i64(&[2], &data)?;
+    /// assert_eq!(view.dtype(), DType::I64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn i64(shape: &'a [usize], data: &'a [i64]) -> crate::Result<Self> {
         Ok(Self::I64(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `i32` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [1_i32, 2];
+    /// let view = TensorView::i32(&[2], &data)?;
+    /// assert_eq!(view.dtype(), DType::I32);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn i32(shape: &'a [usize], data: &'a [i32]) -> crate::Result<Self> {
         Ok(Self::I32(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `bool` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [true, false];
+    /// let view = TensorView::bool(&[2], &data)?;
+    /// assert_eq!(view.dtype(), DType::Bool);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn bool(shape: &'a [usize], data: &'a [bool]) -> crate::Result<Self> {
         Ok(Self::Bool(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `Complex32` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex32;
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [Complex32::new(1.0, 2.0)];
+    /// let view = TensorView::c32(&[1], &data)?;
+    /// assert_eq!(view.dtype(), DType::C32);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
         Ok(Self::C32(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Create a dynamic `Complex64` view over compact column-major host data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let data = [Complex64::new(1.0, 2.0)];
+    /// let view = TensorView::c64(&[1], &data)?;
+    /// assert_eq!(view.dtype(), DType::C64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn c64(shape: &'a [usize], data: &'a [Complex64]) -> crate::Result<Self> {
         Ok(Self::C64(TypedTensorView::from_col_major(shape, data)?))
     }
