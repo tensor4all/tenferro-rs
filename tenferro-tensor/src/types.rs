@@ -2452,7 +2452,7 @@ fn for_each_layout_offset_col_major(
         return f(offset);
     }
 
-    let mut index = vec![0; shape.len()];
+    let mut index = vec![0usize; shape.len()];
     loop {
         let physical = usize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
             op,
@@ -2460,27 +2460,33 @@ fn for_each_layout_offset_col_major(
         })?;
         f(physical)?;
 
-        let mut axis = 0;
-        loop {
-            index[axis] += 1;
-            offset =
-                offset
-                    .checked_add(strides[axis])
+        let mut advance_axis = None;
+        for axis in 0..shape.len() {
+            let next_index =
+                index[axis]
+                    .checked_add(1)
                     .ok_or_else(|| crate::Error::InvalidConfig {
                         op,
-                        message: "view offset overflows".to_string(),
+                        message: "logical index overflows".to_string(),
                     })?;
-            if index[axis] < shape[axis] {
+            if next_index < shape[axis] {
+                advance_axis = Some((axis, next_index));
                 break;
             }
+        }
 
-            let extent = isize::try_from(shape[axis]).map_err(|_| crate::Error::InvalidConfig {
+        let Some((advance_axis, next_index)) = advance_axis else {
+            return Ok(());
+        };
+
+        for axis in 0..advance_axis {
+            let steps = isize::try_from(index[axis]).map_err(|_| crate::Error::InvalidConfig {
                 op,
-                message: "shape extent does not fit in isize".to_string(),
+                message: "logical index does not fit in isize".to_string(),
             })?;
             let rewind =
                 strides[axis]
-                    .checked_mul(extent)
+                    .checked_mul(steps)
                     .ok_or_else(|| crate::Error::InvalidConfig {
                         op,
                         message: "stride rewind overflows".to_string(),
@@ -2492,11 +2498,15 @@ fn for_each_layout_offset_col_major(
                     message: "view offset rewind overflows".to_string(),
                 })?;
             index[axis] = 0;
-            axis += 1;
-            if axis == shape.len() {
-                return Ok(());
-            }
         }
+
+        offset = offset.checked_add(strides[advance_axis]).ok_or_else(|| {
+            crate::Error::InvalidConfig {
+                op,
+                message: "view offset overflows".to_string(),
+            }
+        })?;
+        index[advance_axis] = next_index;
     }
 }
 

@@ -220,6 +220,16 @@ fn non_contiguous_host_view_to_contiguous_preserves_host_placement() {
 }
 
 #[test]
+fn non_contiguous_host_view_to_contiguous_ignores_singleton_axis_stride_overflow() {
+    let data = [10_i32, 20];
+    let view = TypedTensorView::from_slice(vec![1], vec![isize::MAX], 1, &data).unwrap();
+
+    let compact = view.to_contiguous().unwrap();
+
+    assert_eq!(compact.as_slice(), &[20]);
+}
+
+#[test]
 fn typed_tensor_view_backend_to_contiguous_returns_backend_failure() {
     let tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![2],
@@ -254,6 +264,17 @@ fn mutable_host_copy_back_writes_strided_output() {
         out.copy_from_contiguous(&scratch).unwrap();
     }
     assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
+}
+
+#[test]
+fn mutable_host_copy_back_ignores_singleton_axis_stride_overflow() {
+    let mut data = vec![10_i32, 20];
+    let mut view = TypedTensorViewMut::from_slice(vec![1], vec![isize::MAX], 1, &mut data).unwrap();
+    let scratch = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![99]);
+
+    view.copy_from_contiguous(&scratch).unwrap();
+
+    assert_eq!(data, vec![10, 99]);
 }
 
 #[test]
