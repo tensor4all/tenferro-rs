@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::cpu::CpuContext;
-use tenferro_tensor::{Buffer, Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     fn parity_one() -> Self;
@@ -72,14 +72,14 @@ fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
-    if input.shape.len() != 2 {
+    if input.shape().len() != 2 {
         return Err(tenferro_tensor::Error::RankMismatch {
             op,
             expected: 2,
-            actual: input.shape.len(),
+            actual: input.shape().len(),
         });
     }
-    Ok((input.shape[0], input.shape[1]))
+    Ok((input.shape()[0], input.shape()[1]))
 }
 
 fn square_matrix_dim<T>(
@@ -102,11 +102,9 @@ fn tensor_from_vec_with_template<T: Clone, U>(
     data: Vec<T>,
     template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
-    TypedTensor {
-        buffer: Buffer::Host(data),
-        shape,
-        placement: template.placement.clone(),
-    }
+    let mut tensor = TypedTensor::from_vec_col_major(shape, data);
+    tensor.placement = template.placement.clone();
+    tensor
 }
 
 fn col_major_vec_from_mat<T: Copy + PoolScalar>(
@@ -411,7 +409,7 @@ fn split_core_and_batch<'a, T>(
     core_rank: usize,
     op: &'static str,
 ) -> tenferro_tensor::Result<(&'a [usize], &'a [usize])> {
-    split_shape_core_and_batch(&input.shape, core_rank, op)
+    split_shape_core_and_batch(input.shape(), core_rank, op)
 }
 
 fn matrix_core_and_batch<'a, T>(
@@ -490,20 +488,20 @@ where
         let batch_output = op(buffers, &batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+            if batch_output.shape() != expected_shape.as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: expected_shape.clone(),
                 });
             }
         } else {
             let output_elements =
-                checked_product(op_name, "output core shape", &batch_output.shape)?;
+                checked_product(op_name, "output core shape", batch_output.shape())?;
             let capacity =
                 checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
             out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
-            out_core_shape = Some(batch_output.shape.clone());
+            out_core_shape = Some(batch_output.shape().to_vec());
         }
 
         match &mut out_data {
@@ -564,11 +562,12 @@ where
         if out_shapes.is_empty() {
             out_shapes = batch_outputs
                 .iter()
-                .map(|tensor| tensor.shape.clone())
+                .map(|tensor| tensor.shape().to_vec())
                 .collect();
             let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
             for tensor in &batch_outputs {
-                let output_elements = checked_product(op_name, "output core shape", &tensor.shape)?;
+                let output_elements =
+                    checked_product(op_name, "output core shape", tensor.shape())?;
                 let capacity =
                     checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
                 pooled_outputs.push(buffers.acquire_with_capacity::<T>(capacity));
@@ -585,10 +584,10 @@ where
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+            if batch_output.shape() != out_shapes[idx].as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: out_shapes[idx].clone(),
                 });
             }
@@ -647,11 +646,12 @@ where
         if out_shapes.is_empty() {
             out_shapes = batch_outputs
                 .iter()
-                .map(|tensor| tensor.shape.clone())
+                .map(|tensor| tensor.shape().to_vec())
                 .collect();
             let mut pooled_outputs = Vec::with_capacity(batch_outputs.len());
             for tensor in &batch_outputs {
-                let output_elements = checked_product(op_name, "output core shape", &tensor.shape)?;
+                let output_elements =
+                    checked_product(op_name, "output core shape", tensor.shape())?;
                 let capacity =
                     checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
                 pooled_outputs.push(buffers.acquire_with_capacity::<OutT>(capacity));
@@ -668,10 +668,10 @@ where
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+            if batch_output.shape() != out_shapes[idx].as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: out_shapes[idx].clone(),
                 });
             }
@@ -750,20 +750,20 @@ where
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+            if batch_output.shape() != expected_shape.as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: expected_shape.clone(),
                 });
             }
         } else {
             let output_elements =
-                checked_product(op_name, "output core shape", &batch_output.shape)?;
+                checked_product(op_name, "output core shape", batch_output.shape())?;
             let capacity =
                 checked_repeated_len(op_name, "output buffer", output_elements, batch_count)?;
             out_data = Some(buffers.acquire_with_capacity::<T>(capacity));
-            out_core_shape = Some(batch_output.shape.clone());
+            out_core_shape = Some(batch_output.shape().to_vec());
         }
 
         match &mut out_data {
@@ -2099,7 +2099,7 @@ pub(crate) fn cholesky<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "cholesky")?;
         return Ok(tensor_from_vec_with_template(
             matrix_with_batch_shape(n, n, batch_shape),
@@ -2117,7 +2117,7 @@ pub(crate) fn lu<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "lu")?;
         let k = m.min(n);
         let parity_elements = checked_product("lu", "batch shape", batch_shape)?;
@@ -2154,7 +2154,7 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "full_piv_lu")?;
         let parity_elements = checked_product("full_piv_lu", "batch shape", batch_shape)?;
         return Ok(vec![
@@ -2197,7 +2197,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch(a, "full_piv_lu_solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "full_piv_lu_solve")?;
         if b_rows != n {
@@ -2215,7 +2215,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));
@@ -2232,7 +2232,7 @@ pub(crate) fn solve<T: FaerLinalg>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch(a, "solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "solve")?;
         if b_rows != n {
@@ -2250,7 +2250,7 @@ pub(crate) fn solve<T: FaerLinalg>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));
@@ -2270,7 +2270,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     transpose_a: bool,
     unit_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch(a, "triangular_solve")?;
         let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch(b, "triangular_solve")?;
         let rhs_core_dim = if left_side { b_rows } else { b_cols };
@@ -2289,7 +2289,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));
@@ -2313,7 +2313,7 @@ pub(crate) fn svd<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "svd")?;
         let k = m.min(n);
         return Ok(vec![
@@ -2344,7 +2344,7 @@ pub(crate) fn qr<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch(input, "qr")?;
         let k = m.min(n);
         return Ok(vec![
@@ -2370,7 +2370,7 @@ pub(crate) fn eigh<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch(input, "eigh")?;
         return Ok(vec![
             tensor_from_vec_with_template(

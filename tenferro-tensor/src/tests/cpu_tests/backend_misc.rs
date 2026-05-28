@@ -200,6 +200,84 @@ fn test_install_with_pool_preserves_buffers() {
 }
 
 #[test]
+fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
+    let mut backend = CpuBackend::new();
+    backend.with_backend_session(|exec| {
+        let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
+        let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
+        let added = exec
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
+        assert_eq!(added.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+
+        let view_data = [2.0_f64, 3.0];
+        let view_shape = [2usize];
+        assert_eq!(
+            exec.reduce_sum_read(
+                TensorRead::from_view(TensorView::f64(&view_shape, &view_data).unwrap()),
+                &[0],
+            )
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+            &[5.0]
+        );
+        assert_eq!(
+            exec.reduce_prod_read(TensorRead::from_tensor(&lhs), &[0])
+                .unwrap()
+                .as_slice::<f64>()
+                .unwrap(),
+            &[2.0]
+        );
+        assert_eq!(
+            exec.reduce_max_read(TensorRead::from_tensor(&rhs), &[0])
+                .unwrap()
+                .as_slice::<f64>()
+                .unwrap(),
+            &[4.0]
+        );
+        assert_eq!(
+            exec.reduce_min_read(TensorRead::from_tensor(&rhs), &[0])
+                .unwrap()
+                .as_slice::<f64>()
+                .unwrap(),
+            &[3.0]
+        );
+
+        exec.reclaim_buffer(Tensor::F32(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![0.0_f32],
+        )));
+        exec.reclaim_buffer(Tensor::F64(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![0.0_f64],
+        )));
+        exec.reclaim_buffer(Tensor::I32(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![0_i32],
+        )));
+        exec.reclaim_buffer(Tensor::I64(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![0_i64],
+        )));
+        exec.reclaim_buffer(Tensor::Bool(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![false],
+        )));
+        exec.reclaim_buffer(Tensor::C32(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![Complex32::new(0.0, 0.0)],
+        )));
+        exec.reclaim_buffer(Tensor::C64(TypedTensor::from_vec_col_major(
+            vec![1],
+            vec![Complex64::new(0.0, 0.0)],
+        )));
+    });
+
+    assert!(backend.buffer_pool_len() >= 7);
+}
+
+#[test]
 fn test_default_backend_session_methods_cover_cache_fallbacks() {
     struct DefaultOnlyBackend;
 
@@ -220,7 +298,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyBackend {
         panic_backend_methods! {
-        add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -231,6 +308,10 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+        }
+
+        fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+            CpuBackend::new().add(lhs, rhs)
         }
 
         fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -267,11 +348,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl TensorReduction for DefaultOnlyBackend {
-        panic_backend_methods! {
-        reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+        fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_sum(input, axes)
+        }
+
+        fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_prod(input, axes)
+        }
+
+        fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_max(input, axes)
+        }
+
+        fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_min(input, axes)
         }
     }
 
@@ -315,7 +405,6 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl TensorElementwise for DefaultOnlyExec {
         panic_backend_methods! {
-        add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
         neg(input: &Tensor) -> crate::Result<Tensor>;
         div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -326,6 +415,10 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
         select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
         clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+        }
+
+        fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+            CpuBackend::new().add(lhs, rhs)
         }
 
         fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
@@ -362,11 +455,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     }
 
     impl TensorReduction for DefaultOnlyExec {
-        panic_backend_methods! {
-        reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+        fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_sum(input, axes)
+        }
+
+        fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_prod(input, axes)
+        }
+
+        fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_max(input, axes)
+        }
+
+        fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+            CpuBackend::new().reduce_min(input, axes)
         }
     }
 
@@ -415,6 +517,129 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     };
     let mut backend = DefaultOnlyBackend;
     let mut cache = ();
+
+    let add_read_tensor = TensorElementwise::add_read(
+        &mut backend,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+    )
+    .unwrap();
+    assert_eq!(add_read_tensor.as_slice::<f64>().unwrap(), &[5.0]);
+    let add_view_err = TensorElementwise::add_read(
+        &mut backend,
+        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
+        TensorRead::from_tensor(&rhs),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        add_view_err,
+        crate::Error::BackendFailure {
+            op: "add",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+
+    let reduce_input = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]);
+    let reduce_view_shape = [2usize];
+    let reduce_view_data = [2.0_f64, 3.0];
+    assert_eq!(
+        TensorReduction::reduce_sum_read(
+            &mut backend,
+            TensorRead::from_tensor(&reduce_input),
+            &[0],
+        )
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
+        &[5.0]
+    );
+    assert_eq!(
+        TensorReduction::reduce_prod_read(
+            &mut backend,
+            TensorRead::from_tensor(&reduce_input),
+            &[0],
+        )
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
+        &[6.0]
+    );
+    assert_eq!(
+        TensorReduction::reduce_max_read(
+            &mut backend,
+            TensorRead::from_tensor(&reduce_input),
+            &[0],
+        )
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
+        &[3.0]
+    );
+    assert_eq!(
+        TensorReduction::reduce_min_read(
+            &mut backend,
+            TensorRead::from_tensor(&reduce_input),
+            &[0],
+        )
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
+        &[2.0]
+    );
+    for (op, err) in [
+        (
+            "reduce_sum",
+            TensorReduction::reduce_sum_read(
+                &mut backend,
+                TensorRead::from_view(
+                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
+                ),
+                &[0],
+            )
+            .unwrap_err(),
+        ),
+        (
+            "reduce_prod",
+            TensorReduction::reduce_prod_read(
+                &mut backend,
+                TensorRead::from_view(
+                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
+                ),
+                &[0],
+            )
+            .unwrap_err(),
+        ),
+        (
+            "reduce_max",
+            TensorReduction::reduce_max_read(
+                &mut backend,
+                TensorRead::from_view(
+                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
+                ),
+                &[0],
+            )
+            .unwrap_err(),
+        ),
+        (
+            "reduce_min",
+            TensorReduction::reduce_min_read(
+                &mut backend,
+                TensorRead::from_view(
+                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
+                ),
+                &[0],
+            )
+            .unwrap_err(),
+        ),
+    ] {
+        assert!(matches!(
+            err,
+            crate::Error::BackendFailure {
+                op: actual_op,
+                ref message,
+            } if actual_op == op && message.contains("borrowed tensor views")
+        ));
+    }
 
     let direct = BackendCachedDot::dot_general_cached(
         &mut backend,

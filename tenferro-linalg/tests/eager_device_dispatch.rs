@@ -11,17 +11,17 @@ use tenferro_tensor::{
 
 #[test]
 fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
-    let tensor = Tensor::F64(TypedTensor {
-        buffer: Buffer::Backend(Arc::new(BufferHandle::<f64>::new(7))),
-        shape: vec![2, 2],
-        placement: Placement {
+    let tensor = Tensor::F64(TypedTensor::from_buffer_col_major(
+        vec![2, 2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 4))),
+        Placement {
             memory_kind: MemoryKind::Device,
             device: Some(ComputeDevice {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
         },
-    });
+    ));
     let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
 
     let err = op.eager_execute(&[&tensor]).unwrap_err();

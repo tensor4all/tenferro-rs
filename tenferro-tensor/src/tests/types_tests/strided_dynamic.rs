@@ -1,29 +1,28 @@
 use super::*;
 
 #[test]
-fn dynamic_strided_tensor_view_covers_all_dtype_variants() {
+fn tensor_view_covers_all_dtype_variants() {
     macro_rules! assert_read_variant {
-        ($ctor:ident, $ty:ty, $dtype:expr, [$a:expr, $b:expr, $c:expr, $d:expr]) => {{
+        ($variant:ident, $ty:ty, $dtype:expr, [$a:expr, $b:expr, $c:expr, $d:expr]) => {{
             let data: [$ty; 4] = [$a, $b, $c, $d];
-            let view = StridedTensorView::$ctor(&[2, 2], &[2, 1], 0, &data).unwrap();
+            let typed = TypedTensorView::from_slice([2, 2], [2, 1], 0, &data).unwrap();
+            let view = TensorView::$variant(typed);
             assert_eq!(view.dtype(), $dtype);
             assert_eq!(view.shape(), &[2, 2]);
-            assert_eq!(view.strides(), &[2, 1]);
-            assert_eq!(view.offset(), 0);
             assert_eq!(
-                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
+                view.to_tensor().as_slice::<$ty>().unwrap(),
                 &[$a, $c, $b, $d]
             );
         }};
     }
 
-    assert_read_variant!(f32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0]);
-    assert_read_variant!(f64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0]);
-    assert_read_variant!(i32, i32, DType::I32, [1_i32, 2, 3, 4]);
-    assert_read_variant!(i64, i64, DType::I64, [1_i64, 2, 3, 4]);
-    assert_read_variant!(bool, bool, DType::Bool, [false, true, true, false]);
+    assert_read_variant!(F32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0]);
+    assert_read_variant!(F64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0]);
+    assert_read_variant!(I32, i32, DType::I32, [1_i32, 2, 3, 4]);
+    assert_read_variant!(I64, i64, DType::I64, [1_i64, 2, 3, 4]);
+    assert_read_variant!(Bool, bool, DType::Bool, [false, true, true, false]);
     assert_read_variant!(
-        c32,
+        C32,
         Complex32,
         DType::C32,
         [
@@ -34,7 +33,7 @@ fn dynamic_strided_tensor_view_covers_all_dtype_variants() {
         ]
     );
     assert_read_variant!(
-        c64,
+        C64,
         Complex64,
         DType::C64,
         [
@@ -47,10 +46,9 @@ fn dynamic_strided_tensor_view_covers_all_dtype_variants() {
 }
 
 #[test]
-fn dynamic_strided_tensor_view_mut_covers_all_dtype_variants() {
+fn typed_tensor_view_mut_covers_all_dtype_variants() {
     macro_rules! assert_mut_variant {
         (
-            $ctor:ident,
             $variant:ident,
             $ty:ty,
             $dtype:expr,
@@ -58,46 +56,28 @@ fn dynamic_strided_tensor_view_mut_covers_all_dtype_variants() {
             $replacement:expr
         ) => {{
             let mut data: [$ty; 4] = [$a, $b, $c, $d];
-            let mut view = StridedTensorViewMut::$ctor(&[2, 2], &[2, 1], 0, &mut data).unwrap();
-            assert_eq!(view.dtype(), $dtype);
+            let mut view = TypedTensorViewMut::from_slice([2, 2], [2, 1], 0, &mut data).unwrap();
             assert_eq!(view.shape(), &[2, 2]);
             assert_eq!(view.strides(), &[2, 1]);
             assert_eq!(view.offset(), 0);
-            match &mut view {
-                StridedTensorViewMut::$variant(typed) => {
-                    *typed.try_get_mut(&[1, 1]).unwrap() = $replacement;
-                }
-                _ => unreachable!(),
-            }
+            *view.try_get_mut(&[1, 1]).unwrap() = $replacement;
             assert_eq!(
-                view.as_read_only()
-                    .to_tensor()
+                materialize_typed_view_col_major(&view.as_read_only(), "test")
                     .unwrap()
-                    .as_slice::<$ty>()
-                    .unwrap(),
+                    .as_slice(),
                 &[$a, $c, $b, $replacement]
             );
-            assert_eq!(
-                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
-                &[$a, $c, $b, $replacement]
-            );
+            let read = TensorView::$variant(view.as_read_only());
+            assert_eq!(read.dtype(), $dtype);
         }};
     }
 
-    assert_mut_variant!(f32, F32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0], 40.0);
-    assert_mut_variant!(f64, F64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0], 40.0);
-    assert_mut_variant!(i32, I32, i32, DType::I32, [1_i32, 2, 3, 4], 40);
-    assert_mut_variant!(i64, I64, i64, DType::I64, [1_i64, 2, 3, 4], 40);
+    assert_mut_variant!(F32, f32, DType::F32, [1.0_f32, 2.0, 3.0, 4.0], 40.0);
+    assert_mut_variant!(F64, f64, DType::F64, [1.0_f64, 2.0, 3.0, 4.0], 40.0);
+    assert_mut_variant!(I32, i32, DType::I32, [1_i32, 2, 3, 4], 40);
+    assert_mut_variant!(I64, i64, DType::I64, [1_i64, 2, 3, 4], 40);
+    assert_mut_variant!(Bool, bool, DType::Bool, [false, true, true, false], true);
     assert_mut_variant!(
-        bool,
-        Bool,
-        bool,
-        DType::Bool,
-        [false, true, true, false],
-        true
-    );
-    assert_mut_variant!(
-        c32,
         C32,
         Complex32,
         DType::C32,
@@ -110,7 +90,6 @@ fn dynamic_strided_tensor_view_mut_covers_all_dtype_variants() {
         Complex32::new(40.0, -1.0)
     );
     assert_mut_variant!(
-        c64,
         C64,
         Complex64,
         DType::C64,
@@ -125,18 +104,16 @@ fn dynamic_strided_tensor_view_mut_covers_all_dtype_variants() {
 }
 
 #[test]
-fn dynamic_strided_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
+fn typed_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
     macro_rules! assert_dynamic_multi_slice {
         (
-            $ctor:ident,
-            $variant:ident,
             $ty:ty,
             [$a:expr, $b:expr, $c:expr, $d:expr],
             $left:expr,
             $right:expr
         ) => {{
             let mut data: [$ty; 4] = [$a, $b, $c, $d];
-            let mut view = StridedTensorViewMut::$ctor(&[4], &[1], 0, &mut data).unwrap();
+            let mut view = TypedTensorViewMut::from_slice([4], [1], 0, &mut data).unwrap();
             {
                 let (mut lhs, mut rhs) = view
                     .try_multi_slice_mut(
@@ -144,34 +121,24 @@ fn dynamic_strided_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
                         &[StridedSliceSpec::new(2, Some(4), 1)],
                     )
                     .unwrap();
-                match &mut lhs {
-                    StridedTensorViewMut::$variant(typed) => {
-                        *typed.get_mut(&[1]).unwrap() = $left;
-                    }
-                    _ => unreachable!(),
-                }
-                match &mut rhs {
-                    StridedTensorViewMut::$variant(typed) => {
-                        *typed.get_mut(&[0]).unwrap() = $right;
-                    }
-                    _ => unreachable!(),
-                }
+                *lhs.get_mut(&[1]).unwrap() = $left;
+                *rhs.get_mut(&[0]).unwrap() = $right;
             }
             assert_eq!(
-                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
+                materialize_typed_view_col_major(&view.as_read_only(), "test")
+                    .unwrap()
+                    .as_slice(),
                 &[$a, $left, $right, $d]
             );
         }};
     }
 
-    assert_dynamic_multi_slice!(f32, F32, f32, [1.0_f32, 2.0, 3.0, 4.0], 20.0, 30.0);
-    assert_dynamic_multi_slice!(f64, F64, f64, [1.0_f64, 2.0, 3.0, 4.0], 20.0, 30.0);
-    assert_dynamic_multi_slice!(i32, I32, i32, [1_i32, 2, 3, 4], 20, 30);
-    assert_dynamic_multi_slice!(i64, I64, i64, [1_i64, 2, 3, 4], 20, 30);
-    assert_dynamic_multi_slice!(bool, Bool, bool, [false, false, false, true], true, true);
+    assert_dynamic_multi_slice!(f32, [1.0_f32, 2.0, 3.0, 4.0], 20.0, 30.0);
+    assert_dynamic_multi_slice!(f64, [1.0_f64, 2.0, 3.0, 4.0], 20.0, 30.0);
+    assert_dynamic_multi_slice!(i32, [1_i32, 2, 3, 4], 20, 30);
+    assert_dynamic_multi_slice!(i64, [1_i64, 2, 3, 4], 20, 30);
+    assert_dynamic_multi_slice!(bool, [false, false, false, true], true, true);
     assert_dynamic_multi_slice!(
-        c32,
-        C32,
         Complex32,
         [
             Complex32::new(1.0, 1.0),
@@ -183,8 +150,6 @@ fn dynamic_strided_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
         Complex32::new(30.0, -1.0)
     );
     assert_dynamic_multi_slice!(
-        c64,
-        C64,
         Complex64,
         [
             Complex64::new(1.0, 1.0),

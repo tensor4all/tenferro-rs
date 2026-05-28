@@ -10,7 +10,10 @@ use crate::{Tensor, TensorRead};
 
 use super::backend::reclaim_typed;
 use super::CpuBackendKind;
-use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
+use super::{
+    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
+    CpuContext,
+};
 
 pub(crate) struct CpuExecSession<'a> {
     #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
@@ -39,6 +42,11 @@ macro_rules! delegate_with_pool {
 impl TensorElementwise for CpuExecSession<'_> {
     // Elementwise — direct delegation, no install
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
+
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        elementwise::add_read_with_pool(self.buffers, lhs, rhs)
+    }
+
     delegate_with_pool!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
     delegate_with_pool!(neg(input: &Tensor) => elementwise::neg_with_pool);
     delegate_with_pool!(conj(input: &Tensor) => elementwise::conj_with_pool);
@@ -81,9 +89,28 @@ impl TensorStructural for CpuExecSession<'_> {
 impl TensorReduction for CpuExecSession<'_> {
     // Reduction
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
+
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        reduction::reduce_sum_read(input, axes)
+    }
+
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        reduction::reduce_prod_read(input, axes)
+    }
+
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        reduction::reduce_max_read(input, axes)
+    }
+
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        reduction::reduce_min_read(input, axes)
+    }
 }
 
 impl TensorDot for CpuExecSession<'_> {
@@ -112,8 +139,8 @@ impl TensorDot for CpuExecSession<'_> {
                         self.gemm_analysis_cache,
                         None,
                         self.ctx,
-                        lhs,
-                        rhs,
+                        lhs.clone(),
+                        rhs.clone(),
                         config,
                     )?
                 }
@@ -132,8 +159,8 @@ impl TensorDot for CpuExecSession<'_> {
                         self.buffers,
                         self.gemm_analysis_cache,
                         None,
-                        lhs,
-                        rhs,
+                        lhs.clone(),
+                        rhs.clone(),
                         config,
                     )?
                 }
@@ -150,8 +177,8 @@ impl TensorDot for CpuExecSession<'_> {
             return Ok(result);
         }
 
-        let lhs = lhs.to_tensor();
-        let rhs = rhs.to_tensor();
+        let lhs = materialize_tensor_read("dot_general", lhs)?;
+        let rhs = materialize_tensor_read("dot_general", rhs)?;
         self.dot_general_cached(None, &lhs, &rhs, config)
     }
 

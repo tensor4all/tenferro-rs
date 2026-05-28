@@ -49,6 +49,10 @@ let cpu_x = download_tensor(backend.runtime(), &gpu_x).unwrap();
 assert_eq!(cpu_x.as_slice::<f64>().unwrap(), &[3.0]);
 ```
 
+Compacting a view does not change that transfer rule. Host views compact to
+host tensors; CUDA views compact on CUDA when the backend supports that path.
+Neither path silently moves tensor payloads between CPU and GPU.
+
 ## Dtype Mismatch
 
 Typed accessors must match the tensor dtype. If `as_slice::<f64>()` fails,

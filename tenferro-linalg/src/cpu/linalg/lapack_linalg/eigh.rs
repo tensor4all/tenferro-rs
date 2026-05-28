@@ -148,7 +148,7 @@ pub(crate) fn eigh<T: LapackEigh>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "eigh")?;
         return Ok(vec![
             tensor_from_vec_with_template(

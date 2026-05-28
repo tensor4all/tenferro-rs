@@ -72,7 +72,7 @@ pub(crate) fn cholesky<T: LapackCholesky>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (n, batch_shape) = square_core_and_batch_result(input, "cholesky")?;
         return Ok(tensor_from_vec_with_template(
             matrix_with_batch_shape(n, n, batch_shape),

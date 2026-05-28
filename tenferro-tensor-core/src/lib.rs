@@ -3,13 +3,15 @@
 //! `tenferro-tensor-core` owns backend-independent tensor metadata and
 //! host-resident contiguous tensor storage. It does not own execution backends,
 //! backend buffers, GPU handles, provider selection, or materializing kernels.
+//! Runtime/backend-capable `TypedTensor<T, R>` lives in `tenferro-tensor`.
+//! This crate exposes rank/layout metadata plus host-only tensor adapters.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_tensor_core::{SliceSpec, TypedTensor};
+//! use tenferro_tensor_core::{HostTensor, Rank, SliceSpec, TensorLayout};
 //!
-//! let tensor = TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+//! let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 //! let view = tensor
 //!     .as_view()
 //!     .slice_view(&[
@@ -19,11 +21,21 @@
 //!
 //! assert_eq!(view.shape(), &[2, 2]);
 //! assert_eq!(view.as_slice()?, &[3.0, 4.0, 5.0, 6.0]);
+//!
+//! let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
+//! let transposed = layout.transpose_view([1, 0])?;
+//! assert_eq!(transposed.shape(), &[3, 2]);
 //! # Ok::<(), tenferro_tensor_core::Error>(())
 //! ```
 
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
+
+mod layout;
+mod rank;
+
+pub use layout::TensorLayout;
+pub use rank::{DynRank, Rank, TensorRank};
 
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///
@@ -83,7 +95,7 @@ pub enum Error {
     DuplicateAxis { axis: usize },
     #[error("invalid permutation length: expected {expected}, actual {actual}")]
     InvalidPermutationLength { expected: usize, actual: usize },
-    #[error("invalid slice step {step}; v1 requires a positive step")]
+    #[error("invalid slice step {step}; zero is invalid and this API may require a positive step")]
     InvalidSliceStep { step: isize },
     #[error(
         "slice bounds are invalid or unsupported: start={start}, end={end}, axis_len={axis_len}"
@@ -101,6 +113,9 @@ pub enum Error {
     DTypeMismatch { expected: DType, actual: DType },
     #[error("view metadata is out of borrowed-slice bounds")]
     ViewOutOfBounds,
+    /// Mutable layout metadata may alias the same physical element.
+    #[error("mutable tensor layout may overlap physical elements")]
+    OverlappingMutableLayout,
     #[error("integer overflow while validating tensor metadata")]
     IntegerOverflow,
 }
@@ -153,7 +168,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Tensor;
     fn tensor_slice(tensor: &Tensor) -> Option<&[Self]>;
     fn tensor_mut_slice(tensor: &mut Tensor) -> Option<&mut [Self]>;
-    fn into_typed(tensor: Tensor) -> Option<TypedTensor<Self>>;
+    fn into_typed(tensor: Tensor) -> Option<HostTensor<Self>>;
 }
 
 mod private {
@@ -178,7 +193,7 @@ macro_rules! impl_scalar {
             }
 
             fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Tensor {
-                Tensor::$variant(TypedTensor { data, shape })
+                Tensor::$variant(HostTensor { data, shape })
             }
 
             fn tensor_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -195,7 +210,7 @@ macro_rules! impl_scalar {
                 }
             }
 
-            fn into_typed(tensor: Tensor) -> Option<TypedTensor<Self>> {
+            fn into_typed(tensor: Tensor) -> Option<HostTensor<Self>> {
                 match tensor {
                     Tensor::$variant(typed) => Some(typed),
                     _ => None,
@@ -213,7 +228,11 @@ impl_scalar!(bool, bool, DType::Bool, Bool);
 impl_scalar!(Complex32, f32, DType::C32, C32);
 impl_scalar!(Complex64, f64, DType::C64, C64);
 
-/// Explicit positive-step slice descriptor.
+/// Explicit slice descriptor.
+///
+/// A zero step is invalid. Layout metadata APIs support signed steps when
+/// reachable-range validation proves the view stays inside the backing
+/// allocation.
 ///
 /// # Examples
 ///
@@ -235,14 +254,14 @@ pub struct SliceSpec {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor_core::TypedTensor;
+/// use tenferro_tensor_core::HostTensor;
 ///
-/// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// assert_eq!(tensor.as_slice(), &[1.0, 2.0]);
 /// # Ok::<(), tenferro_tensor_core::Error>(())
 /// ```
 #[derive(Clone, Debug, PartialEq)]
-pub struct TypedTensor<T> {
+pub struct HostTensor<T> {
     data: Vec<T>,
     shape: ShapeVec,
 }
@@ -260,13 +279,13 @@ pub struct TypedTensor<T> {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tensor {
-    F32(TypedTensor<f32>),
-    F64(TypedTensor<f64>),
-    I32(TypedTensor<i32>),
-    I64(TypedTensor<i64>),
-    Bool(TypedTensor<bool>),
-    C32(TypedTensor<Complex32>),
-    C64(TypedTensor<Complex64>),
+    F32(HostTensor<f32>),
+    F64(HostTensor<f64>),
+    I32(HostTensor<i32>),
+    I64(HostTensor<i64>),
+    Bool(HostTensor<bool>),
+    C32(HostTensor<Complex32>),
+    C64(HostTensor<Complex64>),
 }
 
 /// Borrowed host tensor view with shape, strides, and offset metadata.
@@ -278,23 +297,23 @@ pub enum Tensor {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor_core::TypedTensor;
+/// use tenferro_tensor_core::HostTensor;
 ///
-/// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let view = tensor.as_view();
 /// assert_eq!(view.shape(), &[2]);
 /// # Ok::<(), tenferro_tensor_core::Error>(())
 /// ```
 ///
 /// ```compile_fail
-/// # use tenferro_tensor_core::TypedTensor;
-/// # let tensor = TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+/// # use tenferro_tensor_core::HostTensor;
+/// # let tensor = HostTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 /// let a = tensor.as_view();
 /// let b = tensor.as_view();
 /// let _ = a == b;
 /// ```
 #[derive(Clone, Debug)]
-pub struct TypedTensorView<'a, T> {
+pub struct HostTensorView<'a, T> {
     data: &'a [T],
     shape: ShapeVec,
     strides: StrideVec,
@@ -323,13 +342,13 @@ pub struct TypedTensorView<'a, T> {
 /// ```
 #[derive(Clone, Debug)]
 pub enum TensorView<'a> {
-    F32(TypedTensorView<'a, f32>),
-    F64(TypedTensorView<'a, f64>),
-    I32(TypedTensorView<'a, i32>),
-    I64(TypedTensorView<'a, i64>),
-    Bool(TypedTensorView<'a, bool>),
-    C32(TypedTensorView<'a, Complex32>),
-    C64(TypedTensorView<'a, Complex64>),
+    F32(HostTensorView<'a, f32>),
+    F64(HostTensorView<'a, f64>),
+    I32(HostTensorView<'a, i32>),
+    I64(HostTensorView<'a, i64>),
+    Bool(HostTensorView<'a, bool>),
+    C32(HostTensorView<'a, Complex32>),
+    C64(HostTensorView<'a, Complex64>),
 }
 
 /// Core-neutral tensor input reference.
@@ -540,41 +559,7 @@ fn validate_view_bounds<T>(
     strides: &[isize],
     offset: isize,
 ) -> Result<()> {
-    if shape.len() != strides.len() {
-        return Err(Error::RankMismatch {
-            expected: shape.len(),
-            actual: strides.len(),
-        });
-    }
-    if offset < 0 || strides.iter().any(|&stride| stride < 0) {
-        return Err(Error::ViewOutOfBounds);
-    }
-    let offset = usize::try_from(offset).map_err(|_| Error::IntegerOverflow)?;
-    if shape.iter().any(|&extent| extent == 0) {
-        return if offset <= data.len() {
-            Ok(())
-        } else {
-            Err(Error::ViewOutOfBounds)
-        };
-    }
-
-    let mut max_offset = offset;
-    for (&extent, &stride) in shape.iter().zip(strides) {
-        let stride = usize::try_from(stride).map_err(|_| Error::IntegerOverflow)?;
-        let axis_span = extent
-            .checked_sub(1)
-            .ok_or(Error::IntegerOverflow)?
-            .checked_mul(stride)
-            .ok_or(Error::IntegerOverflow)?;
-        max_offset = max_offset
-            .checked_add(axis_span)
-            .ok_or(Error::IntegerOverflow)?;
-    }
-    if max_offset < data.len() {
-        Ok(())
-    } else {
-        Err(Error::ViewOutOfBounds)
-    }
+    layout::validate_reachable_bounds(shape, strides, offset, data.len())
 }
 
 fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> bool {
@@ -597,15 +582,15 @@ fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> bool {
     true
 }
 
-impl<T> TypedTensor<T> {
+impl<T> HostTensor<T> {
     /// Create an owned tensor from a column-major host buffer.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![1_i64, 2])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1_i64, 2])?;
     /// assert_eq!(tensor.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -620,9 +605,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![true, false])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![true, false])?;
     /// assert_eq!(tensor.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -635,9 +620,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 2.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 2.0])?;
     /// assert_eq!(tensor.rank(), 2);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -650,9 +635,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![0], vec![])?;
+    /// let tensor = HostTensor::<f64>::from_vec_col_major(vec![0], vec![])?;
     /// assert!(tensor.is_empty());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -665,9 +650,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![1], vec![7_i32])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![7_i32])?;
     /// assert_eq!(tensor.as_slice(), &[7]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -680,9 +665,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let mut tensor = TypedTensor::from_vec_col_major(vec![1], vec![7_i32])?;
+    /// let mut tensor = HostTensor::from_vec_col_major(vec![1], vec![7_i32])?;
     /// tensor.as_mut_slice()[0] = 8;
     /// assert_eq!(tensor.as_slice(), &[8]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
@@ -696,14 +681,14 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// assert!(tensor.as_view().is_zero_offset_col_major());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn as_view(&self) -> TypedTensorView<'_, T> {
-        TypedTensorView {
+    pub fn as_view(&self) -> HostTensorView<'_, T> {
+        HostTensorView {
             data: &self.data,
             shape: self.shape.clone(),
             strides: compact_col_major_strides(&self.shape),
@@ -716,9 +701,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// assert_eq!(tensor.into_vec_col_major().1, vec![3.0]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -731,9 +716,9 @@ impl<T> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// assert_eq!(tensor.into_reshaped(vec![2, 2])?.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -752,15 +737,15 @@ impl<T> TypedTensor<T> {
     }
 }
 
-impl<T: Clone> TypedTensor<T> {
+impl<T: Clone> HostTensor<T> {
     /// Create an owned tensor from row-major data by converting to column-major storage.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let tensor = HostTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// assert_eq!(tensor.as_slice(), &[1.0, 3.0, 2.0, 4.0]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -775,9 +760,9 @@ impl<T: Clone> TypedTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// assert_eq!(tensor.into_vec_row_major()?.1, vec![1.0, 2.0, 3.0, 4.0]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -787,16 +772,16 @@ impl<T: Clone> TypedTensor<T> {
     }
 }
 
-impl<'a, T> TypedTensorView<'a, T> {
+impl<'a, T> HostTensorView<'a, T> {
     /// Create a typed view from explicit metadata and validate bounds eagerly.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensorView;
+    /// use tenferro_tensor_core::HostTensorView;
     ///
     /// let data = [1.0_f64, 2.0, 3.0, 4.0];
-    /// let view = TypedTensorView::from_slice(vec![2], vec![1], 1, &data)?;
+    /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
     /// assert_eq!(view.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -822,9 +807,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// assert_eq!(tensor.as_view().shape(), &[2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -837,9 +822,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
     /// assert_eq!(tensor.as_view().strides(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -852,9 +837,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![1], vec![true])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![true])?;
     /// assert_eq!(tensor.as_view().offset(), 0);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -867,9 +852,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
     /// assert_eq!(tensor.as_view().rank(), 2);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -882,10 +867,10 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensorView;
+    /// use tenferro_tensor_core::HostTensorView;
     ///
     /// let data = [1.0_f64];
-    /// let view = TypedTensorView::from_slice(vec![0], vec![1], 0, &data)?;
+    /// let view = HostTensorView::from_slice(vec![0], vec![1], 0, &data)?;
     /// assert!(view.is_empty());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -898,9 +883,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 2], vec![0_i32; 4])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![0_i32; 4])?;
     /// assert!(tensor.as_view().is_compact_col_major());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -913,9 +898,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![1], vec![1_i64])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert!(tensor.as_view().is_zero_offset_col_major());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -923,14 +908,14 @@ impl<'a, T> TypedTensorView<'a, T> {
         self.offset == 0 && self.is_compact_col_major()
     }
 
-    /// Alias for [`TypedTensorView::is_compact_col_major`].
+    /// Alias for [`HostTensorView::is_compact_col_major`].
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![1], vec![1_i64])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert!(tensor.as_view().is_contiguous_col_major());
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -943,10 +928,10 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensorView;
+    /// use tenferro_tensor_core::HostTensorView;
     ///
     /// let data = [1_i32, 2, 3, 4];
-    /// let view = TypedTensorView::from_slice(vec![2], vec![1], 1, &data)?;
+    /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
     /// assert_eq!(view.as_slice()?, &[2, 3]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -965,9 +950,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// assert_eq!(tensor.as_view().reshape_view(vec![2, 2])?.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
@@ -989,20 +974,20 @@ impl<'a, T> TypedTensorView<'a, T> {
         )
     }
 
-    /// Return a metadata-only axis permutation of this view.
+    /// Return a metadata-only transposed view with axes in the requested order.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::TypedTensor;
+    /// use tenferro_tensor_core::HostTensor;
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
-    /// let view = tensor.as_view().permute_view(&[1, 0])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
+    /// let view = tensor.as_view().transpose_view(&[1, 0])?;
     /// assert_eq!(view.shape(), &[3, 2]);
     /// assert_eq!(view.strides(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn permute_view(&self, axes: &[usize]) -> Result<Self> {
+    pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
         validate_permutation(self.rank(), axes)?;
         let shape = axes
             .iter()
@@ -1020,9 +1005,9 @@ impl<'a, T> TypedTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{SliceSpec, TypedTensor};
+    /// use tenferro_tensor_core::{SliceSpec, HostTensor};
     ///
-    /// let tensor = TypedTensor::from_vec_col_major(vec![4], vec![1_i64, 2, 3, 4])?;
+    /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1_i64, 2, 3, 4])?;
     /// let view = tensor
     ///     .as_view()
     ///     .slice_view(&[SliceSpec { start: 1, end: 4, step: 2 }])?;
@@ -1286,7 +1271,7 @@ impl Tensor {
     pub fn into_vec_col_major<T: TensorScalar>(self) -> Result<(ShapeVec, Vec<T>)> {
         let actual = self.dtype();
         T::into_typed(self)
-            .map(TypedTensor::into_vec_col_major)
+            .map(HostTensor::into_vec_col_major)
             .ok_or(Error::DTypeMismatch {
                 expected: T::dtype(),
                 actual,
@@ -1409,7 +1394,7 @@ impl<'a> TensorView<'a> {
         Ok(impl_dynamic_view!(self, reshape_view(shape) => view))
     }
 
-    /// Return a metadata-only axis permutation of this dynamic view.
+    /// Return a metadata-only transposed dynamic view with axes in the requested order.
     ///
     /// # Examples
     ///
@@ -1417,11 +1402,11 @@ impl<'a> TensorView<'a> {
     /// use tenferro_tensor_core::Tensor;
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 2], vec![1_i64, 2])?;
-    /// assert_eq!(tensor.as_view().permute_view(&[1, 0])?.shape(), &[2, 1]);
+    /// assert_eq!(tensor.as_view().transpose_view(&[1, 0])?.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor_core::Error>(())
     /// ```
-    pub fn permute_view(&self, axes: &[usize]) -> Result<Self> {
-        Ok(impl_dynamic_view!(self, permute_view(axes) => view))
+    pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
+        Ok(impl_dynamic_view!(self, transpose_view(axes) => view))
     }
 
     /// Return a metadata-only positive-step slice of this dynamic view.

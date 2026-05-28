@@ -43,7 +43,7 @@ impl TensorValue<'_> {
     fn tensor_read(&self) -> TensorRead<'_> {
         match self {
             Self::Borrowed(tensor) => TensorRead::from_tensor(tensor),
-            Self::View(view) => TensorRead::from_view(*view),
+            Self::View(view) => TensorRead::from_view(view.clone()),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
         }
     }
@@ -725,7 +725,7 @@ fn eager_einsum_exec_read(
         .iter()
         .map(|input| match input {
             TensorRead::Tensor(tensor) => TensorValue::Borrowed(*tensor),
-            TensorRead::View(view) => TensorValue::View(*view),
+            TensorRead::View(view) => TensorValue::View(view.clone()),
         })
         .collect();
     eager_einsum_exec_values(exec, values, tree)
@@ -745,11 +745,11 @@ fn eager_einsum_exec_binary_read_fast(
     plan: BinaryDotFastPlan,
 ) -> Result<Tensor> {
     let lhs = LabeledTensor {
-        tensor: tensor_value_from_read(inputs[0]),
+        tensor: tensor_value_from_read(inputs[0].clone()),
         labels: subscripts.inputs[0].clone(),
     };
     let rhs = LabeledTensor {
-        tensor: tensor_value_from_read(inputs[1]),
+        tensor: tensor_value_from_read(inputs[1].clone()),
         labels: subscripts.inputs[1].clone(),
     };
     execute_binary_dot_fast_plan(exec, lhs, rhs, plan, true)
@@ -874,7 +874,7 @@ pub(crate) fn eager_einsum_subscripts(
 ///
 /// Owned tensors and borrowed host views share this entry point. Backends may
 /// consume views directly when their execution model supports it, or
-/// materialize/upload them inside the execution session.
+/// canonicalize them within the existing placement inside the execution session.
 #[cfg(test)]
 pub(crate) fn eager_einsum_read_subscripts(
     ctx: &mut impl TensorBackend,

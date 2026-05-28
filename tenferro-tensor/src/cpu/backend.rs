@@ -7,16 +7,22 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic,
     TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorReduction, TensorStructural,
+    TensorIndexing, TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use crate::{Buffer, CacheStats, Tensor, TensorRead, TypedTensor};
+use crate::{
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
+};
 
 use super::exec_session::CpuExecSession;
-use super::{analytic, elementwise, gemm, indexing, reduction, structural, CpuContext};
+use super::{
+    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
+    CpuContext,
+};
 
 #[derive(Debug, Default, Clone)]
 struct CpuSessionProfileEntry {
@@ -624,6 +630,10 @@ impl TensorElementwise for CpuBackend {
         self.install_with_pool(|buffers| elementwise::add_with_pool(buffers, lhs, rhs))
     }
 
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+    }
+
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| elementwise::mul_with_pool(buffers, lhs, rhs))
     }
@@ -778,16 +788,32 @@ impl TensorReduction for CpuBackend {
         self.install(|| reduction::reduce_sum(input, axes))
     }
 
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_sum_read(input, axes))
+    }
+
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_prod(input, axes))
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_prod_read(input, axes))
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_max(input, axes))
     }
 
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_max_read(input, axes))
+    }
+
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.install(|| reduction::reduce_min(input, axes))
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.install(|| reduction::reduce_min_read(input, axes))
     }
 }
 
@@ -820,8 +846,8 @@ impl TensorDot for CpuBackend {
                             cache,
                             None,
                             ctx.as_ref(),
-                            lhs,
-                            rhs,
+                            lhs.clone(),
+                            rhs.clone(),
                             config,
                         )
                     })?
@@ -835,7 +861,14 @@ impl TensorDot for CpuBackend {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                        gemm::dot_general_blas_read_cached(buffers, cache, None, lhs, rhs, config)
+                        gemm::dot_general_blas_read_cached(
+                            buffers,
+                            cache,
+                            None,
+                            lhs.clone(),
+                            rhs.clone(),
+                            config,
+                        )
                     })?
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -848,8 +881,8 @@ impl TensorDot for CpuBackend {
             return Ok(result);
         }
 
-        let lhs = lhs.to_tensor();
-        let rhs = rhs.to_tensor();
+        let lhs = materialize_tensor_read("dot_general", lhs)?;
+        let rhs = materialize_tensor_read("dot_general", rhs)?;
         BackendCachedDot::dot_general_cached(self, &mut cache, None, &lhs, &rhs, config)
     }
 
@@ -1240,6 +1273,45 @@ impl TensorBuffer for CpuBackend {
             Tensor::C32(t) => reclaim_typed(&mut self.buffers, t),
             Tensor::C64(t) => reclaim_typed(&mut self.buffers, t),
         }
+    }
+}
+
+impl<T, R> TensorViewCanonicalization<T, R> for CpuBackend
+where
+    T: Clone + 'static,
+    R: TensorRank,
+{
+    fn to_contiguous(
+        &mut self,
+        view: &TypedTensorView<'_, T, R>,
+    ) -> crate::Result<TypedTensor<T, R>> {
+        if view.backend_buffer().is_some() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::to_contiguous",
+                "CPU backend received a backend tensor view; download the tensor to host before CPU view canonicalization",
+            ));
+        }
+        view.to_contiguous()
+    }
+
+    fn copy_from_contiguous(
+        &mut self,
+        src: &TypedTensor<T, R>,
+        dst: &mut TypedTensorViewMut<'_, T, R>,
+    ) -> crate::Result<()> {
+        if matches!(&src.buffer, Buffer::Backend(_)) {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::copy_from_contiguous",
+                "CPU backend received a backend source tensor; download the tensor to host before CPU view copy-back",
+            ));
+        }
+        if dst.backend_buffer().is_some() {
+            return Err(crate::Error::backend_failure(
+                "CpuBackend::copy_from_contiguous",
+                "CPU backend received a backend destination view; download the tensor to host before CPU view copy-back",
+            ));
+        }
+        dst.copy_from_contiguous(src)
     }
 }
 

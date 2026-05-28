@@ -10,13 +10,16 @@ traced graph execution.
 
 | Layer | Operation style |
 | --- | --- |
-| `TypedTensor<T>` | Typed storage with `tenferro_runtime::typed_tensor` wrappers; convert to `Tensor` for the broad dynamic operation surface |
-| `Tensor` | Concrete no-AD operations through `tenferro_runtime::tensor` and an explicit backend |
+| `TypedTensor<T, R>` | Fixed-dtype runtime storage with optional compile-time rank; may be host-backed or backend-backed |
+| `Tensor` | Dtype-erased, dynamic-rank concrete tensor operations through `tenferro_runtime::tensor` and an explicit backend |
 | `EagerTensor` | Immediate forward operations through `tenferro_ad::eager_tensor`; tracked variables also record state for `backward()` |
 | `TracedTensor` | Lazy graph-building operations through `tenferro_runtime::traced_tensor` |
 
 CUDA is a backend/device choice for supported operations on `Tensor`,
 `EagerTensor`, and `TracedTensor`; it is not a separate tensor layer.
+Owned runtime tensors are compact column-major. Arbitrary strides live on
+views, and compact-only operations may canonicalize those views within the same
+placement without silently transferring CPU/GPU data.
 
 ## Concrete Tensor Example
 

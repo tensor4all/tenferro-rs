@@ -119,7 +119,7 @@ Simpler matricization pipeline:
 | Aspect | strided-rs | omeinsum-rs | Recommendation (→ crate) |
 |--------|-----------|-------------|--------------------------|
 | Borrowed-view passthrough | Yes (Leaf → borrow) | No (Leaf → Arc clone) | **Adopt** borrowed views (→ tenferro-einsum) |
-| Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection (→ tenferro-einsum, uses zero-copy `Tensor::permute`) |
+| Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection (→ tenferro-einsum, uses zero-copy `transpose_view` metadata views) |
 | Buffer pool | HashMap by size | None | **Not adopted** — global allocator (mimalloc/jemalloc) handles reuse |
 | Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write (→ tenferro-einsum) |
 | Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers (→ tenferro-einsum) |
@@ -179,9 +179,10 @@ Single function `execute_unary_naive()`:
 
 ### omeinsum-rs
 
-- **Zero-copy permute via `Arc<Storage>`**: `Tensor::permute()` creates a new
-  `Tensor` with modified shape/strides but shared `Arc<Storage>`. No data copy
-  until GEMM needs contiguous input.
+- **Zero-copy permutation via `Arc<Storage>`**: omeinsum-rs creates a tensor
+  with modified shape/strides but shared storage. tenferro's current runtime
+  spelling for this metadata-only public surface is `transpose_view`; data is
+  copied only at an explicit contiguous/canonicalization boundary.
 - **`ensure_contiguous()`**: copies when `!is_contiguous()`.
 - **`permute_data()`**: always allocates new memory for physical reordering.
 
@@ -302,8 +303,9 @@ Leibniz rule.
    (→ `TensorPrims::trace`)
 3. **`reduce`** — `reduce_axis()` for summing unpaired dimensions.
    (→ `TensorPrims::reduce`)
-4. **`permute`** — `StridedView::permute()` + physical copy.
-   (→ `TensorPrims::permute`)
+4. **`permute`** — algorithmic axis reordering, represented in tenferro as
+   metadata-only `transpose_view` where possible, with physical copy only at an
+   explicit materialization boundary.
 5. **Cache-optimized kernels** — `reduce_axis()` uses blocked, dimension-fused
    iteration from strided-kernel. (→ tenferro-prims via strided-kernel)
 

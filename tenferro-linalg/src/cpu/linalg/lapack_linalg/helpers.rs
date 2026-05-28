@@ -5,14 +5,14 @@ pub(crate) fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
-    if input.shape.len() != 2 {
+    if input.shape().len() != 2 {
         return Err(tenferro_tensor::Error::RankMismatch {
             op,
             expected: 2,
-            actual: input.shape.len(),
+            actual: input.shape().len(),
         });
     }
-    Ok((input.shape[0], input.shape[1]))
+    Ok((input.shape()[0], input.shape()[1]))
 }
 
 pub(crate) fn square_matrix_dim<T>(
@@ -35,11 +35,9 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone, U>(
     data: Vec<T>,
     template: &TypedTensor<U>,
 ) -> TypedTensor<T> {
-    TypedTensor {
-        buffer: tenferro_tensor::Buffer::Host(data),
-        shape,
-        placement: template.placement.clone(),
-    }
+    let mut tensor = TypedTensor::from_vec_col_major(shape, data);
+    tensor.placement = template.placement.clone();
+    tensor
 }
 
 pub(crate) fn split_core_and_batch_result<'a, T>(
@@ -47,14 +45,14 @@ pub(crate) fn split_core_and_batch_result<'a, T>(
     core_rank: usize,
     op: &'static str,
 ) -> tenferro_tensor::Result<(&'a [usize], &'a [usize])> {
-    if input.shape.len() < core_rank {
+    if input.shape().len() < core_rank {
         return Err(tenferro_tensor::Error::RankMismatch {
             op,
             expected: core_rank,
-            actual: input.shape.len(),
+            actual: input.shape().len(),
         });
     }
-    Ok(input.shape.split_at(core_rank))
+    Ok(input.shape().split_at(core_rank))
 }
 
 pub(crate) fn matrix_core_and_batch_result<'a, T>(
@@ -234,16 +232,16 @@ where
         let batch_output = op(buffers, &batch_input)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+            if batch_output.shape() != expected_shape.as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: expected_shape.clone(),
                 });
             }
         } else {
             out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
-            out_core_shape = Some(batch_output.shape.clone());
+            out_core_shape = Some(batch_output.shape().to_vec());
         }
 
         match &mut out_data {
@@ -315,7 +313,7 @@ where
             }
             out_shapes = batch_outputs
                 .iter()
-                .map(|tensor| tensor.shape.clone())
+                .map(|tensor| tensor.shape().to_vec())
                 .collect();
             out_data = batch_outputs
                 .iter()
@@ -335,10 +333,10 @@ where
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+            if batch_output.shape() != out_shapes[idx].as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: out_shapes[idx].clone(),
                 });
             }
@@ -401,7 +399,7 @@ where
             }
             out_shapes = batch_outputs
                 .iter()
-                .map(|tensor| tensor.shape.clone())
+                .map(|tensor| tensor.shape().to_vec())
                 .collect();
             out_data = batch_outputs
                 .iter()
@@ -421,10 +419,10 @@ where
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape.as_slice() != out_shapes[idx].as_slice() {
+            if batch_output.shape() != out_shapes[idx].as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: out_shapes[idx].clone(),
                 });
             }
@@ -503,16 +501,16 @@ where
         let batch_output = op(buffers, &batch_a, &batch_b)?;
 
         if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape.as_slice() != expected_shape.as_slice() {
+            if batch_output.shape() != expected_shape.as_slice() {
                 return Err(tenferro_tensor::Error::ShapeMismatch {
                     op: op_name,
-                    lhs: batch_output.shape.clone(),
+                    lhs: batch_output.shape().to_vec(),
                     rhs: expected_shape.clone(),
                 });
             }
         } else {
             out_data = Some(Vec::with_capacity(batch_output.n_elements() * batch_count));
-            out_core_shape = Some(batch_output.shape.clone());
+            out_core_shape = Some(batch_output.shape().to_vec());
         }
 
         match &mut out_data {

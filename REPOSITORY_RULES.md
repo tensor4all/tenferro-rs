@@ -30,6 +30,12 @@ rules from `tensor4all-agent-rules`.
   repository and whether tenferro is prepared to support its semantics as a
   public contract. If the answer is unclear, keep it `pub(crate)` and expose a
   smaller high-level API instead.
+- Tensor operation names are public vocabulary. Use unsuffixed operation names
+  for owned compact tensor inputs, and add a `_read` suffix only for APIs that
+  explicitly accept borrowed views or `TensorRead`-style input references.
+- Metadata-only layout/view operations must use a `_view` suffix, for example
+  `transpose_view`, `slice_view`, or `reshape_view`. Do not use `_view` for
+  operations that allocate, canonicalize, execute kernels, or transfer data.
 
 ## External Contribution Intake
 
@@ -203,6 +209,10 @@ Tests follow implementation ownership.
 
 - tenferro follows the PyTorch convention: no implicit CPU-GPU transfer.
   Tensors must already live on the device required by the backend operation.
+- Canonicalization is allowed only within the existing placement. Host views may
+  copy into host compact tensors; GPU backend views may canonicalize or copy
+  back on the GPU. These boundaries must not download or upload tensor payloads
+  unless the API is explicitly a transfer API.
 - User code must explicitly upload CPU tensors before CUDA backend execution
   and explicitly download CUDA tensors before CPU-only execution or host value
   inspection.
@@ -227,6 +237,10 @@ Tests follow implementation ownership.
 
 - tenferro uses column-major (Fortran order) dense storage: the leftmost
   dimension has the smallest stride and varies fastest in memory.
+- Owned runtime tensors remain compact column-major only. Arbitrary strides,
+  offsets, transposes, slices, and reverse views live on
+  `TypedTensorView`/`TypedTensorViewMut` or metadata-only layout values until an
+  explicit same-placement canonicalization boundary is reached.
 - Public flat-buffer constructors, exports, examples, FFI contracts, and docs
   must state or preserve column-major semantics.
 - Do not add row-major compatibility shims or hidden row-major round-trips in
@@ -244,6 +258,12 @@ Tests follow implementation ownership.
 - Public indexing and slicing APIs must validate rank, bounds, steps, output
   shape, and empty/singleton boundary behavior at the API boundary or planning
   boundary.
+- Tensor layout metadata and runtime typed views may use signed strides and
+  negative slice steps when reachable-range validation proves every logical
+  element maps inside the backing allocation. Zero step remains invalid. Do not
+  reject negative strides solely because they are negative. Narrower adapter
+  APIs may document stricter compatibility limits, but those limits must be
+  explicit at the API boundary.
 - After validation, hot loops and kernels should not repeat the same range
   checks per element. Carry validated shape/stride/offset metadata into the
   inner implementation instead.
@@ -288,16 +308,17 @@ Tests follow implementation ownership.
 ### Tensor Core Data Model
 
 - `tenferro-tensor-core` owns backend-independent host tensor metadata and
-  contiguous host storage: `DType`, `TensorScalar`, host `TypedTensor<T>`,
-  dynamic `Tensor`, typed/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
-  `SliceSpec`, and metadata-only `reshape_view`, `permute_view`, and
+  contiguous host storage: `DType`, `TensorScalar`, `HostTensor<T>`,
+  dynamic `Tensor`, host/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
+  `SliceSpec`, and metadata-only `reshape_view`, `transpose_view`, and
   `slice_view`.
 - `tenferro-tensor-core` must not depend on CUDA, GPU backends, backend buffers,
   provider selection, or execution backend traits. Its owned `Tensor` must not
   grow inherent `TensorBackend` execution helpers.
-- Core views must validate bounds eagerly using checked arithmetic. v1 rejects
-  negative strides and non-positive slice steps. Do not implement `PartialEq`
-  for views.
+- Core views and layouts must validate bounds eagerly using checked arithmetic.
+  `TensorLayout` metadata views may use signed strides and negative slice steps
+  when reachable-range validation succeeds; zero step remains invalid. Do not
+  implement `PartialEq` for views.
 - `ShapeVec` and `StrideVec` use `SmallVec` with inline rank capacity 8.
 
 ### Faer Integration

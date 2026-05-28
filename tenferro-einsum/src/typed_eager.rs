@@ -11,7 +11,7 @@ pub(crate) fn typed_eager_einsum<T: TensorScalar>(
 ) -> Result<TypedTensor<T>> {
     let tensors: Vec<Tensor> = inputs
         .iter()
-        .map(|tensor| T::into_tensor(tensor.shape.clone(), tensor.host_data().to_vec()))
+        .map(|tensor| T::into_tensor(tensor.shape().to_vec(), tensor.host_data().to_vec()))
         .collect();
     let refs: Vec<&Tensor> = tensors.iter().collect();
     let result = eager_einsum(ctx, &refs, subscripts)?;

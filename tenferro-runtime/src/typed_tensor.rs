@@ -220,7 +220,7 @@ pub fn matmul<T: TensorScalar>(
 }
 
 fn erase<T: TensorScalar>(input: &TypedTensor<T>) -> Tensor {
-    T::into_tensor(input.shape.clone(), input.host_data().to_vec())
+    T::into_tensor(input.shape().to_vec(), input.host_data().to_vec())
 }
 
 fn try_into_typed_result<T: TensorScalar>(

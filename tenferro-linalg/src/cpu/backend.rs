@@ -3,10 +3,13 @@ use crate::backend::LinalgBackend;
 use super::linalg;
 
 use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
-use tenferro_tensor::{DType, Error, Tensor, TensorStructural, TypedTensor};
+use tenferro_tensor::{
+    DType, Error, Tensor, TensorStructural, TensorView, TensorViewCanonicalization, TypedTensor,
+};
 
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("cholesky", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -61,6 +64,8 @@ impl LinalgBackend for CpuBackend {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("triangular_solve", a)?;
+        ensure_host_tensor("triangular_solve", b)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -175,6 +180,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("lu", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -221,6 +227,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("full_piv_lu", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -272,6 +279,8 @@ impl LinalgBackend for CpuBackend {
         b: &Tensor,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("full_piv_lu_solve", a)?;
+        ensure_host_tensor("full_piv_lu_solve", b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
@@ -369,6 +378,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("svd", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -414,7 +424,36 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn svd_view(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match input {
+            TensorView::F32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F32(compact);
+                self.svd(&input)
+            }
+            TensorView::F64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::F64(compact);
+                self.svd(&input)
+            }
+            TensorView::C32(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C32(compact);
+                self.svd(&input)
+            }
+            TensorView::C64(view) => {
+                let compact = self.to_contiguous(&view)?;
+                let input = Tensor::C64(compact);
+                self.svd(&input)
+            }
+            TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
+                Err(unsupported_dtype("svd", input.dtype()))
+            }
+        }
+    }
+
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("qr", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -461,6 +500,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("eigh", input)?;
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -507,6 +547,7 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("eig", input)?;
         if !matches!(
             input,
             Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_)
@@ -539,6 +580,8 @@ impl LinalgBackend for CpuBackend {
     }
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor("solve", a)?;
+        ensure_host_tensor("solve", b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return Ok(zeros_like_tensor(b));
         }
@@ -612,6 +655,31 @@ impl LinalgBackend for CpuBackend {
     }
 }
 
+fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
+    match input {
+        Tensor::F32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::F64(t) => ensure_host_typed_tensor(op, t),
+        Tensor::I32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::I64(t) => ensure_host_typed_tensor(op, t),
+        Tensor::Bool(t) => ensure_host_typed_tensor(op, t),
+        Tensor::C32(t) => ensure_host_typed_tensor(op, t),
+        Tensor::C64(t) => ensure_host_typed_tensor(op, t),
+    }
+}
+
+fn ensure_host_typed_tensor<T: 'static>(
+    op: &'static str,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<()> {
+    if input.as_view().backend_buffer().is_some() {
+        return Err(Error::backend_failure(
+            op,
+            "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
+        ));
+    }
+    Ok(())
+}
+
 fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
@@ -636,16 +704,16 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
 
 fn zeros_like_tensor(input: &Tensor) -> Tensor {
     match input {
-        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::F32(t) => Tensor::F32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::F64(t) => Tensor::F64(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I32(t) => Tensor::I32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::I64(t) => Tensor::I64(TypedTensor::zeros(t.shape().to_vec())),
         Tensor::Bool(t) => Tensor::Bool(TypedTensor::from_vec_col_major(
-            t.shape.clone(),
+            t.shape().to_vec(),
             vec![false; t.n_elements()],
         )),
-        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape.clone())),
-        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape.clone())),
+        Tensor::C32(t) => Tensor::C32(TypedTensor::zeros(t.shape().to_vec())),
+        Tensor::C64(t) => Tensor::C64(TypedTensor::zeros(t.shape().to_vec())),
     }
 }
 

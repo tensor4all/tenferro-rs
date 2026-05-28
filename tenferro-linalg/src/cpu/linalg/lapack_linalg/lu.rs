@@ -148,7 +148,7 @@ pub(crate) fn lu<T: LapackLu>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(&input.shape) {
+    if has_zero_dim(input.shape()) {
         let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu")?;
         let k = m.min(n);
         let parity_elements = batch_element_count("lu", batch_shape)?;

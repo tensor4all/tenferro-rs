@@ -43,16 +43,16 @@ where
         return Ok(None);
     };
     for input in &typed_inputs[1..] {
-        if input.shape != first.shape {
+        if input.shape() != first.shape() {
             return Err(crate::Error::ShapeMismatch {
                 op: "fused_elementwise",
-                lhs: first.shape.clone(),
-                rhs: input.shape.clone(),
+                lhs: first.shape().to_vec(),
+                rhs: input.shape().to_vec(),
             });
         }
     }
 
-    let output_shape = first.shape.clone();
+    let output_shape = first.shape().to_vec();
     let n_elements = first.n_elements();
     Ok(Some(ClassifiedFusion {
         plan,

@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn svd_canonicalizes_transposed_host_view_before_lapack() {
+    let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone());
+    let view = a.as_view().transpose_view([1, 0]).unwrap();
+    let outputs = CpuBackend::new().svd_view(TensorView::F64(view)).unwrap();
+
+    assert_eq!(outputs[0].shape(), &[3, 2]);
+    assert_eq!(outputs[1].shape(), &[2]);
+    assert_eq!(outputs[2].shape(), &[2, 2]);
+
+    let u = matrix_f64_from_tensor(&outputs[0], 3, 2);
+    let s = (0..2)
+        .map(|i| get_f64(&outputs[1], &[i]))
+        .collect::<Vec<_>>();
+    let vt = matrix_f64_from_tensor(&outputs[2], 2, 2);
+    let recon = matmul_f64(&matmul_f64(&u, &diag_f64(&s), 3, 2, 2), &vt, 3, 2, 2);
+    let expected = transpose_f64(&data, 2, 3);
+
+    for (actual, expected) in recon.iter().zip(expected.iter()) {
+        assert_f64_close_tol(*actual, *expected, 1.0e-9);
+    }
+}
+
+#[test]
 fn test_batched_cholesky() {
     let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];

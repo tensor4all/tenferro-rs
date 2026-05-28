@@ -173,7 +173,7 @@ pub(crate) fn solve<T: LapackSolve>(
     b: &TypedTensor<T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if has_zero_dim(&a.shape) || has_zero_dim(&b.shape) {
+    if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         let (n, a_batch_shape) = square_core_and_batch_result(a, "solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "solve")?;
         if b_rows != n {
@@ -191,7 +191,7 @@ pub(crate) fn solve<T: LapackSolve>(
             });
         }
         return Ok(tensor_from_vec_with_template(
-            b.shape.clone(),
+            b.shape().to_vec(),
             Vec::new(),
             b,
         ));

@@ -321,18 +321,18 @@ fn build_layout<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<DotGeneralLayout> {
     let lhs_free = free_axes(
-        lhs.shape.len(),
+        lhs.shape().len(),
         &config.lhs_contracting_dims,
         &config.lhs_batch_dims,
     );
     let rhs_free = free_axes(
-        rhs.shape.len(),
+        rhs.shape().len(),
         &config.rhs_contracting_dims,
         &config.rhs_batch_dims,
     );
 
-    let mut lhs_modes = vec![-1i32; lhs.shape.len()];
-    let mut rhs_modes = vec![-1i32; rhs.shape.len()];
+    let mut lhs_modes = vec![-1i32; lhs.shape().len()];
+    let mut rhs_modes = vec![-1i32; rhs.shape().len()];
     let mut output_modes =
         Vec::with_capacity(lhs_free.len() + rhs_free.len() + config.lhs_batch_dims.len());
     let mut output_shape = Vec::with_capacity(output_modes.capacity());
@@ -350,7 +350,7 @@ fn build_layout<T>(
         next_mode += 1;
         lhs_modes[lhs_axis] = mode;
         rhs_modes[rhs_axis] = mode;
-        contracting_elements *= lhs.shape[lhs_axis];
+        contracting_elements *= lhs.shape()[lhs_axis];
     }
 
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
@@ -359,7 +359,7 @@ fn build_layout<T>(
         lhs_modes[lhs_axis] = mode;
         rhs_modes[rhs_axis] = mode;
         batch_modes.push(mode);
-        batch_shape.push(lhs.shape[lhs_axis]);
+        batch_shape.push(lhs.shape()[lhs_axis]);
     }
 
     for &lhs_axis in &lhs_free {
@@ -367,7 +367,7 @@ fn build_layout<T>(
         next_mode += 1;
         lhs_modes[lhs_axis] = mode;
         output_modes.push(mode);
-        output_shape.push(lhs.shape[lhs_axis]);
+        output_shape.push(lhs.shape()[lhs_axis]);
     }
 
     for &rhs_axis in &rhs_free {
@@ -375,17 +375,17 @@ fn build_layout<T>(
         next_mode += 1;
         rhs_modes[rhs_axis] = mode;
         output_modes.push(mode);
-        output_shape.push(rhs.shape[rhs_axis]);
+        output_shape.push(rhs.shape()[rhs_axis]);
     }
 
     output_modes.extend_from_slice(&batch_modes);
     output_shape.extend_from_slice(&batch_shape);
 
-    let lhs_extents = dims_to_i64(&lhs.shape)?;
-    let rhs_extents = dims_to_i64(&rhs.shape)?;
+    let lhs_extents = dims_to_i64(lhs.shape())?;
+    let rhs_extents = dims_to_i64(rhs.shape())?;
     let output_extents = dims_to_i64(&output_shape)?;
-    let lhs_strides = strides_to_i64(&col_major_strides(&lhs.shape))?;
-    let rhs_strides = strides_to_i64(&col_major_strides(&rhs.shape))?;
+    let lhs_strides = strides_to_i64(&col_major_strides(lhs.shape()))?;
+    let rhs_strides = strides_to_i64(&col_major_strides(rhs.shape()))?;
     let output_strides = strides_to_i64(&col_major_strides(&output_shape))?;
 
     Ok(DotGeneralLayout {
@@ -489,8 +489,8 @@ fn validate_dot_general<T>(
         });
     }
 
-    let lhs_rank = lhs.shape.len();
-    let rhs_rank = rhs.shape.len();
+    let lhs_rank = lhs.shape().len();
+    let rhs_rank = rhs.shape().len();
 
     validate_axis_list(
         OP,
@@ -526,24 +526,26 @@ fn validate_dot_general<T>(
         .iter()
         .zip(&config.rhs_contracting_dims)
     {
-        if lhs.shape[lhs_axis] != rhs.shape[rhs_axis] {
+        if lhs.shape()[lhs_axis] != rhs.shape()[rhs_axis] {
             return Err(Error::InvalidConfig {
                 op: OP,
                 message: format!(
                     "contracting dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs.shape[lhs_axis], rhs.shape[rhs_axis]
+                    lhs.shape()[lhs_axis],
+                    rhs.shape()[rhs_axis]
                 ),
             });
         }
     }
 
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
-        if lhs.shape[lhs_axis] != rhs.shape[rhs_axis] {
+        if lhs.shape()[lhs_axis] != rhs.shape()[rhs_axis] {
             return Err(Error::InvalidConfig {
                 op: OP,
                 message: format!(
                     "batch dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs.shape[lhs_axis], rhs.shape[rhs_axis]
+                    lhs.shape()[lhs_axis],
+                    rhs.shape()[rhs_axis]
                 ),
             });
         }

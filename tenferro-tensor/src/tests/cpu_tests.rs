@@ -15,12 +15,16 @@ use crate::backend::{
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+#[cfg(feature = "cpu-blas")]
+use crate::cpu::CpuBackendKind;
 use crate::cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
     CpuBackend, CpuContext,
 };
+#[cfg(feature = "cpu-blas")]
+use crate::types::StridedSliceSpec;
 use crate::types::{DType, Tensor, TensorRead, TensorView, TypedTensor};
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {

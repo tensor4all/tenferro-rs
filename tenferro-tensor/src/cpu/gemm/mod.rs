@@ -48,6 +48,8 @@ struct GemmDims {
 struct GemmAnalysisPlan {
     lhs_shape: SmallVec<[usize; 8]>,
     rhs_shape: SmallVec<[usize; 8]>,
+    lhs_strides: SmallVec<[isize; 8]>,
+    rhs_strides: SmallVec<[isize; 8]>,
     config: GemmConfigKey,
     dims: Option<GemmDims>,
 }
@@ -82,6 +84,8 @@ impl GemmAnalysisPlan {
     {
         self.lhs_shape.as_slice() == lhs.shape()
             && self.rhs_shape.as_slice() == rhs.shape()
+            && self.lhs_strides.as_slice() == lhs.strides().as_slice()
+            && self.rhs_strides.as_slice() == rhs.strides().as_slice()
             && self.config.matches(config)
     }
 }
@@ -106,12 +110,22 @@ impl GemmConfigKey {
 
 trait TypedTensorRead<T> {
     fn shape(&self) -> &[usize];
+    fn strides(&self) -> SmallVec<[isize; 8]>;
+    fn offset(&self) -> isize;
     fn host_data_opt(&self) -> Option<&[T]>;
 }
 
-impl<T> TypedTensorRead<T> for TypedTensor<T> {
+impl<T: Clone> TypedTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
-        &self.shape
+        self.layout().shape()
+    }
+
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        col_major_strides(self.shape()).into_iter().collect()
+    }
+
+    fn offset(&self) -> isize {
+        0
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
@@ -122,19 +136,39 @@ impl<T> TypedTensorRead<T> for TypedTensor<T> {
     }
 }
 
-impl<T> TypedTensorRead<T> for TypedTensorView<'_, T> {
+impl<T: 'static> TypedTensorRead<T> for TypedTensorView<'_, T> {
     fn shape(&self) -> &[usize] {
-        self.shape
+        self.shape()
+    }
+
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        self.strides().iter().copied().collect()
+    }
+
+    fn offset(&self) -> isize {
+        self.offset()
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
-        Some(self.data)
+        if self.backend_buffer().is_some() {
+            None
+        } else {
+            Some(self.as_physical_slice())
+        }
     }
 }
 
 impl<T: Clone> TypedTensorRead<T> for std::borrow::Cow<'_, TypedTensor<T>> {
     fn shape(&self) -> &[usize] {
         self.as_ref().shape()
+    }
+
+    fn strides(&self) -> SmallVec<[isize; 8]> {
+        self.as_ref().strides()
+    }
+
+    fn offset(&self) -> isize {
+        self.as_ref().offset()
     }
 
     fn host_data_opt(&self) -> Option<&[T]> {
@@ -208,6 +242,8 @@ impl GemmAnalysisCache {
         kind: GemmAnalysisCacheKind,
         lhs_shape: SmallVec<[usize; 8]>,
         rhs_shape: SmallVec<[usize; 8]>,
+        lhs_strides: SmallVec<[isize; 8]>,
+        rhs_strides: SmallVec<[isize; 8]>,
         config: GemmConfigKey,
         dims: Option<GemmDims>,
     ) {
@@ -222,6 +258,8 @@ impl GemmAnalysisCache {
             GemmAnalysisPlan {
                 lhs_shape,
                 rhs_shape,
+                lhs_strides,
+                rhs_strides,
                 config,
                 dims,
             },
@@ -283,6 +321,8 @@ fn gemm_analysis_plan_retained_bytes(plan: &GemmAnalysisPlan) -> usize {
     size_of::<GemmAnalysisPlan>()
         + smallvec_retained_bytes(&plan.lhs_shape)
         + smallvec_retained_bytes(&plan.rhs_shape)
+        + smallvec_retained_bytes(&plan.lhs_strides)
+        + smallvec_retained_bytes(&plan.rhs_strides)
         + gemm_config_key_retained_bytes(&plan.config)
         + plan.dims.as_ref().map_or(0, gemm_dims_retained_bytes)
 }
@@ -445,6 +485,10 @@ fn checked_batch_offset(batch: usize, stride: isize) -> Option<isize> {
     batch.checked_mul(stride)
 }
 
+fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Option<isize> {
+    base.checked_add(checked_batch_offset(batch, stride)?)
+}
+
 fn stride_sort_order(strides: &[isize]) -> SmallVec<[usize; 8]> {
     let mut order: SmallVec<[usize; 8]> = (0..strides.len()).collect();
     order.sort_by_key(|&idx| strides[idx].unsigned_abs());
@@ -518,8 +562,8 @@ where
         .filter(|d| !config.rhs_contracting_dims.contains(d) && !config.rhs_batch_dims.contains(d))
         .collect();
 
-    let lhs_strides: SmallVec<[isize; 8]> = col_major_strides(lhs_shape).into_iter().collect();
-    let rhs_strides: SmallVec<[isize; 8]> = col_major_strides(rhs_shape).into_iter().collect();
+    let lhs_strides = lhs.strides();
+    let rhs_strides = rhs.strides();
 
     let batch_shapes: SmallVec<[usize; 8]> = config
         .lhs_batch_dims
@@ -643,6 +687,8 @@ where
             cache_kind,
             lhs.shape().iter().copied().collect(),
             rhs.shape().iter().copied().collect(),
+            lhs.strides(),
+            rhs.strides(),
             GemmConfigKey::from_config(config),
             dims.clone(),
         );
@@ -661,7 +707,7 @@ pub(crate) fn dot_general_faer<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_cached(buffers, cache, None, ctx, lhs, rhs, config)
 }
@@ -677,7 +723,7 @@ pub(crate) fn dot_general_faer_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, cache_slot, ctx, lhs, rhs, config, false, false,
@@ -697,7 +743,7 @@ pub(crate) fn dot_general_faer_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     dot_general_faer_with_conj_cached(
         buffers, cache, None, ctx, lhs, rhs, config, lhs_conj, rhs_conj,
@@ -717,7 +763,7 @@ pub(crate) fn dot_general_faer_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     if let Some(result) = typed_faer_gemm(
         buffers,
@@ -734,7 +780,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -777,7 +823,7 @@ pub(crate) fn dot_general_faer_read_cached(
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (lhs, rhs) {
+            match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -807,7 +853,7 @@ pub(crate) fn dot_general_faer_read_cached(
                         GemmAnalysisCacheKind::Direct,
                         ctx,
                         a,
-                        &b,
+                        b,
                         config,
                         false,
                         false,
@@ -824,7 +870,7 @@ pub(crate) fn dot_general_faer_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         ctx,
-                        &a,
+                        a,
                         b,
                         config,
                         false,
@@ -842,8 +888,8 @@ pub(crate) fn dot_general_faer_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         ctx,
-                        &a,
-                        &b,
+                        a,
+                        b,
                         config,
                         false,
                         false,
@@ -887,7 +933,7 @@ fn typed_faer_gemm<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq,
+    T: FaerGemm + PoolScalar + Copy + Clone + Zero + One + PartialEq + 'static,
 {
     let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
         return Ok(None);
@@ -898,11 +944,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let Some(a_data) = lhs.host_data_opt().map(<[T]>::as_ptr) else {
@@ -911,15 +957,17 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: this GEMM path uses beta = 0 and overwrites every output element.
     let mut out_data: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out_data.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
@@ -966,11 +1014,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out_data),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out_data),
+        default_placement(),
+    )))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -983,7 +1031,7 @@ pub(crate) fn dot_general_blas<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     dot_general_blas_cached(buffers, cache, None, lhs, rhs, config)
 }
@@ -998,7 +1046,7 @@ pub(crate) fn dot_general_blas_cached<T>(
     config: &DotGeneralConfig,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     if let Some(result) = typed_blas_gemm(
         buffers,
@@ -1012,7 +1060,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -1052,7 +1100,7 @@ pub(crate) fn dot_general_blas_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem + 'static,
 {
     dot_general_blas_with_conj_cached(buffers, cache, None, lhs, rhs, config, lhs_conj, rhs_conj)
 }
@@ -1069,7 +1117,7 @@ pub(crate) fn dot_general_blas_with_conj_cached<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + ConjElem + 'static,
 {
     if !lhs_conj && !rhs_conj {
         return dot_general_blas_cached(buffers, cache, cache_slot, lhs, rhs, config);
@@ -1089,7 +1137,7 @@ where
         return Ok(result);
     }
     let (lhs_perm, rhs_perm, new_config) =
-        canonical_gemm_layout(config, lhs.shape.len(), rhs.shape.len());
+        canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
     let lhs_canon = if is_identity_perm(&lhs_perm) {
         std::borrow::Cow::Borrowed(lhs)
     } else {
@@ -1142,7 +1190,7 @@ pub(crate) fn dot_general_blas_read_cached(
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (lhs, rhs) {
+            match (&lhs, &rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1168,7 +1216,7 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
                         a,
-                        &b,
+                        b,
                         config,
                     )
                     .map(|result| result.map(crate::Tensor::$wrap));
@@ -1182,7 +1230,7 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache,
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
-                        &a,
+                        a,
                         b,
                         config,
                     )
@@ -1197,8 +1245,8 @@ pub(crate) fn dot_general_blas_read_cached(
                         cache,
                         cache_slot,
                         GemmAnalysisCacheKind::Direct,
-                        &a,
-                        &b,
+                        a,
+                        b,
                         config,
                     )
                     .map(|result| result.map(crate::Tensor::$wrap));
@@ -1239,7 +1287,7 @@ fn typed_blas_gemm_with_conj<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
         Some(dims) => dims,
@@ -1251,11 +1299,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1265,10 +1313,10 @@ where
     let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
     let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
 
-    let a_ok = a_rs == 1 || a_cs == 1;
-    let b_ok = b_rs == 1 || b_cs == 1;
-    let c_ok = c_rs == 1;
-    if !a_ok || !b_ok || !c_ok {
+    if !blas_lhs_layout_supported(dims.m, dims.k, a_rs, a_cs)
+        || !blas_rhs_layout_supported(dims.k, dims.n, b_rs, b_cs)
+        || !blas_output_layout_supported(dims.m, c_rs, c_cs)
+    {
         return Ok(None);
     }
     // `BlasGemm::strided_gemm_with_conj` maps row-contiguous operands to
@@ -1285,6 +1333,8 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0 when
     // the BLAS layout can represent the requested conjugation.
@@ -1292,9 +1342,9 @@ where
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
@@ -1323,11 +1373,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out),
+        default_placement(),
+    )))
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -1343,7 +1393,7 @@ fn typed_blas_gemm<L, R, T>(
 where
     L: TypedTensorRead<T>,
     R: TypedTensorRead<T>,
-    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One,
+    T: BlasGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
 {
     let dims = match analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? {
         Some(dims) => dims,
@@ -1355,11 +1405,11 @@ where
         // SAFETY: the buffer is fully initialized immediately by fill.
         let mut data = unsafe { T::pool_acquire(buffers, out_n) };
         data.fill(T::zero());
-        return Ok(Some(TypedTensor {
-            buffer: Buffer::Host(data),
-            shape: dims.out_shape.into_vec(),
-            placement: default_placement(),
-        }));
+        return Ok(Some(TypedTensor::from_buffer_col_major(
+            dims.out_shape.into_vec(),
+            Buffer::Host(data),
+            default_placement(),
+        )));
     }
 
     let a_rs = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
@@ -1369,10 +1419,10 @@ where
     let c_rs = normalize_singleton_stride(dims.c_rs, dims.m, 1);
     let c_cs = normalize_singleton_stride(dims.c_cs, dims.n, dims.m);
 
-    let a_ok = a_rs == 1 || a_cs == 1;
-    let b_ok = b_rs == 1 || b_cs == 1;
-    let c_ok = c_rs == 1;
-    if !a_ok || !b_ok || !c_ok {
+    if !blas_lhs_layout_supported(dims.m, dims.k, a_rs, a_cs)
+        || !blas_rhs_layout_supported(dims.k, dims.n, b_rs, b_cs)
+        || !blas_output_layout_supported(dims.m, c_rs, c_cs)
+    {
         return Ok(None);
     }
 
@@ -1382,15 +1432,17 @@ where
     let Some(b_data) = rhs.host_data_opt().map(<[T]>::as_ptr) else {
         return Ok(None);
     };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
 
     // SAFETY: each batch GEMM writes its full output block with beta = 0.
     let mut out: Vec<T> = unsafe { T::pool_acquire(buffers, out_n) };
     let c_ptr = out.as_mut_ptr();
 
     for batch in 0..dims.batch_total {
-        let a_off = checked_batch_offset(batch, dims.a_bs)
+        let a_off = checked_view_batch_offset(a_base, batch, dims.a_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "lhs batch offset overflow"))?;
-        let b_off = checked_batch_offset(batch, dims.b_bs)
+        let b_off = checked_view_batch_offset(b_base, batch, dims.b_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "rhs batch offset overflow"))?;
         let c_off = checked_batch_offset(batch, dims.c_bs)
             .ok_or_else(|| Error::backend_failure("dot_general", "output batch offset overflow"))?;
@@ -1414,11 +1466,11 @@ where
         }
     }
 
-    Ok(Some(TypedTensor {
-        buffer: Buffer::Host(out),
-        shape: dims.out_shape.into_vec(),
-        placement: default_placement(),
-    }))
+    Ok(Some(TypedTensor::from_buffer_col_major(
+        dims.out_shape.into_vec(),
+        Buffer::Host(out),
+        default_placement(),
+    )))
 }
 
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
@@ -1428,6 +1480,44 @@ fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> 
     } else {
         stride
     }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_lhs_layout_supported(m: usize, k: usize, row_stride: isize, col_stride: isize) -> bool {
+    if row_stride == 1 {
+        blas_leading_stride_supported(col_stride, m)
+    } else if col_stride == 1 {
+        blas_leading_stride_supported(row_stride, k)
+    } else {
+        false
+    }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_rhs_layout_supported(k: usize, n: usize, row_stride: isize, col_stride: isize) -> bool {
+    if row_stride == 1 {
+        blas_leading_stride_supported(col_stride, k)
+    } else if col_stride == 1 {
+        blas_leading_stride_supported(row_stride, n)
+    } else {
+        false
+    }
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_output_layout_supported(m: usize, row_stride: isize, col_stride: isize) -> bool {
+    row_stride == 1 && blas_leading_stride_supported(col_stride, m)
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_leading_stride_supported(stride: isize, minimum: usize) -> bool {
+    if stride <= 0 {
+        return false;
+    }
+    let Ok(stride_usize) = usize::try_from(stride) else {
+        return false;
+    };
+    stride_usize >= minimum && i32::try_from(stride).is_ok()
 }
 
 #[cfg(test)]

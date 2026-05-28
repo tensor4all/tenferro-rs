@@ -23,6 +23,10 @@ supported execution path yet.
 Keep tensors on CUDA across a CUDA workload. Download only when the host needs
 to inspect values or hand data to CPU-only code.
 
+View canonicalization follows the same rule. A CUDA backend may compact a CUDA
+view into CUDA memory, and host code may compact a host view into host memory,
+but tenferro does not use canonicalization as a hidden CPU/GPU transfer.
+
 ## Eager GPU Synchronization
 
 Eager CUDA execution submits work immediately and returns a CUDA-resident
@@ -83,7 +87,7 @@ The example downloads the result back to CPU and asserts the expected values.
 
 | Tensor model | How CUDA fits |
 | --- | --- |
-| `TypedTensor<T>` | Fixed-dtype host layer. For CUDA backend execution, wrap or upload through `Tensor`, and download before typed host access. |
+| `TypedTensor<T, R>` | Fixed-dtype runtime tensor with optional compile-time rank; storage may be host-backed or backend-backed, and host access still requires explicit download for CUDA buffers. |
 | `Tensor` | Main concrete CUDA value for backend execution |
 | `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
 | `TracedTensor` | Graphs can be executed by `GraphExecutor<CudaBackend>` for supported ops |

@@ -10,6 +10,16 @@ fn linalg_source() -> String {
     .unwrap_or_else(|err| panic!("GPU linalg source should be readable: {err}"))
 }
 
+fn gpu_mod_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("gpu")
+            .join("mod.rs"),
+    )
+    .unwrap_or_else(|err| panic!("GPU linalg module source should be readable: {err}"))
+}
+
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -31,6 +41,19 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         .map(|offset| start_idx + offset)
         .unwrap_or(source.len());
     &source[start_idx..end_idx]
+}
+
+fn assert_before(section: &str, earlier: &str, later: &str) {
+    let earlier_idx = section
+        .find(earlier)
+        .unwrap_or_else(|| panic!("source section should contain {earlier:?}"));
+    let later_idx = section
+        .find(later)
+        .unwrap_or_else(|| panic!("source section should contain {later:?}"));
+    assert!(
+        earlier_idx < later_idx,
+        "{earlier:?} should appear before {later:?}"
+    );
 }
 
 #[test]
@@ -93,5 +116,95 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
         violations.is_empty(),
         "GPU LU must not rebuild P/L/U/parity through a full device-to-host-to-device roundtrip:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn cubecl_linalg_overrides_svd_view_with_backend_canonicalization() {
+    let source = gpu_mod_source();
+    let svd_view_source = source_section(&source, "fn svd_view", "fn qr");
+
+    for needle in [
+        "self.to_contiguous(&view)?",
+        "let input = Tensor::F64(compact);",
+        "self.svd(&input)",
+    ] {
+        assert!(
+            svd_view_source.contains(needle),
+            "CubeCL svd_view should canonicalize borrowed GPU views on the backend: missing {needle}"
+        );
+    }
+}
+
+#[test]
+fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs() {
+    let source = linalg_source();
+
+    for (start, end, residency_check) in [
+        (
+            "fn cholesky_typed",
+            "fn triangular_solve_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn lu_typed",
+            "fn svd_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn svd_typed",
+            "fn qr_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn qr_typed",
+            "fn eigh_typed",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+        (
+            "fn eigh_typed",
+            "fn validate_nonsingular_gpu",
+            "ensure_cubecl_resident_typed(OP, input)?;",
+        ),
+    ] {
+        let section = source_section(&source, start, end);
+        assert_before(section, residency_check, "if has_zero_dim");
+    }
+
+    let triangular = source_section(&source, "fn triangular_solve_typed", "fn lu_typed");
+    assert_before(
+        triangular,
+        "ensure_cubecl_resident_typed(OP, a)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        triangular,
+        "ensure_cubecl_resident_typed(OP, b)?;",
+        "if has_zero_dim",
+    );
+
+    let solve = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
+    assert_before(
+        solve,
+        "ensure_supported_linalg_pair(OP, a, b)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        solve,
+        "ensure_cubecl_resident_tensor(OP, a)?;",
+        "if has_zero_dim",
+    );
+    assert_before(
+        solve,
+        "ensure_cubecl_resident_tensor(OP, b)?;",
+        "if has_zero_dim",
+    );
+    assert!(
+        solve.contains("zero_like_linalg_device_tensor(backend.runtime(), b, OP)"),
+        "GPU solve zero-dim fast path should allocate the result on the GPU"
+    );
+    assert!(
+        !source.contains("fn zeros_like_tensor"),
+        "GPU linalg should not build host zero tensors for device fast paths"
     );
 }

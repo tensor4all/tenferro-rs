@@ -14,9 +14,10 @@ This document specifies the current dense tensor data model split between
 
 The split is intentional:
 
-- `tenferro-tensor-core` is a lightweight host-only data model and view layer.
-- `tenferro-tensor` adds runtime tensor storage, placement metadata, backend
-  traits, CPU backends, and core execution kernels.
+- `tenferro-tensor-core` is a lightweight rank/layout metadata and host-only
+  adapter layer.
+- `tenferro-tensor` adds runtime tensor storage, placement metadata, typed
+  views, backend traits, CPU backends, and core execution kernels.
 
 `tenferro-tensor-core` must not require computation backends, GPU runtimes,
 provider selection, graph execution, or AD. Crates that need only dtype tags,
@@ -35,12 +36,12 @@ Current public concepts:
 - `DType`: runtime dtype tags for `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`,
   and `C64`.
 - `TensorScalar`: sealed scalar trait for supported scalar types.
-- `TypedTensor<T>`: owned typed host tensor with contiguous column-major data.
+- `HostTensor<T>`: owned typed host tensor with contiguous column-major data.
 - `Tensor`: dynamic host tensor enum over the supported scalar types.
-- `TypedTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
+- `HostTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
 - `TensorRef<'a>`: borrowed dynamic tensor reference.
 - `ShapeVec` and `StrideVec`: compact shape and signed-stride vectors.
-- `SliceSpec`: explicit positive-step slice descriptor.
+- `SliceSpec`: explicit slice descriptor. A zero step is invalid.
 
 Core tensors are host-resident and backend-independent. They have no device
 placement, no backend-owned buffers, no GPU handles, and no execution methods.
@@ -51,13 +52,20 @@ Core views describe shape, signed strides, and an offset into borrowed host
 storage. The view operations are metadata-only:
 
 - `reshape_view`
-- `permute_view`
+- `transpose_view`
 - `slice_view`
 
 Views may be non-contiguous. `as_slice()` succeeds only when the view is
-slice-contiguous for the borrowed storage. For v1, `SliceSpec` requires a
-positive step; negative strides and non-positive steps are intentionally
-rejected until the view contract is extended.
+slice-contiguous for the borrowed storage. `TensorLayout` metadata slicing
+supports signed strides and negative steps when reachable-range validation
+proves every logical element maps inside the backing allocation. Zero step
+remains invalid.
+
+The current `tenferro-tensor-core` host adapters
+`HostTensorView::slice_view` and `TensorView::slice_view` are a narrower
+positive-step compatibility surface. Runtime views in `tenferro-tensor`
+(`TypedTensorView` and `TypedTensorViewMut`) use the general reachable-range
+contract for negative-step metadata views.
 
 ---
 
@@ -69,9 +77,9 @@ and scalar model, then adds runtime storage and backend placement.
 The current typed runtime tensor shape is:
 
 ```rust
-pub struct TypedTensor<T> {
+pub struct TypedTensor<T, R = DynRank> {
     pub buffer: Buffer<T>,
-    pub shape: Vec<usize>,
+    layout: TensorLayout<R>,
     pub placement: Placement,
 }
 
@@ -120,13 +128,17 @@ pub struct Placement {
 }
 ```
 
-Host buffers are contiguous column-major tensors. Backend buffers are opaque to
-the runtime tensor layer; the backend that owns the concrete handle is
-responsible for downcasting and execution.
+Owned runtime tensors are compact column-major tensors. Arbitrary strides,
+offsets, transposes, slices, and reverse layouts live on `TypedTensorView`,
+`TypedTensorViewMut`, or `TensorLayout` metadata until an explicit
+same-placement canonicalization boundary. Backend buffers are opaque to the
+runtime tensor layer; the backend that owns the concrete handle is responsible
+for downcasting and execution.
 
 `tenferro-tensor` owns:
 
-- runtime dense tensor types
+- runtime dense tensor types, including `TypedTensor<T, R = DynRank>` and
+  dynamic-rank `Tensor`
 - backend traits
 - CPU backend implementations
 - core execution kernels
@@ -162,7 +174,7 @@ documented in [`backend-contract.md`](backend-contract.md).
 
 ## V. Dense Tensor Boundary
 
-`tenferro::Tensor` is a dense runtime tensor. It does not carry structural
+`tenferro_tensor::Tensor` is a dense runtime tensor. It does not carry structural
 metadata such as diagonal, symmetric, block-diagonal, or sparse layout tags.
 
 This is a deliberate boundary:

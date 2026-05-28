@@ -14,9 +14,15 @@ CPU execution, and backend-parametric concrete tensor kernels.
 
 ### Tensor Values
 
-- `Tensor` dynamic dtype wrapper for `F32`, `F64`, `I64`, `C32`, and `C64`.
-- `TypedTensor<T>` typed dense tensor payload.
-- Host buffers by default; CubeCL device buffers behind the `cubecl` feature.
+- `Tensor` dynamic dtype wrapper for `F32`, `F64`, `I32`, `I64`, `Bool`,
+  `C32`, and `C64`. It remains dynamic-rank.
+- `TypedTensor<T, R = DynRank>` typed runtime tensor payload with optional
+  compile-time rank metadata.
+- `TypedTensorView` and `TypedTensorViewMut` carry arbitrary strides, offsets,
+  and metadata-only layout transforms.
+- Owned tensors are compact column-major and may hold host buffers or
+  backend-owned buffers. Compact-only boundaries may canonicalize views within
+  the same placement, but they do not silently transfer between CPU and GPU.
 
 ### Backend Surface
 
@@ -61,12 +67,14 @@ CUDA operation and dtype matrix. The high-level categories are:
 - explicit upload/download and device pointer bridge,
 - `F32`/`F64` elementwise arithmetic, comparison, selection, clamp, and
   analytic unary operations, plus `C32`/`C64` add/mul/div/neg/conj,
-- reductions including sum/product for all tensor dtypes and min/max for
-  `F32`/`F64`,
-- structural operations including transpose, reshape, broadcast, reverse,
-  concatenate, diagonal extraction/embedding, and triangular masks for all
-  tensor dtypes,
-- slice/pad/concatenate/reverse for all tensor dtypes and
+- reductions including sum/product for `F32`, `F64`, `I32`, `I64`, `C32`, and
+  `C64`, and min/max for `F32`/`F64`,
+- reshape for all public tensor dtypes, and other structural operations
+  including transpose, broadcast, reverse, concatenate, diagonal
+  extraction/embedding, and triangular masks for `F32`, `F64`, `I32`, `I64`,
+  `C32`, and `C64`,
+- slice/pad/concatenate/reverse for `F32`, `F64`, `I32`, `I64`, `C32`, and
+  `C64`, and
   gather/scatter/dynamic_slice for floating and complex data with numeric
   index tensors,
 - cuTENSOR-backed contraction paths for real and complex floating dtypes,

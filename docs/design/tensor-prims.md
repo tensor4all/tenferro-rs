@@ -27,16 +27,22 @@ tenferro-einsum
         │
         ▼
 tenferro-tensor
-    Tensor, TypedTensor, TensorBackend, BackendSession
+    Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, BackendSession
         │
         ├── cpu::CpuBackend
         └── tenferro_gpu::CubeclBackend (feature = "cuda")
+        ▲
+        │
+tenferro-tensor-core
+    Rank/layout metadata and host-only adapters
 ```
 
 There is exactly one dense runtime tensor type family (`Tensor` /
-`TypedTensor`) and one backend trait surface. Higher layers should depend on
-`TensorBackend`/`BackendSession`, not on a backend-specific context or deleted
-primitive-family traits.
+`TypedTensor<T, R>`) and one backend trait surface. Higher layers should depend
+on `TensorBackend`/`BackendSession`, not on a backend-specific context or
+deleted primitive-family traits. `tenferro-tensor-core` owns rank/layout
+metadata and host-only adapters; backend-capable `TypedTensor<T, R>` lives in
+`tenferro-tensor`.
 
 ## Backend Operation Surface
 
@@ -54,6 +60,10 @@ execution pipeline:
 | Linalg | `cholesky`, `triangular_solve`, `lu`, `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, `eig` |
 | Placement | `upload_host_tensor`, `download_to_host` |
 | Memory reuse | `reclaim_buffer` |
+
+Unsuffixed operation methods consume owned compact tensors. Methods with a
+`_read` suffix accept borrowed views or `TensorRead` inputs. Metadata-only
+operations that return views use the `_view` suffix.
 
 Each backend may return a typed unsupported error for operations or dtypes it
 does not support. Higher layers must not silently fall back across devices.
@@ -92,8 +102,8 @@ Important design points:
   execution pipeline for placement-aware execution.
 - GPU operations receiving CPU tensors return `BackendFailure` with an upload
   hint.
-- CPU operations receiving GPU tensors panic because that is a programming
-  error at the backend boundary.
+- Result-returning CPU operations receiving GPU tensors return `BackendFailure`
+  with a download hint where the buffer is detected at the CPU boundary.
 - ROCm is only a feature stub today.
 
 See [gpu-backend-design.md](./gpu-backend-design.md) for the CubeCL-specific

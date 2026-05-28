@@ -2,10 +2,10 @@
 
 This guide covers immediate execution: direct no-AD tensor computation and
 `EagerTensor` forward execution with optional PyTorch-like reverse-mode
-autodiff on scalar losses. Start with `TypedTensor<T>` or `Tensor` for no-AD
-work. Use `EagerTensor` when you want operations to run immediately inside an
-`EagerRuntime`, and create tracked variables when the workflow needs gradient
-accumulation and `backward()`.
+autodiff on scalar losses. Start with `TypedTensor<T, R>` or `Tensor` for
+no-AD work. Use `EagerTensor` when you want operations to run immediately
+inside an `EagerRuntime`, and create tracked variables when the workflow needs
+gradient accumulation and `backward()`.
 
 ## Setup
 
@@ -26,10 +26,10 @@ one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
 Most broad concrete operations are available as `tenferro_runtime::tensor` free
-functions, with method wrappers kept for compatibility. `TypedTensor<T>` is the
-first layer to consider when you want compile-time dtype safety or typed
-host-side data. Einsum is provided by the separate `tenferro-einsum` standard
-extension.
+functions, with method wrappers kept for compatibility. `TypedTensor<T, R>` is
+the first layer to consider when you want compile-time dtype safety, optional
+rank typing, or typed data that may be host-backed or backend-backed. Einsum is
+provided by the separate `tenferro-einsum` standard extension.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -41,12 +41,19 @@ status. See [Execution Models](execution-models.md) and
 
 ```rust
 use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_tensor::Rank;
 
 // Dynamic dtype (`Tensor`)
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
 // Static dtype (`TypedTensor`)
 let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+let ranked: TypedTensor<f64, Rank<2>> = match b.clone().try_into_rank::<2>() {
+    Ok(ranked) => ranked,
+    Err(err) => panic!("unexpected rank mismatch: {err}"),
+};
+assert_eq!(ranked.shape(), &[2, 3]);
+assert!(b.clone().try_into_rank::<3>().is_err());
 
 // Convert between layers for a specific dtype.
 let c = Tensor::F64(b.clone());
@@ -55,6 +62,10 @@ assert_eq!(c.shape(), &[2, 3]);
 
 The flat buffers above are in column-major order, so a `[2, 3]` tensor stores
 its columns as `[1, 2]`, `[3, 4]`, and `[5, 6]`.
+Owned tensors stay compact column-major. Metadata-only strided views live on
+`TypedTensorView` and `TypedTensorViewMut`; compact-only operation boundaries
+may canonicalize such views within the same placement, but they do not silently
+upload CPU tensors or download CUDA tensors.
 
 ## Arithmetic
 
@@ -204,7 +215,7 @@ assert!(y.grad().is_none());
 
 | Scenario | Recommended |
 |----------|-------------|
-| Fixed scalar type and no AD | `TypedTensor<T>` |
+| Fixed scalar type and no AD | `TypedTensor<T, R>` |
 | Dynamic dtype and no AD | `Tensor` + a backend |
 | Data preprocessing | `Tensor` + a backend |
 | Tight inner loops | Direct/eager execution |
