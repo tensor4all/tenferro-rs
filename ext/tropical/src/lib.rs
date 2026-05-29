@@ -39,6 +39,7 @@
 //! assert_eq!(value.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 //! ```
 
+pub mod cpu;
 pub mod newtype;
 pub mod traced;
 

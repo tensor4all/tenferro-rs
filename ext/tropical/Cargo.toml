@@ -18,6 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 tenferro-runtime = { path = "../../tenferro-runtime" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
 num-traits = "0.2"
 
 [dev-dependencies]
