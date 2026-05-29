@@ -6,8 +6,9 @@
 use tenferro_ad::TracedTensorAdExt;
 mod support;
 use support::RunTraced;
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::{CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};
+use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

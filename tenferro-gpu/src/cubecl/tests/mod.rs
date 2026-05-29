@@ -1,9 +1,9 @@
 use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
-use crate::cpu::CpuBackend;
 use crate::cubecl::{download_tensor, upload_tensor, CubeclBackend};
 use crate::{Tensor, TypedTensor};
+use tenferro_cpu::CpuBackend;
 
 mod elementwise_tests;
 mod fusion_tests;

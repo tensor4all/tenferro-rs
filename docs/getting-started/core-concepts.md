@@ -63,7 +63,8 @@ physical order.
 ordinary no-AD computation when runtime dtype is useful.
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -111,7 +112,8 @@ lowers that graph into a reusable program, and a `GraphExecutor<B>` runs the
 program on a backend.
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);

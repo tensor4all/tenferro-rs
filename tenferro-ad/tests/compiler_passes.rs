@@ -656,7 +656,8 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     // End-to-end: build a traced graph with multiple free dims, compile,
     // and run it through the CPU backend. Compare the output to the
     // equivalent matmul result.
-    use tenferro_runtime::{CpuBackend, Tensor, TypedTensor};
+    use tenferro_cpu::CpuBackend;
+    use tenferro_runtime::{Tensor, TypedTensor};
 
     // LHS [M1, M2, K] * RHS [K, N] => [M1, M2, N]. The compile pipeline
     // should emit a canonical DotGeneral + output Reshape. Run end-to-end

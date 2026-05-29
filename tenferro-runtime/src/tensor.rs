@@ -13,7 +13,8 @@ pub use tenferro_tensor::Tensor;
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, DType, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, DType, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let y = tensor::convert(&x, DType::F32, &mut backend).unwrap();
@@ -27,7 +28,8 @@ pub fn convert(input: &Tensor, to: DType, backend: &mut impl TensorBackend) -> R
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
@@ -45,7 +47,8 @@ macro_rules! unary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+        /// # use tenferro_cpu::CpuBackend;
+        /// use tenferro_runtime::{tensor, Tensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]);
         #[doc = concat!("let y = tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
@@ -63,7 +66,8 @@ macro_rules! binary_fn {
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+        /// # use tenferro_cpu::CpuBackend;
+        /// use tenferro_runtime::{tensor, Tensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
         /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -121,7 +125,8 @@ unary_fn!(log1p, log1p, "Elementwise `log(1 + x)`.");
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -140,7 +145,8 @@ pub fn sub(lhs: &Tensor, rhs: &Tensor, backend: &mut impl TensorBackend) -> Resu
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CompareDir, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, CompareDir, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -164,7 +170,8 @@ pub fn compare(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CompareDir, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, CompareDir, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]);
 /// # let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]);
@@ -186,7 +193,8 @@ pub fn where_select(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]);
 /// # let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]);
@@ -210,7 +218,8 @@ pub fn clamp(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
 /// # let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
@@ -231,7 +240,8 @@ pub fn matmul(a: &Tensor, b: &Tensor, backend: &mut impl TensorBackend) -> Resul
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
 /// let y = tensor::reshape(&x, &[4], &mut backend).unwrap();
@@ -250,7 +260,8 @@ pub fn reshape(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
 /// let y = tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
@@ -269,7 +280,8 @@ pub fn transpose(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{tensor, CpuBackend, Tensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{tensor, Tensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
 /// let y = tensor::reduce_sum(&x, &[0], &mut backend).unwrap();

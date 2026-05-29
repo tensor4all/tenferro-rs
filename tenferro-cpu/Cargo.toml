@@ -1,0 +1,57 @@
+[package]
+name = "tenferro-cpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "CPU backend, kernels, provider selection, and CPU resource pools for tenferro."
+
+[lib]
+name = "tenferro_cpu"
+
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["dep:faer"]
+cpu-blas = ["dep:cblas-sys", "dep:lapack"]
+provider-src = ["cpu-blas", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
+provider-inject = ["cpu-blas", "dep:cblas-inject", "dep:lapack-inject"]
+src-openblas = ["provider-src", "blas-src/openblas"]
+src-accelerate = ["provider-src", "blas-src/accelerate"]
+src-intel-mkl-dynamic-parallel = ["provider-src", "blas-src/intel-mkl-dynamic-parallel"]
+
+[dependencies]
+tenferro-tensor = { path = "../tenferro-tensor" }
+num-complex.workspace = true
+num-traits.workspace = true
+smallvec.workspace = true
+strided-kernel.workspace = true
+thiserror.workspace = true
+faer = { workspace = true, optional = true }
+cblas-sys = { workspace = true, optional = true }
+cblas-inject = { workspace = true, optional = true }
+lapack-inject = { workspace = true, optional = true }
+cblas-src = { workspace = true, optional = true }
+blas-src = { workspace = true, optional = true }
+lapack = { workspace = true, optional = true }
+lapack-src = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "dot_general_overhead"
+harness = false
+
+[[bench]]
+name = "pairwise_contraction"
+harness = false
+
+[[bench]]
+name = "cpu_install_overhead"
+harness = false
+
+[[bench]]
+name = "openblas_direct_overhead"
+harness = false
+required-features = ["cpu-blas"]

@@ -3,7 +3,10 @@
 //! Operation families that are no longer part of core, including einsum, live
 //! in their extension crates.
 
-use tenferro_tensor::{CompareDir, Error, Result, Tensor, TensorBackend, TensorScalar};
+use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
+use tenferro_tensor::{
+    CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
+};
 
 pub use tenferro_tensor::TypedTensor;
 
@@ -12,7 +15,8 @@ pub use tenferro_tensor::TypedTensor;
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]);
@@ -23,18 +27,21 @@ pub fn add<T: TensorScalar>(
     rhs: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out = crate::tensor::add(&erase(lhs), &erase(rhs), backend)?;
+    let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
+    let out =
+        backend.with_backend_session(|exec| exec.add_read(lhs.tensor_read(), rhs.tensor_read()))?;
     try_into_typed_result("add", out)
 }
 
 macro_rules! unary_fn {
-    ($name:ident, $summary:literal) => {
+    ($name:ident, $method:ident, $summary:literal) => {
         #[doc = $summary]
         ///
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+        /// # use tenferro_cpu::CpuBackend;
+        /// use tenferro_runtime::{typed_tensor, TypedTensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 4.0]);
         #[doc = concat!("let y = typed_tensor::", stringify!($name), "(&x, &mut backend).unwrap();")]
@@ -43,20 +50,21 @@ macro_rules! unary_fn {
             input: &TypedTensor<T>,
             backend: &mut impl TensorBackend,
         ) -> Result<TypedTensor<T>> {
-            let out = crate::tensor::$name(&erase(input), backend)?;
+            let out = backend.with_backend_session(|exec| exec.$method(T::tensor_read(input)))?;
             try_into_typed_result(stringify!($name), out)
         }
     };
 }
 
 macro_rules! binary_fn {
-    ($name:ident, $summary:literal) => {
+    ($name:ident, $method:ident, $summary:literal) => {
         #[doc = $summary]
         ///
         /// # Examples
         ///
         /// ```rust
-        /// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+        /// # use tenferro_cpu::CpuBackend;
+        /// use tenferro_runtime::{typed_tensor, TypedTensor};
         /// # let mut backend = CpuBackend::new();
         /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
         /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -67,7 +75,9 @@ macro_rules! binary_fn {
             rhs: &TypedTensor<T>,
             backend: &mut impl TensorBackend,
         ) -> Result<TypedTensor<T>> {
-            let out = crate::tensor::$name(&erase(lhs), &erase(rhs), backend)?;
+            let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
+            let out =
+                backend.with_backend_session(|exec| exec.$method(lhs.tensor_read(), rhs.tensor_read()))?;
             try_into_typed_result(stringify!($name), out)
         }
     };
@@ -75,39 +85,51 @@ macro_rules! binary_fn {
 
 binary_fn!(
     mul,
+    mul_read,
     "Elementwise multiplication with NumPy-style broadcasting."
 );
-binary_fn!(div, "Elementwise division with NumPy-style broadcasting.");
-binary_fn!(pow, "Elementwise power with NumPy-style broadcasting.");
+binary_fn!(
+    div,
+    div_read,
+    "Elementwise division with NumPy-style broadcasting."
+);
+binary_fn!(
+    pow,
+    pow_read,
+    "Elementwise power with NumPy-style broadcasting."
+);
 binary_fn!(
     maximum,
+    maximum_read,
     "Elementwise maximum with NumPy-style broadcasting."
 );
 binary_fn!(
     minimum,
+    minimum_read,
     "Elementwise minimum with NumPy-style broadcasting."
 );
 
-unary_fn!(neg, "Elementwise negation.");
-unary_fn!(abs, "Elementwise absolute value.");
-unary_fn!(sign, "Elementwise sign.");
-unary_fn!(conj, "Elementwise complex conjugate.");
-unary_fn!(exp, "Elementwise exponential.");
-unary_fn!(log, "Elementwise natural logarithm.");
-unary_fn!(sin, "Elementwise sine.");
-unary_fn!(cos, "Elementwise cosine.");
-unary_fn!(tanh, "Elementwise hyperbolic tangent.");
-unary_fn!(sqrt, "Elementwise square root.");
-unary_fn!(rsqrt, "Elementwise reciprocal square root.");
-unary_fn!(expm1, "Elementwise `exp(x) - 1`.");
-unary_fn!(log1p, "Elementwise `log(1 + x)`.");
+unary_fn!(neg, neg_read, "Elementwise negation.");
+unary_fn!(abs, abs_read, "Elementwise absolute value.");
+unary_fn!(sign, sign_read, "Elementwise sign.");
+unary_fn!(conj, conj_read, "Elementwise complex conjugate.");
+unary_fn!(exp, exp_read, "Elementwise exponential.");
+unary_fn!(log, log_read, "Elementwise natural logarithm.");
+unary_fn!(sin, sin_read, "Elementwise sine.");
+unary_fn!(cos, cos_read, "Elementwise cosine.");
+unary_fn!(tanh, tanh_read, "Elementwise hyperbolic tangent.");
+unary_fn!(sqrt, sqrt_read, "Elementwise square root.");
+unary_fn!(rsqrt, rsqrt_read, "Elementwise reciprocal square root.");
+unary_fn!(expm1, expm1_read, "Elementwise `exp(x) - 1`.");
+unary_fn!(log1p, log1p_read, "Elementwise `log(1 + x)`.");
 
 /// Elementwise subtraction with NumPy-style broadcasting.
 ///
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -118,7 +140,11 @@ pub fn sub<T: TensorScalar>(
     rhs: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out = crate::tensor::sub(&erase(lhs), &erase(rhs), backend)?;
+    let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
+    let neg_rhs = backend.with_backend_session(|exec| exec.neg_read(rhs.tensor_read()))?;
+    let out = backend.with_backend_session(|exec| {
+        exec.add_read(lhs.tensor_read(), TensorRead::from_tensor(&neg_rhs))
+    })?;
     try_into_typed_result("sub", out)
 }
 
@@ -129,7 +155,8 @@ pub fn sub<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -142,7 +169,10 @@ pub fn compare<T: TensorScalar>(
     dir: CompareDir,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<bool>> {
-    let out = crate::tensor::compare(&erase(lhs), &erase(rhs), dir, backend)?;
+    let (lhs, rhs) = broadcast_binary_read(lhs, rhs, backend)?;
+    let out = backend.with_backend_session(|exec| {
+        exec.compare_read(lhs.tensor_read(), rhs.tensor_read(), &dir)
+    })?;
     try_into_typed_result("compare", out)
 }
 
@@ -153,7 +183,8 @@ pub fn compare<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]);
 /// # let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]);
@@ -166,12 +197,15 @@ pub fn where_select<T: TensorScalar>(
     on_false: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out = crate::tensor::where_select(
-        &erase(condition),
-        &erase(on_true),
-        &erase(on_false),
-        backend,
-    )?;
+    let (condition, on_true, on_false) =
+        broadcast_ternary_read(condition, on_true, on_false, backend)?;
+    let out = backend.with_backend_session(|exec| {
+        exec.select_read(
+            condition.tensor_read(),
+            on_true.tensor_read(),
+            on_false.tensor_read(),
+        )
+    })?;
     try_into_typed_result("where_select", out)
 }
 
@@ -180,7 +214,8 @@ pub fn where_select<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]);
 /// # let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]);
@@ -193,7 +228,14 @@ pub fn clamp<T: TensorScalar>(
     upper: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out = crate::tensor::clamp(&erase(input), &erase(lower), &erase(upper), backend)?;
+    let (input, lower, upper) = broadcast_ternary_read(input, lower, upper, backend)?;
+    let out = backend.with_backend_session(|exec| {
+        exec.clamp_read(
+            input.tensor_read(),
+            lower.tensor_read(),
+            upper.tensor_read(),
+        )
+    })?;
     try_into_typed_result("clamp", out)
 }
 
@@ -204,7 +246,8 @@ pub fn clamp<T: TensorScalar>(
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{typed_tensor, CpuBackend, TypedTensor};
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
 /// # let mut backend = CpuBackend::new();
 /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
 /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]);
@@ -215,12 +258,85 @@ pub fn matmul<T: TensorScalar>(
     b: &TypedTensor<T>,
     backend: &mut impl TensorBackend,
 ) -> Result<TypedTensor<T>> {
-    let out = crate::tensor::matmul(&erase(a), &erase(b), backend)?;
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![a.shape().len() - 1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let out = backend.with_backend_session(|exec| {
+        exec.dot_general_read(T::tensor_read(a), T::tensor_read(b), &config)
+    })?;
     try_into_typed_result("matmul", out)
 }
 
-fn erase<T: TensorScalar>(input: &TypedTensor<T>) -> Tensor {
-    T::into_tensor(input.shape().to_vec(), input.host_data().to_vec())
+enum ReadInput<'a> {
+    Borrowed(TensorRead<'a>),
+    Owned(Tensor),
+}
+
+impl ReadInput<'_> {
+    fn tensor_read(&self) -> TensorRead<'_> {
+        match self {
+            Self::Borrowed(read) => read.clone(),
+            Self::Owned(tensor) => TensorRead::from_tensor(tensor),
+        }
+    }
+}
+
+fn broadcast_binary_read<'a, T: TensorScalar>(
+    lhs: &'a TypedTensor<T>,
+    rhs: &'a TypedTensor<T>,
+    backend: &mut impl TensorBackend,
+) -> Result<(ReadInput<'a>, ReadInput<'a>)> {
+    let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
+    Ok((
+        broadcast_to_read(lhs, &shape, backend)?,
+        broadcast_to_read(rhs, &shape, backend)?,
+    ))
+}
+
+fn broadcast_ternary_read<'a, C: TensorScalar, T: TensorScalar>(
+    first: &'a TypedTensor<C>,
+    second: &'a TypedTensor<T>,
+    third: &'a TypedTensor<T>,
+    backend: &mut impl TensorBackend,
+) -> Result<(ReadInput<'a>, ReadInput<'a>, ReadInput<'a>)> {
+    let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
+        .map_err(broadcast_error)?;
+    Ok((
+        broadcast_to_read(first, &shape, backend)?,
+        broadcast_to_read(second, &shape, backend)?,
+        broadcast_to_read(third, &shape, backend)?,
+    ))
+}
+
+fn broadcast_to_read<'a, T: TensorScalar>(
+    input: &'a TypedTensor<T>,
+    target_shape: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<ReadInput<'a>> {
+    if input.shape() == target_shape {
+        return Ok(ReadInput::Borrowed(T::tensor_read(input)));
+    }
+
+    let plan = broadcast_input_plan(input.shape(), target_shape).map_err(broadcast_error)?;
+    let source = if plan.source_shape == input.shape() {
+        ReadInput::Borrowed(T::tensor_read(input))
+    } else {
+        let reshaped = backend.with_backend_session(|exec| {
+            exec.reshape_read(T::tensor_read(input), &plan.source_shape)
+        })?;
+        ReadInput::Owned(reshaped)
+    };
+    let out = backend.with_backend_session(|exec| {
+        exec.broadcast_in_dim_read(source.tensor_read(), target_shape, &plan.dims)
+    })?;
+    Ok(ReadInput::Owned(out))
+}
+
+fn broadcast_error(err: impl std::fmt::Display) -> Error {
+    Error::backend_failure("broadcast", err.to_string())
 }
 
 fn try_into_typed_result<T: TensorScalar>(

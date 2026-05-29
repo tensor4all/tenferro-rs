@@ -1,5 +1,6 @@
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::{CpuBackend, DType, GraphExecutor, Tensor, TypedTensor};
+use tenferro_runtime::{DType, GraphExecutor, Tensor, TypedTensor};
 
 #[test]
 fn eval_exec_ir_non_consuming_preserves_caller_inputs() {

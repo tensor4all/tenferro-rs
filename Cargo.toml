@@ -4,6 +4,7 @@ members = [
     "tenferro-internal-device",
     "tenferro-tensor-core",
     "tenferro-tensor",
+    "tenferro-cpu",
     "tenferro-gpu",
     "tenferro-runtime",
     "tenferro-ad",

@@ -4,8 +4,9 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::eager_tensor::einsum;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_runtime::Tensor;
 
 const BATCHES: &[usize] = &[16, 64, 256];
 const BATCHED_SMALL_SIZES: &[usize] = &[2, 4, 8, 16];

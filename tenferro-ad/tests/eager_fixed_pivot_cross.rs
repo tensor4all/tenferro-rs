@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 const TOL: f64 = 1.0e-10;
 

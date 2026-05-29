@@ -4,9 +4,9 @@
 //! via EagerTensor AD tests. These tests target branches with real logic:
 //! edge-case handling, byte parsing, multi-output unpacking, etc.
 use tenferro_ad::eager_exec::exec_op_on_tensors;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

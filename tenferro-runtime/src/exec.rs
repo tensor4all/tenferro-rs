@@ -116,7 +116,7 @@ pub(crate) fn resolve_tensor_shape_exprs(
 ///
 /// ```
 /// use tenferro_runtime::exec::{eval_exec_ir, ExecProgram};
-/// use tenferro_runtime::CpuBackend;
+/// use tenferro_cpu::CpuBackend;
 ///
 /// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_ir::<CpuBackend>;
@@ -137,7 +137,7 @@ pub fn eval_exec_ir<B: TensorBackend + 'static>(
 ///
 /// ```
 /// use tenferro_runtime::exec::{eval_exec_ir_unsegmented, ExecProgram};
-/// use tenferro_runtime::CpuBackend;
+/// use tenferro_cpu::CpuBackend;
 ///
 /// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_ir_unsegmented::<CpuBackend>;

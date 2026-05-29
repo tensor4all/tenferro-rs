@@ -16,7 +16,7 @@ use super::dispatch::{
     HostDispatchKey, BACKEND_DISPATCH_TABLE,
 };
 use super::ExecOp;
-use crate::CpuBackend;
+use tenferro_cpu::CpuBackend;
 
 #[test]
 fn exec_op_maps_to_catalog_kind() {

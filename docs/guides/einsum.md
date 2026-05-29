@@ -19,7 +19,8 @@ Use the traced route when einsum should be part of a graph compiled by
 `GraphCompiler` and executed by `GraphExecutor`.
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],

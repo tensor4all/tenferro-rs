@@ -1,7 +1,6 @@
 use num_complex::Complex64;
-use tenferro_runtime::{
-    CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
-};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))

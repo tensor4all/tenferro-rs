@@ -13,16 +13,10 @@ name = "tenferro_ad"
 [features]
 default = ["cpu-faer"]
 cpu-faer = [
-    "tenferro-runtime/cpu-faer",
-    "tenferro-internal-ops/cpu-faer",
-    "tenferro-tensor/cpu-faer",
-    "tenferro-gpu?/cpu-faer",
+    "tenferro-cpu/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-runtime/cpu-blas",
-    "tenferro-internal-ops/cpu-blas",
-    "tenferro-tensor/cpu-blas",
-    "tenferro-gpu?/cpu-blas",
+    "tenferro-cpu/cpu-blas",
 ]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
@@ -31,6 +25,7 @@ rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 tenferro-runtime = { path = "../tenferro-runtime", default-features = false }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false, features = ["autodiff"] }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = true }
 chainrules-core.workspace = true
 computegraph.workspace = true

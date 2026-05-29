@@ -4,8 +4,8 @@ use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::inject::{
     register_blas_gemm_fn_ptrs, register_lapack_full_piv_lu_fn_ptrs, register_lapack_provider_ptrs,
     BlasGemmFnPtrSet, LapackFullPivLuFnPtrSet, LapackProviderPtrSet, ProviderAbi,

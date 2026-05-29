@@ -237,7 +237,7 @@ impl ExtensionOp for EinsumExtensionOp {
     }
 
     fn eager_execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let mut backend = tenferro_tensor::cpu::CpuBackend::new();
+        let mut backend = tenferro_cpu::CpuBackend::new();
         let subscripts = Subscripts::from(&self.subscripts);
         crate::eager::eager_einsum_subscripts(&mut backend, inputs, &subscripts)
             .map(|output| vec![output])

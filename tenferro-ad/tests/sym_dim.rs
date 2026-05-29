@@ -1,8 +1,9 @@
 mod support;
 use support::RunTraced;
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::GraphExecutor;
-use tenferro_runtime::{CpuBackend, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))

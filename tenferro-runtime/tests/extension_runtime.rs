@@ -3,13 +3,14 @@ use std::hash::Hasher;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::SymDim;
 use tenferro_runtime::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionExecutionContext,
     ExtensionExecutor, ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
 };
-use tenferro_tensor::{cpu::CpuBackend, DType, Tensor};
+use tenferro_tensor::{DType, Tensor};
 
 #[derive(Clone, Debug)]
 struct IdentityRuntimeOp {

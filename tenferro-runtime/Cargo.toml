@@ -12,8 +12,8 @@ name = "tenferro_runtime"
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro-tensor/cpu-blas"]
+cpu-faer = ["tenferro-cpu/cpu-faer"]
+cpu-blas = ["tenferro-cpu/cpu-blas"]
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops" }
@@ -24,3 +24,6 @@ lru.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }

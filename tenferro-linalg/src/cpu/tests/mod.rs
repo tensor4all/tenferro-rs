@@ -10,17 +10,17 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "cpu-faer")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
-use tenferro_tensor::backend::TensorBackend;
 #[cfg(feature = "cpu-faer")]
-use tenferro_tensor::buffer_pool::BufferPool;
-use tenferro_tensor::config::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-};
-use tenferro_tensor::cpu::{
+use tenferro_cpu::buffer_pool::BufferPool;
+use tenferro_cpu::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
     reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
     CpuBackend, CpuContext,
+};
+use tenferro_tensor::backend::TensorBackend;
+use tenferro_tensor::config::{
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor};
 

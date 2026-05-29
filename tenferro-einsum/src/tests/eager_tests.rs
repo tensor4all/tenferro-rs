@@ -1,4 +1,5 @@
-use tenferro_tensor::{cpu::CpuBackend, Tensor, TensorBackend, TensorRead, TensorView};
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorView};
 
 use crate::eager::{eager_einsum, eager_einsum_owned, eager_einsum_read_subscripts};
 use crate::Subscripts;

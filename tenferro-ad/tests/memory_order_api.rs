@@ -1,4 +1,5 @@
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]
 fn traced_tensor_row_major_constructor_stores_column_major_input() {

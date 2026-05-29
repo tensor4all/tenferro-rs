@@ -15,10 +15,11 @@ use std::collections::HashSet;
 use support::{run_many_traced_with, RunTraced};
 
 use computegraph::fragment::Fragment;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::traced::TracedTensor;
 use tenferro_runtime::GraphExecutor;
-use tenferro_runtime::{CpuBackend, Tensor, TypedTensor};
+use tenferro_runtime::{Tensor, TypedTensor};
 
 const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;

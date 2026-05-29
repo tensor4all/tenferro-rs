@@ -1,7 +1,8 @@
 use tenferro_ad::TracedTensorAdExt;
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 #[test]
 fn graph_executor_runs_compiled_single_output_program() {
@@ -212,26 +213,19 @@ fn graph_executor_cache_stats_are_separate_from_compiler_stats() {
 }
 
 #[test]
-fn graph_executor_cpu_cache_controls_are_available() {
+fn graph_executor_runtime_cache_controls_are_available() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    let original_gemm_capacity = executor.gemm_analysis_cache_capacity();
-    executor.set_gemm_analysis_cache_capacity(0);
-    assert_eq!(executor.gemm_analysis_cache_capacity(), 0);
-    executor.set_gemm_analysis_cache_capacity(original_gemm_capacity);
+    let stats = executor.cache_stats();
+    assert_eq!(stats.extensions.entries, 0);
+    assert_eq!(stats.backend.entries, 0);
 
-    let original_pool_limit = executor.buffer_pool_limit_bytes();
-    executor.set_buffer_pool_limit_bytes(0);
-    assert_eq!(executor.buffer_pool_limit_bytes(), 0);
-    executor.set_buffer_pool_limit_bytes(original_pool_limit);
+    executor.clear_backend_cache();
+    assert_eq!(executor.cache_stats().backend.entries, 0);
 
-    let stats = executor.cpu_cache_stats();
-    assert_eq!(stats.executor.extensions.entries, 0);
-    assert_eq!(stats.buffer_pool.entries, executor.buffer_pool_len());
-
-    executor.clear_all_caches();
-    assert_eq!(executor.cpu_cache_stats().executor.backend.entries, 0);
-    assert_eq!(executor.buffer_pool_len(), 0);
+    executor.clear_caches();
+    assert_eq!(executor.cache_stats().extensions.entries, 0);
+    assert_eq!(executor.cache_stats().backend.entries, 0);
 }
 
 #[test]

@@ -15,7 +15,8 @@
 use tenferro_ad::TracedTensorAdExt;
 mod support;
 use support::RunTraced;
-use tenferro_runtime::{CpuBackend, GraphExecutor, Tensor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 fn f64_data(tensor: &Tensor) -> &[f64] {

@@ -96,7 +96,8 @@ wrappers that accept dynamic-rank `TypedTensor<T>` values and return typed
 results.
 
 ```rust
-use tenferro_runtime::{typed_tensor, CompareDir, CpuBackend, TypedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{typed_tensor, CompareDir, TypedTensor};
 
 let mut backend = CpuBackend::new();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
@@ -177,7 +178,8 @@ Use `Tensor` with a backend when you want direct no-AD computation but the dtype
 should remain dynamic.
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -212,7 +214,8 @@ assert_eq!(x.grad().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
-use tenferro_runtime::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{traced_tensor, GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
@@ -247,7 +250,8 @@ assert!((data[2] - 7.38905609893065).abs() < 1e-12);
 ## Reshape And Transpose
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(
@@ -279,7 +283,8 @@ assert_eq!(repeated.data().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0
 ## Reduce Over Axes
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(

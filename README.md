@@ -59,7 +59,8 @@ type is fixed in your Rust code, prefer `TypedTensor<T, R>` and the typed
 operation entry points described in the tensor operations guide.
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut backend = CpuBackend::new();
@@ -189,7 +190,8 @@ through a `GraphExecutor`. This is the entry point for graph reuse and
 transform-style AD (`grad`, `vjp`, `jvp`, and HVP by composition).
 
 ```rust
-use tenferro_runtime::{traced_tensor, CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{traced_tensor, GraphCompiler, GraphExecutor, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = TracedTensor::from_vec_row_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);

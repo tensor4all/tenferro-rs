@@ -48,11 +48,6 @@ pub(crate) mod config {
     pub use tenferro_tensor::config::*;
 }
 
-#[cfg(all(test, feature = "cuda"))]
-pub(crate) mod cpu {
-    pub use tenferro_tensor::cpu::*;
-}
-
 #[cfg(feature = "cuda")]
 pub(crate) mod types {
     pub use crate::CubeclBuffer;

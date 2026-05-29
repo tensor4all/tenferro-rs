@@ -15,16 +15,12 @@ autodiff = [
     "tenferro-internal-ops/autodiff",
 ]
 cpu-faer = [
-    "tenferro-runtime/cpu-faer",
     "tenferro-ad?/cpu-faer",
-    "tenferro-internal-ops/cpu-faer",
-    "tenferro-tensor/cpu-faer",
+    "tenferro-cpu/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-runtime/cpu-blas",
     "tenferro-ad?/cpu-blas",
-    "tenferro-internal-ops/cpu-blas",
-    "tenferro-tensor/cpu-blas",
+    "tenferro-cpu/cpu-blas",
 ]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
@@ -36,6 +32,7 @@ tenferro-internal-device = { path = "../tenferro-internal-device" }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 computegraph.workspace = true
 chainrules-core = { workspace = true, optional = true }
 lru.workspace = true

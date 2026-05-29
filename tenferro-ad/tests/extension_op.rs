@@ -32,12 +32,13 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ad::extension::{
     apply_eager, register_extension_rule, ExtensionAdRuleTrait, ExtensionRuleSet,
 };
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, SymDim};
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionRuntime};
-use tenferro_runtime::{CpuBackend, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::{DType, TensorBackend, TypedTensor};
 
 // ----------------------------------------------------------------------

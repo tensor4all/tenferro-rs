@@ -14,6 +14,7 @@ use computegraph::resolve::resolve;
 use computegraph::types::{GlobalValKey, OpMode, ValRef};
 use computegraph::LocalValId;
 use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
@@ -26,7 +27,6 @@ use tenferro_runtime::exec::eval_exec_ir;
 use tenferro_runtime::shape_infer::{infer_output_dtype, infer_output_extents};
 use tenferro_runtime::traced_tensor::matmul;
 use tenferro_runtime::{GraphExecutor, TracedTensor};
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
     TensorReduction, TypedTensor,

@@ -83,13 +83,14 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, Tensor};
+    /// use tenferro_tensor::{Tensor, TensorBackend};
     ///
-    /// let mut backend = CpuBackend::new();
-    /// let x = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]);
-    /// let y = x.index_select(-1, &[2, 0], &mut backend).unwrap();
-    ///
-    /// assert_eq!(y.as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// fn select_last_axis<B: TensorBackend>(
+    ///     backend: &mut B,
+    ///     x: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     x.index_select(-1, &[2, 0], backend)
+    /// }
     /// ```
     pub fn index_select(
         &self,
@@ -106,15 +107,15 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{cpu::CpuBackend, Tensor};
+    /// use tenferro_tensor::{Tensor, TensorBackend};
     ///
-    /// let mut backend = CpuBackend::new();
-    /// let a = Tensor::from_vec_col_major(vec![], vec![1.0_f64]);
-    /// let b = Tensor::from_vec_col_major(vec![], vec![2.0_f64]);
-    /// let out = Tensor::stack(&[&a, &b], -1, &mut backend).unwrap();
-    ///
-    /// assert_eq!(out.shape(), &[2]);
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// fn stack_scalars<B: TensorBackend>(
+    ///     backend: &mut B,
+    ///     a: &Tensor,
+    ///     b: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     Tensor::stack(&[a, b], -1, backend)
+    /// }
     /// ```
     pub fn stack(
         tensors: &[&Self],

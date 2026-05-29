@@ -17,8 +17,8 @@ When both providers are compiled, `CpuBackend::new()` selects faer. Select BLAS
 explicitly when you want provider-backed GEMM or LAPACK calls:
 
 ```rust
-use tenferro_runtime::CpuBackend;
-use tenferro_tensor::cpu::CpuBackendKind;
+use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuBackendKind;
 
 let backend = CpuBackend::try_with_threads_and_kind(4, CpuBackendKind::Blas).unwrap();
 assert_eq!(backend.num_threads(), 4);
@@ -30,7 +30,8 @@ Use `CpuBackend::with_threads(n)` when one backend should carry a fixed CPU
 parallelism policy:
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::GraphExecutor;
 
 let executor = GraphExecutor::new(CpuBackend::with_threads(4));
 assert_eq!(executor.backend().num_threads(), 4);
@@ -74,7 +75,7 @@ parallelism. If an outer loop already runs many independent tenferro calls in
 parallel, use a smaller inner backend:
 
 ```rust
-use tenferro_runtime::CpuBackend;
+use tenferro_cpu::CpuBackend;
 
 let backend = CpuBackend::with_threads(1);
 ```
@@ -92,7 +93,8 @@ Reuse execution objects when you repeat related work:
   reusable backend buffers.
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor};
 
 let mut compiler = GraphCompiler::new();
 let mut executor = GraphExecutor::new(CpuBackend::with_threads(4));
@@ -110,7 +112,8 @@ configured independently.
 use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
 use tenferro_runtime::extension::ExtensionCacheLimits;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
@@ -133,7 +136,8 @@ executor.set_gemm_analysis_cache_capacity(512);
 For CPU executors, the CPU buffer pool has its own retention limit:
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::GraphExecutor;
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
@@ -147,7 +151,8 @@ than reusing old plans and buffers.
 
 ```rust
 use tenferro_ad::EagerRuntime;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let mut compiler = GraphCompiler::new();
@@ -161,7 +166,8 @@ eager.clear_caches();
 For CPU executors, `clear_all_caches()` also clears the CPU buffer pool:
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphExecutor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::GraphExecutor;
 
 let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.clear_all_caches();

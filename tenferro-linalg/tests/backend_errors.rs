@@ -1,13 +1,14 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
+use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{
-    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer,
-    BufferHandle, CompareDir, DType, DotGeneralConfig, Error, GatherConfig, MemoryKind, PadConfig,
-    Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural, TensorView, TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
+    DType, DotGeneralConfig, Error, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig,
+    SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TensorView, TypedTensor,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

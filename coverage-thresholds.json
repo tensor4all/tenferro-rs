@@ -16,6 +16,11 @@
     "tenferro-einsum/src/extension.rs": 70,
     "tenferro-einsum/src/lib.rs": 65,
     "tenferro-einsum/src/subscripts.rs": 65,
+    "tenferro-cpu/src/backend.rs": 78,
+    "tenferro-cpu/src/exec_session.rs": 60,
+    "tenferro-cpu/src/gemm/mod.rs": 79,
+    "tenferro-cpu/src/indexing.rs": 73,
+    "tenferro-cpu/src/reduction.rs": 79,
     "tenferro-fft/src/lib.rs": 79,
     "tenferro-gpu/src/kernels/reduce/routines.rs": 70,
     "tenferro-linalg/src/ad/rules/mod.rs": 22,
@@ -26,9 +31,6 @@
     "tenferro-runtime/src/extension_cache.rs": 65,
     "tenferro-runtime/src/extension_runtime.rs": 73,
     "tenferro-runtime/src/exec.rs": 75,
-    "tenferro-tensor/src/cpu/exec_session.rs": 60,
-    "tenferro-tensor/src/cpu/backend.rs": 78,
-    "tenferro-tensor/src/cpu/gemm/mod.rs": 79,
     "tenferro-ad/src/eager_exec.rs": 35,
     "tenferro-ad/src/eager_ops.rs": 60
   }

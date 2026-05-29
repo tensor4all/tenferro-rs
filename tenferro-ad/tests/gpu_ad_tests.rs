@@ -3,10 +3,9 @@
 use tenferro_ad::TracedTensorAdExt;
 mod support;
 use support::RunTraced;
+use tenferro_cpu::CpuBackend;
 use tenferro_gpu::cubecl::{download_tensor, upload_tensor, CubeclBackend};
-use tenferro_runtime::{
-    CpuBackend, DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor,
-};
+use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Buffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

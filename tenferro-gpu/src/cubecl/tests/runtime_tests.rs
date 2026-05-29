@@ -154,7 +154,7 @@ gpu_test!(test_pointer_bridge, {
 
 gpu_test!(test_backend_add_matches_cpu_reference, {
     let mut backend = CubeclBackend::new(0).unwrap();
-    let mut cpu = crate::cpu::CpuBackend::new();
+    let mut cpu = tenferro_cpu::CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
     let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]);
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();

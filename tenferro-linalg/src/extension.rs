@@ -273,7 +273,7 @@ impl ExtensionOpTrait for LinalgExtensionOp {
 
         match eager_linalg_device(inputs)? {
             EagerLinalgDevice::Cpu => {
-                let mut backend = tenferro_tensor::cpu::CpuBackend::new();
+                let mut backend = tenferro_cpu::CpuBackend::new();
                 execute_linalg(self.op, inputs, &mut backend)
             }
             EagerLinalgDevice::Cuda(device_ordinal) => {

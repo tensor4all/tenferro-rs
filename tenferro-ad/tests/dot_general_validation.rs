@@ -2,8 +2,8 @@ mod support;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use support::RunTraced;
 
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

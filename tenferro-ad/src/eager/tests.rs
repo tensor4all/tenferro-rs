@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use chainrules_core::ADKey;
 use computegraph::types::GlobalValKey;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::SymDim;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::Tensor;
 
 use super::backward::{

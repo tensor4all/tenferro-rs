@@ -1,12 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{
-    buffer_pool::BufferPoolStats, cpu::CpuBackend, DType, RuntimeCacheControl, Tensor,
-    TensorBackend, TypedTensor,
-};
+use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TypedTensor};
 
-use super::cache::{CpuGraphExecutorCacheStats, GraphExecutorCacheStats};
+use super::cache::GraphExecutorCacheStats;
 use super::program::{GraphProgram, GraphProgramInput};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
@@ -22,7 +19,8 @@ use crate::traced::TracedTensor;
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 /// let y = &x + &x;
@@ -46,7 +44,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// assert_eq!(executor.cache_stats().extensions.entries, 0);
@@ -65,7 +64,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// let _backend = executor.backend();
@@ -79,7 +79,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// assert_eq!(executor.extension_executor().cache_stats().entries, 0);
@@ -93,7 +94,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.extension_executor_mut().clear_caches();
@@ -117,7 +119,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -136,7 +139,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]);
     /// let y = x.neg();
@@ -158,7 +162,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     /// let y = &x + &x;
@@ -185,7 +190,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1);
     /// let sum = &x + &x;
@@ -216,7 +222,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -246,7 +253,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]);
     /// let mut compiler = GraphCompiler::new();
@@ -268,7 +276,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.clear_backend_cache();
@@ -283,7 +292,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.clear_extension_caches();
@@ -298,7 +308,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.clear_caches();
@@ -314,7 +325,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphExecutor};
     ///
     /// let executor = GraphExecutor::new(CpuBackend::new());
     /// let stats = executor.cache_stats();
@@ -334,150 +346,6 @@ where
 {
     fn default() -> Self {
         Self::new(B::default())
-    }
-}
-
-impl GraphExecutor<CpuBackend> {
-    /// Number of reusable typed host buffers retained by the CPU backend.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert_eq!(executor.buffer_pool_len(), 0);
-    /// ```
-    pub fn buffer_pool_len(&self) -> usize {
-        self.backend.buffer_pool_len()
-    }
-
-    /// Snapshot reusable typed host buffers retained by the CPU backend.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// let stats = executor.buffer_pool_stats();
-    /// assert_eq!(stats.buffers, 0);
-    /// ```
-    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
-        self.backend.buffer_pool_stats()
-    }
-
-    /// Reset all reusable typed host buffers retained by the CPU backend.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.reset_buffer_pool();
-    /// assert_eq!(executor.buffer_pool_len(), 0);
-    /// ```
-    pub fn reset_buffer_pool(&mut self) {
-        self.backend.reset_buffer_pool();
-    }
-
-    /// Return stats for executor caches and the CPU buffer pool.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// let stats = executor.cpu_cache_stats();
-    /// assert_eq!(stats.executor.extensions.entries, 0);
-    /// assert_eq!(stats.buffer_pool.entries, 0);
-    /// ```
-    pub fn cpu_cache_stats(&self) -> CpuGraphExecutorCacheStats {
-        CpuGraphExecutorCacheStats {
-            executor: self.cache_stats(),
-            buffer_pool: self.backend.buffer_pool_cache_stats(),
-        }
-    }
-
-    /// Clear executor-owned caches and the CPU backend buffer pool.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.clear_all_caches();
-    /// assert_eq!(executor.cpu_cache_stats().buffer_pool.entries, 0);
-    /// ```
-    pub fn clear_all_caches(&mut self) {
-        self.clear_caches();
-        self.reset_buffer_pool();
-    }
-
-    /// Return the CPU GEMM analysis-cache slot capacity.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert!(executor.gemm_analysis_cache_capacity() > 0);
-    /// ```
-    pub fn gemm_analysis_cache_capacity(&self) -> usize {
-        self.backend_cache.capacity()
-    }
-
-    /// Resize the CPU GEMM analysis-cache slot capacity.
-    ///
-    /// A capacity of zero disables retention.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.set_gemm_analysis_cache_capacity(0);
-    /// assert_eq!(executor.gemm_analysis_cache_capacity(), 0);
-    /// ```
-    pub fn set_gemm_analysis_cache_capacity(&mut self, capacity: usize) {
-        self.backend_cache.set_capacity(capacity);
-    }
-
-    /// Return the CPU buffer-pool retention limit in bytes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let executor = GraphExecutor::new(CpuBackend::new());
-    /// assert!(executor.buffer_pool_limit_bytes() > 0);
-    /// ```
-    pub fn buffer_pool_limit_bytes(&self) -> usize {
-        self.backend.buffer_pool_limit_bytes()
-    }
-
-    /// Update the CPU buffer-pool retention limit in bytes.
-    ///
-    /// A limit of zero disables buffer retention.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphExecutor};
-    ///
-    /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// executor.set_buffer_pool_limit_bytes(0);
-    /// assert_eq!(executor.buffer_pool_limit_bytes(), 0);
-    /// ```
-    pub fn set_buffer_pool_limit_bytes(&mut self, max_retained_capacity_bytes: usize) {
-        self.backend
-            .set_buffer_pool_limit_bytes(max_retained_capacity_bytes);
     }
 }
 

@@ -2,8 +2,8 @@
 //!
 //! This crate is the explicit opt-in boundary for traced and eager automatic
 //! differentiation. Primal graph construction and execution live in
-//! `tenferro-runtime`; tensor storage and CPU execution live in
-//! `tenferro-tensor`.
+//! `tenferro-runtime`; tensor storage lives in `tenferro-tensor`, and CPU
+//! execution lives in `tenferro-cpu`.
 //!
 //! # Examples
 //!
@@ -35,8 +35,8 @@ pub use eager::{EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
 pub use eager_backend::EagerBackend;
 pub use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics, shape_infer};
 pub use tenferro_runtime::{
-    CompareDir, CpuBackend, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor,
+    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Tensor,
 };
 pub use traced::TracedTensorAdExt;
 

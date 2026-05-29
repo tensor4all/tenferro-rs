@@ -6,7 +6,7 @@ use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 ///
 /// ```rust
 /// use tenferro_linalg::backend::LinalgBackend;
-/// use tenferro_tensor::cpu::CpuBackend;
+/// use tenferro_cpu::CpuBackend;
 ///
 /// fn accepts_linalg_backend<B: LinalgBackend>(_backend: &mut B) {}
 ///
@@ -43,7 +43,8 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
-    /// use tenferro_tensor::{cpu::CpuBackend, TensorView, TypedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],

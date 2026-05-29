@@ -3,14 +3,13 @@
 use std::num::NonZeroUsize;
 
 use tenferro_ad::EagerRuntime;
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{
     eager_tensor::einsum as eager_einsum, einsum, einsum_with, parse_einsum_subscripts,
     ContractionOptimizerOptions, EinsumOptimize,
 };
 use tenferro_runtime::extension::ExtensionCacheLimits;
-use tenferro_runtime::{
-    CpuBackend, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
-};
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor};
 
 fn register_runtime(executor: &mut GraphExecutor<CpuBackend>) {
     executor
