@@ -3,6 +3,9 @@
 //! The routines in this module operate on compact column-major buffers. They
 //! are intended as small, generic fallbacks for extension planning and lowering
 //! work that needs both tropical values and the first winning contracted index.
+//! NaN products are ignored in the same spirit as tenferro CPU `reduce_max` and
+//! `reduce_min`; if every product for an output cell is NaN, the cell receives
+//! the semiring additive identity.
 //!
 //! # Examples
 //!
@@ -18,7 +21,7 @@
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 
-use std::ops::Add;
+use num_traits::Float;
 
 const OP: &str = "tropical_gemm_with_argmax";
 
@@ -32,12 +35,22 @@ const OP: &str = "tropical_gemm_with_argmax";
 /// assert_eq!(TropicalGemmKind::MaxPlus, TropicalGemmKind::MaxPlus);
 /// assert_ne!(TropicalGemmKind::MaxPlus, TropicalGemmKind::MinPlus);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TropicalGemmKind {
     /// Max-plus product: `out[i, j] = max_kk(a[i, kk] + b[kk, j])`.
     MaxPlus,
     /// Min-plus product: `out[i, j] = min_kk(a[i, kk] + b[kk, j])`.
     MinPlus,
+}
+
+impl From<crate::TropicalKind> for TropicalGemmKind {
+    fn from(kind: crate::TropicalKind) -> Self {
+        match kind {
+            crate::TropicalKind::MaxPlus => Self::MaxPlus,
+            crate::TropicalKind::MinPlus => Self::MinPlus,
+        }
+    }
 }
 
 /// Tropical GEMM values and first-winning contracted indices.
@@ -73,9 +86,11 @@ pub struct TropicalGemmArgmax<T> {
 
 /// Compute a column-major tropical GEMM and first-winning contracted indices.
 ///
-/// Inputs are compact column-major matrices: `a` has shape `[m, k]`, `b` has
-/// shape `[k, n]`, and the output has shape `[m, n]` with flat index
-/// `i + j * m`. Ties keep the first contracted index.
+/// Inputs are compact column-major floating-point matrices: `a` has shape
+/// `[m, k]`, `b` has shape `[k, n]`, and the output has shape `[m, n]` with
+/// flat index `i + j * m`. Ties keep the first contracted index. NaN products
+/// are ignored; if every product for an output cell is NaN, the value is
+/// `-inf` for max-plus or `inf` for min-plus and the argmax placeholder is `0`.
 ///
 /// # Errors
 ///
@@ -105,7 +120,7 @@ pub fn tropical_gemm_with_argmax<T>(
     n: usize,
 ) -> tenferro_tensor::Result<TropicalGemmArgmax<T>>
 where
-    T: Copy + PartialOrd + Add<Output = T>,
+    T: Float,
 {
     validate_inputs(a, m, k, b, n)?;
 
@@ -116,18 +131,23 @@ where
     for j in 0..n {
         let b_col = j * k;
         for i in 0..m {
-            let mut best = a[i] + b[b_col];
+            let mut best = identity(kind);
             let mut winner = 0_u32;
+            let mut has_ordered_candidate = false;
 
-            for kk in 1..k {
+            for kk in 0..k {
                 let candidate = a[i + kk * m] + b[kk + b_col];
+                if candidate.is_nan() {
+                    continue;
+                }
                 let is_better = match kind {
-                    TropicalGemmKind::MaxPlus => candidate > best,
-                    TropicalGemmKind::MinPlus => candidate < best,
+                    TropicalGemmKind::MaxPlus => !has_ordered_candidate || candidate > best,
+                    TropicalGemmKind::MinPlus => !has_ordered_candidate || candidate < best,
                 };
                 if is_better {
                     best = candidate;
                     winner = kk as u32;
+                    has_ordered_candidate = true;
                 }
             }
 
@@ -137,6 +157,13 @@ where
     }
 
     Ok(TropicalGemmArgmax { values, argmax })
+}
+
+fn identity<T: Float>(kind: TropicalGemmKind) -> T {
+    match kind {
+        TropicalGemmKind::MaxPlus => T::neg_infinity(),
+        TropicalGemmKind::MinPlus => T::infinity(),
+    }
 }
 
 fn validate_inputs<T>(
