@@ -57,6 +57,12 @@ pub(crate) struct GemmPlan {
     pub(crate) ro_modes: Vec<u32>,
     /// Summed (contracted) dimension modes.
     pub(crate) sum_modes: Vec<u32>,
+    /// Pre-computed left-only dimension sizes.
+    pub(crate) lo_sizes: Vec<usize>,
+    /// Pre-computed right-only dimension sizes.
+    pub(crate) ro_sizes: Vec<usize>,
+    /// Pre-computed summed dimension sizes.
+    pub(crate) sum_sizes: Vec<usize>,
     /// Pre-computed batch dimension sizes.
     pub(crate) batch_sizes: Vec<usize>,
     /// Fused left-only size (product of lo dimensions).
@@ -334,6 +340,9 @@ pub(crate) fn compile_pairwise_step_plan(
             lo_modes,
             ro_modes,
             sum_modes,
+            lo_sizes,
+            ro_sizes,
+            sum_sizes,
             batch_sizes,
             m,
             n,

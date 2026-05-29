@@ -383,7 +383,7 @@ where
     let rhs = T::host_slice(inputs[1])?;
     let canonical_shape = gemm.expanded_output_shape().to_vec();
     let requested_shape = output_shape_for_labels(output_subs, subscripts, inputs)?;
-    let contracted_shape = output_shape_for_labels(gemm.contracted_modes(), subscripts, inputs)?;
+    let contracted_shape = gemm.contracted_shape().to_vec();
     let output_len = element_count(&requested_shape)?;
 
     if output_len == 0 {

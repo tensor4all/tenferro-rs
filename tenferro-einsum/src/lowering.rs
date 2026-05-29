@@ -385,6 +385,25 @@ impl<'a> GemmPlan<'a> {
         inner.lo_modes.as_slice()
     }
 
+    /// Return dimension sizes for [`Self::left_only_modes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+    /// let gemm = tree.step_plan(0).unwrap().gemm();
+    ///
+    /// assert_eq!(gemm.left_only_shape(), &[2]);
+    /// ```
+    #[must_use]
+    pub fn left_only_shape(&self) -> &'a [usize] {
+        let inner: &'a InnerGemmPlan = self.inner;
+        inner.lo_sizes.as_slice()
+    }
+
     /// Return modes present only on the right operand and output.
     ///
     /// # Examples
@@ -402,6 +421,25 @@ impl<'a> GemmPlan<'a> {
     pub fn right_only_modes(&self) -> &'a [u32] {
         let inner: &'a InnerGemmPlan = self.inner;
         inner.ro_modes.as_slice()
+    }
+
+    /// Return dimension sizes for [`Self::right_only_modes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+    /// let gemm = tree.step_plan(0).unwrap().gemm();
+    ///
+    /// assert_eq!(gemm.right_only_shape(), &[4]);
+    /// ```
+    #[must_use]
+    pub fn right_only_shape(&self) -> &'a [usize] {
+        let inner: &'a InnerGemmPlan = self.inner;
+        inner.ro_sizes.as_slice()
     }
 
     /// Return modes contracted between the pairwise operands.
@@ -423,6 +461,30 @@ impl<'a> GemmPlan<'a> {
         inner.sum_modes.as_slice()
     }
 
+    /// Return dimension sizes for [`Self::contracted_modes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1, 2], &[1, 2, 3]], &[0, 3]);
+    /// let tree = ContractionTree::from_pairs(
+    ///     &subs,
+    ///     &[&[2, 3, 4], &[3, 4, 5]],
+    ///     &[(0, 1)],
+    /// )
+    /// .unwrap();
+    /// let gemm = tree.step_plan(0).unwrap().gemm();
+    ///
+    /// assert_eq!(gemm.contracted_shape(), &[3, 4]);
+    /// ```
+    #[must_use]
+    pub fn contracted_shape(&self) -> &'a [usize] {
+        let inner: &'a InnerGemmPlan = self.inner;
+        inner.sum_sizes.as_slice()
+    }
+
     /// Return modes shared by both operands and preserved in the output.
     ///
     /// # Examples
@@ -441,6 +503,25 @@ impl<'a> GemmPlan<'a> {
         let inner: &'a InnerGemmPlan = self.inner;
         let batch_start = inner.lo_modes.len() + inner.ro_modes.len();
         &inner.canonical_modes[batch_start..]
+    }
+
+    /// Return dimension sizes for [`Self::batch_modes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[3, 0, 1], &[1, 2, 3]], &[3, 0, 2]);
+    /// let tree = ContractionTree::from_pairs(&subs, &[&[5, 2, 3], &[3, 4, 5]], &[(0, 1)]).unwrap();
+    /// let gemm = tree.step_plan(0).unwrap().gemm();
+    ///
+    /// assert_eq!(gemm.batch_shape(), &[5]);
+    /// ```
+    #[must_use]
+    pub fn batch_shape(&self) -> &'a [usize] {
+        let inner: &'a InnerGemmPlan = self.inner;
+        inner.batch_sizes.as_slice()
     }
 
     /// Return target mode order for preparing the left GEMM operand.

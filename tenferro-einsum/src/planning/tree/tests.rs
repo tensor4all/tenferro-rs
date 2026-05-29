@@ -326,6 +326,10 @@ fn public_lowering_step_plan_exposes_gemm_layout() {
     assert_eq!(gemm.right_only_modes(), &[2]);
     assert_eq!(gemm.contracted_modes(), &[1]);
     assert_eq!(gemm.batch_modes(), &[] as &[u32]);
+    assert_eq!(gemm.left_only_shape(), &[2]);
+    assert_eq!(gemm.right_only_shape(), &[4]);
+    assert_eq!(gemm.contracted_shape(), &[3]);
+    assert_eq!(gemm.batch_shape(), &[] as &[usize]);
     assert_eq!(gemm.m(), 2);
     assert_eq!(gemm.k(), 3);
     assert_eq!(gemm.n(), 4);
@@ -344,6 +348,22 @@ fn public_lowering_step_plan_reports_final_permutation() {
 
     assert_eq!(gemm.canonical_output_modes(), &[0, 2]);
     assert!(gemm.needs_final_permute());
+}
+
+#[test]
+fn public_lowering_step_plan_exposes_multi_contracted_shape() {
+    let subs = Subscripts::new(&[&[0, 1, 2], &[1, 2, 3]], &[0, 3]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3, 4], &[3, 4, 5]], &[(0, 1)]).unwrap();
+
+    let gemm = tree.step_plan(0).unwrap().gemm();
+
+    assert_eq!(gemm.left_only_modes(), &[0]);
+    assert_eq!(gemm.right_only_modes(), &[3]);
+    assert_eq!(gemm.contracted_modes(), &[1, 2]);
+    assert_eq!(gemm.left_only_shape(), &[2]);
+    assert_eq!(gemm.right_only_shape(), &[5]);
+    assert_eq!(gemm.contracted_shape(), &[3, 4]);
+    assert_eq!(gemm.batch_shape(), &[] as &[usize]);
 }
 
 #[test]
@@ -433,6 +453,10 @@ fn public_lowering_step_plan_exposes_multi_batch_layout() {
     assert_eq!(gemm.right_only_modes(), &[2]);
     assert_eq!(gemm.contracted_modes(), &[1]);
     assert_eq!(gemm.batch_modes(), &[3, 4]);
+    assert_eq!(gemm.left_only_shape(), &[2]);
+    assert_eq!(gemm.right_only_shape(), &[4]);
+    assert_eq!(gemm.contracted_shape(), &[3]);
+    assert_eq!(gemm.batch_shape(), &[5, 6]);
     assert_eq!(gemm.lhs_target_modes(), &[0, 1, 3, 4]);
     assert_eq!(gemm.rhs_target_modes(), &[1, 2, 3, 4]);
     assert_eq!(gemm.canonical_output_modes(), &[0, 2, 3, 4]);
