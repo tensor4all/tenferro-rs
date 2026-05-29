@@ -16,11 +16,16 @@ resolver = "2"
 name = "tenferro_ext_tropical"
 path = "src/lib.rs"
 
+[features]
+default = []
+tropical-gemm = ["dep:tropical-gemm"]
+
 [dependencies]
 tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-runtime = { path = "../../tenferro-runtime" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 num-traits = "0.2"
+tropical-gemm = { version = "0.2", default-features = false, optional = true }
 
 [dev-dependencies]
 tenferro-cpu = { path = "../../tenferro-cpu" }
