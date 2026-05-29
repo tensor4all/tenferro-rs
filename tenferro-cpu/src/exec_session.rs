@@ -98,6 +98,15 @@ impl TensorAnalytic for CpuExecSession<'_> {
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        if let Some(input) = input.as_tensor() {
+            return structural::transpose_with_pool(self.buffers, input, perm);
+        }
+
+        let input = materialize_tensor_read("transpose", input)?;
+        structural::transpose_with_pool(self.buffers, &input, perm)
+    }
+
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         if let Some(input) = input.as_tensor() {

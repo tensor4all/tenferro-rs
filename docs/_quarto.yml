@@ -4,6 +4,7 @@ project:
   render:
     - index.md
     - getting-started/**/*.md
+    - tutorials/**/*.md
     - guides/**/*.md
     - api/**/*.md
     - internals/**/*.md
@@ -28,6 +29,12 @@ website:
           - getting-started/index.md
           - getting-started/core-concepts.md
           - getting-started/pytorch-jax-mapping.md
+      - section: "Tutorials"
+        contents:
+          - tutorials/index.md
+          - tutorials/typed-tensor-non-ad.md
+          - tutorials/eager-autodiff-pytorch-style.md
+          - tutorials/traced-autodiff-jax-style.md
       - section: "Guides"
         contents:
           - guides/choosing-an-api.md

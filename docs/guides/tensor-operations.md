@@ -105,11 +105,13 @@ let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]);
 
 let sum = typed_tensor::add(&x, &y, &mut backend).unwrap();
 let product = typed_tensor::mul(&x, &y, &mut backend).unwrap();
+let total = typed_tensor::reduce_sum(&product, &[0], &mut backend).unwrap();
 let mask = typed_tensor::compare(&sum, &product, CompareDir::Lt, &mut backend).unwrap();
 let selected = typed_tensor::where_select(&mask, &sum, &product, &mut backend).unwrap();
 
 assert_eq!(sum.as_slice(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice(), &[4.0, 10.0, 18.0]);
+assert_eq!(total.as_slice(), &[32.0]);
 assert_eq!(mask.as_slice(), &[false, true, true]);
 assert_eq!(selected.as_slice(), &[4.0, 7.0, 9.0]);
 ```
@@ -121,12 +123,17 @@ The current typed wrapper set covers:
   `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, and `log1p`;
 - boolean-producing and selection operations: `compare`, `where_select`, and
   `clamp`;
+- reduction and structural operations that preserve scalar type: `reduce_sum`,
+  `reshape`, `transpose`, and `broadcast_in_dim`;
 - rank-2 matrix multiplication through `matmul`.
 
 These wrappers are a convenience layer over concrete tensor backend execution.
 For backend-resident CUDA tensors or operation families not covered by the
 typed wrappers, use the dtype-erased `Tensor` path or the eager/traced layer
-that matches the workflow.
+that matches the workflow. Prefer backend-aware typed wrappers for tensor
+reductions and shape operations; reserve `iter()` and `as_slice()` for
+host-side inspection, small assertions, or interoperability with ordinary Rust
+slice code.
 
 ## Map, Iteration, And Parallelism
 
@@ -144,9 +151,10 @@ assert_eq!(x.as_slice(), &[2.0, 4.0, 6.0]);
 
 There is no public closure-style `TypedTensor::map` or `mapv` method in the
 current public API. For host-only transformations, use `iter`, `iter_mut`,
-`as_slice`, `host_data_mut`, or `as_physical_slice_mut`. For tensor math that
-should use backend kernels, use typed wrappers or the dtype-erased `Tensor`,
-`EagerTensor`, or `TracedTensor` operation surface.
+`as_slice`, `host_data_mut`, or `as_physical_slice_mut`. For tensor math,
+reductions, or shape operations that should use backend execution, use typed
+wrappers or the dtype-erased `Tensor`, `EagerTensor`, or `TracedTensor`
+operation surface.
 
 Host iterators are ordinary Rust slice iterators. Backend CPU parallelism is
 controlled by the backend execution context, not by `iter()` itself. See
