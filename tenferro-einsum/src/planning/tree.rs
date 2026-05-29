@@ -315,10 +315,15 @@ impl ContractionTree {
         let n_inputs = self.subscripts.inputs.len();
         let step = self.steps.get(step_idx)?;
         let result_idx = n_inputs + step_idx;
+        let output_subs = if step_idx + 1 == self.steps.len() {
+            &self.subscripts.output
+        } else {
+            &self.operand_subs[result_idx]
+        };
         Some((
             &self.operand_subs[step.left],
             &self.operand_subs[step.right],
-            &self.operand_subs[result_idx],
+            output_subs,
         ))
     }
 

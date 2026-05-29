@@ -254,6 +254,19 @@ fn step_subscripts_returns_correct_labels_for_each_step() {
 }
 
 #[test]
+fn step_subscripts_returns_requested_final_output_order() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[2, 0]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+
+    let (lhs, rhs, out) = tree.step_subscripts(0).unwrap();
+
+    assert_eq!(lhs, &[0, 1]);
+    assert_eq!(rhs, &[1, 2]);
+    assert_eq!(out, &[2, 0]);
+}
+
+#[test]
 fn self_greedy_with_four_operands_chooses_cheapest_pairs() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
     let size_dict: HashMap<u32, usize> = [(0, 10), (1, 2), (2, 10), (3, 2), (4, 10)]
