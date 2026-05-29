@@ -35,40 +35,19 @@ const OP: &str = "tropical_einsum_with_argmax";
 
 /// Tropical einsum semiring flavor.
 ///
+/// This is an alias for the crate-level [`crate::TropicalKind`], kept here so
+/// callers can import einsum-specific APIs from one module without introducing a
+/// second semiring enum.
+///
 /// # Examples
 ///
 /// ```
 /// use tenferro_ext_tropical::{einsum::TropicalEinsumKind, TropicalKind};
 ///
-/// assert_eq!(TropicalEinsumKind::from(TropicalKind::MaxPlus), TropicalEinsumKind::MaxPlus);
+/// assert_eq!(TropicalEinsumKind::MaxPlus, TropicalKind::MaxPlus);
 /// assert_ne!(TropicalEinsumKind::MaxPlus, TropicalEinsumKind::MinPlus);
 /// ```
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum TropicalEinsumKind {
-    /// Max-plus semiring: products add, reductions take the maximum.
-    MaxPlus,
-    /// Min-plus semiring: products add, reductions take the minimum.
-    MinPlus,
-}
-
-impl From<crate::TropicalKind> for TropicalEinsumKind {
-    fn from(kind: crate::TropicalKind) -> Self {
-        match kind {
-            crate::TropicalKind::MaxPlus => Self::MaxPlus,
-            crate::TropicalKind::MinPlus => Self::MinPlus,
-        }
-    }
-}
-
-impl From<TropicalEinsumKind> for TropicalGemmKind {
-    fn from(kind: TropicalEinsumKind) -> Self {
-        match kind {
-            TropicalEinsumKind::MaxPlus => Self::MaxPlus,
-            TropicalEinsumKind::MinPlus => Self::MinPlus,
-        }
-    }
-}
+pub type TropicalEinsumKind = crate::TropicalKind;
 
 /// Argmax metadata captured for one pairwise tropical contraction step.
 ///
@@ -93,6 +72,7 @@ pub struct TropicalArgmaxStep {
     output_shape: Vec<usize>,
     output_subscripts: Vec<u32>,
     contracted_subscripts: Vec<u32>,
+    contracted_shape: Vec<usize>,
 }
 
 impl TropicalArgmaxStep {
@@ -101,12 +81,14 @@ impl TropicalArgmaxStep {
         output_shape: Vec<usize>,
         output_subscripts: Vec<u32>,
         contracted_subscripts: Vec<u32>,
+        contracted_shape: Vec<usize>,
     ) -> Self {
         Self {
             indices,
             output_shape,
             output_subscripts,
             contracted_subscripts,
+            contracted_shape,
         }
     }
 
@@ -188,6 +170,52 @@ impl TropicalArgmaxStep {
     #[must_use]
     pub fn contracted_subscripts(&self) -> &[u32] {
         &self.contracted_subscripts
+    }
+
+    /// Return the shape fused into each argmax index.
+    ///
+    /// Coordinates are encoded in column-major order over this shape.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    ///
+    /// assert_eq!(result.argmax[0].contracted_shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn contracted_shape(&self) -> &[usize] {
+        &self.contracted_shape
+    }
+
+    /// Decode the winning contracted coordinates for one output element.
+    ///
+    /// Returns `None` when `output_index` is outside the argmax buffer or when
+    /// the stored fused winner is outside the contracted shape.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ext_tropical::einsum::{tropical_einsum_with_argmax, TropicalEinsumKind};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+    /// let result = tropical_einsum_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
+    ///
+    /// assert_eq!(result.argmax[0].winner_coordinates(0).unwrap(), vec![0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn winner_coordinates(&self, output_index: usize) -> Option<Vec<usize>> {
+        let fused = *self.indices.get(output_index)? as usize;
+        decode_col_major_index(fused, &self.contracted_shape)
     }
 }
 
@@ -296,6 +324,11 @@ pub fn tropical_einsum_with_argmax(
     }
 
     let gemm = step.gemm();
+    if gemm.contracted_modes().is_empty() {
+        return Err(invalid_config(
+            "tropical einsum requires at least one contracted mode for argmax capture",
+        ));
+    }
     if !gemm.batch_modes().is_empty() {
         return Err(invalid_config(
             "batched tropical einsum is not supported yet",
@@ -348,6 +381,31 @@ where
 {
     let lhs = T::host_slice(inputs[0])?;
     let rhs = T::host_slice(inputs[1])?;
+    let canonical_shape = gemm.expanded_output_shape().to_vec();
+    let requested_shape = output_shape_for_labels(output_subs, subscripts, inputs)?;
+    let contracted_shape = output_shape_for_labels(gemm.contracted_modes(), subscripts, inputs)?;
+    let output_len = element_count(&requested_shape)?;
+
+    if output_len == 0 {
+        let argmax_step = TropicalArgmaxStep::new(
+            Vec::new(),
+            requested_shape.clone(),
+            output_subs.to_vec(),
+            gemm.contracted_modes().to_vec(),
+            contracted_shape,
+        );
+        return Ok(TropicalEinsumResult {
+            output: Tensor::from_vec_col_major(requested_shape, Vec::<T>::new()),
+            argmax: vec![argmax_step],
+        });
+    }
+
+    if gemm.k() == 0 {
+        return Err(invalid_config(
+            "zero-sized contracted modes are supported only when the requested output is empty",
+        ));
+    }
+
     let out = tropical_gemm_with_argmax(
         TropicalGemmKind::from(kind),
         lhs,
@@ -357,8 +415,6 @@ where
         gemm.n(),
     )?;
 
-    let canonical_shape = gemm.expanded_output_shape().to_vec();
-    let requested_shape = output_shape_for_labels(output_subs, subscripts, inputs)?;
     let (values, indices) = if gemm.needs_final_permute() {
         (
             permute_col_major(
@@ -390,6 +446,7 @@ where
         requested_shape.clone(),
         output_subs.to_vec(),
         gemm.contracted_modes().to_vec(),
+        contracted_shape,
     );
     Ok(TropicalEinsumResult {
         output: Tensor::from_vec_col_major(requested_shape, values),
@@ -543,6 +600,25 @@ fn element_count(shape: &[usize]) -> tenferro_tensor::Result<usize> {
         acc.checked_mul(extent)
             .ok_or_else(|| invalid_config(format!("shape {shape:?} overflows usize")))
     })
+}
+
+fn decode_col_major_index(mut flat: usize, shape: &[usize]) -> Option<Vec<usize>> {
+    let total = shape
+        .iter()
+        .try_fold(1usize, |acc, &extent| acc.checked_mul(extent))?;
+    if flat >= total {
+        return None;
+    }
+
+    let mut coordinates = Vec::with_capacity(shape.len());
+    for &extent in shape {
+        if extent == 0 {
+            return None;
+        }
+        coordinates.push(flat % extent);
+        flat /= extent;
+    }
+    Some(coordinates)
 }
 
 fn invalid_config(message: impl Into<String>) -> tenferro_tensor::Error {

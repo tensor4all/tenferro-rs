@@ -5,7 +5,8 @@
 //! work that needs both tropical values and the first winning contracted index.
 //! NaN products are ignored in the same spirit as tenferro CPU `reduce_max` and
 //! `reduce_min`; if every product for an output cell is NaN, the cell receives
-//! the semiring additive identity.
+//! the semiring additive identity. A zero contracted dimension is accepted only
+//! when the output is empty.
 //!
 //! # Examples
 //!
@@ -95,8 +96,9 @@ pub struct TropicalGemmArgmax<T> {
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::InvalidConfig`] when input lengths do not
-/// exactly match the provided dimensions, when `k == 0`, or when `k` is too
-/// large to represent a winning contracted index as `u32`.
+/// exactly match the provided dimensions, when `k == 0` with a non-empty
+/// output, or when `k` is too large to represent a winning contracted index as
+/// `u32`.
 ///
 /// # Examples
 ///
@@ -173,17 +175,6 @@ fn validate_inputs<T>(
     b: &[T],
     n: usize,
 ) -> tenferro_tensor::Result<()> {
-    if k == 0 {
-        return Err(invalid_config("contracting dimension k must be nonzero"));
-    }
-
-    let max_argmax_len = (u32::MAX as usize).saturating_add(1);
-    if k > max_argmax_len {
-        return Err(invalid_config(format!(
-            "contracting dimension k={k} cannot be represented as u32 argmax indices"
-        )));
-    }
-
     let expected_a = checked_len(m, k, "a")?;
     if a.len() != expected_a {
         return Err(invalid_config(format!(
@@ -200,7 +191,23 @@ fn validate_inputs<T>(
         )));
     }
 
-    checked_len(m, n, "output")?;
+    let out_len = checked_len(m, n, "output")?;
+    if k == 0 {
+        if out_len == 0 {
+            return Ok(());
+        }
+        return Err(invalid_config(
+            "contracting dimension k must be nonzero for non-empty outputs",
+        ));
+    }
+
+    let max_argmax_len = (u32::MAX as usize).saturating_add(1);
+    if k > max_argmax_len {
+        return Err(invalid_config(format!(
+            "contracting dimension k={k} cannot be represented as u32 argmax indices"
+        )));
+    }
+
     Ok(())
 }
 

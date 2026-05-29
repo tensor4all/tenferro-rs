@@ -116,6 +116,24 @@ fn invalid_dimensions_return_invalid_config() {
     ));
 }
 
+#[test]
+fn zero_contracting_dimension_is_allowed_only_for_empty_outputs() {
+    let empty =
+        tropical_gemm_with_argmax(TropicalGemmKind::MaxPlus, &[] as &[f64], 0, 0, &[], 4).unwrap();
+    assert!(empty.values.is_empty());
+    assert!(empty.argmax.is_empty());
+
+    let err = tropical_gemm_with_argmax(TropicalGemmKind::MaxPlus, &[] as &[f64], 2, 0, &[], 4)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "tropical_gemm_with_argmax",
+            ..
+        }
+    ));
+}
+
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn oversized_contracting_dimension_returns_invalid_config_before_reading_inputs() {
