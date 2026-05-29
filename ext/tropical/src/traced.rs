@@ -19,10 +19,11 @@
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[5.0]);
 //! ```
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tenferro_einsum::Subscripts;
-use tenferro_runtime::{extension, Error, Result, TracedTensor};
+use tenferro_runtime::{extension, DType, Error, Result, TracedTensor};
 
 use crate::extension::TropicalEinsumOp;
 use crate::TropicalKind;
@@ -311,6 +312,23 @@ fn validate_tropical_einsum_inputs(
             subscripts.inputs.len()
         )));
     }
+    for (input_idx, tensor) in inputs.iter().enumerate() {
+        if !matches!(tensor.dtype, DType::F32 | DType::F64) {
+            return Err(Error::ContractionError(format!(
+                "tropical einsum input {input_idx} dtype {:?} is not supported",
+                tensor.dtype
+            )));
+        }
+    }
+    if inputs[0].dtype != inputs[1].dtype {
+        return Err(Error::ContractionError(format!(
+            "tropical einsum input dtypes must match, got {:?} and {:?}",
+            inputs[0].dtype, inputs[1].dtype
+        )));
+    }
+
+    let mut labels_seen = HashSet::new();
+    let mut concrete_label_dims = HashMap::new();
     for (input_idx, (labels, tensor)) in subscripts.inputs.iter().zip(inputs).enumerate() {
         if labels.len() != tensor.rank {
             return Err(Error::ContractionError(format!(
@@ -328,6 +346,18 @@ fn validate_tropical_einsum_inputs(
                 "tropical einsum input {input_idx} repeated labels are not supported"
             )));
         }
+        labels_seen.extend(labels.iter().copied());
+        if let Some(shape) = tensor.try_concrete_shape() {
+            for (&label, &extent) in labels.iter().zip(shape.iter()) {
+                if let Some(previous) = concrete_label_dims.insert(label, extent) {
+                    if previous != extent {
+                        return Err(Error::ContractionError(format!(
+                            "tropical einsum label {label} has inconsistent concrete sizes {previous} and {extent}"
+                        )));
+                    }
+                }
+            }
+        }
     }
     if subscripts
         .output
@@ -338,6 +368,13 @@ fn validate_tropical_einsum_inputs(
         return Err(Error::ContractionError(
             "tropical einsum repeated output labels are not supported".to_string(),
         ));
+    }
+    for &label in &subscripts.output {
+        if !labels_seen.contains(&label) {
+            return Err(Error::ContractionError(format!(
+                "tropical einsum output label {label} is not present in any input"
+            )));
+        }
     }
     let has_contracted = subscripts.inputs[0]
         .iter()
