@@ -36,5 +36,10 @@ num-traits = "0.2"
 tropical-gemm = { version = "0.2", default-features = false, optional = true }
 
 [dev-dependencies]
+criterion = "0.5"
 tenferro-ad = { path = "../../tenferro-ad", default-features = false }
 tenferro-cpu = { path = "../../tenferro-cpu" }
+
+[[bench]]
+name = "tropical_matmul"
+harness = false

@@ -537,7 +537,7 @@ impl ExtensionAdRule for TropicalEinsumJvpAdRule {
 
 /// Build an explicit AD rule set for tropical traced einsum extensions.
 ///
-/// The returned set is intended for [`tenferro_ad::AdContext`]. It registers
+/// The returned set is intended for `tenferro_ad::AdContext`. It registers
 /// the primal tropical einsum linearization rule and the transposed JVP rule
 /// used for reverse-mode cotangent routing.
 ///
@@ -564,7 +564,7 @@ pub fn tropical_ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
 
 /// Register tropical traced einsum AD rules in the process-global registry.
 ///
-/// Prefer [`tropical_ad_rules`] with an explicit [`tenferro_ad::AdContext`] for
+/// Prefer [`tropical_ad_rules`] with an explicit `tenferro_ad::AdContext` for
 /// tests and applications. This helper exists for compatibility with global
 /// extension-rule lookup and treats duplicate registration as success.
 ///

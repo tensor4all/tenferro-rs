@@ -79,10 +79,13 @@ Extension op payloads do not need process-global registration. Construct
 `Arc<dyn ExtensionOpTrait>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
-For AD, register a rule separately with
-`tenferro_ad::extension::register_extension_rule`. Rule builders expose
-incoming tangents/cotangents and helper methods for emitting tensor
-operations, so extension authors do not need to handle graph IDs directly.
+For AD, implement `tenferro_ad::extension::ExtensionAdRuleTrait`, put the rule
+in a `tenferro_ad::extension::ExtensionRuleSet`, and attach that set with
+`tenferro_ad::AdContext::builder().with_extension_rules(...)`. Rule builders
+expose incoming tangents/cotangents and helper methods for emitting tensor
+operations, so extension authors do not need to handle graph IDs directly. The
+process-global `register_extension_rule` helper remains available only for
+compatibility with older global lookup paths.
 
 When porting Julia `frule` / `rrule` code:
 
@@ -94,7 +97,7 @@ When porting Julia `frule` / `rrule` code:
 
 The lower-level adapter surface remains available for specialized extension
 authors who need direct graph-builder control. New extension authors should
-start with `ExtensionChainRuleTrait`.
+start with `ExtensionAdRuleTrait` plus an explicit `ExtensionRuleSet`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
 removed; operation payloads are carried directly in the graph.
 
@@ -103,8 +106,14 @@ The detailed trait contract is documented in the internal
 crates should wrap that machinery in small APIs that look like the equivalent
 PyTorch or JAX operation.
 
-## Example: FFT
+## Examples
 
-[FFT (extension)](tenferro-fft.md) is the first extension package following this
-pattern. It provides Fourier transforms as tensor extension operations while
-keeping the runtime and tensor crates focused on the common dense operation set.
+[FFT (extension)](tenferro-fft.md) provides Fourier transforms as tensor
+extension operations while keeping the runtime and tensor crates focused on the
+common dense operation set.
+
+The nested `ext/tropical` crate is a worked numeric-extension example for
+non-standard arithmetic. It exposes scalar tropical newtypes, traced
+composition helpers, fused binary tropical einsum extension ops, optional
+`tropical-gemm` CPU dispatch for matmul-shaped contractions, and optional
+traced AD rules for unique-winner tropical einsum paths.
