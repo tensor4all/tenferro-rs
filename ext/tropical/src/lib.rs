@@ -41,6 +41,7 @@
 //! ```
 
 pub mod cpu;
+pub mod einsum;
 pub mod newtype;
 pub mod traced;
 
