@@ -61,6 +61,8 @@ impl<T: Float> Add for MaxPlus<T> {
     }
 }
 
+// In max-plus algebra, semiring multiplication is ordinary addition.
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<T: Add<Output = T>> Mul for MaxPlus<T> {
     type Output = MaxPlus<T>;
 
@@ -117,6 +119,8 @@ impl<T: Float> Add for MinPlus<T> {
     }
 }
 
+// In min-plus algebra, semiring multiplication is ordinary addition.
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl<T: Add<Output = T>> Mul for MinPlus<T> {
     type Output = MinPlus<T>;
 

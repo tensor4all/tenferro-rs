@@ -55,6 +55,7 @@ pub use traced::{min_plus_dot_general, tropical_dot_general, tropical_reduce_sum
 /// assert_eq!(TropicalKind::MaxPlus, TropicalKind::MaxPlus);
 /// assert_ne!(TropicalKind::MaxPlus, TropicalKind::MinPlus);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TropicalKind {
     /// Max-plus semiring: `out[i, j] = max_k(a[i, k] + b[k, j])`.
