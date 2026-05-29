@@ -274,9 +274,9 @@ pub(crate) fn compile_pairwise_step_plan(
     let ro_sizes: Vec<usize> = ro_modes.iter().map(|m| size_dict[m]).collect();
     let sum_sizes: Vec<usize> = sum_modes.iter().map(|m| size_dict[m]).collect();
 
-    let m = lo_sizes.iter().product::<usize>().max(1);
-    let n = ro_sizes.iter().product::<usize>().max(1);
-    let k = sum_sizes.iter().product::<usize>().max(1);
+    let m = product_or_one_for_empty(&lo_sizes);
+    let n = product_or_one_for_empty(&ro_sizes);
+    let k = product_or_one_for_empty(&sum_sizes);
 
     let target_a: Vec<u32> = lo_modes
         .iter()
@@ -348,6 +348,14 @@ pub(crate) fn compile_pairwise_step_plan(
             b_gemm_shape,
         },
     })
+}
+
+fn product_or_one_for_empty(sizes: &[usize]) -> usize {
+    if sizes.is_empty() {
+        1
+    } else {
+        sizes.iter().product()
+    }
 }
 
 /// Compile step plans for all steps in a contraction tree.

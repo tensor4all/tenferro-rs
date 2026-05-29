@@ -334,6 +334,124 @@ fn public_lowering_step_plan_reports_final_permutation() {
 }
 
 #[test]
+fn public_lowering_step_plan_preserves_zero_sized_gemm_metadata() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[0, 3], &[3, 4]], &[(0, 1)]).unwrap();
+
+    let gemm = tree.step_plan(0).unwrap().gemm();
+
+    assert_eq!(gemm.left_only_modes(), &[0]);
+    assert_eq!(gemm.m(), 0);
+    assert_eq!(gemm.k(), 3);
+    assert_eq!(gemm.n(), 4);
+    assert_eq!(gemm.lhs_gemm_shape(), &[0, 3]);
+    assert_eq!(gemm.output_gemm_shape(), &[0, 4]);
+    assert_eq!(gemm.expanded_output_shape(), &[0, 4]);
+}
+
+#[test]
+fn public_lowering_step_plan_uses_identity_for_empty_mode_groups() {
+    let subs = Subscripts::new(&[&[0], &[0]], &[]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[3], &[3]], &[(0, 1)]).unwrap();
+
+    let gemm = tree.step_plan(0).unwrap().gemm();
+
+    assert_eq!(gemm.left_only_modes(), &[] as &[u32]);
+    assert_eq!(gemm.right_only_modes(), &[] as &[u32]);
+    assert_eq!(gemm.m(), 1);
+    assert_eq!(gemm.n(), 1);
+    assert_eq!(gemm.k(), 3);
+    assert_eq!(gemm.lhs_gemm_shape(), &[1, 3]);
+    assert_eq!(gemm.rhs_gemm_shape(), &[3, 1]);
+    assert_eq!(gemm.output_gemm_shape(), &[1, 1]);
+    assert_eq!(gemm.expanded_output_shape(), &[] as &[usize]);
+}
+
+#[test]
+fn public_lowering_step_plan_exposes_diagonal_stages_for_both_operands() {
+    let subs = Subscripts::new(&[&[0, 0, 1], &[1, 2, 2]], &[0, 2]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[3, 3, 4], &[4, 5, 5]], &[(0, 1)]).unwrap();
+
+    let step = tree.step_plan(0).unwrap();
+    let lhs_diag = step.lhs_diag().unwrap();
+    let rhs_diag = step.rhs_diag().unwrap();
+
+    let mut lhs_stages = lhs_diag.stages();
+    assert_eq!(lhs_stages.len(), 1);
+    let lhs_stage = lhs_stages.next().unwrap();
+    assert_eq!(lhs_stage.axis_pairs(), &[(0, 1)]);
+    assert_eq!(lhs_stage.result_subs(), &[1, 0]);
+    assert_eq!(lhs_diag.result_subs(), &[1, 0]);
+
+    let mut rhs_stages = rhs_diag.stages();
+    assert_eq!(rhs_stages.len(), 1);
+    let rhs_stage = rhs_stages.next().unwrap();
+    assert_eq!(rhs_stage.axis_pairs(), &[(1, 2)]);
+    assert_eq!(rhs_stage.result_subs(), &[1, 2]);
+    assert_eq!(rhs_diag.result_subs(), &[1, 2]);
+}
+
+#[test]
+fn public_lowering_step_plan_exposes_pre_reduction_plans_for_both_operands() {
+    let subs = Subscripts::new(&[&[0, 1, 3], &[1, 2, 4]], &[2]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3, 5], &[3, 4, 7]], &[(0, 1)]).unwrap();
+
+    let step = tree.step_plan(0).unwrap();
+    let lhs_reduce = step.lhs_reduce().unwrap();
+    let rhs_reduce = step.rhs_reduce().unwrap();
+
+    assert_eq!(lhs_reduce.original_subs(), &[0, 1, 3]);
+    assert_eq!(lhs_reduce.kept_subs(), &[1]);
+    assert_eq!(lhs_reduce.out_shape(), &[3]);
+    assert_eq!(rhs_reduce.original_subs(), &[1, 2, 4]);
+    assert_eq!(rhs_reduce.kept_subs(), &[1, 2]);
+    assert_eq!(rhs_reduce.out_shape(), &[3, 4]);
+}
+
+#[test]
+fn public_lowering_step_plan_exposes_multi_batch_layout() {
+    let subs = Subscripts::new(&[&[3, 4, 0, 1], &[1, 2, 3, 4]], &[3, 4, 0, 2]);
+    let tree =
+        ContractionTree::from_pairs(&subs, &[&[5, 6, 2, 3], &[3, 4, 5, 6]], &[(0, 1)]).unwrap();
+
+    let gemm = tree.step_plan(0).unwrap().gemm();
+
+    assert_eq!(gemm.left_only_modes(), &[0]);
+    assert_eq!(gemm.right_only_modes(), &[2]);
+    assert_eq!(gemm.contracted_modes(), &[1]);
+    assert_eq!(gemm.batch_modes(), &[3, 4]);
+    assert_eq!(gemm.lhs_target_modes(), &[0, 1, 3, 4]);
+    assert_eq!(gemm.rhs_target_modes(), &[1, 2, 3, 4]);
+    assert_eq!(gemm.canonical_output_modes(), &[0, 2, 3, 4]);
+    assert_eq!(gemm.lhs_gemm_shape(), &[2, 3, 5, 6]);
+    assert_eq!(gemm.rhs_gemm_shape(), &[3, 4, 5, 6]);
+    assert_eq!(gemm.output_gemm_shape(), &[2, 4, 5, 6]);
+    assert_eq!(gemm.expanded_output_shape(), &[2, 4, 5, 6]);
+    assert!(gemm.needs_final_permute());
+}
+
+#[test]
+fn public_lowering_wrapper_types_implement_debug() {
+    let diag_subs = Subscripts::new(&[&[0, 0, 1], &[1, 2, 2]], &[0, 2]);
+    let diag_tree =
+        ContractionTree::from_pairs(&diag_subs, &[&[3, 3, 4], &[4, 5, 5]], &[(0, 1)]).unwrap();
+    let step = diag_tree.step_plan(0).unwrap();
+    let diag = step.lhs_diag().unwrap();
+    let stage = diag.stages().next().unwrap();
+
+    let reduce_subs = Subscripts::new(&[&[0, 1, 3], &[1, 2, 4]], &[2]);
+    let reduce_tree =
+        ContractionTree::from_pairs(&reduce_subs, &[&[2, 3, 5], &[3, 4, 7]], &[(0, 1)]).unwrap();
+    let reduce = reduce_tree.step_plan(0).unwrap().lhs_reduce().unwrap();
+
+    let _ = format!("{step:?}");
+    let _ = format!("{diag:?}");
+    let _ = format!("{stage:?}");
+    let _ = format!("{reduce:?}");
+    let _ = format!("{:?}", step.gemm());
+}
+
+#[test]
 fn optimize_with_annealing_schedule_produces_valid_tree() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4], &[4, 5]], &[0, 5]);
     let shapes = [

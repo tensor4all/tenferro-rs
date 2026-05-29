@@ -33,7 +33,7 @@ use crate::planning::plan::{
 ///
 /// assert_eq!(step.gemm().contracted_modes(), &[1]);
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PairwiseStepPlan<'a> {
     inner: &'a InnerStepPlan,
 }
@@ -150,7 +150,7 @@ impl<'a> PairwiseStepPlan<'a> {
 ///
 /// assert_eq!(diag.result_subs(), &[0]);
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DiagPlan<'a> {
     inner: &'a InnerDiagPlan,
 }
@@ -175,7 +175,7 @@ impl<'a> DiagPlan<'a> {
     /// assert_eq!(stages.next().unwrap().axis_pairs(), &[(0, 1)]);
     /// assert!(stages.next().is_none());
     /// ```
-    pub fn stages(&self) -> impl Iterator<Item = DiagStage<'a>> + '_ {
+    pub fn stages(self) -> impl ExactSizeIterator<Item = DiagStage<'a>> + 'a {
         let inner: &'a InnerDiagPlan = self.inner;
         inner.stages.iter().map(DiagStage::new)
     }
@@ -213,7 +213,7 @@ impl<'a> DiagPlan<'a> {
 ///
 /// assert_eq!(stage.axis_pairs(), &[(0, 1)]);
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DiagStage<'a> {
     inner: &'a InnerDiagStage,
 }
@@ -275,7 +275,7 @@ impl<'a> DiagStage<'a> {
 ///
 /// assert_eq!(reduce.out_shape(), &[3]);
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ReducePlan<'a> {
     inner: &'a InnerReducePlan,
 }
@@ -356,7 +356,7 @@ impl<'a> ReducePlan<'a> {
 ///
 /// assert_eq!(gemm.lhs_gemm_shape(), &[2, 3]);
 /// ```
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct GemmPlan<'a> {
     inner: &'a InnerGemmPlan,
 }
