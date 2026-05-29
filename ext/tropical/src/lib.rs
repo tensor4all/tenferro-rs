@@ -5,9 +5,10 @@
 //!
 //! This standalone crate restores the public skeleton for tropical extension
 //! work against tenferro's current split crates. It currently provides scalar
-//! newtypes and traced composition wrappers over core tenferro graph ops.
-//! Fused extension runtime registration, argmax capture, and tropical AD rules
-//! are intentionally deferred to later implementation tasks.
+//! newtypes, traced composition wrappers over core tenferro graph ops, and a
+//! generic CPU value-plus-argmax GEMM fallback. Fused extension runtime
+//! registration and tropical AD rules are intentionally deferred to later
+//! implementation tasks.
 //!
 //! # Examples
 //!
