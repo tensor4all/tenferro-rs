@@ -322,6 +322,25 @@ impl ContractionTree {
         ))
     }
 
+    /// Return the precomputed lowering plan for one pairwise contraction step.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    /// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+    ///
+    /// assert_eq!(tree.step_plan(0).unwrap().gemm().m(), 2);
+    /// ```
+    #[must_use]
+    pub fn step_plan(&self, step_idx: usize) -> Option<crate::lowering::PairwiseStepPlan<'_>> {
+        self.step_plans
+            .get(step_idx)
+            .map(crate::lowering::PairwiseStepPlan::new)
+    }
+
     #[doc(hidden)]
     #[must_use]
     pub fn retained_bytes_for_cache_stats(&self) -> usize {

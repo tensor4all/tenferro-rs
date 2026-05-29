@@ -302,6 +302,38 @@ fn from_pairs_with_two_operands_builds_single_step_tree() {
 }
 
 #[test]
+fn public_lowering_step_plan_exposes_gemm_layout() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+
+    let step = tree.step_plan(0).expect("one pairwise step");
+    let gemm = step.gemm();
+
+    assert_eq!(gemm.left_only_modes(), &[0]);
+    assert_eq!(gemm.right_only_modes(), &[2]);
+    assert_eq!(gemm.contracted_modes(), &[1]);
+    assert_eq!(gemm.batch_modes(), &[] as &[u32]);
+    assert_eq!(gemm.m(), 2);
+    assert_eq!(gemm.k(), 3);
+    assert_eq!(gemm.n(), 4);
+    assert_eq!(gemm.lhs_gemm_shape(), &[2, 3]);
+    assert_eq!(gemm.rhs_gemm_shape(), &[3, 4]);
+    assert_eq!(gemm.output_gemm_shape(), &[2, 4]);
+    assert!(!gemm.needs_final_permute());
+}
+
+#[test]
+fn public_lowering_step_plan_reports_final_permutation() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[2, 0]);
+    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
+
+    let gemm = tree.step_plan(0).unwrap().gemm();
+
+    assert_eq!(gemm.canonical_output_modes(), &[0, 2]);
+    assert!(gemm.needs_final_permute());
+}
+
+#[test]
 fn optimize_with_annealing_schedule_produces_valid_tree() {
     let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4], &[4, 5]], &[0, 5]);
     let shapes = [

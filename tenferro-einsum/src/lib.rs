@@ -48,6 +48,7 @@ mod eager;
 #[cfg(feature = "autodiff")]
 pub mod eager_tensor;
 mod extension;
+pub mod lowering;
 mod optimize;
 mod planning;
 mod subscripts;
