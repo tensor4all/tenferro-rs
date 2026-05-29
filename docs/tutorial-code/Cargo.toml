@@ -1,0 +1,28 @@
+[package]
+name = "tenferro-tutorial-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["cpu-faer"]
+cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer"]
+cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas"]
+
+[dependencies]
+tenferro-ad = { path = "../../tenferro-ad", default-features = false }
+tenferro-cpu = { path = "../../tenferro-cpu", default-features = false }
+tenferro-runtime = { path = "../../tenferro-runtime", default-features = false }
+
+[[bin]]
+name = "typed_tensor_non_ad"
+path = "src/bin/typed_tensor_non_ad.rs"
+
+[[bin]]
+name = "eager_autodiff_pytorch_style"
+path = "src/bin/eager_autodiff_pytorch_style.rs"
+
+[[bin]]
+name = "traced_autodiff_jax_style"
+path = "src/bin/traced_autodiff_jax_style.rs"

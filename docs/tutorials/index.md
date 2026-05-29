@@ -1,0 +1,28 @@
+# Tutorials
+
+These tutorials are ordered, runnable introductions to the main tenferro
+workflows. They complement the guides: tutorials show one complete path, while
+guides describe the broader API surface and tradeoffs.
+
+All non-trivial code in this section is sourced from `docs/tutorial-code` and
+is run by the workspace test workflow.
+
+## Suggested Order
+
+| Tutorial | Use it when |
+| --- | --- |
+| [TypedTensor for no-AD numeric computation](typed-tensor-non-ad.md) | You know the scalar type in Rust and want ndarray-like CPU tensor computation without AD. |
+| [Eager autodiff, PyTorch style](eager-autodiff-pytorch-style.md) | You want immediate execution, scalar losses, `backward()`, and accumulated gradients. |
+| [Traced autodiff, JAX style](traced-autodiff-jax-style.md) | You want to build a graph, compile/run it, and apply transform-style AD such as `grad` or `jvp`. |
+
+## Running The Tutorial Code
+
+From the repository root:
+
+```bash
+cargo test -p tenferro-tutorial-code --release
+```
+
+The CI workflow runs this package through the existing workspace test command,
+so tutorial execution does not add a second tenferro compilation step after
+unit tests.

@@ -270,6 +270,102 @@ pub fn matmul<T: TensorScalar>(
     try_into_typed_result("matmul", out)
 }
 
+/// Sum elements across one or more axes.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// # let mut backend = CpuBackend::new();
+/// let x = TypedTensor::<f64>::from_vec_row_major(
+///     vec![2, 3],
+///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+/// );
+/// let row_sums = typed_tensor::reduce_sum(&x, &[1], &mut backend).unwrap();
+/// assert_eq!(row_sums.host_data(), &[6.0, 15.0]);
+/// ```
+pub fn reduce_sum<T: TensorScalar>(
+    input: &TypedTensor<T>,
+    axes: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    let out =
+        backend.with_backend_session(|exec| exec.reduce_sum_read(T::tensor_read(input), axes))?;
+    try_into_typed_result("reduce_sum", out)
+}
+
+/// Reshape a typed tensor through the backend structural operation.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// # let mut backend = CpuBackend::new();
+/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+/// let y = typed_tensor::reshape(&x, &[3, 2], &mut backend).unwrap();
+/// assert_eq!(y.shape(), &[3, 2]);
+/// ```
+pub fn reshape<T: TensorScalar>(
+    input: &TypedTensor<T>,
+    shape: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    let out =
+        backend.with_backend_session(|exec| exec.reshape_read(T::tensor_read(input), shape))?;
+    try_into_typed_result("reshape", out)
+}
+
+/// Permute typed tensor axes through the backend structural operation.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// # let mut backend = CpuBackend::new();
+/// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]);
+/// let y = typed_tensor::transpose(&x, &[1, 0], &mut backend).unwrap();
+/// assert_eq!(y.shape(), &[3, 2]);
+/// ```
+pub fn transpose<T: TensorScalar>(
+    input: &TypedTensor<T>,
+    perm: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    let out =
+        backend.with_backend_session(|exec| exec.transpose_read(T::tensor_read(input), perm))?;
+    try_into_typed_result("transpose", out)
+}
+
+/// Broadcast a typed tensor into a larger shape.
+///
+/// `dims` maps each input axis to its output axis, following the concrete
+/// backend `broadcast_in_dim` contract.
+///
+/// # Examples
+///
+/// ```rust
+/// # use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{typed_tensor, TypedTensor};
+/// # let mut backend = CpuBackend::new();
+/// let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]);
+/// let matrix = typed_tensor::broadcast_in_dim(&row, &[2, 3], &[1], &mut backend).unwrap();
+/// assert_eq!(matrix.shape(), &[2, 3]);
+/// ```
+pub fn broadcast_in_dim<T: TensorScalar>(
+    input: &TypedTensor<T>,
+    shape: &[usize],
+    dims: &[usize],
+    backend: &mut impl TensorBackend,
+) -> Result<TypedTensor<T>> {
+    let out = backend.with_backend_session(|exec| {
+        exec.broadcast_in_dim_read(T::tensor_read(input), shape, dims)
+    })?;
+    try_into_typed_result("broadcast_in_dim", out)
+}
+
 enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
     Owned(Tensor),

@@ -230,6 +230,10 @@ pub trait TensorAnalytic {
 /// ```
 pub trait TensorStructural {
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        self.transpose(read_tensor("transpose", input)?, perm)
+    }
+
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         self.reshape(read_tensor("reshape", input)?, shape)

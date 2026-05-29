@@ -12,6 +12,7 @@ when the workflow needs them.
 ## Start Here
 
 - [Core Concepts](getting-started/core-concepts.md)
+- [Tutorials](tutorials/index.md)
 - [Choosing a Tensor Layer](guides/choosing-an-api.md)
 - [Execution Models](guides/execution-models.md)
 - [Memory Order](guides/memory-order.md)
@@ -67,6 +68,7 @@ symbolic inputs, and reuse.
 
 | Workflow | Start with |
 | --- | --- |
+| Step-by-step runnable examples | [`Tutorials`](tutorials/index.md) |
 | No-AD computation with a fixed scalar type | [`TypedTensor<T>` and direct tensor workflows](guides/choosing-an-api.md) |
 | No-AD dynamic dtype computation | [`Tensor` with a backend](guides/eager-operations.md) |
 | PyTorch-like eager execution and optional scalar-loss `backward()` | [`EagerTensor` and `EagerRuntime`](guides/eager-operations.md) |

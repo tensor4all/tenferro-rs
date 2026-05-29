@@ -14,6 +14,7 @@ members = [
     "tenferro-einsum",
     "tenferro-linalg",
     "tenferro-fft",
+    "docs/tutorial-code",
 ]
 default-members = [
     "tenferro-tensor",

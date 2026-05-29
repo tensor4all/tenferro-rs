@@ -838,6 +838,15 @@ impl TensorStructural for CpuBackend {
         self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
     }
 
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        if let Some(input) = input.as_tensor() {
+            return self.transpose(input, perm);
+        }
+
+        let input = materialize_tensor_read("transpose", input)?;
+        self.transpose(&input, perm)
+    }
+
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
         self.install(|| structural::reshape(input, shape))
     }
