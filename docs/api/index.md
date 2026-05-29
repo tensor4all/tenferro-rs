@@ -21,7 +21,9 @@ For contributors, internal crate APIs are also available in the
 - [tenferro-tensor-core](./tenferro_tensor_core/index.html): host-only tensor
   data model, dtype tags, scalar trait, and metadata-only views
 - [tenferro-tensor](./tenferro_tensor/index.html): dense runtime tensors,
-  backend traits, CPU backend, and core execution kernels
+  typed views, backend traits, and backend-independent contracts
+- [tenferro-cpu](./tenferro_cpu/index.html): CPU backend, CPU execution
+  sessions, CPU kernels, buffer pools, and CPU provider selection
 - [tenferro-gpu](./tenferro_gpu/index.html): CubeCL/CUDA backend and GPU
   transfer helpers
 - [tenferro-einsum](./tenferro_einsum/index.html): subscripts,
@@ -44,6 +46,7 @@ For contributors, internal crate APIs are also available in the
 ```text
 tenferro-tensor-core     -> host-only tensor data model
 tenferro-tensor          -> tenferro-tensor-core, tenferro-internal-device
+tenferro-cpu             -> tenferro-tensor
 tenferro-gpu             -> tenferro-tensor
 tenferro-internal-ops    -> tenferro-core-ops, tenferro-tensor
 tenferro-runtime         -> tenferro-internal-ops, tenferro-tensor

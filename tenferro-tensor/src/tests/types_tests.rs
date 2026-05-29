@@ -46,6 +46,32 @@ macro_rules! tensor_scalar_roundtrip_test {
 }
 
 #[test]
+fn tensor_scalar_tensor_read_covers_all_variants() {
+    let f64s = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]);
+    assert_eq!(f64::tensor_read(&f64s).dtype(), DType::F64);
+
+    let f32s = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0]);
+    assert_eq!(f32::tensor_read(&f32s).dtype(), DType::F32);
+
+    let i64s = TypedTensor::<i64>::from_vec_col_major(vec![1], vec![1]);
+    assert_eq!(i64::tensor_read(&i64s).dtype(), DType::I64);
+
+    let i32s = TypedTensor::<i32>::from_vec_col_major(vec![1], vec![1]);
+    assert_eq!(i32::tensor_read(&i32s).dtype(), DType::I32);
+
+    let bools = TypedTensor::<bool>::from_vec_col_major(vec![1], vec![true]);
+    assert_eq!(bool::tensor_read(&bools).dtype(), DType::Bool);
+
+    let c64s =
+        TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]);
+    assert_eq!(Complex64::tensor_read(&c64s).dtype(), DType::C64);
+
+    let c32s =
+        TypedTensor::<Complex32>::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]);
+    assert_eq!(Complex32::tensor_read(&c32s).dtype(), DType::C32);
+}
+
+#[test]
 fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
     assert_eq!(col_major_strides(&[]), Vec::<isize>::new());
     assert_eq!(col_major_strides(&[2, 3, 4]), vec![1, 2, 6]);

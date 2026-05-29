@@ -9,22 +9,12 @@ description = "FFT extension runtime and public FFT APIs for tenferro."
 
 [features]
 default = ["cpu-faer"]
+cpu-faer = ["tenferro-cpu/cpu-faer"]
+cpu-blas = ["tenferro-cpu/cpu-blas"]
 autodiff = [
     "chainrules-core",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
-]
-cpu-faer = [
-    "tenferro-runtime/cpu-faer",
-    "tenferro-ad?/cpu-faer",
-    "tenferro-internal-ops/cpu-faer",
-    "tenferro-tensor/cpu-faer",
-]
-cpu-blas = [
-    "tenferro-runtime/cpu-blas",
-    "tenferro-ad?/cpu-blas",
-    "tenferro-internal-ops/cpu-blas",
-    "tenferro-tensor/cpu-blas",
 ]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
@@ -40,3 +30,6 @@ computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
 rustfft = "6"
+
+[dev-dependencies]
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }

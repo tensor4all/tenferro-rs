@@ -1,6 +1,6 @@
+use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cubecl::CubeclBackend;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
     DotGeneralConfig, ElementwiseFusionPlan, GatherConfig, PadConfig, Result as TensorResult,
@@ -53,32 +53,54 @@ impl BackendRuntimeCache for EagerBackend {
 impl TensorElementwise for EagerBackend {
     delegate_tensor_backend_methods! {
         fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn neg(input: &Tensor) -> TensorResult<Tensor>;
+        fn neg_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn conj(input: &Tensor) -> TensorResult<Tensor>;
+        fn conj_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn abs(input: &Tensor) -> TensorResult<Tensor>;
+        fn abs_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sign(input: &Tensor) -> TensorResult<Tensor>;
+        fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
+        fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
         fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
+        fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
         fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
+        fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> TensorResult<Tensor>;
     }
 }
 
 impl TensorAnalytic for EagerBackend {
     delegate_tensor_backend_methods! {
         fn exp(input: &Tensor) -> TensorResult<Tensor>;
+        fn exp_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn log(input: &Tensor) -> TensorResult<Tensor>;
+        fn log_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sin(input: &Tensor) -> TensorResult<Tensor>;
+        fn sin_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn cos(input: &Tensor) -> TensorResult<Tensor>;
+        fn cos_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn tanh(input: &Tensor) -> TensorResult<Tensor>;
+        fn tanh_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
+        fn sqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn rsqrt(input: &Tensor) -> TensorResult<Tensor>;
+        fn rsqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
+        fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
         fn expm1(input: &Tensor) -> TensorResult<Tensor>;
+        fn expm1_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
         fn log1p(input: &Tensor) -> TensorResult<Tensor>;
+        fn log1p_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
     }
 }
 
@@ -86,7 +108,9 @@ impl TensorStructural for EagerBackend {
     delegate_tensor_backend_methods! {
         fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
         fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
+        fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
         fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
+        fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn convert(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;

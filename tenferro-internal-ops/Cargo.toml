@@ -11,10 +11,8 @@ description = "Graph op vocabulary and AD rule implementations for the tenferro 
 name = "tenferro_ops"
 
 [features]
-default = ["autodiff", "cpu-faer"]
+default = ["autodiff"]
 autodiff = ["chainrules-core"]
-cpu-faer = ["tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro-tensor/cpu-blas"]
 gpu = []
 cuda = ["gpu"]
 rocm = ["gpu"]

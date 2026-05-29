@@ -138,7 +138,7 @@ pub fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
 /// ```
 /// use tenferro_runtime::segment::eval_exec_segmented;
 /// use tenferro_runtime::exec::ExecProgram;
-/// use tenferro_runtime::CpuBackend;
+/// use tenferro_cpu::CpuBackend;
 ///
 /// let _eval: fn(&mut CpuBackend, &ExecProgram, Vec<tenferro_runtime::Tensor>) -> tenferro_runtime::error::Result<Vec<tenferro_runtime::Tensor>> =
 ///     eval_exec_segmented::<CpuBackend>;

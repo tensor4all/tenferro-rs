@@ -83,7 +83,7 @@ impl<B: TensorBackend + 'static> ExtensionRegistry<B> {
     ///
     /// ```
     /// use tenferro_runtime::ExtensionRegistry;
-    /// use tenferro_tensor::cpu::CpuBackend;
+    /// use tenferro_cpu::CpuBackend;
     ///
     /// let registry = ExtensionRegistry::<CpuBackend>::new();
     /// assert!(!registry.contains("example.identity.v1"));
@@ -155,7 +155,7 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///
     /// ```
     /// use tenferro_runtime::ExtensionExecutor;
-    /// use tenferro_tensor::cpu::CpuBackend;
+    /// use tenferro_cpu::CpuBackend;
     ///
     /// let executor = ExtensionExecutor::<CpuBackend>::new();
     /// assert_eq!(executor.cache_stats().entries, 0);

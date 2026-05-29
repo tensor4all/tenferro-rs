@@ -8,7 +8,8 @@
 //!
 //! ```
 //! use tenferro_linalg::traced_tensor::cholesky;
-//! use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(
 //!     vec![2, 2],

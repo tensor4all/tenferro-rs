@@ -1,10 +1,10 @@
 use num_complex::{Complex32, Complex64};
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::exec::{
     eval_exec_ir, eval_exec_ir_unsegmented, ExecInstruction, ExecOp, ExecProgram,
 };
 use tenferro_runtime::segment::{eval_exec_segmented, segment_exec_program, Segment};
 use tenferro_runtime::DType;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 #[cfg(feature = "cuda")]

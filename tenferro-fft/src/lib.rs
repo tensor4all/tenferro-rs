@@ -8,7 +8,8 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 //! use tenferro_fft::{traced_tensor::fft, FftNorm};
 //!
 //! let x = TracedTensor::from_vec_col_major(
@@ -416,7 +417,8 @@ define_extension_runtime! {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
@@ -457,7 +459,8 @@ pub fn fft(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]);
@@ -501,7 +504,8 @@ pub fn ifft(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
@@ -546,7 +550,8 @@ pub fn rfft(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 /// use tenferro_fft::{traced_tensor, FftNorm};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(

@@ -16,20 +16,16 @@ autodiff = [
     "tenferro-internal-ops/autodiff",
 ]
 cpu-faer = [
-    "tenferro-runtime/cpu-faer",
     "tenferro-ad?/cpu-faer",
-    "tenferro-internal-ops/cpu-faer",
-    "tenferro-tensor/cpu-faer",
+    "tenferro-cpu/cpu-faer",
 ]
 cpu-blas = [
-    "tenferro-runtime/cpu-blas",
     "tenferro-ad?/cpu-blas",
-    "tenferro-internal-ops/cpu-blas",
-    "tenferro-tensor/cpu-blas",
+    "tenferro-cpu/cpu-blas",
 ]
 provider-inject = [
     "cpu-blas",
-    "tenferro-tensor/provider-inject",
+    "tenferro-cpu/provider-inject",
     "dep:cblas-inject",
     "dep:lapack-inject",
 ]
@@ -53,6 +49,7 @@ tenferro-gpu = { path = "../tenferro-gpu", default-features = false, optional = 
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 cblas-inject = { workspace = true, optional = true }
 chainrules-core = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }

@@ -1,10 +1,10 @@
 mod support;
 use support::{run_many_traced_with, RunTraced};
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
 use tenferro_runtime::traced_tensor::pow;
 use tenferro_runtime::DType;
 use tenferro_runtime::GraphExecutor;
-use tenferro_tensor::cpu::CpuBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

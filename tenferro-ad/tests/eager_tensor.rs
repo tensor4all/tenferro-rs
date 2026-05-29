@@ -2,9 +2,8 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 
 use num_complex::Complex64;
-use tenferro_runtime::{
-    CpuBackend, DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor,
-};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor};
 
 #[path = "eager_tensor/context_and_promotion.rs"]
 mod context_and_promotion;

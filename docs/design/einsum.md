@@ -33,7 +33,8 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 The extension crate exposes lazy traced einsum:
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_einsum::traced_tensor::einsum;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);

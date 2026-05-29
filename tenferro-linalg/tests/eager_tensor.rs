@@ -2,7 +2,8 @@
 
 use num_complex::Complex64;
 use std::sync::{Arc, OnceLock};
-use tenferro_ad::{AdContext, CpuBackend, EagerRuntime, EagerTensor, Tensor};
+use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuBackend;
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();

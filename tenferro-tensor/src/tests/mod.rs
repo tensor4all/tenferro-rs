@@ -1,7 +1,4 @@
+mod backend_default_read_tests;
 mod config_tests;
-mod cpu_indexing_coverage_tests;
-mod cpu_stub_tests;
-mod cpu_tests;
-mod eager_api_tests;
 mod op_vocabulary_contract_tests;
 mod types_tests;

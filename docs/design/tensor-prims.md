@@ -3,7 +3,8 @@
 This file keeps the historical `tensor-prims.md` name, but the current
 implementation no longer has a separate `tenferro-prims` crate or the old
 `TensorPrims` protocol families. Dense tensor execution is owned by
-`tenferro-tensor`.
+`tenferro-tensor` for backend traits and value types, with concrete CPU
+execution in `tenferro-cpu`.
 
 The current backend protocol is:
 
@@ -29,7 +30,7 @@ tenferro-einsum
 tenferro-tensor
     Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, BackendSession
         │
-        ├── cpu::CpuBackend
+        ├── tenferro_cpu::CpuBackend
         └── tenferro_gpu::CubeclBackend (feature = "cuda")
         ▲
         │
@@ -70,7 +71,7 @@ does not support. Higher layers must not silently fall back across devices.
 
 ## CPU Backend
 
-`cpu::CpuBackend` is present when at least one CPU provider feature is enabled.
+`tenferro_cpu::CpuBackend` is present when at least one CPU provider feature is enabled.
 CPU provider features are additive:
 
 - `cpu-faer` for faer-backed GEMM/linalg,
@@ -141,8 +142,9 @@ path.
 ## Linalg
 
 Linalg is not a separate backend crate today. Dense linalg operations are part
-of `TensorBackend`, with CPU implementations under `tenferro-tensor/src/cpu`
-and CubeCL/CUDA implementations under `tenferro-gpu/src/cubecl/linalg.rs`.
+of the linalg extension backend surface, with CPU implementations under
+`tenferro-linalg/src/cpu` and CubeCL/CUDA implementations under
+`tenferro-gpu/src/cubecl/linalg.rs`.
 
 General eigendecomposition is a permanent CUDA limitation for cuSOLVER:
 `CubeclBackend::eig` returns `BackendFailure`, and callers must explicitly

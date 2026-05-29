@@ -1677,6 +1677,23 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor;
 
+    /// Borrow a typed tensor as a dtype-erased [`TensorRead`] view.
+    ///
+    /// This keeps the typed tensor borrowed instead of copying host data into
+    /// a new dynamic tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar, TypedTensor};
+    ///
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
+    /// let read = f64::tensor_read(&tensor);
+    /// assert_eq!(read.dtype(), DType::F64);
+    /// assert_eq!(read.shape(), &[2]);
+    /// ```
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_>;
+
     /// Try to borrow the host data from a [`Tensor`].
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]>;
 
@@ -1734,6 +1751,10 @@ impl TensorScalar for f64 {
         Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
     }
 
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::F64(tensor.as_view()))
+    }
+
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::F64(t) => Some(t.host_data()),
@@ -1765,6 +1786,10 @@ impl TensorScalar for f32 {
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::F32(TypedTensor::from_vec_col_major(shape, data))
+    }
+
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::F32(tensor.as_view()))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -1800,6 +1825,10 @@ impl TensorScalar for i64 {
         Tensor::I64(TypedTensor::from_vec_col_major(shape, data))
     }
 
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::I64(tensor.as_view()))
+    }
+
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::I64(t) => Some(t.host_data()),
@@ -1831,6 +1860,10 @@ impl TensorScalar for i32 {
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::I32(TypedTensor::from_vec_col_major(shape, data))
+    }
+
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::I32(tensor.as_view()))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -1866,6 +1899,10 @@ impl TensorScalar for bool {
         Tensor::Bool(TypedTensor::from_vec_col_major(shape, data))
     }
 
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::Bool(tensor.as_view()))
+    }
+
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::Bool(t) => Some(t.host_data()),
@@ -1899,6 +1936,10 @@ impl TensorScalar for Complex64 {
         Tensor::C64(TypedTensor::from_vec_col_major(shape, data))
     }
 
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::C64(tensor.as_view()))
+    }
+
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
         match tensor {
             Tensor::C64(t) => Some(t.host_data()),
@@ -1930,6 +1971,10 @@ impl TensorScalar for Complex32 {
 
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> Tensor {
         Tensor::C32(TypedTensor::from_vec_col_major(shape, data))
+    }
+
+    fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
+        TensorRead::from_view(TensorView::C32(tensor.as_view()))
     }
 
     fn try_as_slice(tensor: &Tensor) -> Option<&[Self]> {
@@ -3694,6 +3739,7 @@ impl Tensor {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize]) {
     for i in 0..shape.len() {
         out[i] = flat % shape[i];

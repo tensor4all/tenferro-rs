@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 
-use tenferro_tensor::buffer_pool::BufferPool;
+use tenferro_cpu::buffer_pool::BufferPool;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 use super::helpers::{

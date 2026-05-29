@@ -1,6 +1,5 @@
-use tenferro_runtime::{
-    CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
-};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data))
@@ -34,7 +33,7 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let result1 = engine.run(&program1).unwrap();
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
 
-    let pooled_after_first = engine.buffer_pool_len();
+    let pooled_after_first = engine.backend().buffer_pool_len();
     assert!(pooled_after_first > 0);
 
     let ta2 = TracedTensor::from_tensor_concrete_shape(a);
@@ -45,6 +44,6 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
 
     let result2 = engine.run(&program2).unwrap();
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
-    let pooled_after_second = engine.buffer_pool_len();
+    let pooled_after_second = engine.backend().buffer_pool_len();
     assert!(pooled_after_second < pooled_after_first * 2);
 }

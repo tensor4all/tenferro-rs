@@ -30,7 +30,7 @@ pub use tenferro_runtime::extension::{
 /// ```rust
 /// use tenferro_ad::extension::apply_eager;
 /// use tenferro_ad::{EagerRuntime, EagerTensor};
-/// use tenferro_runtime::CpuBackend;
+/// use tenferro_cpu::CpuBackend;
 /// use tenferro_tensor::Tensor;
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());

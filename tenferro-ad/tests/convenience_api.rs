@@ -1,7 +1,8 @@
 mod support;
 use num_complex::{Complex32, Complex64};
 use support::RunTraced;
-use tenferro_runtime::{CpuBackend, GraphExecutor, Tensor, TensorScalar, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphExecutor, Tensor, TensorScalar, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]

@@ -23,7 +23,8 @@ its `autodiff` feature.
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
 let loss = (&x * &x).reduce_sum(&[0]);
@@ -43,7 +44,8 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let mut compiler = GraphCompiler::new();
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -66,7 +68,8 @@ assert_eq!(result.shape(), &[2, 2]);
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -96,7 +99,8 @@ assert_eq!(result.shape(), &[2, 3]);
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],

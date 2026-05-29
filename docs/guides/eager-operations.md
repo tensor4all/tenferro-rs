@@ -10,7 +10,8 @@ gradient accumulation and `backward()`.
 ## Setup
 
 ```rust
-use tenferro_runtime::{CpuBackend, Tensor, TypedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{Tensor, TypedTensor};
 
 let mut ctx = CpuBackend::new();
 ```
@@ -70,7 +71,8 @@ upload CPU tensors or download CUDA tensors.
 ## Arithmetic
 
 ```rust
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
@@ -89,7 +91,8 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{tensor, CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{tensor, Tensor};
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
@@ -128,7 +131,8 @@ assert_eq!(x.shape(), &[3]);
 ## Shape operations
 
 ```rust
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut ctx = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -185,7 +189,7 @@ explicitly when you want a fresh pass.
 
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_runtime::CpuBackend;
+use tenferro_cpu::CpuBackend;
 
 let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]), ctx.clone());

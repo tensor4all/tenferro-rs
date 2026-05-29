@@ -1,7 +1,8 @@
 #![cfg(feature = "autodiff")]
 
 use tenferro_ad::AdContext;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {

@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_runtime::{
-    CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
-};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let n_elements = shape.iter().product();

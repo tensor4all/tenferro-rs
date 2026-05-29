@@ -1,8 +1,9 @@
+use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    cpu::CpuBackend, BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TypedTensor,
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorRead, TensorReduction, TensorStructural, TensorView, TypedTensor,
 };
 
 use crate::eager::{
@@ -11,6 +12,16 @@ use crate::eager::{
 };
 use crate::typed_eager::typed_eager_einsum;
 use crate::Subscripts;
+
+#[test]
+fn typed_eager_einsum_does_not_erase_through_host_copies() {
+    let source = include_str!("typed_eager.rs");
+
+    assert!(
+        !source.contains("host_data().to_vec()"),
+        "typed eager einsum must use TensorRead inputs instead of copying host data"
+    );
+}
 
 #[derive(Default)]
 struct WrongDTypeBackend;

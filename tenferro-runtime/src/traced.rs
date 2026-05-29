@@ -1396,7 +1396,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// let cols = x.shape_of(1);
@@ -1429,7 +1430,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]);
     /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]);
@@ -1466,7 +1468,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]);

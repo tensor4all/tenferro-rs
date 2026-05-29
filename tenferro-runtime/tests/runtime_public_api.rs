@@ -1,5 +1,5 @@
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{tensor, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::cpu::CpuBackend;
 
 #[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {

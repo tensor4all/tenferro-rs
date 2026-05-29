@@ -1,7 +1,8 @@
 use tenferro_ad::TracedTensorAdExt;
 mod support;
 use support::RunTraced;
-use tenferro_runtime::{CpuBackend, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-5;
 const FD_H: f64 = 1.0e-5;

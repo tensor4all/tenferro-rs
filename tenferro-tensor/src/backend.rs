@@ -4,6 +4,17 @@ use crate::config::{
 use crate::types::{TensorRank, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use crate::{RuntimeCacheControl, Tensor, TensorRead};
 
+fn read_boundary_error(op: &'static str) -> crate::Error {
+    crate::Error::backend_failure(
+        op,
+        "backend does not accept borrowed tensor views at this execution boundary",
+    )
+}
+
+fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a Tensor> {
+    input.as_tensor().ok_or_else(|| read_boundary_error(op))
+}
+
 /// Canonical elementwise fusion plan shared between segmented execution and backends.
 #[doc(hidden)]
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -29,11 +40,9 @@ tenferro_core_ops::define_elementwise_fusion_op!();
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorElementwise};
+/// use tenferro_tensor::TensorElementwise;
 ///
 /// fn accepts_elementwise<B: TensorElementwise>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_elementwise(&mut backend);
 /// ```
 pub trait TensorElementwise {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -47,46 +56,106 @@ pub trait TensorElementwise {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{
-    ///     cpu::CpuBackend, TensorElementwise, TensorRead, TensorView, TypedTensor,
-    /// };
+    /// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
     ///
-    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]);
-    /// let view = TensorView::F64(tensor.as_view());
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend.add_read(
-    ///     TensorRead::from_view(view.clone()),
-    ///     TensorRead::from_view(view),
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// fn add_owned<B: TensorElementwise>(
+    ///     backend: &mut B,
+    ///     lhs: &Tensor,
+    ///     rhs: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+    /// }
     /// ```
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.add(lhs, rhs),
-            _ => Err(crate::Error::backend_failure(
-                "add",
-                "backend does not accept borrowed tensor views at this execution boundary",
-            )),
-        }
+        self.add(read_tensor("add", lhs)?, read_tensor("add", rhs)?)
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.mul(read_tensor("mul", lhs)?, read_tensor("mul", rhs)?)
+    }
+
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.neg(read_tensor("neg", input)?)
+    }
+
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.conj(read_tensor("conj", input)?)
+    }
+
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.div(read_tensor("div", lhs)?, read_tensor("div", rhs)?)
+    }
+
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.abs(read_tensor("abs", input)?)
+    }
+
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sign(read_tensor("sign", input)?)
+    }
+
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.maximum(read_tensor("maximum", lhs)?, read_tensor("maximum", rhs)?)
+    }
+
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.minimum(read_tensor("minimum", lhs)?, read_tensor("minimum", rhs)?)
+    }
+
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
+    fn compare_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        dir: &CompareDir,
+    ) -> crate::Result<Tensor> {
+        self.compare(
+            read_tensor("compare", lhs)?,
+            read_tensor("compare", rhs)?,
+            dir,
+        )
+    }
+
     fn select(
         &mut self,
         pred: &Tensor,
         on_true: &Tensor,
         on_false: &Tensor,
     ) -> crate::Result<Tensor>;
+    fn select_read(
+        &mut self,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        self.select(
+            read_tensor("select", pred)?,
+            read_tensor("select", on_true)?,
+            read_tensor("select", on_false)?,
+        )
+    }
+
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+    fn clamp_read(
+        &mut self,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        self.clamp(
+            read_tensor("clamp", input)?,
+            read_tensor("clamp", lower)?,
+            read_tensor("clamp", upper)?,
+        )
+    }
 }
 
 /// Analytic unary and binary tensor operations.
@@ -94,23 +163,60 @@ pub trait TensorElementwise {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorAnalytic};
+/// use tenferro_tensor::TensorAnalytic;
 ///
 /// fn accepts_analytic<B: TensorAnalytic>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_analytic(&mut backend);
 /// ```
 pub trait TensorAnalytic {
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.exp(read_tensor("exp", input)?)
+    }
+
     fn log(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.log(read_tensor("log", input)?)
+    }
+
     fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sin(read_tensor("sin", input)?)
+    }
+
     fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.cos(read_tensor("cos", input)?)
+    }
+
     fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.tanh(read_tensor("tanh", input)?)
+    }
+
     fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.sqrt(read_tensor("sqrt", input)?)
+    }
+
     fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.rsqrt(read_tensor("rsqrt", input)?)
+    }
+
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.pow(read_tensor("pow", lhs)?, read_tensor("pow", rhs)?)
+    }
+
     fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.expm1(read_tensor("expm1", input)?)
+    }
+
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.log1p(read_tensor("log1p", input)?)
+    }
 }
 
 /// Shape, layout, and dtype transformation operations.
@@ -118,21 +224,32 @@ pub trait TensorAnalytic {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorStructural};
+/// use tenferro_tensor::TensorStructural;
 ///
 /// fn accepts_structural<B: TensorStructural>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_structural(&mut backend);
 /// ```
 pub trait TensorStructural {
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
+        self.reshape(read_tensor("reshape", input)?, shape)
+    }
+
     fn broadcast_in_dim(
         &mut self,
         input: &Tensor,
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor>;
+    fn broadcast_in_dim_read(
+        &mut self,
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.broadcast_in_dim(read_tensor("broadcast_in_dim", input)?, shape, dims)
+    }
+
     fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor>;
     fn extract_diagonal(
         &mut self,
@@ -155,11 +272,9 @@ pub trait TensorStructural {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorReduction};
+/// use tenferro_tensor::TensorReduction;
 ///
 /// fn accepts_reduction<B: TensorReduction>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_reduction(&mut backend);
 /// ```
 pub trait TensorReduction {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
@@ -169,18 +284,14 @@ pub trait TensorReduction {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{
-    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
-    /// };
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorReduction};
     ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend.reduce_sum_read(
-    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///     &[0],
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 7.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// fn sum_owned<B: TensorReduction>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.reduce_sum_read(TensorRead::from_tensor(input), &[0])
+    /// }
     /// ```
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -199,18 +310,14 @@ pub trait TensorReduction {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{
-    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
-    /// };
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorReduction};
     ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend.reduce_prod_read(
-    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///     &[0],
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 12.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// fn prod_owned<B: TensorReduction>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.reduce_prod_read(TensorRead::from_tensor(input), &[0])
+    /// }
     /// ```
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -229,18 +336,14 @@ pub trait TensorReduction {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{
-    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
-    /// };
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorReduction};
     ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend.reduce_max_read(
-    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///     &[0],
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// fn max_owned<B: TensorReduction>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.reduce_max_read(TensorRead::from_tensor(input), &[0])
+    /// }
     /// ```
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -259,18 +362,14 @@ pub trait TensorReduction {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{
-    ///     cpu::CpuBackend, TensorRead, TensorReduction, TensorView, TypedTensor,
-    /// };
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorReduction};
     ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend.reduce_min_read(
-    ///     TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///     &[0],
-    /// )?;
-    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// fn min_owned<B: TensorReduction>(
+    ///     backend: &mut B,
+    ///     input: &Tensor,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.reduce_min_read(TensorRead::from_tensor(input), &[0])
+    /// }
     /// ```
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
@@ -288,11 +387,9 @@ pub trait TensorReduction {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorDot};
+/// use tenferro_tensor::TensorDot;
 ///
 /// fn accepts_dot<B: TensorDot>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_dot(&mut backend);
 /// ```
 pub trait TensorDot: TensorElementwise {
     fn dot_general(
@@ -355,13 +452,9 @@ pub trait TensorDot: TensorElementwise {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, BackendSession, BackendSessionHost};
+/// use tenferro_tensor::BackendSession;
 ///
-/// let mut backend = CpuBackend::new();
-/// backend.with_backend_session(|session| {
-///     fn accepts_session_dot<S: BackendSession + ?Sized>(_session: &mut S) {}
-///     accepts_session_dot(session);
-/// });
+/// fn accepts_session_dot<S: BackendSession + ?Sized>(_session: &mut S) {}
 /// ```
 pub trait SessionCachedDot: TensorDot {
     #[doc(hidden)]
@@ -394,11 +487,9 @@ pub trait SessionCachedDot: TensorDot {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorIndexing};
+/// use tenferro_tensor::TensorIndexing;
 ///
 /// fn accepts_indexing<B: TensorIndexing>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_indexing(&mut backend);
 /// ```
 pub trait TensorIndexing {
     fn gather(
@@ -446,13 +537,14 @@ pub trait TensorIndexing {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorViewCanonicalization, TypedTensor};
+/// use tenferro_tensor::{DynRank, TensorViewCanonicalization, TypedTensor};
 ///
-/// let mut backend = CpuBackend::new();
-/// let tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]);
-/// let compact = backend.to_contiguous(&tensor.as_view())?;
-/// assert_eq!(compact.as_slice(), &[1, 2]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// fn compact_i32<B: TensorViewCanonicalization<i32, DynRank>>(
+///     backend: &mut B,
+///     tensor: &TypedTensor<i32>,
+/// ) -> tenferro_tensor::Result<TypedTensor<i32>> {
+///     backend.to_contiguous(&tensor.as_view())
+/// }
 /// ```
 pub trait TensorViewCanonicalization<T: Clone + 'static, R: TensorRank> {
     fn to_contiguous(
@@ -472,11 +564,9 @@ pub trait TensorViewCanonicalization<T: Clone + 'static, R: TensorRank> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorFusion};
+/// use tenferro_tensor::TensorFusion;
 ///
 /// fn accepts_fusion<B: TensorFusion>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_fusion(&mut backend);
 /// ```
 pub trait TensorFusion {
     #[doc(hidden)]
@@ -494,11 +584,9 @@ pub trait TensorFusion {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorBuffer};
+/// use tenferro_tensor::TensorBuffer;
 ///
 /// fn accepts_buffer<B: TensorBuffer>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_buffer(&mut backend);
 /// ```
 pub trait TensorBuffer {
     fn reclaim_buffer(&mut self, _tensor: Tensor) {}
@@ -509,11 +597,9 @@ pub trait TensorBuffer {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorDeviceTransfer};
+/// use tenferro_tensor::TensorDeviceTransfer;
 ///
 /// fn accepts_transfer<B: TensorDeviceTransfer>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_transfer(&mut backend);
 /// ```
 pub trait TensorDeviceTransfer {
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
@@ -530,11 +616,9 @@ pub trait TensorDeviceTransfer {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, BackendRuntimeCache};
+/// use tenferro_tensor::BackendRuntimeCache;
 ///
 /// fn accepts_runtime_cache<B: BackendRuntimeCache>(_backend: &B) {}
-/// let backend = CpuBackend::new();
-/// accepts_runtime_cache(&backend);
 /// ```
 pub trait BackendRuntimeCache {
     #[doc(hidden)]
@@ -546,11 +630,9 @@ pub trait BackendRuntimeCache {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, BackendCachedDot};
+/// use tenferro_tensor::BackendCachedDot;
 ///
 /// fn accepts_backend_cached_dot<B: BackendCachedDot>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_backend_cached_dot(&mut backend);
 /// ```
 pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
     #[doc(hidden)]
@@ -585,11 +667,9 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, BackendSessionHost};
+/// use tenferro_tensor::BackendSessionHost;
 ///
 /// fn accepts_session_host<B: BackendSessionHost>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_session_host(&mut backend);
 /// ```
 pub trait BackendSessionHost: BackendRuntimeCache {
     fn with_backend_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R
@@ -648,15 +728,18 @@ impl<T> TensorBackendOps for T where
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, BackendSessionHost, Tensor, TypedTensor};
+/// use tenferro_tensor::{BackendSessionHost, Tensor, TypedTensor};
 ///
-/// let mut backend = CpuBackend::new();
-/// let a = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]));
-/// let b = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]));
-/// let sum = backend
-///     .with_backend_session(|exec| exec.add(&a, &b))
-///     .unwrap();
-/// assert_eq!(sum.shape(), &[2]);
+/// fn add_in_session<B: BackendSessionHost>(
+///     backend: &mut B,
+///     a: &Tensor,
+///     b: &Tensor,
+/// ) -> tenferro_tensor::Result<Tensor>
+/// where
+///     B: tenferro_tensor::TensorBackend,
+/// {
+///     backend.with_backend_session(|exec| exec.add(a, b))
+/// }
 /// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot {}
 
@@ -667,11 +750,9 @@ impl<T> BackendSession for T where T: TensorBackendOps + SessionCachedDot + ?Siz
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, TensorBackend};
+/// use tenferro_tensor::TensorBackend;
 ///
 /// fn accepts_backend<B: TensorBackend>(_backend: &mut B) {}
-/// let mut backend = CpuBackend::new();
-/// accepts_backend(&mut backend);
 /// ```
 pub trait TensorBackend:
     BackendRuntimeCache
@@ -692,10 +773,11 @@ impl<T> SessionCachedDot for T where T: TensorBackend + ?Sized {}
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{cpu::CpuBackend, default_backend_session};
+/// use tenferro_tensor::{default_backend_session, TensorBackend};
 ///
-/// let mut backend = CpuBackend::new();
-/// let _ = default_backend_session(&mut backend, |_exec| 1usize);
+/// fn run_with_default_session<B: TensorBackend>(backend: &mut B) -> usize {
+///     default_backend_session(backend, |_exec| 1usize)
+/// }
 /// ```
 pub fn default_backend_session<B: TensorBackend, R>(
     backend: &mut B,

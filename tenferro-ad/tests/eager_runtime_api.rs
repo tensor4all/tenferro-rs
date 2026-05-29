@@ -1,5 +1,6 @@
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 #[test]
 fn eager_runtime_replaces_eager_context_public_name() {

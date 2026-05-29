@@ -1,4 +1,4 @@
-use tenferro_tensor::buffer_pool::BufferPool;
+use tenferro_cpu::buffer_pool::BufferPool;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 pub(crate) fn matrix_dims<T>(

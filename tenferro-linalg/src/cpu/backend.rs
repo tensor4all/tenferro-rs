@@ -2,7 +2,7 @@ use crate::backend::LinalgBackend;
 
 use super::linalg;
 
-use tenferro_tensor::cpu::{CpuBackend, CpuBackendKind};
+use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::{
     DType, Error, Tensor, TensorStructural, TensorView, TensorViewCanonicalization, TypedTensor,
 };

@@ -4,8 +4,9 @@
 
 mod support;
 use support::RunTraced;
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]

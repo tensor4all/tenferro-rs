@@ -29,7 +29,8 @@ The design goal is to keep these concerns separate:
 | Crate | Role |
 |---|---|
 | `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar trait, and host-only tensor adapters |
-| `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, backend traits, CPU backend, and core execution kernels |
+| `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, backend traits, and backend-independent contracts |
+| `tenferro-cpu` | CPU backend, CPU execution sessions, CPU kernels, buffer pools, and CPU provider selection |
 | `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, extension runtime registration, and extension cache storage |
 | `tenferro-ad` | Eager runtime, eager tensors, and traced AD extension traits |
@@ -42,8 +43,9 @@ The design goal is to keep these concerns separate:
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |
 
 The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
-`tenferro-gpu`, `tenferro-runtime`, `tenferro-ad`, `tenferro-einsum`,
-`tenferro-linalg`, and `tenferro-fft`. Crates with `internal` in their name are
+`tenferro-cpu`, `tenferro-gpu`, `tenferro-runtime`, `tenferro-ad`,
+`tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft`. Crates with
+`internal` in their name are
 implementation crates and should not be presented as user-facing API surfaces.
 
 ## III. Layering
@@ -61,7 +63,10 @@ Layer 3: tenferro-runtime
 
 Layer 2: tenferro-tensor
          runtime TypedTensor<T, R>/Tensor values, typed views,
-         backend traits, CPU backend, core execution kernels
+         backend traits, backend-independent contracts
+
+         tenferro-cpu
+         CPU backend, CPU execution sessions, CPU kernels, buffer pools
 
          tenferro-gpu
          CubeCL/CUDA backend and GPU transfer helpers
@@ -91,7 +96,10 @@ The dependency direction is deliberately one-way:
 tenferro-tensor-core
     |
     v
-tenferro-tensor <---------------- tenferro-gpu
+tenferro-tensor <---------------- tenferro-cpu
+    ^                                  |
+    |                                  |
+    |----------------------------- tenferro-gpu
     |                                  ^
     |                                  |
     v                                  |
@@ -122,8 +130,9 @@ Rules:
 - `tenferro-tensor-core` must not expose public `TypedTensor` aliases.
   Backend-capable typed tensors are owned by `tenferro-tensor`.
 - `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed
-  views, backend traits, and CPU execution, but not CubeCL/CUDA implementation
-  details.
+  views, backend traits, and backend-independent contracts.
+- `tenferro-cpu` owns `CpuBackend`, `CpuContext`, CPU execution sessions,
+  CPU kernels, buffer pools, and CPU provider selection.
 - `tenferro-gpu` owns GPU backend implementation and transfer helpers.
 - `tenferro-runtime` owns graph construction, compilation, execution, extension
   runtime registration, and extension cache ownership.

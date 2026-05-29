@@ -9,7 +9,7 @@
 //!
 //! ```rust
 //! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
-//! use tenferro_tensor::cpu::CpuBackend;
+//! use tenferro_cpu::CpuBackend;
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
 //! let y = &x + &x;
@@ -50,11 +50,10 @@ pub use extension_runtime::{
     ExtensionRuntimeRegistryError,
 };
 pub use graph::{
-    CpuGraphExecutorCacheStats, GraphCompiler, GraphCompilerCacheStats, GraphExecutor,
-    GraphExecutorCacheStats, GraphProgram, GraphProgramInput,
+    GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats, GraphProgram,
+    GraphProgramInput,
 };
 pub use sym_dim::SymDim;
-pub use tenferro_tensor::cpu::CpuBackend;
 pub use tenferro_tensor::{
     CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TypedTensor,

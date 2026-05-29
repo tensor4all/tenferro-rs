@@ -1,8 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::einsum;
 use tenferro_runtime::{
-    CpuBackend, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
+    GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
 };
 
 const L: usize = 32;

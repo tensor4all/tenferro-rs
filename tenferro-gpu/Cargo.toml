@@ -12,8 +12,8 @@ name = "tenferro_gpu"
 
 [features]
 default = ["cpu-faer"]
-cpu-faer = ["tenferro-tensor/cpu-faer"]
-cpu-blas = ["tenferro-tensor/cpu-blas"]
+cpu-faer = ["tenferro-cpu/cpu-faer"]
+cpu-blas = ["tenferro-cpu/cpu-blas"]
 cpu-reference = []
 cuda = ["dep:cubecl", "dep:cubecl-cuda", "dep:cubecl-runtime", "dep:cudarc"]
 rocm = []
@@ -31,6 +31,7 @@ num-traits.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 criterion.workspace = true
 
 [[example]]

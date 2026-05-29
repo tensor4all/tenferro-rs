@@ -6,8 +6,8 @@ use faer::{
 use num_complex::{Complex32, Complex64};
 use std::ops::Range;
 
-use tenferro_tensor::buffer_pool::{BufferPool, PoolScalar};
-use tenferro_tensor::cpu::CpuContext;
+use tenferro_cpu::buffer_pool::{BufferPool, PoolScalar};
+use tenferro_cpu::CpuContext;
 use tenferro_tensor::{Tensor, TypedTensor};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {

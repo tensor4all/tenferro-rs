@@ -1,4 +1,5 @@
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 #[test]
 fn compiler_clear_caches_clears_compile_entries() {
@@ -38,7 +39,7 @@ fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
 }
 
 #[test]
-fn cpu_executor_clear_all_caches_clears_buffer_pool() {
+fn executor_clear_caches_clears_executor_owned_runtime_caches() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
     let y = &x + &x;
     let mut compiler = GraphCompiler::new();
@@ -46,17 +47,9 @@ fn cpu_executor_clear_all_caches_clears_buffer_pool() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let _ = executor.run(&program).expect("run");
-    let before = executor.cpu_cache_stats();
-    assert_eq!(
-        before.buffer_pool.retained_bytes,
-        executor.buffer_pool_stats().capacity_bytes
-    );
+    executor.clear_caches();
 
-    executor.clear_all_caches();
-
-    let after = executor.cpu_cache_stats();
-    assert_eq!(after.executor.extensions.entries, 0);
-    assert_eq!(after.executor.backend.entries, 0);
-    assert_eq!(after.buffer_pool.entries, 0);
-    assert_eq!(executor.buffer_pool_len(), 0);
+    let after = executor.cache_stats();
+    assert_eq!(after.extensions.entries, 0);
+    assert_eq!(after.backend.entries, 0);
 }

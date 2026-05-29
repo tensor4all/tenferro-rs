@@ -111,7 +111,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
@@ -137,7 +138,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
@@ -158,7 +160,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
@@ -183,7 +186,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
@@ -204,7 +208,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(
@@ -229,7 +234,8 @@ impl EagerTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::{CpuBackend, EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![1.0_f64]), ctx.clone());

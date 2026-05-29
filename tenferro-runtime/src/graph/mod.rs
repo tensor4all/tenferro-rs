@@ -17,7 +17,7 @@ mod compiler;
 mod executor;
 mod program;
 
-pub use cache::{CpuGraphExecutorCacheStats, GraphCompilerCacheStats, GraphExecutorCacheStats};
+pub use cache::{GraphCompilerCacheStats, GraphExecutorCacheStats};
 pub use compiler::GraphCompiler;
 pub use executor::GraphExecutor;
 pub use program::{GraphProgram, GraphProgramInput};

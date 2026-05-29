@@ -22,7 +22,8 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -38,7 +39,8 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -75,7 +77,8 @@ let ad = AdContext::builder()
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]);
@@ -96,7 +99,8 @@ assert_eq!(singular_values, vec![1.0, 2.0]);
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]);
@@ -130,7 +134,8 @@ assert_eq!(eigenvalues, vec![1.0, 3.0]);
 ## Traced Cholesky Factorization
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_linalg::traced_tensor::cholesky;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -149,7 +154,8 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ## Traced Solve In A Graph
 
 ```rust
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 use tenferro_linalg::traced_tensor::solve;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
@@ -170,7 +176,8 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
 ```rust
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{CpuBackend, Tensor};
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::Tensor;
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]);

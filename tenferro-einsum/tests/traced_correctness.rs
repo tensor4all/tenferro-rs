@@ -4,12 +4,13 @@
 //! available for converting row-major test data when needed.
 
 use num_complex::Complex64;
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::EinsumOptimize;
 use tenferro_einsum::{
     ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
 };
 use tenferro_runtime::error::Result;
-use tenferro_runtime::{CpuBackend, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::TypedTensor;
 
 #[path = "traced_correctness/ported_and_paths.rs"]

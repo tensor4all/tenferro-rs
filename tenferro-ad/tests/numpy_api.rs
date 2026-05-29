@@ -1,7 +1,8 @@
 use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    traced_tensor, CompareDir, CpuBackend, DType, GraphCompiler, GraphExecutor, Tensor,
-    TracedTensor, TypedTensor,
+    traced_tensor, CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+    TypedTensor,
 };
 
 use tenferro_ad::eager_tensor;
