@@ -1,0 +1,24 @@
+[package]
+name = "tenferro-ext-tropical"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Hiroshi Shinaoka <h.shinaoka@gmail.com>"]
+publish = false
+description = "Standalone tropical semiring extension skeleton for tenferro."
+
+# This crate is intentionally a nested standalone workspace while the extension
+# surface evolves outside the core tenferro workspace.
+[workspace]
+resolver = "2"
+
+[lib]
+name = "tenferro_ext_tropical"
+path = "src/lib.rs"
+
+[dependencies]
+tenferro-cpu = { path = "../../tenferro-cpu" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-runtime = { path = "../../tenferro-runtime" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
+num-traits = "0.2"
