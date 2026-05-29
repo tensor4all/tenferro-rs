@@ -4,11 +4,10 @@
 //! Tropical semiring helpers for tenferro.
 //!
 //! This standalone crate restores the public skeleton for tropical extension
-//! work against tenferro's current split crates. It currently provides scalar
-//! newtypes, traced composition wrappers over core tenferro graph ops, and a
-//! generic CPU value-plus-argmax GEMM fallback. Fused extension runtime
-//! registration and tropical AD rules are intentionally deferred to later
-//! implementation tasks.
+//! work against tenferro's current split crates. It provides scalar newtypes,
+//! traced composition wrappers over core tenferro graph ops, fused traced
+//! tropical einsum extension helpers, and a generic CPU value-plus-argmax GEMM
+//! fallback.
 //!
 //! # Examples
 //!
@@ -42,11 +41,18 @@
 
 pub mod cpu;
 pub mod einsum;
+mod extension;
 pub mod newtype;
 pub mod traced;
 
+pub use extension::register_runtime;
+#[cfg(feature = "autodiff")]
+pub use extension::{register_tropical_ad_rules, tropical_ad_rules};
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
-pub use traced::{min_plus_dot_general, tropical_dot_general, tropical_reduce_sum};
+pub use traced::{
+    min_plus_dot_general, min_plus_dot_general_fused, tropical_dot_general,
+    tropical_dot_general_fused, tropical_reduce_sum,
+};
 
 /// Tropical semiring flavor used by traced and future fused tropical ops.
 ///

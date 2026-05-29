@@ -272,15 +272,52 @@ pub fn tropical_einsum_with_argmax(
     inputs: &[&Tensor],
     notation: &str,
 ) -> tenferro_tensor::Result<TropicalEinsumResult> {
+    let subscripts = Subscripts::parse(notation)
+        .map_err(|err| invalid_config(format!("invalid einsum notation `{notation}`: {err}")))?;
+    tropical_einsum_subscripts_with_argmax(kind, inputs, &subscripts)
+}
+
+/// Execute a binary tropical einsum from parsed subscripts and capture argmax.
+///
+/// This is equivalent to [`tropical_einsum_with_argmax`] but accepts the parsed
+/// [`tenferro_einsum::Subscripts`] representation directly so traced extension
+/// payloads do not need to stringify labels.
+///
+/// # Errors
+///
+/// Returns [`tenferro_tensor::Error::InvalidConfig`] when shapes, dtype, or
+/// lowering features are outside the supported binary tropical surface.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_einsum::Subscripts;
+/// use tenferro_ext_tropical::einsum::{
+///     tropical_einsum_subscripts_with_argmax, TropicalEinsumKind,
+/// };
+/// use tenferro_tensor::Tensor;
+///
+/// let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]);
+/// let b = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]);
+/// let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
+/// let result =
+///     tropical_einsum_subscripts_with_argmax(TropicalEinsumKind::MaxPlus, &[&a, &b], &subscripts)?;
+///
+/// assert_eq!(result.output.as_slice::<f64>().unwrap(), &[3.0]);
+/// assert_eq!(result.argmax[0].indices(), &[0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub fn tropical_einsum_subscripts_with_argmax(
+    kind: TropicalEinsumKind,
+    inputs: &[&Tensor],
+    subscripts: &Subscripts,
+) -> tenferro_tensor::Result<TropicalEinsumResult> {
     if inputs.len() != 2 {
         return Err(invalid_config(format!(
             "only two-input binary contractions are supported, got {} inputs",
             inputs.len()
         )));
     }
-
-    let subscripts = Subscripts::parse(notation)
-        .map_err(|err| invalid_config(format!("invalid einsum notation `{notation}`: {err}")))?;
     if subscripts.inputs.len() != inputs.len() {
         return Err(invalid_config(format!(
             "notation describes {} inputs but {} tensors were provided",
@@ -294,7 +331,7 @@ pub fn tropical_einsum_with_argmax(
     }
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = ContractionTree::optimize(&subscripts, &shapes)
+    let tree = ContractionTree::optimize(subscripts, &shapes)
         .map_err(|err| invalid_config(format!("einsum lowering failed: {err}")))?;
     if tree.step_count() != 1 {
         return Err(invalid_config(format!(
@@ -336,7 +373,7 @@ pub fn tropical_einsum_with_argmax(
         (DType::F32, DType::F32) => execute_typed::<f32>(
             kind,
             inputs,
-            &subscripts,
+            subscripts,
             lhs_subs,
             rhs_subs,
             output_subs,
@@ -345,7 +382,7 @@ pub fn tropical_einsum_with_argmax(
         (DType::F64, DType::F64) => execute_typed::<f64>(
             kind,
             inputs,
-            &subscripts,
+            subscripts,
             lhs_subs,
             rhs_subs,
             output_subs,
